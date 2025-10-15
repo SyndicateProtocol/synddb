@@ -309,10 +309,10 @@ synddb:
 
   database:
     path: ./data/synddb.sqlite
-    journal_mode: WAL
-    synchronous: NORMAL
-    cache_size: -64000  # 64MB
-    mmap_size: 30000000000  # 30GB
+    journal_mode: WAL           # Keep WAL for concurrent reads during writes
+    synchronous: NORMAL         # NORMAL is optimal - FULL is overkill, OFF risks corruption
+    cache_size: -2000000        # 2GB cache (was 64MB) - more RAM for hot data
+    mmap_size: 274877906944     # 256GB mmap (was 30GB) - map entire DB to memory if possible
 
   sequencer:
     batch_size: 1000
@@ -350,6 +350,13 @@ synddb:
 - Build transaction handling with proper ACID guarantees
 - Implement and benchmark performance optimizations
 - Create database schema for common use cases
+
+### Performance Philosophy
+Since we have validators handling bridging/settlement and periodic blockchain commits:
+- **Before blockchain commit**: Data must be durable to OS (NORMAL sync) but not necessarily to disk
+- **After blockchain commit**: Data is replicated across read replicas, so single-node disk failure is acceptable
+- **Trade-offs we accept**: Lower disk-level durability for 10-100x performance gains
+- **What we DON'T compromise**: Data consistency and OS-level durability before state commitment
 
 ### Tasks
 
@@ -415,16 +422,44 @@ impl SyndDatabase {
     }
 
     fn initialize_optimizations(conn: &Connection) -> Result<()> {
-        // Performance-critical pragmas
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.pragma_update(None, "cache_size", -64000)?;
-        conn.pragma_update(None, "mmap_size", 30000000000i64)?;
-        conn.pragma_update(None, "temp_store", "MEMORY")?;
-        conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
-        conn.pragma_update(None, "page_size", 4096)?;
+        // MAXIMUM PERFORMANCE CONFIGURATION
+        // Optimized for write-heavy sequencer with state commitment guarantees
 
-        info!("SQLite optimizations applied");
+        // WAL mode for concurrent reads during writes
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+
+        // NORMAL: Ensures durability to OS, but not to disk on every write
+        // This is safe because we commit state to blockchain periodically
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+
+        // 2GB cache - keep hot data in RAM (negative = size in KB)
+        conn.pragma_update(None, "cache_size", -2000000)?;
+
+        // 256GB memory map - map entire DB file to virtual memory if possible
+        conn.pragma_update(None, "mmap_size", 274877906944i64)?;
+
+        // Keep temp tables/indices in memory
+        conn.pragma_update(None, "temp_store", "MEMORY")?;
+
+        // EXCLUSIVE mode - single sequencer doesn't need to coordinate
+        conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+
+        // 64KB pages (max size) - reduces B-tree depth for large datasets
+        // Must be set before any tables are created
+        conn.pragma_update(None, "page_size", 65536)?;
+
+        // WAL optimizations for write performance
+        conn.pragma_update(None, "wal_autocheckpoint", 10000)?;  // 10k pages before checkpoint
+        conn.pragma_update(None, "wal_checkpoint", "PASSIVE")?;   // Non-blocking checkpoints
+
+        // Optimize for SSDs - no need for sequential write optimization
+        conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+        conn.pragma_update(None, "incremental_vacuum", 1000)?;    // Cleanup 1000 pages at a time
+
+        // Memory optimizations
+        conn.pragma_update(None, "threads", 0)?;                  // Single-threaded per connection
+
+        info!("SQLite maximum performance optimizations applied");
         Ok(())
     }
 
