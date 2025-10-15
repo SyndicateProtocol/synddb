@@ -95,6 +95,18 @@ pub struct SqliteDatabase {
 impl SqliteDatabase {
     /// Create a new SQLite database instance
     pub fn new<P: AsRef<Path>>(path: P, pool_size: u32) -> Result<Self> {
+        Self::new_with_config(path, pool_size, "WAL", "NORMAL", -2000000, 274877906944)
+    }
+
+    /// Create a new SQLite database instance with custom pragma configuration
+    pub fn new_with_config<P: AsRef<Path>>(
+        path: P,
+        pool_size: u32,
+        journal_mode: &str,
+        synchronous: &str,
+        cache_size: i64,
+        mmap_size: i64,
+    ) -> Result<Self> {
         let db_path = path.as_ref().to_string_lossy().to_string();
         let manager = SqliteConnectionManager::file(&db_path);
 
@@ -105,7 +117,7 @@ impl SqliteDatabase {
 
         // Initialize database with optimizations
         let conn = pool.get().connection_err()?;
-        Self::initialize_optimizations(&conn)?;
+        Self::initialize_optimizations(&conn, journal_mode, synchronous, cache_size, mmap_size)?;
         Self::create_metadata_tables(&conn)?;
 
         info!("SQLite database initialized at {}", db_path);
@@ -117,22 +129,23 @@ impl SqliteDatabase {
         })
     }
 
-    /// Initialize SQLite with maximum performance optimizations
-    fn initialize_optimizations(conn: &Connection) -> Result<()> {
+    /// Initialize SQLite with performance optimizations
+    fn initialize_optimizations(
+        conn: &Connection,
+        journal_mode: &str,
+        synchronous: &str,
+        cache_size: i64,
+        mmap_size: i64,
+    ) -> Result<()> {
         info!("Applying SQLite performance optimizations");
 
-        // WAL mode for concurrent reads during writes
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // Configurable pragmas
+        conn.pragma_update(None, "journal_mode", journal_mode)?;
+        conn.pragma_update(None, "synchronous", synchronous)?;
+        conn.pragma_update(None, "cache_size", cache_size)?;
+        conn.pragma_update(None, "mmap_size", mmap_size)?;
 
-        // NORMAL: Ensures durability to OS, but not to disk on every write
-        // Safe because we commit state to blockchain periodically
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-
-        // 2GB cache - keep hot data in RAM (negative = size in KB)
-        conn.pragma_update(None, "cache_size", -2000000)?;
-
-        // 256GB memory map - map entire DB file to virtual memory if possible
-        conn.pragma_update(None, "mmap_size", 274877906944i64)?;
+        // Fixed optimizations for SyndDB architecture
 
         // Keep temp tables/indices in memory
         conn.pragma_update(None, "temp_store", "MEMORY")?;

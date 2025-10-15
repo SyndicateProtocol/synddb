@@ -31,10 +31,14 @@
 //! // Load configuration
 //! let config = SyndDBConfig::test_config();
 //!
-//! // Initialize database
-//! let database = Arc::new(SqliteDatabase::new(
+//! // Initialize database with configuration
+//! let database = Arc::new(SqliteDatabase::new_with_config(
 //!     &config.database.path,
 //!     config.database.pool_size,
+//!     &config.database.journal_mode,
+//!     &config.database.synchronous,
+//!     config.database.cache_size,
+//!     config.database.mmap_size,
 //! )?);
 //!
 //! // Create extension registry
