@@ -27,6 +27,8 @@ synddb-core/
 ## Features
 
 - **High-Performance SQLite**: Optimized for 50,000+ TPS with WAL mode, 2GB cache, 256GB mmap
+- **Automatic Statement Caching**: Transparent prepared statement optimization (no manual registration)
+- **Real-Time Metrics**: Latency percentiles, throughput, and error rate tracking
 - **Extension System**: Clean trait-based extensibility for custom business logic
 - **Async/Await**: Full tokio async support for non-blocking operations
 - **State Replication**: Snapshot and diff generation for read replica synchronization

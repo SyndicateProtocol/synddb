@@ -116,9 +116,8 @@ impl SqliteDatabase {
         Self::initialize_optimizations(&conn)?;
         Self::create_metadata_tables(&conn)?;
 
-        // Initialize prepared statement cache
+        // Initialize prepared statement cache (automatic caching)
         let prepared_statements = Arc::new(PreparedStatementCache::new());
-        prepared_statements.initialize_common();
 
         // Initialize metrics collector
         let metrics = Arc::new(MetricsCollector::new());
@@ -228,6 +227,10 @@ impl SyndDatabase for SqliteDatabase {
 
     async fn execute(&self, sql: &str, params: Vec<SqlValue>) -> Result<ExecuteResult> {
         let start = Instant::now();
+
+        // Automatically cache this SQL statement
+        self.prepared_statements.cache_statement(sql);
+
         let conn = self.get_connection()?;
 
         // Convert SqlValue params to rusqlite params
@@ -319,6 +322,10 @@ impl SyndDatabase for SqliteDatabase {
 
     async fn query(&self, sql: &str, params: Vec<SqlValue>) -> Result<QueryResult> {
         let start = Instant::now();
+
+        // Automatically cache this SQL statement
+        self.prepared_statements.cache_statement(sql);
+
         let conn = self.get_connection()?;
 
         let mut stmt = conn.prepare(sql)?;
