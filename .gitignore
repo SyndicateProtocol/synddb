@@ -22,3 +22,8 @@ target
 
 # macOS system files
 .DS_Store
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
