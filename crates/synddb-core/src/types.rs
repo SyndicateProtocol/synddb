@@ -9,6 +9,39 @@ use std::time::Duration;
 /// Result type alias for SyndDB operations
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Extension trait for Result types to simplify error conversion
+pub trait ResultExt<T> {
+    /// Convert error to PoolError variant
+    fn pool_err(self) -> Result<T>;
+
+    /// Convert error to ConnectionError variant
+    fn connection_err(self) -> Result<T>;
+
+    /// Convert error to TransactionError variant
+    fn transaction_err(self) -> Result<T>;
+
+    /// Add context to an error
+    fn context(self, msg: &str) -> Result<T>;
+}
+
+impl<T, E: std::fmt::Display> ResultExt<T> for std::result::Result<T, E> {
+    fn pool_err(self) -> Result<T> {
+        self.map_err(|e| Error::PoolError(e.to_string()))
+    }
+
+    fn connection_err(self) -> Result<T> {
+        self.map_err(|e| Error::ConnectionError(e.to_string()))
+    }
+
+    fn transaction_err(self) -> Result<T> {
+        self.map_err(|e| Error::TransactionError(e.to_string()))
+    }
+
+    fn context(self, msg: &str) -> Result<T> {
+        self.map_err(|e| Error::Other(anyhow::anyhow!("{}: {}", msg, e)))
+    }
+}
+
 /// Core error types for SyndDB
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +69,27 @@ pub enum Error {
 
     #[error("State error: {0}")]
     State(String),
+
+    #[error("Connection pool error: {0}")]
+    PoolError(String),
+
+    #[error("Connection acquisition failed: {0}")]
+    ConnectionError(String),
+
+    #[error("Transaction error: {0}")]
+    TransactionError(String),
+
+    #[error("Checksum mismatch: expected {expected}, got {actual}")]
+    ChecksumMismatch { expected: String, actual: String },
+
+    #[error("Version mismatch: current {current}, required {required}")]
+    VersionMismatch { current: u64, required: u64 },
+
+    #[error("Extension not found: {0}")]
+    ExtensionNotFound(String),
+
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(String),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),

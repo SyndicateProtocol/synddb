@@ -63,3 +63,4 @@ ipfs-api = "0.17"
 
 # Utils
 parking_lot = "0.12"
+rustc-hash = "2.0"

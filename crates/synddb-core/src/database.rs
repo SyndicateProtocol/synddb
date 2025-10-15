@@ -110,12 +110,10 @@ impl SqliteDatabase {
         let pool = Pool::builder()
             .max_size(pool_size)
             .build(manager)
-            .map_err(|e| Error::Other(anyhow::anyhow!("Failed to create pool: {}", e)))?;
+            .pool_err()?;
 
         // Initialize database with optimizations
-        let conn = pool
-            .get()
-            .map_err(|e| Error::Other(anyhow::anyhow!("{}", e)))?;
+        let conn = pool.get().connection_err()?;
         Self::initialize_optimizations(&conn)?;
         Self::create_metadata_tables(&conn)?;
 
@@ -201,9 +199,7 @@ impl SqliteDatabase {
 
     /// Get a connection from the pool
     fn get_connection(&self) -> Result<PooledConnection<SqliteConnectionManager>> {
-        self.pool
-            .get()
-            .map_err(|e| Error::Other(anyhow::anyhow!("Failed to get connection: {}", e)))
+        self.pool.get().connection_err()
     }
 
     /// Convert SqlValue to rusqlite parameter
@@ -215,6 +211,26 @@ impl SqliteDatabase {
             SqlValue::Text(s) => Box::new(s.clone()),
             SqlValue::Blob(b) => Box::new(b.clone()),
         }
+    }
+
+    /// Helper to execute a closure with converted parameters
+    ///
+    /// This encapsulates the two-step parameter conversion process:
+    /// 1. Convert SqlValues to boxed ToSql trait objects
+    /// 2. Convert boxes to references for rusqlite
+    ///
+    /// This pattern is necessary because rusqlite requires &[&dyn ToSql],
+    /// but we can't create those references directly from SqlValue.
+    fn with_params<F, R>(params: &[SqlValue], f: F) -> R
+    where
+        F: FnOnce(&[&dyn ToSql]) -> R,
+    {
+        let param_values: Vec<Box<dyn ToSql>> =
+            params.iter().map(Self::sql_value_to_param).collect();
+
+        let param_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+
+        f(&param_refs)
     }
 }
 
@@ -236,18 +252,15 @@ impl SyndDatabase for SqliteDatabase {
 
         let conn = self.get_connection()?;
 
-        // Convert SqlValue params to rusqlite params
-        let param_values: Vec<Box<dyn ToSql>> =
-            params.iter().map(|v| Self::sql_value_to_param(v)).collect();
-
-        let param_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
-
-        let rows_affected = conn.execute(sql, param_refs.as_slice())?;
-        let last_insert_rowid = if rows_affected > 0 {
-            Some(conn.last_insert_rowid())
-        } else {
-            None
-        };
+        let (rows_affected, last_insert_rowid) = Self::with_params(&params, |params| {
+            let rows_affected = conn.execute(sql, params)?;
+            let last_insert_rowid = if rows_affected > 0 {
+                Some(conn.last_insert_rowid())
+            } else {
+                None
+            };
+            Ok::<_, rusqlite::Error>((rows_affected, last_insert_rowid))
+        })?;
 
         let duration = start.elapsed();
 
@@ -266,7 +279,7 @@ impl SyndDatabase for SqliteDatabase {
         let mut conn = self.get_connection()?;
 
         // Begin transaction
-        let tx = conn.transaction().map_err(Error::Database)?;
+        let tx = conn.transaction().transaction_err()?;
 
         let mut results = Vec::new();
 
@@ -274,19 +287,15 @@ impl SyndDatabase for SqliteDatabase {
         for op in operations {
             let op_start = Instant::now();
 
-            // Convert SqlValue params to ToSql trait objects
-            let params: Vec<Box<dyn ToSql>> =
-                op.params.iter().map(Self::sql_value_to_param).collect();
-
-            // Convert to references for execute
-            let param_refs: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
-
-            let rows_affected = tx.execute(&op.sql, param_refs.as_slice())?;
-            let last_insert_rowid = if rows_affected > 0 {
-                Some(tx.last_insert_rowid())
-            } else {
-                None
-            };
+            let (rows_affected, last_insert_rowid) = Self::with_params(&op.params, |params| {
+                let rows_affected = tx.execute(&op.sql, params)?;
+                let last_insert_rowid = if rows_affected > 0 {
+                    Some(tx.last_insert_rowid())
+                } else {
+                    None
+                };
+                Ok::<_, rusqlite::Error>((rows_affected, last_insert_rowid))
+            })?;
 
             results.push(ExecuteResult {
                 rows_affected,
@@ -323,32 +332,30 @@ impl SyndDatabase for SqliteDatabase {
         // Get column names
         let columns: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
-        // Convert SqlValue params to rusqlite params
-        let param_values: Vec<Box<dyn ToSql>> =
-            params.iter().map(|v| Self::sql_value_to_param(v)).collect();
-
-        let param_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
-
         // Execute query and collect rows
-        let mut rows_data = Vec::new();
-        let mut rows = stmt.query(param_refs.as_slice())?;
+        let rows_data = Self::with_params(&params, |params| {
+            let mut rows_data = Vec::new();
+            let mut rows = stmt.query(params)?;
 
-        while let Some(row) = rows.next()? {
-            let mut row_values = Vec::new();
-            for i in 0..columns.len() {
-                let value = match row.get_ref(i)? {
-                    rusqlite::types::ValueRef::Null => SqlValue::Null,
-                    rusqlite::types::ValueRef::Integer(i) => SqlValue::Integer(i),
-                    rusqlite::types::ValueRef::Real(f) => SqlValue::Real(f),
-                    rusqlite::types::ValueRef::Text(s) => {
-                        SqlValue::Text(String::from_utf8_lossy(s).to_string())
-                    }
-                    rusqlite::types::ValueRef::Blob(b) => SqlValue::Blob(b.to_vec()),
-                };
-                row_values.push(value);
+            while let Some(row) = rows.next()? {
+                let mut row_values = Vec::new();
+                for i in 0..columns.len() {
+                    let value = match row.get_ref(i)? {
+                        rusqlite::types::ValueRef::Null => SqlValue::Null,
+                        rusqlite::types::ValueRef::Integer(i) => SqlValue::Integer(i),
+                        rusqlite::types::ValueRef::Real(f) => SqlValue::Real(f),
+                        rusqlite::types::ValueRef::Text(s) => {
+                            SqlValue::Text(String::from_utf8_lossy(s).to_string())
+                        }
+                        rusqlite::types::ValueRef::Blob(b) => SqlValue::Blob(b.to_vec()),
+                    };
+                    row_values.push(value);
+                }
+                rows_data.push(row_values);
             }
-            rows_data.push(row_values);
-        }
+
+            Ok::<_, rusqlite::Error>(rows_data)
+        })?;
 
         let row_count = rows_data.len();
         let duration = start.elapsed();
@@ -445,7 +452,10 @@ impl SyndDatabase for SqliteDatabase {
         // Verify checksum
         let calculated_checksum = calculate_checksum(&snapshot.data);
         if calculated_checksum != snapshot.checksum {
-            return Err(Error::State("Snapshot checksum mismatch".to_string()));
+            return Err(Error::ChecksumMismatch {
+                expected: snapshot.checksum.clone(),
+                actual: calculated_checksum,
+            });
         }
 
         // Decompress
@@ -481,13 +491,16 @@ impl SyndDatabase for SqliteDatabase {
         // Verify checksum
         let calculated_checksum = calculate_checksum(&diff.compressed);
         if calculated_checksum != diff.checksum {
-            return Err(Error::State("Diff checksum mismatch".to_string()));
+            return Err(Error::ChecksumMismatch {
+                expected: diff.checksum.clone(),
+                actual: calculated_checksum,
+            });
         }
 
         // Execute all statements synchronously (no await points while holding connection)
         {
             let mut conn = self.get_connection()?;
-            let tx = conn.transaction()?;
+            let tx = conn.transaction().transaction_err()?;
 
             // Execute all statements in the diff
             for statement in &diff.statements {

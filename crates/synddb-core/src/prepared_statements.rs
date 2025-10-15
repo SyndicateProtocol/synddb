@@ -5,16 +5,20 @@
 //! prepared statements internally.
 
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Automatic prepared statement cache
 ///
 /// Caches SQL statements by their content hash for automatic reuse.
 /// This is transparent to the caller - extensions just execute SQL
 /// and the cache automatically handles optimization.
+///
+/// Uses FxHash (Firefox's hasher) for 3x faster hashing compared to
+/// the default SipHash, since we control the input (SQL strings) and
+/// don't need DoS protection.
 pub struct PreparedStatementCache {
-    /// Map of SQL hash to SQL string
-    cache: RwLock<HashMap<u64, CachedStatement>>,
+    /// Map of SQL hash to cached statement (using FxHash for speed)
+    cache: RwLock<FxHashMap<u64, CachedStatement>>,
     /// Cache statistics
     stats: RwLock<CacheStats>,
     /// Maximum cache size
@@ -57,7 +61,7 @@ impl PreparedStatementCache {
     /// Create a cache with specified maximum capacity
     pub fn with_capacity(max_size: usize) -> Self {
         Self {
-            cache: RwLock::new(HashMap::new()),
+            cache: RwLock::new(FxHashMap::default()),
             stats: RwLock::new(CacheStats::default()),
             max_size,
         }
@@ -112,18 +116,23 @@ impl PreparedStatementCache {
     }
 
     /// Evict least-recently-used entry
-    fn evict_lru(&self, cache: &mut HashMap<u64, CachedStatement>) {
+    fn evict_lru(&self, cache: &mut FxHashMap<u64, CachedStatement>) {
         if let Some((&hash, _)) = cache.iter().min_by_key(|(_, entry)| entry.use_count) {
             cache.remove(&hash);
         }
     }
 
-    /// Hash SQL for cache key (simple FNV-1a hash)
+    /// Hash SQL for cache key using FxHash (optimized for internal caching)
+    ///
+    /// FxHash is 3x faster than the default SipHash and is the standard
+    /// hasher used by rustc itself for internal caching. Since we control
+    /// the input (SQL strings from our own code), we don't need the
+    /// cryptographic properties of SipHash.
     fn hash_sql(sql: &str) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
+        use rustc_hash::FxHasher;
         use std::hash::{Hash, Hasher};
 
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         sql.hash(&mut hasher);
         hasher.finish()
     }
