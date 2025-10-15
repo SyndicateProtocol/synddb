@@ -27,7 +27,7 @@ synddb-core/
 ## Features
 
 - **High-Performance SQLite**: Optimized for 50,000+ TPS with WAL mode, 2GB cache, 256GB mmap
-- **Real-Time Metrics**: Latency percentiles, throughput, and error rate tracking
+- **Observability**: Built-in tracing support for logging latency and throughput metrics
 - **Extension System**: Clean trait-based extensibility for custom business logic
 - **Async/Await**: Full tokio async support for non-blocking operations
 - **State Replication**: Snapshot and diff generation for read replica synchronization
@@ -415,9 +415,10 @@ cargo doc --package synddb-core --open
 - Local write framework
 
 ✅ **Phase 2 Complete**: SQLite performance optimization
-- Real-time metrics collection (latency, throughput, errors)
-- Performance benchmarking suite
+- Aggressive SQLite pragma tuning (WAL, cache, mmap)
+- Configurable database parameters per environment
 - Idiomatic error handling with specific error types
+- Tracing integration for observability
 
 📋 **Upcoming Phases**:
 - Phase 3: Trigger system and business logic
