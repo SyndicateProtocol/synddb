@@ -1,28 +1,28 @@
-# SyndDB Extensibility Framework
+# SyndDB Extension Development Guide
 
 ## Philosophy
 
-SyndDB is designed as an **extensible database execution engine**, not a monolithic application. The core provides high-performance SQLite execution, state replication, and blockchain integration - while applications plug in their specific business logic through well-defined extension points.
+SyndDB follows a **Core + Extensions** architecture. The **SyndDB Core** provides the high-performance database engine, state replication, and blockchain integration. **SyndDB Extensions** are developer-created modules that add specific business logic, schemas, and functionality on top of the Core.
 
 This separation enables:
-- **Core stability**: The engine remains unchanged across different use cases
-- **Application flexibility**: Each use case implements only its specific requirements
-- **Rapid development**: No need to understand core internals to build applications
+- **Core stability**: The SyndDB Core engine remains unchanged across different use cases
+- **Extension flexibility**: Each extension implements only its specific requirements
+- **Rapid development**: No need to understand Core internals to build extensions
 - **Type safety**: Strongly-typed interfaces ensure correctness at compile time
-- **Performance optimization**: Core optimizations benefit all applications
+- **Performance optimization**: Core optimizations automatically benefit all extensions
 
 ## Architecture Overview
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                    Application Layer                      │
-│  (Your Custom Logic - Schemas, Writes, Rules, Bridges)    │
+│                     Extensions Layer                      │
+│  (Developer Extensions - Schemas, Writes, Rules, Bridges) │
 ├──────────────────────────────────────────────────────────┤
-│                   Extension Framework                     │
-│  (Traits, Registries, Hooks, Validators, Builders)       │
+│                   Extension Interface                     │
+│      (Traits, Registries, Hooks, Validators, APIs)       │
 ├──────────────────────────────────────────────────────────┤
-│                      Core Engine                         │
-│  (SQLite, Sequencer, Replication, Blockchain Publishing) │
+│                      SyndDB Core                         │
+│  (SQLite Engine, Sequencer, Replication, Blockchain)     │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -30,7 +30,7 @@ This separation enables:
 
 ### 1. Schema Extensions
 
-Applications define their database schema as SQL DDL statements. The core engine handles execution and replication - you just provide the schema.
+Extensions define their database schema as SQL DDL statements. The SyndDB Core handles execution and replication - extensions just provide the schema.
 
 ```rust
 // synddb-extensions/src/schema.rs
@@ -57,7 +57,7 @@ pub trait SchemaExtension: Send + Sync {
 
 ### 2. LocalWrite Type Extensions
 
-Define custom write operations that map to SQL statements. The framework handles validation, serialization, and execution.
+Define custom write operations that map to SQL statements. The SyndDB Core handles validation, serialization, and execution.
 
 ```rust
 // synddb-extensions/src/writes.rs
@@ -93,7 +93,7 @@ pub struct SqlStatement {
 
 ### 3. Trigger Extensions
 
-Register SQLite triggers for automatic business logic execution at the database level.
+Extensions register SQLite triggers for automatic business logic execution at the database level.
 
 ```rust
 // synddb-extensions/src/triggers.rs
@@ -128,7 +128,7 @@ pub enum TriggerEvent {
 
 ### 4. Bridge Extensions
 
-Define how your application interacts with external blockchains for deposits and withdrawals.
+Define how your extension interacts with external blockchains for deposits and withdrawals.
 
 ```rust
 // synddb-extensions/src/bridge.rs
@@ -170,7 +170,7 @@ pub struct WithdrawalRequest {
 
 ### 5. Query Extensions
 
-Define custom query patterns and caching strategies for your application.
+Define custom query patterns and caching strategies for your extension.
 
 ```rust
 // synddb-extensions/src/queries.rs
@@ -230,11 +230,11 @@ async fn main() -> Result<()> {
 }
 ```
 
-## Example Use Cases
+## Example Extensions
 
 ### 1. Perpetual DEX Extension
 
-A complete perpetual DEX implementation showcasing all extension points:
+A complete perpetual DEX extension showcasing all extension points:
 
 ```rust
 // perp-dex-extension/src/lib.rs
@@ -1051,7 +1051,7 @@ async fn test_full_flow() {
 
 ## Conclusion
 
-The SyndDB Extensibility Framework provides a powerful, type-safe way to build high-performance blockchain applications without dealing with low-level database or replication complexity. By implementing a few trait methods, your application gains access to:
+The SyndDB Core + Extensions architecture provides a powerful, type-safe way to build high-performance blockchain applications without dealing with low-level database or replication complexity. By implementing a few trait methods, your extension gains access to the full power of the SyndDB Core:
 
 - Ultra-fast SQLite execution (<1ms latency)
 - Automatic state replication across nodes
@@ -1059,4 +1059,10 @@ The SyndDB Extensibility Framework provides a powerful, type-safe way to build h
 - Built-in query capabilities
 - Optional TEE-secured settlement
 
-Focus on your application logic - let SyndDB handle the infrastructure.
+The SyndDB Core handles all the infrastructure complexity - extensions focus purely on business logic. This clean separation ensures that:
+- Core improvements benefit all extensions automatically
+- Extensions can be developed, tested, and deployed independently
+- The ecosystem can grow without modifying the Core
+- Developers can build powerful applications without deep Core knowledge
+
+Focus on your extension's logic - the SyndDB Core handles everything else.
