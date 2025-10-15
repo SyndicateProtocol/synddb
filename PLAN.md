@@ -278,14 +278,16 @@ pub trait StorageProvider: Send + Sync {
 use alloy::primitives::B256;
 
 // BlockchainPublisher is a THIN WRAPPER for blockchain interactions
-// It passes through prior hash and new hash to ensure chain consistency
+// HYBRID APPROACH: Passes both global hash (for consistency) and type-specific hash
 #[async_trait]
 pub trait BlockchainPublisher: Send + Sync {
-    // All methods require prior_hash to match lastHash on chain
-    async fn submit_diff_to_chain(&self, diff: &[u8], prior_hash: &[u8; 32], new_hash: &[u8; 32]) -> Result<B256>;
-    async fn submit_diff_pointer_to_chain(&self, cid: &str, prior_hash: &[u8; 32], new_hash: &[u8; 32]) -> Result<B256>;
-    async fn submit_snapshot_to_chain(&self, snapshot: &[u8], prior_hash: &[u8; 32], new_hash: &[u8; 32]) -> Result<B256>;
-    async fn submit_snapshot_pointer_to_chain(&self, cid: &str, prior_hash: &[u8; 32], new_hash: &[u8; 32]) -> Result<B256>;
+    // Diff methods pass global hash + diff-specific hash
+    async fn submit_diff_to_chain(&self, diff: &[u8], prior_global: &[u8; 32], new_global: &[u8; 32], diff_hash: &[u8; 32]) -> Result<B256>;
+    async fn submit_diff_pointer_to_chain(&self, cid: &str, prior_global: &[u8; 32], new_global: &[u8; 32], diff_hash: &[u8; 32]) -> Result<B256>;
+
+    // Snapshot methods pass global hash + snapshot-specific hash
+    async fn submit_snapshot_to_chain(&self, snapshot: &[u8], prior_global: &[u8; 32], new_global: &[u8; 32], snapshot_hash: &[u8; 32]) -> Result<B256>;
+    async fn submit_snapshot_pointer_to_chain(&self, cid: &str, prior_global: &[u8; 32], new_global: &[u8; 32], snapshot_hash: &[u8; 32]) -> Result<B256>;
 }
 ```
 
@@ -1110,13 +1112,34 @@ DISTRIBUTED REPLICATION (via Blockchain):
 pragma solidity ^0.8.0;
 
 contract SyndDB {
-    // Simple hash chain: each new hash must reference the prior hash
-    bytes32 public lastHash;  // The last published hash (global state)
-    address public sequencer;
+    // HYBRID HASH CHAIN APPROACH:
+    // - Global chain (lastHash): Ensures total ordering and sequencer consistency
+    // - Per-type chains: Enable flexible traversal for read replicas
 
-    // Events
-    event DiffPublished(uint256 indexed fromVersion, uint256 indexed toVersion, bytes32 diffHash);
-    event SnapshotPublished(uint256 indexed version, bytes32 snapshotHash);
+    // Primary chain - every operation MUST update this
+    bytes32 public lastHash;  // Global state hash (ensures sequencer is always up-to-date)
+
+    // Secondary chains - for type-specific traversal by read replicas
+    bytes32 public lastDiffHash;      // Last diff hash (for incremental sync)
+    bytes32 public lastSnapshotHash;  // Last snapshot hash (for bootstrap)
+
+    address public sequencer;
+    uint256 public currentVersion;
+
+    // Events include both global and type-specific hashes
+    event DiffPublished(
+        uint256 indexed fromVersion,
+        uint256 indexed toVersion,
+        bytes32 diffHash,
+        bytes32 globalHash,
+        bytes32 priorDiffHash
+    );
+    event SnapshotPublished(
+        uint256 indexed version,
+        bytes32 snapshotHash,
+        bytes32 globalHash,
+        bytes32 priorSnapshotHash
+    );
 
     modifier onlySequencer() {
         require(msg.sender == sequencer, "Only sequencer can publish");
@@ -1125,58 +1148,94 @@ contract SyndDB {
 
     // Publish state diff directly to chain (for small state diffs)
     function publishDiff(
-        bytes32 priorHash,  // Must match lastHash
-        bytes32 newHash,    // New hash after this operation
-        bytes32 diffHash,
+        bytes32 priorGlobalHash,  // Must match lastHash (ensures global consistency)
+        bytes32 newGlobalHash,    // New global hash after this operation
+        bytes32 diffHash,         // Hash of this specific diff
         uint256 diffIndex,
         bytes calldata diffData
     ) external onlySequencer {
-        require(priorHash == lastHash, "Prior hash mismatch");
-        lastHash = newHash;
+        require(priorGlobalHash == lastHash, "Global hash mismatch");
+
+        // Update both chains
+        lastHash = newGlobalHash;
+        bytes32 priorDiffHash = lastDiffHash;
+        lastDiffHash = diffHash;
+
         // Store diff chunk - stub
     }
 
     // Publish state diff pointer (for large state diffs stored off-chain)
     function publishDiffPointer(
-        bytes32 priorHash,  // Must match lastHash
-        bytes32 newHash,    // New hash after this operation
-        bytes32 diffHash,
+        bytes32 priorGlobalHash,  // Must match lastHash (ensures global consistency)
+        bytes32 newGlobalHash,    // New global hash after this operation
+        bytes32 diffHash,         // Hash of this specific diff
         uint256 fromVersion,
         uint256 toVersion,
         string calldata storagePointer
     ) external onlySequencer {
-        require(priorHash == lastHash, "Prior hash mismatch");
+        require(priorGlobalHash == lastHash, "Global hash mismatch");
         require(toVersion > fromVersion, "Invalid version range");
 
-        lastHash = newHash;
-        emit DiffPublished(fromVersion, toVersion, diffHash);
+        // Store prior hashes for event
+        bytes32 priorDiffHash = lastDiffHash;
+
+        // Update all state
+        lastHash = newGlobalHash;
+        lastDiffHash = diffHash;
+        currentVersion = toVersion;
+
+        emit DiffPublished(fromVersion, toVersion, diffHash, newGlobalHash, priorDiffHash);
     }
 
     // Publish state snapshot directly to chain
     function publishSnapshot(
-        bytes32 priorHash,  // Must match lastHash
-        bytes32 newHash,    // New hash after this operation
-        bytes32 snapshotHash,
+        bytes32 priorGlobalHash,  // Must match lastHash (ensures global consistency)
+        bytes32 newGlobalHash,    // New global hash after this operation
+        bytes32 snapshotHash,     // Hash of this specific snapshot
         uint256 snapshotIndex,
         bytes calldata snapshotData
     ) external onlySequencer {
-        require(priorHash == lastHash, "Prior hash mismatch");
-        lastHash = newHash;
+        require(priorGlobalHash == lastHash, "Global hash mismatch");
+
+        // Update both chains
+        lastHash = newGlobalHash;
+        bytes32 priorSnapshotHash = lastSnapshotHash;
+        lastSnapshotHash = snapshotHash;
+
         // Store snapshot chunk - stub
     }
 
     // Publish state snapshot pointer
     function publishSnapshotPointer(
-        bytes32 priorHash,  // Must match lastHash
-        bytes32 newHash,    // New hash after this operation
-        bytes32 snapshotHash,
+        bytes32 priorGlobalHash,  // Must match lastHash (ensures global consistency)
+        bytes32 newGlobalHash,    // New global hash after this operation
+        bytes32 snapshotHash,     // Hash of this specific snapshot
         uint256 version,
         string calldata storagePointer
     ) external onlySequencer {
-        require(priorHash == lastHash, "Prior hash mismatch");
+        require(priorGlobalHash == lastHash, "Global hash mismatch");
 
-        lastHash = newHash;
-        emit SnapshotPublished(version, snapshotHash);
+        // Store prior hashes for event
+        bytes32 priorSnapshotHash = lastSnapshotHash;
+
+        // Update state
+        lastHash = newGlobalHash;
+        lastSnapshotHash = snapshotHash;
+
+        emit SnapshotPublished(version, snapshotHash, newGlobalHash, priorSnapshotHash);
+    }
+
+    // Helper view functions for read replicas
+    function getLatestDiff() external view returns (bytes32) {
+        return lastDiffHash;
+    }
+
+    function getLatestSnapshot() external view returns (bytes32) {
+        return lastSnapshotHash;
+    }
+
+    function getGlobalState() external view returns (bytes32 globalHash, bytes32 diffHash, bytes32 snapshotHash, uint256 version) {
+        return (lastHash, lastDiffHash, lastSnapshotHash, currentVersion);
     }
 }
 ```
@@ -1381,17 +1440,25 @@ class ArweaveStorage implements IOffchainStorageProvider {
  * It runs periodically to batch and submit accumulated local writes to the blockchain
  * This is separate from execute_local_write which handles individual client requests
  *
- * VERSION TRACKING:
- * - lastPublishedVersion: Tracks the last database version successfully submitted to chain
- * - batch.version: The current version after all queued local writes have been executed
- * - The diff generator creates a DatabaseDiff with (from_version, to_version) embedded
- * - BlockchainPublisher just submits this diff - it doesn't track versions itself
+ * HYBRID HASH TRACKING:
+ * - lastGlobalHash: Ensures sequencer has seen all prior operations (diffs AND snapshots)
+ * - lastDiffHash: Tracks the diff-specific chain for incremental updates
+ * - lastSnapshotHash: Tracks the snapshot-specific chain for bootstrapping
+ *
+ * Benefits:
+ * 1. Sequencer must acknowledge ALL operations via global hash
+ * 2. Read replicas can follow just diffs for incremental sync
+ * 3. New replicas can bootstrap from snapshots without processing all diffs
+ * 4. Replicas can verify they're on the correct chain via global hash
  */
 class BlockchainSubmitter {
   private queue: ChainSubmitQueue;  // Queue of local writes submitted via execute_local_write
   private storage: IOffchainStorageProvider;
   private blockchainClient: IBlockchainPublisher;  // Thin wrapper for chain interaction
   private lastPublishedVersion: u64;  // VERSION TRACKING: Last version on chain
+  private lastGlobalHash: bytes32;    // HASH TRACKING: Global chain
+  private lastDiffHash: bytes32;      // HASH TRACKING: Diff-specific chain
+  private lastSnapshotHash: bytes32;  // HASH TRACKING: Snapshot-specific chain
 
   /**
    * Called periodically (e.g., every second) to submit accumulated local writes to blockchain
@@ -1440,24 +1507,34 @@ class BlockchainSubmitter {
   }
 
   private async publishDirectlyOnchain(diff: DatabaseDiff) {
-    // Pass prior hash and new hash for chain consistency
+    const newGlobalHash = this.computeGlobalHash(diff);
+    const diffHash = this.computeDiffHash(diff);
+
     await this.blockchainClient.submitDiffToChain(
       diff.compressed,
-      this.lastPublishedHash,  // Must match lastHash on chain
-      this.computeNewHash(diff) // New hash after this diff
+      this.lastGlobalHash,     // Must match global lastHash on chain
+      newGlobalHash,           // New global hash
+      diffHash                 // Hash of this specific diff
     );
-    this.lastPublishedHash = this.computeNewHash(diff);
+
+    this.lastGlobalHash = newGlobalHash;
+    this.lastDiffHash = diffHash;
   }
 
   private async publishViaOffchainStorage(diff: DatabaseDiff) {
     const cid = await this.storage.storeToIPFS(diff.compressed);
+    const newGlobalHash = this.computeGlobalHash(diff);
+    const diffHash = this.computeDiffHash(diff);
 
     await this.blockchainClient.submitDiffPointerToChain(
       cid,
-      this.lastPublishedHash,  // Must match lastHash on chain
-      this.computeNewHash(diff) // New hash after this diff
+      this.lastGlobalHash,     // Must match global lastHash on chain
+      newGlobalHash,           // New global hash
+      diffHash                 // Hash of this specific diff
     );
-    this.lastPublishedHash = this.computeNewHash(diff);
+
+    this.lastGlobalHash = newGlobalHash;
+    this.lastDiffHash = diffHash;
   }
 }
 ```
