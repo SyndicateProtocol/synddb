@@ -66,12 +66,12 @@ synddb/
 │   ├── sequencer/
 │   │   ├── sequencer.ts    # Main sequencer orchestrator
 │   │   ├── batcher.ts      # Transaction batching logic
-│   │   ├── compressor.ts   # Diff/snapshot compression
+│   │   ├── compressor.ts   # State diff/state snapshot compression
 │   │   └── publisher.ts    # Blockchain publishing
 │   ├── replica/
 │   │   ├── replica.ts      # Main read replica orchestrator
-│   │   ├── syncer.ts       # State synchronization
-│   │   ├── reconstructor.ts # Database reconstruction
+│   │   ├── syncer.ts       # State sync
+│   │   ├── reconstructor.ts # State reconstruction
 │   │   ├── query.ts        # Query interface
 │   │   └── validator.ts    # Optional: TEE validator for settlement
 │   ├── contracts/
@@ -101,11 +101,11 @@ synddb/
 // Core database interface
 interface ISyndDatabase {
   execute(sql: string, params?: any[]): Promise<Result>;
-  beginTransaction(): Promise<Transaction>;
-  generateSnapshot(): Promise<Snapshot>;
-  generateDiff(fromVersion: number, toVersion: number): Promise<Diff>;
-  applySnapshot(snapshot: Snapshot): Promise<void>;
-  applyDiff(diff: Diff): Promise<void>;
+  beginTransaction(): Promise<DatabaseTransaction>;
+  generateSnapshot(): Promise<StateSnapshot>;
+  generateDiff(fromVersion: number, toVersion: number): Promise<StateDiff>;
+  applySnapshot(snapshot: StateSnapshot): Promise<void>;
+  applyDiff(diff: StateDiff): Promise<void>;
 }
 
 // Sequencer interface
@@ -133,10 +133,10 @@ interface IStorageProvider {
 
 // Chain publisher interface
 interface IChainPublisher {
-  writeDiff(diff: Buffer): Promise<TransactionHash>;
-  writeDiffPointer(cid: string): Promise<TransactionHash>;
-  writeSnapshot(snapshot: Buffer): Promise<TransactionHash>;
-  writeSnapshotPointer(cid: string): Promise<TransactionHash>;
+  publishDiff(diff: Buffer): Promise<TransactionHash>;
+  publishDiffPointer(cid: string): Promise<TransactionHash>;
+  publishSnapshot(snapshot: Buffer): Promise<TransactionHash>;
+  publishSnapshotPointer(cid: string): Promise<TransactionHash>;
 }
 ```
 
@@ -159,7 +159,7 @@ synddb:
     compression: zstd
     publish_interval_ms: 1000
     max_diff_size: 1048576  # 1MB
-    snapshot_interval: 10000  # Every 10k transactions
+    state_snapshot_interval: 10000  # Every 10k transactions
 
   replica:
     sync_interval_ms: 500
@@ -687,7 +687,7 @@ class OrderTransactionBuilder {
 
 ### Goals
 - Implement smart contracts for state publication
-- Build diff and snapshot generation system
+- Build state diff and state snapshot generation system
 - Implement compression and chunking for large states
 - Create off-chain storage integration (IPFS/Arweave)
 
@@ -740,8 +740,8 @@ contract SyndDB {
         _;
     }
 
-    // Write diff directly to chain (for small diffs)
-    function writeDiff(
+    // Publish state diff directly to chain (for small state diffs)
+    function publishDiff(
         bytes32 diffHash,
         uint256 diffIndex,
         bytes calldata diffData
@@ -750,8 +750,8 @@ contract SyndDB {
         // Implementation depends on max size constraints
     }
 
-    // Write diff pointer (for large diffs stored off-chain)
-    function writeDiffPointer(
+    // Publish state diff pointer (for large state diffs stored off-chain)
+    function publishDiffPointer(
         bytes32 diffHash,
         uint256 fromVersion,
         uint256 toVersion,
@@ -772,8 +772,8 @@ contract SyndDB {
         emit DiffPublished(fromVersion, toVersion, diffHash);
     }
 
-    // Write snapshot directly to chain
-    function writeSnapshot(
+    // Publish state snapshot directly to chain
+    function publishSnapshot(
         bytes32 snapshotHash,
         uint256 snapshotIndex,
         bytes calldata snapshotData
@@ -781,8 +781,8 @@ contract SyndDB {
         // Store snapshot chunk
     }
 
-    // Write snapshot pointer
-    function writeSnapshotPointer(
+    // Publish state snapshot pointer
+    function publishSnapshotPointer(
         bytes32 snapshotHash,
         uint256 version,
         string calldata storagePointer
@@ -799,13 +799,13 @@ contract SyndDB {
 }
 ```
 
-#### 4.2 Diff Generation System
+#### 4.2 State Diff Generation System
 ```typescript
 class DiffGenerator {
   private lastPublishedVersion: number = 0;
   private changeLog: ChangeLog;
 
-  async generateDiff(fromVersion: number, toVersion: number): Promise<Diff> {
+  async generateDiff(fromVersion: number, toVersion: number): Promise<StateDiff> {
     // Get all changes between versions
     const changes = await this.changeLog.getChanges(fromVersion, toVersion);
 
@@ -818,8 +818,8 @@ class DiffGenerator {
       sqlStatements.push(...this.generateTableDiff(table, tableChanges));
     }
 
-    // Create diff object
-    const diff: Diff = {
+    // Create state diff object
+    const diff: StateDiff = {
       fromVersion,
       toVersion,
       statements: sqlStatements,
@@ -858,7 +858,7 @@ class DiffGenerator {
     return statements;
   }
 
-  private async compress(diff: Diff): Promise<Buffer> {
+  private async compress(diff: StateDiff): Promise<Buffer> {
     // Use zstd for best compression ratio with good speed
     const json = JSON.stringify(diff);
     return await zstd.compress(Buffer.from(json), 3);
@@ -866,10 +866,10 @@ class DiffGenerator {
 }
 ```
 
-#### 4.3 Snapshot Generation
+#### 4.3 State Snapshot Generation
 ```typescript
 class SnapshotGenerator {
-  async generateSnapshot(): Promise<Snapshot> {
+  async generateSnapshot(): Promise<StateSnapshot> {
     const version = await this.getCurrentVersion();
 
     // Use SQLite backup API for consistent snapshot
@@ -885,7 +885,7 @@ class SnapshotGenerator {
     // Compress snapshot
     const compressed = await zstd.compress(snapshotData, 6);
 
-    const snapshot: Snapshot = {
+    const snapshot: StateSnapshot = {
       version,
       merkleRoot,
       size: snapshotData.length,
@@ -984,7 +984,7 @@ class StatePublisher {
       return;
     }
 
-    // Generate diff from last published version
+    // Generate state diff from last published version
     const diff = await this.diffGenerator.generateDiff(
       this.lastPublishedVersion,
       batch.version
@@ -1008,26 +1008,26 @@ class StatePublisher {
     }
   }
 
-  private determinePublishStrategy(diff: Diff): 'direct' | 'pointer' {
+  private determinePublishStrategy(diff: StateDiff): 'direct' | 'pointer' {
     const MAX_ONCHAIN_SIZE = 100 * 1024; // 100KB
     return diff.compressedSize < MAX_ONCHAIN_SIZE ? 'direct' : 'pointer';
   }
 
-  private async publishDirect(diff: Diff) {
+  private async publishDirect(diff: StateDiff) {
     // Chunk if necessary
     const chunks = this.chunkData(diff.compressed, 30000);
 
     for (let i = 0; i < chunks.length; i++) {
-      await this.chain.writeDiff(chunks[i]);
+      await this.chain.publishDiff(chunks[i]);
     }
   }
 
-  private async publishViaPointer(diff: Diff) {
+  private async publishViaPointer(diff: StateDiff) {
     // Store to IPFS/Arweave
     const cid = await this.storage.store(diff.compressed);
 
     // Publish pointer to chain
-    await this.chain.writeDiffPointer(cid);
+    await this.chain.publishDiffPointer(cid);
   }
 }
 ```
@@ -1036,7 +1036,7 @@ class StatePublisher {
 
 ### Goals
 - Build read replica nodes that sync from blockchain (anyone can run a replica)
-- Implement state reconstruction from diffs and snapshots
+- Implement state derivation from state diffs and state snapshots
 - Create query interface for read replicas
 - Build monitoring and alerting system for replica health
 - Enable permissionless replica deployment - no special authorization needed
@@ -1075,13 +1075,13 @@ class ReadReplicaNode {
     const latestSnapshot = await this.findLatestSnapshot();
 
     if (latestSnapshot) {
-      await this.initializeFromSnapshot(latestSnapshot);
+      await this.bootstrapFromSnapshot(latestSnapshot);
     } else {
-      await this.initializeFromGenesis();
+      await this.bootstrapFromGenesis();
     }
   }
 
-  private async initializeFromSnapshot(snapshot: SnapshotCommitment) {
+  private async bootstrapFromSnapshot(snapshot: SnapshotCommitment) {
     // Retrieve snapshot from storage
     const data = await this.storage.retrieve(snapshot.storagePointer);
 
@@ -1169,7 +1169,7 @@ class StateSyncer {
 
     // Decompress
     const decompressed = await zstd.decompress(diffData);
-    const diff = JSON.parse(decompressed.toString()) as Diff;
+    const diff = JSON.parse(decompressed.toString()) as StateDiff;
 
     // Verify integrity
     const calculatedHash = hash(decompressed);
