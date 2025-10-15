@@ -12,7 +12,7 @@ SyndDB is a high-performance blockchain database that replaces traditional EVM e
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌──────────────────┐         ┌──────────────────┐             │
-│  │   Writer/Leader   │         │  Reader/Validator │             │
+│  │      Writer      │         │      Reader       │             │
 │  │                   │         │                   │             │
 │  │  ┌─────────────┐  │         │  ┌─────────────┐  │             │
 │  │  │   SQLite    │  │         │  │   SQLite    │  │             │
@@ -64,15 +64,16 @@ synddb/
 │   │   ├── types/          # Core type definitions
 │   │   └── config/         # Configuration management
 │   ├── writer/
-│   │   ├── leader.ts       # Main writer orchestrator
+│   │   ├── writer.ts       # Main writer orchestrator
 │   │   ├── batcher.ts      # Transaction batching logic
 │   │   ├── compressor.ts   # Diff/snapshot compression
 │   │   └── publisher.ts    # Blockchain publishing
 │   ├── reader/
-│   │   ├── validator.ts    # Main validator orchestrator
+│   │   ├── reader.ts       # Main reader orchestrator
 │   │   ├── syncer.ts       # State synchronization
 │   │   ├── reconstructor.ts # Database reconstruction
-│   │   └── query.ts        # Query interface
+│   │   ├── query.ts        # Query interface
+│   │   └── validator.ts    # Optional: TEE validator for settlement
 │   ├── contracts/
 │   │   ├── interfaces/     # Contract interfaces
 │   │   └── implementations/ # Solidity contracts
@@ -727,15 +728,15 @@ contract SyndDB {
     mapping(uint256 => SnapshotCommitment) public snapshots;
 
     uint256 public currentVersion;
-    address public leader;
+    address public writer;
 
     // Events
     event DiffPublished(uint256 indexed fromVersion, uint256 indexed toVersion, bytes32 diffHash);
     event SnapshotPublished(uint256 indexed version, bytes32 snapshotHash);
     event StateAdvanced(uint256 indexed version, bytes32 stateRoot);
 
-    modifier onlyLeader() {
-        require(msg.sender == leader, "Only leader can publish");
+    modifier onlyWriter() {
+        require(msg.sender == writer, "Only writer can publish");
         _;
     }
 
@@ -744,7 +745,7 @@ contract SyndDB {
         bytes32 diffHash,
         uint256 diffIndex,
         bytes calldata diffData
-    ) external onlyLeader {
+    ) external onlyWriter {
         // Store diff chunk
         // Implementation depends on max size constraints
     }
@@ -755,7 +756,7 @@ contract SyndDB {
         uint256 fromVersion,
         uint256 toVersion,
         string calldata storagePointer
-    ) external onlyLeader {
+    ) external onlyWriter {
         require(toVersion > fromVersion, "Invalid version range");
         require(toVersion > currentVersion, "Version must advance");
 
@@ -776,7 +777,7 @@ contract SyndDB {
         bytes32 snapshotHash,
         uint256 snapshotIndex,
         bytes calldata snapshotData
-    ) external onlyLeader {
+    ) external onlyWriter {
         // Store snapshot chunk
     }
 
@@ -785,7 +786,7 @@ contract SyndDB {
         bytes32 snapshotHash,
         uint256 version,
         string calldata storagePointer
-    ) external onlyLeader {
+    ) external onlyWriter {
         snapshots[version] = SnapshotCommitment({
             snapshotHash: snapshotHash,
             version: version,
@@ -1031,23 +1032,24 @@ class StatePublisher {
 }
 ```
 
-## Phase 5: Validator Implementation (Week 10-11)
+## Phase 5: Reader Implementation (Week 10-11)
 
 ### Goals
-- Build reader/validator nodes that sync from blockchain
+- Build reader nodes that sync from blockchain
 - Implement state reconstruction from diffs and snapshots
 - Create query interface for read replicas
 - Build monitoring and alerting system
+- Note: Validators are a special type of reader with TEE-based settlement capabilities (covered in Phase 6)
 
 ### Tasks
 
-#### 5.1 Validator Node Architecture
+#### 5.1 Reader Node Architecture
 ```typescript
-class ValidatorNode {
+class ReaderNode {
   private db: SyndDatabase;
   private syncer: StateSyncer;
   private queryEngine: QueryEngine;
-  private monitor: ValidatorMonitor;
+  private monitor: ReaderMonitor;
 
   async start() {
     // Initialize from latest snapshot or genesis
@@ -1235,7 +1237,7 @@ class QueryEngine {
 
 #### 5.4 Monitoring and Alerting
 ```typescript
-class ValidatorMonitor {
+class ReaderMonitor {
   private metrics: MetricsCollector;
   private alerts: AlertManager;
 
@@ -1279,7 +1281,7 @@ class ValidatorMonitor {
     this.alerts.addRule({
       name: 'high_version_lag',
       condition: () => this.targetVersion - this.currentVersion > 100,
-      message: 'Validator is lagging behind by more than 100 versions'
+      message: 'Reader is lagging behind by more than 100 versions'
     });
 
     // Alert if sync is stuck
@@ -1299,19 +1301,20 @@ class ValidatorMonitor {
 }
 ```
 
-## Phase 6: TEE Integration & Settlement (Week 12-13)
+## Phase 6: TEE Validators & Settlement (Week 12-13)
 
 ### Goals
-- Implement TEE-based validators for settlement
+- Implement TEE-based validators (specialized readers with settlement capabilities)
 - Build bridge message processing
 - Create settlement transaction system
 - Implement circuit breakers and safety mechanisms
 
 ### Tasks
 
-#### 6.1 TEE Validator Architecture
+#### 6.1 TEE Validator Architecture (Specialized Reader)
 ```typescript
-class TEEValidator {
+// TEEValidator extends ReaderNode with additional settlement capabilities
+class TEEValidator extends ReaderNode {
   private enclave: SecureEnclave;
   private settlementKey: PrivateKey;
   private bridge: BridgeContract;
@@ -1693,8 +1696,8 @@ services:
 - **Weeks 3-5**: SQLite engine and performance tuning
 - **Weeks 6-7**: Transaction types and triggers
 - **Weeks 8-9**: Blockchain integration and publishing
-- **Weeks 10-11**: Validator implementation
-- **Weeks 12-13**: TEE integration and settlement
+- **Weeks 10-11**: Reader implementation
+- **Weeks 12-13**: TEE validators (specialized readers) and settlement
 - **Weeks 14-15**: Testing and optimization
 
 ## Next Steps
