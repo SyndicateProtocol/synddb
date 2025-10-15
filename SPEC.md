@@ -20,6 +20,8 @@ This design balances performance and decentralization, recognizing that some use
 ## Trade-offs
 For this performance, applications must accept:
 1. Significant decentralization trade-offs in block production (decentralization in validators is maintained)
+   - Single sequencer architecture means liveness failures if the sequencer goes down
+   - Fallback sequencers must restart from last published state, not the sequencer's current state (potential data loss between publications)
 2. Non-EVM execution framework
 3. Asset location flexibility comes with different trade-offs:
    - Assets on settlement layer: Maximum security but requires message passing for actions
