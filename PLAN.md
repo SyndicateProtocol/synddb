@@ -1,7 +1,7 @@
 # SyndDB Implementation Plan
 
 ## Executive Summary
-SyndDB is a high-performance blockchain database that replaces traditional EVM execution with SQLite, enabling ultra-low latency database operations while maintaining decentralized validation. The system consists of a single writer node and multiple reader nodes that anyone can run permissionlessly. Only a small subset of readers with TEE hardware become validators for settlement operations. This plan outlines a phased approach to build the complete system, starting with core architecture, focusing on SQLite performance, and progressively adding blockchain integration and validation capabilities.
+SyndDB is a high-performance blockchain database that replaces traditional EVM execution with SQLite, enabling ultra-low latency database operations while maintaining decentralized validation. The system consists of a single sequencer node and multiple read replica nodes that anyone can run permissionlessly. Only a small subset of read replicas with TEE hardware become validators for settlement operations. This plan outlines a phased approach to build the complete system, starting with core architecture, focusing on SQLite performance, and progressively adding blockchain integration and validation capabilities.
 
 ## Architecture Overview
 
@@ -12,7 +12,7 @@ SyndDB is a high-performance blockchain database that replaces traditional EVM e
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌──────────────────┐      ┌────────────────────────────┐      │
-│  │   Writer (1)     │      │  Readers (Anyone Can Run)  │      │
+│  │  Sequencer (1)   │      │ Read Replicas (Anyone)    │      │
 │  │                   │      │                            │      │
 │  │  ┌─────────────┐  │      │  ┌─────────────────────┐  │      │
 │  │  │   SQLite    │  │      │  │  SQLite Replicas    │  │      │
@@ -63,13 +63,13 @@ synddb/
 │   │   ├── database/       # SQLite abstraction layer
 │   │   ├── types/          # Core type definitions
 │   │   └── config/         # Configuration management
-│   ├── writer/
-│   │   ├── writer.ts       # Main writer orchestrator
+│   ├── sequencer/
+│   │   ├── sequencer.ts    # Main sequencer orchestrator
 │   │   ├── batcher.ts      # Transaction batching logic
 │   │   ├── compressor.ts   # Diff/snapshot compression
 │   │   └── publisher.ts    # Blockchain publishing
-│   ├── reader/
-│   │   ├── reader.ts       # Main reader orchestrator
+│   ├── replica/
+│   │   ├── replica.ts      # Main read replica orchestrator
 │   │   ├── syncer.ts       # State synchronization
 │   │   ├── reconstructor.ts # Database reconstruction
 │   │   ├── query.ts        # Query interface
@@ -108,16 +108,16 @@ interface ISyndDatabase {
   applyDiff(diff: Diff): Promise<void>;
 }
 
-// Writer interface
-interface IWriter {
+// Sequencer interface
+interface ISequencer {
   start(): Promise<void>;
   stop(): Promise<void>;
   submitTransaction(tx: DatabaseTransaction): Promise<TransactionReceipt>;
   publishState(): Promise<PublishReceipt>;
 }
 
-// Reader interface
-interface IReader {
+// Read Replica interface
+interface IReadReplica {
   start(): Promise<void>;
   stop(): Promise<void>;
   syncToLatest(): Promise<void>;
@@ -144,7 +144,7 @@ interface IChainPublisher {
 ```yaml
 # config.yaml
 synddb:
-  role: writer  # or reader
+  role: sequencer  # or replica
 
   database:
     path: ./data/synddb.sqlite
@@ -153,7 +153,7 @@ synddb:
     cache_size: -64000  # 64MB
     mmap_size: 30000000000  # 30GB
 
-  writer:
+  sequencer:
     batch_size: 1000
     batch_timeout_ms: 100
     compression: zstd
@@ -161,7 +161,7 @@ synddb:
     max_diff_size: 1048576  # 1MB
     snapshot_interval: 10000  # Every 10k transactions
 
-  reader:
+  replica:
     sync_interval_ms: 500
     cache_ttl_ms: 60000
     max_lag_blocks: 100
@@ -728,15 +728,15 @@ contract SyndDB {
     mapping(uint256 => SnapshotCommitment) public snapshots;
 
     uint256 public currentVersion;
-    address public writer;
+    address public sequencer;
 
     // Events
     event DiffPublished(uint256 indexed fromVersion, uint256 indexed toVersion, bytes32 diffHash);
     event SnapshotPublished(uint256 indexed version, bytes32 snapshotHash);
     event StateAdvanced(uint256 indexed version, bytes32 stateRoot);
 
-    modifier onlyWriter() {
-        require(msg.sender == writer, "Only writer can publish");
+    modifier onlySequencer() {
+        require(msg.sender == sequencer, "Only sequencer can publish");
         _;
     }
 
@@ -745,7 +745,7 @@ contract SyndDB {
         bytes32 diffHash,
         uint256 diffIndex,
         bytes calldata diffData
-    ) external onlyWriter {
+    ) external onlySequencer {
         // Store diff chunk
         // Implementation depends on max size constraints
     }
@@ -756,7 +756,7 @@ contract SyndDB {
         uint256 fromVersion,
         uint256 toVersion,
         string calldata storagePointer
-    ) external onlyWriter {
+    ) external onlySequencer {
         require(toVersion > fromVersion, "Invalid version range");
         require(toVersion > currentVersion, "Version must advance");
 
@@ -777,7 +777,7 @@ contract SyndDB {
         bytes32 snapshotHash,
         uint256 snapshotIndex,
         bytes calldata snapshotData
-    ) external onlyWriter {
+    ) external onlySequencer {
         // Store snapshot chunk
     }
 
@@ -786,7 +786,7 @@ contract SyndDB {
         bytes32 snapshotHash,
         uint256 version,
         string calldata storagePointer
-    ) external onlyWriter {
+    ) external onlySequencer {
         snapshots[version] = SnapshotCommitment({
             snapshotHash: snapshotHash,
             version: version,
@@ -1032,30 +1032,30 @@ class StatePublisher {
 }
 ```
 
-## Phase 5: Reader Implementation (Week 10-11)
+## Phase 5: Read Replica Implementation (Week 10-11)
 
 ### Goals
-- Build reader nodes that sync from blockchain (anyone can run a reader)
+- Build read replica nodes that sync from blockchain (anyone can run a replica)
 - Implement state reconstruction from diffs and snapshots
 - Create query interface for read replicas
-- Build monitoring and alerting system for reader health
-- Enable permissionless reader deployment - no special authorization needed
+- Build monitoring and alerting system for replica health
+- Enable permissionless replica deployment - no special authorization needed
 
 **Important Notes:**
-- **Anyone can run a reader node** - readers are permissionless and open to all
-- **Readers provide data access and queries** - most readers will only serve this function
-- **Validators are a subset of readers** - only some readers with TEE capabilities become validators (Phase 6)
-- **No settlement authority for regular readers** - only TEE validators can process withdrawals
+- **Anyone can run a read replica** - replicas are permissionless and open to all
+- **Read replicas provide data access and queries** - most replicas will only serve this function
+- **Validators are a subset of read replicas** - only some replicas with TEE capabilities become validators (Phase 6)
+- **No settlement authority for regular replicas** - only TEE validators can process withdrawals
 
 ### Tasks
 
-#### 5.1 Reader Node Architecture
+#### 5.1 Read Replica Node Architecture
 ```typescript
-class ReaderNode {
+class ReadReplicaNode {
   private db: SyndDatabase;
   private syncer: StateSyncer;
   private queryEngine: QueryEngine;
-  private monitor: ReaderMonitor;
+  private monitor: ReplicaMonitor;
 
   async start() {
     // Initialize from latest snapshot or genesis
@@ -1243,7 +1243,7 @@ class QueryEngine {
 
 #### 5.4 Monitoring and Alerting
 ```typescript
-class ReaderMonitor {
+class ReplicaMonitor {
   private metrics: MetricsCollector;
   private alerts: AlertManager;
 
@@ -1287,7 +1287,7 @@ class ReaderMonitor {
     this.alerts.addRule({
       name: 'high_version_lag',
       condition: () => this.targetVersion - this.currentVersion > 100,
-      message: 'Reader is lagging behind by more than 100 versions'
+      message: 'Read replica is lagging behind by more than 100 versions'
     });
 
     // Alert if sync is stuck
@@ -1310,24 +1310,24 @@ class ReaderMonitor {
 ## Phase 6: TEE Validators & Settlement (Week 12-13)
 
 ### Goals
-- Implement TEE-based validators (a small subset of readers with settlement capabilities)
+- Implement TEE-based validators (a small subset of read replicas with settlement capabilities)
 - Build bridge message processing for validator-only operations
 - Create settlement transaction system that only validators can execute
 - Implement circuit breakers and safety mechanisms
 
 **Key Distinctions:**
-- **Validators are optional** - the system works with just regular readers for queries
-- **Only a small subset of readers become validators** - most readers remain query-only nodes
-- **TEE hardware required** - validators need specialized TEE hardware that regular readers don't
-- **Settlement authority** - only validators can sign bridge transactions, regular readers cannot
-- **Higher trust requirements** - validators must be registered and attested, readers need no permission
+- **Validators are optional** - the system works with just regular read replicas for queries
+- **Only a small subset of read replicas become validators** - most replicas remain query-only nodes
+- **TEE hardware required** - validators need specialized TEE hardware that regular replicas don't
+- **Settlement authority** - only validators can sign bridge transactions, regular replicas cannot
+- **Higher trust requirements** - validators must be registered and attested, replicas need no permission
 
 ### Tasks
 
-#### 6.1 TEE Validator Architecture (Specialized Reader)
+#### 6.1 TEE Validator Architecture (Specialized Read Replica)
 ```typescript
-// TEEValidator extends ReaderNode with additional settlement capabilities
-class TEEValidator extends ReaderNode {
+// TEEValidator extends ReadReplicaNode with additional settlement capabilities
+class TEEValidator extends ReadReplicaNode {
   private enclave: SecureEnclave;
   private settlementKey: PrivateKey;
   private bridge: BridgeContract;
@@ -1505,34 +1505,34 @@ describe('SyndDatabase', () => {
 ##### Integration Tests
 ```typescript
 describe('End-to-End Flow', () => {
-  let writer: Writer;
-  let reader: Reader;
+  let sequencer: Sequencer;
+  let replica: ReadReplica;
   let chain: MockChain;
 
   beforeEach(async () => {
     chain = await MockChain.deploy();
-    writer = new Writer(writerConfig);
-    reader = new Reader(readerConfig);
+    sequencer = new Sequencer(sequencerConfig);
+    replica = new ReadReplica(replicaConfig);
 
-    await writer.start();
-    await reader.start();
+    await sequencer.start();
+    await replica.start();
   });
 
-  it('should sync state from writer to reader', async () => {
-    // Submit transactions to writer
+  it('should sync state from sequencer to read replica', async () => {
+    // Submit transactions to sequencer
     const txs = generateTestTransactions(100);
     for (const tx of txs) {
-      await writer.submitTransaction(tx);
+      await sequencer.submitTransaction(tx);
     }
 
     // Wait for publish
     await waitForPublish();
 
-    // Wait for reader sync
-    await waitForSync(reader);
+    // Wait for replica sync
+    await waitForSync(replica);
 
-    // Query reader and verify state
-    const result = await reader.query('SELECT COUNT(*) as count FROM orders');
+    // Query replica and verify state
+    const result = await replica.query('SELECT COUNT(*) as count FROM orders');
     expect(result[0].count).toBe(100);
   });
 });
@@ -1591,13 +1591,13 @@ class MemoryOptimizer {
 
 ### Infrastructure Requirements
 
-#### Writer Node
+#### Sequencer Node
 - CPU: 16+ cores (for parallel transaction processing)
 - RAM: 64GB+ (for in-memory caching)
 - Storage: NVMe SSD, 2TB+ (for database and WAL)
 - Network: 10Gbps+ (for state publishing)
 
-#### Reader Node
+#### Read Replica Node
 - CPU: 8+ cores
 - RAM: 32GB+
 - Storage: NVMe SSD, 1TB+
@@ -1609,14 +1609,14 @@ class MemoryOptimizer {
 version: '3.8'
 
 services:
-  writer:
-    image: synddb/writer:latest
+  sequencer:
+    image: synddb/sequencer:latest
     environment:
-      - ROLE=writer
+      - ROLE=sequencer
       - CHAIN_RPC=${CHAIN_RPC}
-      - PRIVATE_KEY=${WRITER_PRIVATE_KEY}
+      - PRIVATE_KEY=${SEQUENCER_PRIVATE_KEY}
     volumes:
-      - writer-data:/data
+      - sequencer-data:/data
     ports:
       - "8080:8080"
     deploy:
@@ -1625,13 +1625,13 @@ services:
           cpus: '16'
           memory: 64G
 
-  reader:
-    image: synddb/reader:latest
+  replica:
+    image: synddb/replica:latest
     environment:
-      - ROLE=reader
+      - ROLE=replica
       - CHAIN_RPC=${CHAIN_RPC}
     volumes:
-      - reader-data:/data
+      - replica-data:/data
     ports:
       - "3000:3000"
     deploy:
@@ -1642,8 +1642,8 @@ services:
           memory: 32G
 
 volumes:
-  writer-data:
-  reader-data:
+  sequencer-data:
+  replica-data:
 ```
 
 ### Monitoring Stack
@@ -1670,11 +1670,11 @@ services:
 ### Performance Targets
 - **Transaction Throughput**: 50,000+ TPS for simple operations
 - **Query Latency**: <5ms p99 for indexed queries
-- **Sync Latency**: <1 second from writer to reader
+- **Sync Latency**: <1 second from sequencer to read replicas
 - **State Publishing Cost**: <$0.01 per 1000 transactions
 
 ### Reliability Targets
-- **Uptime**: 99.9% for readers, 99.95% for writer
+- **Uptime**: 99.9% for read replicas, 99.95% for sequencer
 - **Data Durability**: 99.999999% (via blockchain + IPFS/Arweave)
 - **Recovery Time**: <5 minutes from snapshot
 
@@ -1694,7 +1694,7 @@ services:
    - Fallback: Rebuild from snapshots
 
 ### Operational Risks
-1. **Writer Compromise**
+1. **Sequencer Compromise**
    - Mitigation: Hardware security modules (HSM)
    - Mitigation: Multi-sig for critical operations
    - Mitigation: Circuit breakers and rate limits
@@ -1709,8 +1709,8 @@ services:
 - **Weeks 3-5**: SQLite engine and performance tuning
 - **Weeks 6-7**: Transaction types and triggers
 - **Weeks 8-9**: Blockchain integration and publishing
-- **Weeks 10-11**: Reader implementation
-- **Weeks 12-13**: TEE validators (specialized readers) and settlement
+- **Weeks 10-11**: Read replica implementation
+- **Weeks 12-13**: TEE validators (specialized read replicas) and settlement
 - **Weeks 14-15**: Testing and optimization
 
 ## Next Steps
@@ -1725,7 +1725,7 @@ services:
 
 ### Why SQLite?
 - Embedded database (no separate server process)
-- Excellent performance for single-writer model
+- Excellent performance for single-sequencer model
 - Battle-tested with billions of deployments
 - Full ACID compliance
 - Rich SQL support including triggers
