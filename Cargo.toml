@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/synddb-core",
+    "crates/synddb-sequencer",
+    "crates/synddb-replica",
+    "crates/synddb-contracts",
+    "crates/synddb-storage",
+    "crates/synddb-utils",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/syndicate-io/synddb"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.41", features = ["full"] }
+async-trait = "0.1"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "backup", "blob", "vtab"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "2.0.0-rc.3"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Compression
+zstd = "0.13"
+
+# Cryptography
+sha3 = "0.10"
+ring = "0.17"
+
+# Blockchain (alloy)
+alloy = { version = "1.0", features = ["full"] }
+
+# Metrics
+metrics = "0.24"
+
+# Config
+config = "0.14"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Storage providers
+ipfs-api = "0.17"
+
+# Utils
+parking_lot = "0.12"
