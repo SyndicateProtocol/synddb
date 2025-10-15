@@ -327,7 +327,18 @@ impl Default for ArweaveConfig {
 
 impl SyndDBConfig {
     /// Load configuration from a file
+    ///
+    /// This loads configuration from multiple sources in priority order:
+    /// 1. Environment variables with SYNDDB_ prefix (highest priority)
+    /// 2. Config file (YAML/TOML/JSON)
+    /// 3. Defaults defined in code
+    ///
+    /// In development, a .env file will be automatically loaded if present.
+    /// The .env file should never be committed to version control.
     pub fn from_file(path: &str) -> Result<Self> {
+        // Load .env file if it exists (development only - fails silently in production)
+        dotenvy::dotenv().ok();
+
         let config = config::Config::builder()
             .add_source(config::File::with_name(path))
             .add_source(config::Environment::with_prefix("SYNDDB"))

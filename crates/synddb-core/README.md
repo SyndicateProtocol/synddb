@@ -237,10 +237,28 @@ PRAGMA locking_mode = EXCLUSIVE;
 
 ## Configuration
 
-Configuration can be loaded from files or environment variables:
+SyndDB uses a layered configuration system with the following priority order (highest to lowest):
+
+1. **Environment variables** (prefixed with `SYNDDB_`)
+2. **Configuration files** (YAML/TOML/JSON)
+3. **Default values** (defined in code)
+
+### Development Setup
+
+For local development, create a `.env` file from the example:
+
+```bash
+cp .env.example .env
+# Edit .env with your local settings
+```
+
+The `.env` file is automatically loaded during development and should **never** be committed to version control.
+
+### Configuration File
+
+Create a `config.yaml` file:
 
 ```yaml
-# config.yaml
 synddb:
   role: sequencer
 
@@ -271,12 +289,36 @@ synddb:
       api_endpoint: http://localhost:5001
 ```
 
-Load configuration:
+### Environment Variables
+
+You can override any config value using environment variables:
+
+```bash
+# Override database path
+export SYNDDB_DATABASE_PATH=/custom/path/db.sqlite
+
+# Override RPC URL
+export SYNDDB_CHAIN_RPC_URL=https://custom-rpc.example.com
+
+# Private keys should ONLY be set via env vars, never in config files
+export SYNDDB_CHAIN_PRIVATE_KEY=0x...
+```
+
+### Loading Configuration
 
 ```rust
+// Loads from config file + .env (if present) + environment variables
 let config = SyndDBConfig::from_file("config.yaml")?;
 config.validate()?;
 ```
+
+### Production Deployment
+
+In production:
+- **DO NOT** use `.env` files (they won't exist)
+- Set environment variables via your deployment platform (Docker, Kubernetes, systemd, etc.)
+- Use secret management for sensitive values (private keys, API keys)
+- Configuration files can be used for non-sensitive defaults
 
 ## Testing
 
