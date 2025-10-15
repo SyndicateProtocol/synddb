@@ -1,12 +1,12 @@
 # SyndDB Core Implementation Plan
 
-## Important Note on Extensibility
-This document describes the **core implementation** of the SyndDB engine - the foundational infrastructure that powers all applications. For information about:
-- **Building applications on SyndDB**: See [EXTENSIBILITY.md](EXTENSIBILITY.md)
-- **Use case examples** (DEXs, tokens, gaming): See [EXTENSIBILITY.md](EXTENSIBILITY.md)
+## Important Note on Core vs Extensions
+This document describes the **SyndDB Core** - the foundational infrastructure that powers all extensions. For information about:
+- **Building extensions for SyndDB**: See [EXTENSIBILITY.md](EXTENSIBILITY.md)
+- **Example extensions** (DEXs, tokens, gaming): See [EXTENSIBILITY.md](EXTENSIBILITY.md)
 - **Extension development guide**: See [EXTENSIBILITY.md](EXTENSIBILITY.md)
 
-The core implementation is **use-case agnostic** - it provides the database execution, replication, and blockchain integration that all applications leverage through the extension framework.
+The SyndDB Core is **extension-agnostic** - it provides the database execution, replication, and blockchain integration that all extensions leverage through well-defined interfaces.
 
 ## Executive Summary
 SyndDB is a high-performance blockchain database that replaces traditional EVM execution with SQLite, enabling ultra-low latency database operations while maintaining decentralized validation. The system consists of a single sequencer node and multiple read replica nodes that anyone can run permissionlessly. Only a small subset of read replicas with TEE hardware become validators for settlement operations. This plan outlines a phased approach to build the complete system in **Rust**, starting with core architecture, focusing on SQLite performance, and progressively adding blockchain integration and validation capabilities.
@@ -494,12 +494,12 @@ impl SyndDatabase {
 }
 ```
 
-#### 2.2 Schema Extension Framework
+#### 2.2 Schema Extension Interface
 
-Applications define their schemas through the extension framework rather than being hardcoded in the core. The core provides the infrastructure for executing and replicating these schemas.
+Extensions define their schemas through the extension interface rather than being hardcoded in the Core. The SyndDB Core provides the infrastructure for executing and replicating these schemas.
 
 ```rust
-// Applications implement SchemaExtension trait
+// Extensions implement SchemaExtension trait
 pub trait SchemaExtension: Send + Sync {
     fn schema_id(&self) -> &str;
     fn version(&self) -> u32;
@@ -510,7 +510,7 @@ pub trait SchemaExtension: Send + Sync {
 }
 ```
 
-For specific schema examples including order books, ERC-20 tokens, gaming leaderboards, and more, see [EXTENSIBILITY.md](EXTENSIBILITY.md). The core engine remains agnostic to these application-specific schemas.
+For specific schema examples including order books, ERC-20 tokens, gaming leaderboards, and more, see [EXTENSIBILITY.md](EXTENSIBILITY.md). The SyndDB Core remains agnostic to extension-specific schemas.
 
 #### 2.3 Performance Benchmarking Suite (Rust)
 ```rust
@@ -827,12 +827,12 @@ impl ExtensionRegistry {
 }
 ```
 
-#### 3.2 SQLite Trigger Framework
+#### 3.2 SQLite Trigger Interface
 
-Applications register SQLite triggers through the extension framework to implement business logic at the database level. The core engine manages trigger installation and execution order.
+Extensions register SQLite triggers through the extension interface to implement business logic at the database level. The SyndDB Core manages trigger installation and execution order.
 
 ```rust
-// Applications implement TriggerExtension trait
+// Extensions implement TriggerExtension trait
 pub trait TriggerExtension: Send + Sync {
     fn trigger_id(&self) -> &str;
     fn table_name(&self) -> &str;
@@ -847,7 +847,7 @@ pub enum TriggerEvent {
     BeforeDelete, AfterDelete,
 }
 
-// Core engine handles trigger registration
+// SyndDB Core handles trigger registration
 impl LocalWriteRegistry {
     fn install_triggers(&self, definition: &dyn LocalWriteDefinition) -> Result<()> {
         let trigger_sql = self.generate_trigger_sql(definition)?;
@@ -858,7 +858,7 @@ impl LocalWriteRegistry {
 }
 ```
 
-For specific trigger examples including order matching, balance validation, liquidation monitoring, and more complex business logic implementations, see [EXTENSIBILITY.md](EXTENSIBILITY.md). The core provides the trigger execution infrastructure while applications define their specific logic.
+For specific trigger examples including order matching, balance validation, liquidation monitoring, and more complex business logic implementations, see [EXTENSIBILITY.md](EXTENSIBILITY.md). The SyndDB Core provides the trigger execution infrastructure while extensions define their specific logic.
 
 #### 3.3 Local Write Framework (Rust)
 ```rust

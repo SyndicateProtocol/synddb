@@ -1,5 +1,30 @@
 # SyndDB: High-Performance Blockchain Database
 
+## Terminology Glossary
+
+### Core Architecture Terms
+* **SyndDB Core** - The foundational infrastructure providing SQLite execution, state replication, and blockchain integration
+* **SyndDB Extensions** - Developer-created modules that add specific business logic, schemas, and functionality on top of the Core
+* **Extension Interface** - The set of traits (SchemaExtension, LocalWriteExtension, etc.) that extensions implement to integrate with the Core
+
+### Node Types
+* **Sequencer** - Single trusted node that sequences database transactions and publishes state to blockchain
+* **Read Replica** - Any node that syncs published state to serve queries (anyone can run permissionlessly)
+* **Validator** - Specialized read replica running in TEE with settlement authority (subset of read replicas)
+
+### State Management Terms
+* **LocalWrite** - SQL operations executed immediately in sequencer's local database (<1ms latency)
+* **State Diff** - Incremental database changes between versions
+* **State Snapshot** - Complete database state at a specific version
+* **Chain Submission** - Process of publishing batched local writes to blockchain for replication
+
+### Extension Components
+* **SchemaExtension** - Defines database tables and indexes
+* **LocalWriteExtension** - Defines custom write operations
+* **TriggerExtension** - Implements automated business logic via SQLite triggers
+* **BridgeExtension** - Handles deposits/withdrawals with external blockchains
+* **QueryExtension** - Defines custom query patterns and caching
+
 ## Overview
 SyndDB is Syndicate's proposed high-performance blockchain database product. The goal is to extend the utility of blockchain infrastructure beyond traditional sequencing into database-scale workloads.
 
@@ -200,17 +225,22 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
 * NFT marketplaces and metadata
 * Real-time analytics and dashboards
 
-## Implementation Framework
-### Core Components
-The SyndDB framework provides:
-* SQLite database bootstrapping via the sequencer
-* SQLite message passing to the settlement chain via validators
+## Implementation Architecture
+### SyndDB Core
+The SyndDB Core provides:
+* High-performance SQLite execution engine
+* State replication and synchronization
+* Blockchain integration for durability
 * Smart contracts for state publication
 * TEE-based validator infrastructure
+* Extension registration and management
 
-### Application-Specific Implementation
-Applications building on SyndDB are responsible for:
-* Database schema design
-* Specific SQL transactions
-* Message passing format to/from the bridge
-* Application-specific business logic
+### SyndDB Extensions
+Extensions built on SyndDB Core are responsible for:
+* Database schema design (via SchemaExtension trait)
+* Business logic and SQL transactions (via LocalWriteExtension trait)
+* Triggers and automated rules (via TriggerExtension trait)
+* Bridge message formats (via BridgeExtension trait)
+* Custom query patterns (via QueryExtension trait)
+
+The Core + Extensions architecture ensures clean separation between infrastructure (Core) and business logic (Extensions). See [EXTENSIBILITY.md](EXTENSIBILITY.md) for the complete extension development guide.
