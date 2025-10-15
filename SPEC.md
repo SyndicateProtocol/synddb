@@ -11,35 +11,46 @@ This design balances performance and decentralization, recognizing that some use
 
 ## Key Benefits
 1. Incredibly fast and low latency system
-2. Simple settlement to/from blockchain pools (no need to bridge assets)
+2. Flexible asset management - assets can either:
+   - Live natively on the system for maximum performance, or
+   - Remain on the settlement chain with actions triggered via message passing
+   - Bridge assets only when needed (bridging is optional, not required)
 3. Few to no indexing requirements (indexing is built into the relational database)
 
 ## Trade-offs
 For this performance, applications must accept:
 1. Significant decentralization trade-offs in block production (decentralization in validators is maintained)
+   - Single sequencer architecture means liveness failures if the sequencer goes down
+   - Fallback sequencers must restart from last published state, not the sequencer's current state (potential data loss between publications)
 2. Non-EVM execution framework
-3. Funds live on the settlement layer rather than the database layer
+3. Asset location flexibility comes with different trade-offs:
+   - Assets on settlement layer: Maximum security but requires message passing for actions
+   - Assets native on SyndDB: Maximum performance but relies on sequencer and validator security model
+   - Hybrid approach: Bridge assets as needed for specific operations (adds operational complexity)
 
-## Architecture Overview 
-At a high level, SyndDB consists of two roles:
-* **Writer (Leader)** – Runs a local SQLite instance, batches state transitions, and posts diffs/snapshots onchain or via offchain pointers (IPFS/Arweave).
-* **Reader (Validator)** – Ingests the published state (snapshots or diffs) and reconstructs the database locally for query and indexing.
+## Architecture Overview
+At a high level, SyndDB consists of two primary roles:
+* **Sequencer** – A single trusted node that runs a local SQLite instance, sequences database transactions, batches state transitions, and publishes state diffs/state snapshots onchain or via offchain pointers (IPFS/Arweave).
+* **Read Replica** – Any node that ingests the published state (state snapshots or state diffs) and reconstructs the database locally for query and indexing. **Anyone can run a read replica** to access the data and serve queries.
 
-The ingestion pipeline resembles standard blockchain pipelines, but via a different execution framework. SQLite snapshots can be used to bootstrap new participants, while diffs allow continuous low-latency updates.
+A subset of read replicas can optionally become validators:
+* **Validator** – A specialized read replica that runs inside a TEE (Trusted Execution Environment) with additional capabilities for processing withdrawals and settlement to the blockchain. Not all read replicas need to be validators - most read replicas will simply serve queries and provide data access.
+
+The ingestion pipeline resembles standard blockchain pipelines, but via a different execution framework. SQLite state snapshots can be used to bootstrap new participants, while state diffs allow continuous low-latency updates.
 
 In SyndDB, sequencing works analogously to an appchain, but with database-native semantics:
-* Writers batch SQL state transitions and post them periodically to the blockchain.
-* Readers synchronize to these updates, ensuring they have consistent replicated state.
-* Special transaction types allow message passing (e.g., withdrawals, liquidations) from SyndDB into the broader blockchain ecosystem.
+* The single sequencer batches SQL statements and publishes them periodically to the blockchain.
+* Read replicas (which anyone can run) sync to these updates, ensuring they have consistent state.
+* Special database transaction types allow bridge operations (e.g., withdrawals, liquidations) from SyndDB into the broader blockchain ecosystem, processed only by the subset of read replicas that are validators.
 
-This approach enables appchain-style composability while keeping the leader optimized for database workloads.
+This approach enables appchain-style composability while keeping the sequencer optimized for database workloads.
 
-### Database as Leader
+### Sequencer as Source of Truth
 
-The SQLite database serves as the trusted sequencer and leader in SyndDB's model. The leader operates as:
-* **Source of Truth**: Writers sequence transactions in real-time and post batched updates.
-* **Trusted Role with Guardrails**: While trust is placed in the leader, circuit breakers (e.g., caps on withdrawals, pool limits, or throttling of asset movements) enforce safety.
-* **Application-Specific Logic**: Leaders can prune historical data for performance (useful for perp DEX order books or ephemeral social feeds) while still providing snapshots for bootstrapping.
+The SQLite database managed by the sequencer serves as the trusted source of truth in SyndDB's model. The sequencer operates as:
+* **Source of Truth**: The sequencer orders database transactions in real-time and publishes batched updates.
+* **Trusted Role with Guardrails**: While trust is placed in the sequencer, circuit breakers (e.g., caps on withdrawals, pool limits, or throttling of asset movements) enforce safety.
+* **Application-Specific Logic**: The sequencer can prune historical data for performance (useful for perp DEX order books or ephemeral social feeds) while still providing state snapshots for bootstrapping.
 
 This model trades full decentralization for practical high-performance guarantees, making it suitable for applications where ultra-low latency and throughput matter more than trustless derivability of all history.
 
@@ -47,22 +58,22 @@ This model trades full decentralization for practical high-performance guarantee
 Smart contracts define the interface for state publication with four primary functions:
 
 ```solidity
-writeDiff(bytes32 diffHash, uint256 diffIndex, bytes calldata diff) 
-// Write a diff of SQLite transactions to blockchain. Can be chunked via an index as necessary
+writeDiff(bytes32 diffHash, uint256 diffIndex, bytes calldata diff)
+// Publish a state diff of SQL statements to blockchain. Can be chunked via an index as necessary
 
-writeDiffPointer(bytes calldata cid) 
-// Write a diff to IPFS/Arweave, write the CID to blockchain for ordering
+writeDiffPointer(bytes calldata cid)
+// Publish a state diff to IPFS/Arweave, write the CID to blockchain for ordering
 
-writeSnapshot(bytes32 snapshotHash, uint256 snapshotIndex, bytes calldata snapshot) 
-// Write a snapshot to blockchain. Can be chunked via an index as necessary
+writeSnapshot(bytes32 snapshotHash, uint256 snapshotIndex, bytes calldata snapshot)
+// Publish a state snapshot to blockchain. Can be chunked via an index as necessary
 
-writeSnapshotPointer(bytes calldata cid) 
-// Write a snapshot to IPFS/Arweave, write the CID to blockchain for ordering
+writeSnapshotPointer(bytes calldata cid)
+// Publish a state snapshot to IPFS/Arweave, write the CID to blockchain for ordering
 ```
 
-New validators or read-only nodes can derive state either from genesis, or by getting the latest snapshot. The latter is likely a good fit for data that is frequently pruned, but indexing all the way back to genesis can be used for historical data.
+New read replicas can derive state either from genesis, or by bootstrapping from the latest state snapshot. The latter is likely a good fit for data that is frequently pruned, but deriving state all the way back from genesis can be used for historical data.
 
-### Example Transactions
+### Example Database Transactions
 
 #### Order Book Operations
 
@@ -170,13 +181,16 @@ VALUES ('evt_567', '0xabc...', '0x0', 'acct_789', 2000, 1698765435);
 COMMIT;
 ```
 
-### TEE Settlement via Validators
-For applications requiring stronger guarantees (e.g., bridging assets, financial contracts), SyndDB can incorporate Trusted Execution Environments (TEEs) as validators. This design includes:
-* A read replica inside a TEE verifies ingested state, checking validity from snapshots or Genesis.
-* TEEs hold settlement keys authorized via zkVM on the settlement chain.
-* Upon detecting special transaction types (e.g., asset withdrawal requests), the TEE replica signs and submits settlement messages through a bridge on the settlement chain.
+### TEE Validators for Settlement (Optional)
+For applications requiring stronger guarantees (e.g., bridging assets, financial contracts), SyndDB can incorporate Trusted Execution Environments (TEEs) to create specialized validators. **Important: Only a subset of read replicas need to become validators.**
 
-This design secures settlement without requiring every read node to act as a validator, balancing scalability with security assurances. Circuit breakers and safeguards (implemented in settlement-layer contracts) mitigate risk from the trusted leader role.
+* **Validators are a Subset of Read Replicas**: While anyone can run a standard read replica for querying data, only specially designated read replicas running inside TEEs become validators with settlement authority.
+* **Most Read Replicas are Not Validators**: The majority of read replica nodes will simply sync state and serve queries. They don't need TEE hardware or settlement responsibilities.
+* **State Verification**: Validators use their TEE-protected database replica to verify derived state, checking validity from state snapshots or genesis.
+* **Settlement Authority**: Only TEE validators hold settlement keys authorized via attestation verification on the settlement chain.
+* **Bridge Operations**: Upon detecting special database transaction types (e.g., asset withdrawal requests), TEE validators (not regular read replicas) sign and submit settlement transactions through a bridge.
+
+This design allows anyone to run a read replica for data access while limiting settlement authority to a trusted subset of TEE validators, balancing accessibility with security. Circuit breakers and safeguards (implemented in settlement-layer contracts) mitigate risk from the trusted sequencer role.
 
 ## Use Cases
 SyndDB is designed for high-scale applications that require ultra-low latency and high throughput, including:
@@ -189,9 +203,9 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
 ## Implementation Framework
 ### Core Components
 The SyndDB framework provides:
-* SQLite database bootstrapping via the leader
+* SQLite database bootstrapping via the sequencer
 * SQLite message passing to the settlement chain via validators
-* Smart contracts for reads/writes
+* Smart contracts for state publication
 * TEE-based validator infrastructure
 
 ### Application-Specific Implementation
