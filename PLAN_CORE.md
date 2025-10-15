@@ -2,9 +2,9 @@
 
 ## Important Note on Core vs Extensions
 This document describes the **SyndDB Core** - the foundational infrastructure that powers all extensions. For information about:
-- **Building extensions for SyndDB**: See [EXTENSIBILITY.md](EXTENSIBILITY.md)
-- **Example extensions** (DEXs, tokens, gaming): See [EXTENSIBILITY.md](EXTENSIBILITY.md)
-- **Extension development guide**: See [EXTENSIBILITY.md](EXTENSIBILITY.md)
+- **Building extensions for SyndDB**: See [PLAN_EXTENSIONS.md](PLAN_EXTENSIONS.md)
+- **Example extensions** (DEXs, tokens, gaming): See [PLAN_EXTENSIONS.md](PLAN_EXTENSIONS.md)
+- **Extension development guide**: See [PLAN_EXTENSIONS.md](PLAN_EXTENSIONS.md)
 
 The SyndDB Core is **extension-agnostic** - it provides the database execution, replication, and blockchain integration that all extensions leverage through well-defined interfaces.
 
@@ -510,7 +510,7 @@ pub trait SchemaExtension: Send + Sync {
 }
 ```
 
-For specific schema examples including order books, ERC-20 tokens, gaming leaderboards, and more, see [EXTENSIBILITY.md](EXTENSIBILITY.md). The SyndDB Core remains agnostic to extension-specific schemas.
+For specific schema examples including order books, ERC-20 tokens, gaming leaderboards, and more, see [PLAN_EXTENSIONS.md](PLAN_EXTENSIONS.md). The SyndDB Core remains agnostic to extension-specific schemas.
 
 #### 2.3 Performance Benchmarking Suite (Rust)
 ```rust
@@ -858,7 +858,7 @@ impl LocalWriteRegistry {
 }
 ```
 
-For specific trigger examples including order matching, balance validation, liquidation monitoring, and more complex business logic implementations, see [EXTENSIBILITY.md](EXTENSIBILITY.md). The SyndDB Core provides the trigger execution infrastructure while extensions define their specific logic.
+For specific trigger examples including order matching, balance validation, liquidation monitoring, and more complex business logic implementations, see [PLAN_EXTENSIONS.md](PLAN_EXTENSIONS.md). The SyndDB Core provides the trigger execution infrastructure while extensions define their specific logic.
 
 #### 3.3 Local Write Framework (Rust)
 ```rust

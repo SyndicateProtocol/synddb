@@ -243,4 +243,4 @@ Extensions built on SyndDB Core are responsible for:
 * Bridge message formats (via BridgeExtension trait)
 * Custom query patterns (via QueryExtension trait)
 
-The Core + Extensions architecture ensures clean separation between infrastructure (Core) and business logic (Extensions). See [EXTENSIBILITY.md](EXTENSIBILITY.md) for the complete extension development guide.
+The Core + Extensions architecture ensures clean separation between infrastructure (Core) and business logic (Extensions). See [PLAN_EXTENSIONS.md](PLAN_EXTENSIONS.md) for the complete extension development guide.
