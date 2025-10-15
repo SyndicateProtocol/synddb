@@ -247,6 +247,13 @@ pub trait Sequencer: Send + Sync {
     // - A snapshot (complete database state for checkpointing)
     // Runs on a schedule (e.g., every 1 second or every 1000 local writes)
     // This enables read replicas to replicate the sequencer's state
+    //
+    // VERSION MANAGEMENT:
+    // The Sequencer internally tracks:
+    // - lastPublishedVersion: The last version successfully submitted to chain
+    // - currentVersion: The current version after local writes
+    // When creating diffs, it uses (from: lastPublishedVersion, to: currentVersion)
+    // The BlockchainPublisher doesn't need to know about versions - they're embedded in the diff/snapshot
     async fn submit_writes_to_chain(&self) -> Result<ChainSubmitReceipt>;
 }
 
@@ -270,11 +277,26 @@ pub trait StorageProvider: Send + Sync {
 // synddb-contracts/src/lib.rs
 use alloy::primitives::B256;
 
+// BlockchainPublisher is a THIN WRAPPER for blockchain interactions
+// It does NOT manage versions or state - it's just responsible for:
+// 1. Taking already-prepared diffs/snapshots (with versions embedded)
+// 2. Submitting them to the smart contract
+// 3. Returning transaction hashes
+//
+// VERSION MANAGEMENT happens in the layer above (Sequencer/BlockchainSubmitter)
+// The diff/snapshot already contains from_version and to_version when passed here
 #[async_trait]
 pub trait BlockchainPublisher: Send + Sync {
+    // Submits a diff that already contains version info (from_version, to_version)
     async fn submit_diff_to_chain(&self, diff: &[u8]) -> Result<B256>;
+
+    // Submits a pointer to offchain storage (diff at that location has version info)
     async fn submit_diff_pointer_to_chain(&self, cid: &str) -> Result<B256>;
+
+    // Submits a snapshot that already contains its version number
     async fn submit_snapshot_to_chain(&self, snapshot: &[u8]) -> Result<B256>;
+
+    // Submits a pointer to offchain storage (snapshot at that location has version info)
     async fn submit_snapshot_pointer_to_chain(&self, cid: &str) -> Result<B256>;
 }
 ```
@@ -1203,10 +1225,12 @@ impl DatabaseDiffGenerator {
             .duration_since(SystemTime::UNIX_EPOCH)?
             .as_secs();
 
-        // Create database diff object
+        // Create database diff object with VERSIONS EMBEDDED IN THE DIFF
+        // This is key: the diff itself contains the version range
+        // BlockchainPublisher just submits this diff as-is without needing to know versions
         let diff = DatabaseDiff {
-            from_version,
-            to_version,
+            from_version,     // Version currently on chain
+            to_version,       // Version after applying this diff
             statements: sql_statements.clone(),
             checksum,
             timestamp,
@@ -1363,11 +1387,18 @@ class ArweaveStorage implements IOffchainStorageProvider {
  * BlockchainSubmitter handles the SUBMIT_WRITES_TO_CHAIN functionality of the Sequencer
  * It runs periodically to batch and submit accumulated local writes to the blockchain
  * This is separate from execute_local_write which handles individual client requests
+ *
+ * VERSION TRACKING:
+ * - lastPublishedVersion: Tracks the last database version successfully submitted to chain
+ * - batch.version: The current version after all queued local writes have been executed
+ * - The diff generator creates a DatabaseDiff with (from_version, to_version) embedded
+ * - BlockchainPublisher just submits this diff - it doesn't track versions itself
  */
 class BlockchainSubmitter {
   private queue: ChainSubmitQueue;  // Queue of local writes submitted via execute_local_write
   private storage: IOffchainStorageProvider;
-  private blockchainClient: IBlockchainPublisher;
+  private blockchainClient: IBlockchainPublisher;  // Thin wrapper for chain interaction
+  private lastPublishedVersion: u64;  // VERSION TRACKING: Last version on chain
 
   /**
    * Called periodically (e.g., every second) to submit accumulated local writes to blockchain
@@ -1384,21 +1415,24 @@ class BlockchainSubmitter {
 
     // Generate database diff from all local writes since last submission
     // This calls SyndDatabase.generate_diff() internally
+    // IMPORTANT: The diff contains both from_version and to_version internally
     const diff = await this.diffGenerator.generateDiff(
-      this.lastPublishedVersion,
-      batch.version
+      this.lastPublishedVersion,  // FROM: Where chain currently is
+      batch.version                // TO: Where sequencer local DB is now
     );
 
     // Decide whether to publish directly onchain or via offchain storage
     const publishStrategy = this.determineBlockchainStrategy(diff);
 
+    // BlockchainPublisher receives the diff with versions already embedded
+    // It doesn't need to track versions - just submits what it's given
     if (publishStrategy === 'direct') {
       await this.publishDirectlyOnchain(diff);
     } else {
       await this.publishViaOffchainStorage(diff);
     }
 
-    // Update last published version
+    // Update last published version only after successful submission
     this.lastPublishedVersion = batch.version;
 
     // Check if snapshot is needed
