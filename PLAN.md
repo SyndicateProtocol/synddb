@@ -64,13 +64,12 @@ All components will be implemented in Rust for:
 #### Networking & Async
 - **tokio** - Async runtime for networking and I/O
 - **axum** or **actix-web** - Web framework for API endpoints
+- **jsonrpsee** - JSON-RPC server/client implementation for API compatibility
 - **tonic** - gRPC framework for inter-node communication
 - **quinn** - QUIC implementation for low-latency networking
 
 #### Blockchain Integration
-- **ethers-rs** - Ethereum/EVM interaction
-- **alloy** - Next-gen Ethereum library (alternative to ethers)
-- **revm** - Ethereum Virtual Machine implementation in Rust
+- **alloy** - Modern, high-performance Ethereum library
 
 #### Compression & Serialization
 - **zstd** - Zstandard compression
@@ -79,10 +78,11 @@ All components will be implemented in Rust for:
 - **prost** - Protocol Buffers
 
 #### Cryptography & Security
+- **sp1-sdk** - Succinct SP1 Zero Knowledge Virtual Machine for proving execution
+- **lit-sdk** - Lit Protocol SDK for TEE attestation and verification via Lit Actions
 - **ring** - Cryptographic operations
 - **sha3** - SHA-3 and Keccak hashing
 - **ed25519-dalek** - Ed25519 signatures
-- **sgx** or **teaclave-sgx-sdk** - Intel SGX for TEE support
 
 #### Storage Backends
 - **ipfs-api** - IPFS client
@@ -139,7 +139,7 @@ synddb/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── abi/           # Contract ABIs
-│   │       ├── bindings.rs    # Generated bindings (ethers-rs)
+│   │       ├── bindings.rs    # Generated bindings (alloy)
 │   │       └── lib.rs
 │   ├── synddb-storage/     # Storage backends
 │   │   ├── Cargo.toml
@@ -212,14 +212,14 @@ pub trait StorageProvider: Send + Sync {
 }
 
 // synddb-contracts/src/lib.rs
-use ethers::types::H256;
+use alloy::primitives::B256;
 
 #[async_trait]
 pub trait ChainPublisher: Send + Sync {
-    async fn publish_diff(&self, diff: &[u8]) -> Result<H256>;
-    async fn publish_diff_pointer(&self, cid: &str) -> Result<H256>;
-    async fn publish_snapshot(&self, snapshot: &[u8]) -> Result<H256>;
-    async fn publish_snapshot_pointer(&self, cid: &str) -> Result<H256>;
+    async fn publish_diff(&self, diff: &[u8]) -> Result<B256>;
+    async fn publish_diff_pointer(&self, cid: &str) -> Result<B256>;
+    async fn publish_snapshot(&self, snapshot: &[u8]) -> Result<B256>;
+    async fn publish_snapshot_pointer(&self, cid: &str) -> Result<B256>;
 }
 ```
 
@@ -1605,80 +1605,227 @@ class ReplicaMonitor {
 
 ### Tasks
 
-#### 6.1 TEE Validator Architecture (Specialized Read Replica)
-```typescript
-// TEEValidator extends ReadReplicaNode with additional settlement capabilities
-class TEEValidator extends ReadReplicaNode {
-  private enclave: SecureEnclave;
-  private settlementKey: PrivateKey;
-  private bridge: BridgeContract;
+#### 6.1 TEE Validator Architecture with Lit Protocol (Specialized Read Replica)
+```rust
+// synddb-replica/src/validator.rs
+// TEEValidator extends ReadReplica with Lit Protocol for TEE attestation and SP1 for ZK proofs
 
-  async initialize() {
-    // Initialize secure enclave
-    this.enclave = await SecureEnclave.create({
-      attestation: true,
-      sealing: true
-    });
+use lit_sdk::{LitNodeClient, LitAction, AttestationReport};
+use sp1_sdk::{ProverClient, SP1Stdin, SP1Proof};
+use alloy::primitives::{Address, B256};
 
-    // Generate or unseal settlement key
-    this.settlementKey = await this.enclave.getOrGenerateKey('settlement');
+pub struct TEEValidator {
+    // Base read replica functionality
+    replica: ReadReplica,
 
-    // Register with bridge contract
-    await this.registerWithBridge();
-  }
+    // Lit Protocol for TEE attestation
+    lit_client: LitNodeClient,
+    lit_action_ipfs_cid: String,  // IPFS CID of the Lit Action for validation
 
-  private async registerWithBridge() {
-    // Generate attestation report
-    const attestation = await this.enclave.generateAttestation({
-      userData: this.settlementKey.publicKey
-    });
+    // SP1 for zero-knowledge proof generation
+    sp1_prover: ProverClient,
+    sp1_program: Vec<u8>,  // Compiled SP1 program for state validation
 
-    // Submit to bridge contract
-    await this.bridge.registerValidator(
-      this.settlementKey.publicKey,
-      attestation
-    );
-  }
+    // Settlement keys managed by Lit Protocol
+    settlement_address: Address,
 
-  async processWithdrawals() {
-    // Query pending withdrawals
-    const withdrawals = await this.db.query(`
-      SELECT * FROM withdrawal_requests
-      WHERE status = 'PENDING'
-      ORDER BY timestamp ASC
-      LIMIT 100
-    `);
-
-    for (const withdrawal of withdrawals) {
-      await this.processWithdrawal(withdrawal);
-    }
-  }
-
-  private async processWithdrawal(withdrawal: WithdrawalRequest) {
-    // Validate withdrawal
-    if (!await this.validateWithdrawal(withdrawal)) {
-      await this.markWithdrawalFailed(withdrawal);
-      return;
-    }
-
-    // Sign withdrawal message
-    const message = this.encodeWithdrawalMessage(withdrawal);
-    const signature = await this.enclave.sign(message, this.settlementKey);
-
-    // Submit to bridge
-    const tx = await this.bridge.processWithdrawal(
-      withdrawal,
-      signature
-    );
-
-    // Update status
-    await this.db.execute(`
-      UPDATE withdrawal_requests
-      SET status = 'COMPLETED', settlement_tx_hash = ?
-      WHERE request_id = ?
-    `, [tx.hash, withdrawal.request_id]);
-  }
+    // Bridge contract interface
+    bridge: BridgeContract,
 }
+
+impl TEEValidator {
+    pub async fn new(config: ValidatorConfig) -> Result<Self> {
+        // Initialize base read replica
+        let replica = ReadReplica::new(config.replica_config).await?;
+
+        // Initialize Lit Protocol client
+        let lit_client = LitNodeClient::new(config.lit_network_url).await?;
+
+        // Initialize SP1 prover
+        let sp1_prover = ProverClient::new();
+
+        // Load SP1 program for state validation
+        let sp1_program = std::fs::read(&config.sp1_program_path)?;
+
+        // Deploy or reference Lit Action for TEE operations
+        let lit_action_ipfs_cid = config.lit_action_cid;
+
+        Ok(Self {
+            replica,
+            lit_client,
+            lit_action_ipfs_cid,
+            sp1_prover,
+            sp1_program,
+            settlement_address: config.settlement_address,
+            bridge: BridgeContract::new(config.bridge_address),
+        })
+    }
+
+    pub async fn initialize(&mut self) -> Result<()> {
+        // Register with Lit Protocol for TEE attestation
+        let attestation = self.generate_lit_attestation().await?;
+
+        // Generate SP1 proof of correct initialization
+        let init_proof = self.generate_initialization_proof().await?;
+
+        // Register validator with bridge contract
+        self.register_with_bridge(attestation, init_proof).await?;
+
+        Ok(())
+    }
+
+    async fn generate_lit_attestation(&self) -> Result<AttestationReport> {
+        // Use Lit Actions to generate TEE attestation
+        let lit_action_params = serde_json::json!({
+            "validator_address": self.settlement_address,
+            "replica_state_hash": self.replica.get_state_hash(),
+        });
+
+        let attestation = self.lit_client
+            .execute_lit_action(
+                &self.lit_action_ipfs_cid,
+                lit_action_params,
+            )
+            .await?;
+
+        Ok(attestation)
+    }
+
+    async fn generate_initialization_proof(&self) -> Result<SP1Proof> {
+        // Create input for SP1 program
+        let mut stdin = SP1Stdin::new();
+        stdin.write(&self.replica.get_current_version());
+        stdin.write(&self.replica.get_state_hash());
+
+        // Generate ZK proof of valid initialization
+        let proof = self.sp1_prover
+            .prove(&self.sp1_program, stdin)
+            .await?;
+
+        Ok(proof)
+    }
+
+    async fn register_with_bridge(
+        &self,
+        attestation: AttestationReport,
+        init_proof: SP1Proof,
+    ) -> Result<()> {
+        // Submit attestation and proof to bridge contract
+        self.bridge
+            .register_validator(
+                self.settlement_address,
+                attestation.encode(),
+                init_proof.bytes(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn process_withdrawals(&mut self) -> Result<()> {
+        // Query pending withdrawals from database
+        let withdrawals = self.replica.query(
+            "SELECT * FROM withdrawal_requests
+             WHERE status = 'PENDING'
+             ORDER BY timestamp ASC
+             LIMIT 100",
+            &[]
+        ).await?;
+
+        for withdrawal in withdrawals {
+            self.process_withdrawal(withdrawal).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn process_withdrawal(&mut self, withdrawal: WithdrawalRequest) -> Result<()> {
+        // Generate SP1 proof of valid withdrawal
+        let withdrawal_proof = self.generate_withdrawal_proof(&withdrawal).await?;
+
+        // Use Lit Protocol to sign withdrawal with TEE-protected key
+        let signature = self.sign_with_lit_action(&withdrawal).await?;
+
+        // Submit to bridge with proof and signature
+        let tx_hash = self.bridge
+            .process_withdrawal(
+                withdrawal.clone(),
+                withdrawal_proof,
+                signature,
+            )
+            .await?;
+
+        // Update database status
+        self.replica.execute(
+            "UPDATE withdrawal_requests
+             SET status = 'COMPLETED', settlement_tx_hash = ?1
+             WHERE request_id = ?2",
+            &[&tx_hash.to_string(), &withdrawal.request_id],
+        ).await?;
+
+        Ok(())
+    }
+
+    async fn generate_withdrawal_proof(&self, withdrawal: &WithdrawalRequest) -> Result<SP1Proof> {
+        // Create SP1 input with withdrawal details and current state
+        let mut stdin = SP1Stdin::new();
+        stdin.write(&withdrawal.account_id);
+        stdin.write(&withdrawal.amount);
+        stdin.write(&withdrawal.token_address);
+        stdin.write(&self.replica.get_state_hash());
+
+        // Generate ZK proof that withdrawal is valid according to state
+        let proof = self.sp1_prover
+            .prove(&self.sp1_program, stdin)
+            .await?;
+
+        Ok(proof)
+    }
+
+    async fn sign_with_lit_action(&self, withdrawal: &WithdrawalRequest) -> Result<Vec<u8>> {
+        // Use Lit Action to sign withdrawal with TEE-protected key
+        let params = serde_json::json!({
+            "message": self.encode_withdrawal_message(withdrawal),
+            "key_id": "settlement_key",
+        });
+
+        let signature = self.lit_client
+            .execute_lit_action(
+                &self.lit_action_ipfs_cid,
+                params,
+            )
+            .await?;
+
+        Ok(signature.to_bytes())
+    }
+}
+
+// Lit Action code (deployed to IPFS, executed in Lit nodes)
+// This would be JavaScript that runs in Lit's TEE environment
+const litActionCode = `
+async function main() {
+    // This code runs inside Lit Protocol's TEE
+    const { validator_address, action_type, params } = args;
+
+    if (action_type === "attestation") {
+        // Generate TEE attestation
+        const attestation = await Lit.Actions.generateAttestation({
+            data: params,
+            includeEnvironment: true,
+        });
+        return attestation;
+    } else if (action_type === "sign") {
+        // Sign with TEE-protected key
+        const signature = await Lit.Actions.signEcdsa({
+            toSign: params.message,
+            publicKey: params.key_id,
+            sigName: "withdrawal_signature",
+        });
+        return signature;
+    }
+}
+main();
+`;
 ```
 
 #### 6.2 Bridge Smart Contract
