@@ -11,11 +11,13 @@ To avoid confusion, this document uses specific terms:
 - **Database Transaction** - A set of SQL operations executed atomically in SQLite
 - **Blockchain Transaction** - On-chain transaction published to Ethereum/Syndicate chain
 - **execute_database_operation()** - Executes SQL operations in the sequencer's local SQLite
-- **publish_to_blockchain()** - Creates and submits a BLOCKCHAIN transaction containing state updates
-- **BlockchainPublishQueue** - Queue holding operations waiting to be published to blockchain
-- **BlockchainPublishReceipt** - Confirmation that state was published to the blockchain
+- **submit_to_blockchain()** - Creates and submits a BLOCKCHAIN transaction containing database changes
+- **DatabaseSnapshot** - Complete SQLite database backup at a specific version
+- **DatabaseDiff** - Incremental SQL changes between database versions
+- **BlockchainSubmitQueue** - Queue holding operations waiting to be submitted to blockchain
+- **BlockchainSubmitReceipt** - Confirmation that database changes were submitted to blockchain
 
-The flow is: Database operations are executed locally → batched → published as blockchain transactions.
+The flow is: Database operations are executed locally → batched → submitted as blockchain transactions.
 
 ### System Components
 ```
@@ -32,7 +34,7 @@ The flow is: Database operations are executed locally → batched → published 
 │  │  └─────────────┘ │      │  └────────────────────────┘ │   │
 │  │                  │      │                              │   │
 │  │  ┌─────────────┐ │      │  ┌────────────────────────┐ │   │
-│  │  │  Tx Handler │ │      │  │   State Sync &         │ │   │
+│  │  │  Op Handler │ │      │  │   Database Sync &      │ │   │
 │  │  │  & Triggers │ │      │  │   Query Engines        │ │   │
 │  │  └─────────────┘ │      │  └────────────────────────┘ │   │
 │  │                  │      │                              │   │
@@ -146,16 +148,16 @@ synddb/
 │   │   └── src/
 │   │       ├── main.rs           # Sequencer binary
 │   │       ├── sequencer.rs      # Main sequencer orchestrator
-│   │       ├── batcher.rs        # Transaction batching logic
-│   │       ├── compressor.rs     # State diff/snapshot compression
+│   │       ├── batcher.rs        # Operation batching logic
+│   │       ├── compressor.rs     # Database diff/snapshot compression
 │   │       └── publisher.rs      # Blockchain publishing
 │   ├── synddb-replica/        # Read replica implementation
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── main.rs           # Replica binary
 │   │       ├── replica.rs        # Main read replica orchestrator
-│   │       ├── syncer.rs         # State sync
-│   │       ├── reconstructor.rs  # State reconstruction
+│   │       ├── syncer.rs         # Database sync from blockchain
+│   │       ├── reconstructor.rs  # Database reconstruction
 │   │       ├── query.rs          # Query interface
 │   │       └── validator.rs      # Optional: TEE validator
 │   ├── synddb-contracts/      # Smart contract bindings
@@ -203,23 +205,23 @@ pub trait SyndDatabase: Send + Sync {
     async fn execute(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<ExecuteResult>;
     async fn begin_database_transaction(&self) -> Result<DatabaseTransaction>;
 
-    // GENERATE methods - Used by the SEQUENCER to create state representations for publishing
-    // generate_snapshot: Creates a full database snapshot (complete SQLite file backup)
+    // GENERATE methods - Used by the SEQUENCER to create database state representations for publishing
+    // generate_database_snapshot: Creates a full database snapshot (complete SQLite file backup)
     // This captures the entire database state at a specific version for new replicas to bootstrap from
-    async fn generate_snapshot(&self) -> Result<StateSnapshot>;
+    async fn generate_database_snapshot(&self) -> Result<DatabaseSnapshot>;
 
-    // generate_diff: Creates a state diff containing all SQL changes between two versions
+    // generate_database_diff: Creates a database diff containing all SQL changes between two versions
     // This captures incremental changes (INSERT/UPDATE/DELETE statements) to publish to chain
-    async fn generate_diff(&self, from_version: u64, to_version: u64) -> Result<StateDiff>;
+    async fn generate_database_diff(&self, from_version: u64, to_version: u64) -> Result<DatabaseDiff>;
 
-    // APPLY methods - Used by READ REPLICAS to reconstruct state from published data
-    // apply_snapshot: Restores the database from a full snapshot (replaces entire DB state)
+    // APPLY methods - Used by READ REPLICAS to reconstruct database state from published data
+    // apply_database_snapshot: Restores the database from a full snapshot (replaces entire DB state)
     // Used when a new replica joins or needs to catch up from a checkpoint
-    async fn apply_snapshot(&self, snapshot: StateSnapshot) -> Result<()>;
+    async fn apply_database_snapshot(&self, snapshot: DatabaseSnapshot) -> Result<()>;
 
-    // apply_diff: Executes SQL statements from a state diff to update the database
+    // apply_database_diff: Executes SQL statements from a database diff to update the database
     // Used for incremental updates as replicas follow the sequencer's published changes
-    async fn apply_diff(&self, diff: StateDiff) -> Result<()>;
+    async fn apply_database_diff(&self, diff: DatabaseDiff) -> Result<()>;
 }
 
 // synddb-sequencer/src/sequencer.rs
@@ -235,13 +237,13 @@ pub trait Sequencer: Send + Sync {
     // Alternative names considered: submit_sql_transaction(), execute_sql()
     async fn execute_database_operation(&self, op: DatabaseOperation) -> Result<OperationReceipt>;
 
-    // PUBLISH_TO_BLOCKCHAIN - Periodically publishes accumulated state changes to blockchain
+    // SUBMIT_TO_BLOCKCHAIN - Periodically submits accumulated database changes to blockchain
     // This batches many database operations and creates either:
-    // - A state diff (via generate_diff) for incremental updates, OR
-    // - A state snapshot (via generate_snapshot) for checkpointing
-    // Runs on a schedule (e.g., every 1 second or every 1000 transactions)
-    // This is what makes the state available for read replicas to sync
-    async fn publish_to_blockchain(&self) -> Result<BlockchainPublishReceipt>;
+    // - A database diff (via generate_database_diff) for incremental updates, OR
+    // - A database snapshot (via generate_database_snapshot) for checkpointing
+    // Runs on a schedule (e.g., every 1 second or every 1000 database operations)
+    // This is what makes the database state available for read replicas to sync
+    async fn submit_to_blockchain(&self) -> Result<BlockchainSubmitReceipt>;
 }
 
 // synddb-replica/src/replica.rs
@@ -292,7 +294,7 @@ synddb:
     compression: zstd
     publish_interval_ms: 1000
     max_diff_size: 1048576  # 1MB
-    state_snapshot_interval: 10000  # Every 10k transactions
+    blockchain_snapshot_interval: 10000  # Every 10k database operations
 
   replica:
     sync_interval_ms: 500
@@ -379,8 +381,8 @@ impl SyndDatabase {
             will_be_published_in: "next batch (~1s)",
         };
 
-        // Add to queue for later publishing via publish_to_blockchain()
-        self.blockchain_publish_queue.push(op).await?;
+        // Add to queue for later submission via submit_to_blockchain()
+        self.blockchain_submit_queue.push(op).await?;
 
         Ok(receipt)
     }
@@ -717,19 +719,19 @@ pub fn create_connection_pool(path: &str, size: u32) -> Result<Pool<SqliteConnec
 }
 ```
 
-## Phase 3: Transaction Type System & SQLite Triggers (Week 6-7)
+## Phase 3: Database Operation Type System & SQLite Triggers (Week 6-7)
 
 ### Goals
-- Build flexible transaction type system using SQLite triggers
+- Build flexible database operation type system using SQLite triggers
 - Implement validation and business logic at database level
-- Create programmable hooks for custom transaction types
-- Build transaction serialization and deserialization
+- Create programmable hooks for custom operation types
+- Build operation serialization and deserialization
 
 ### Tasks
 
-#### 3.1 Transaction Type Registry (Rust)
+#### 3.1 Operation Type Registry (Rust)
 ```rust
-// synddb-core/src/transaction_types.rs
+// synddb-core/src/operation_types.rs
 use serde::{Serialize, Deserialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -1022,11 +1024,11 @@ fn generate_nonce() -> u64 {
 }
 ```
 
-## Phase 4: Blockchain Integration & State Publishing (Week 8-9)
+## Phase 4: Blockchain Integration & Database Publishing (Week 8-9)
 
 ### Goals
-- Implement smart contracts for state publication
-- Build state diff and state snapshot generation system
+- Implement smart contracts for database state publication
+- Build database diff and database snapshot generation system
 - Implement compression and chunking for large states
 - Create off-chain storage integration (IPFS/Arweave)
 
@@ -1036,16 +1038,16 @@ DATABASE OPERATIONS:
 Client Request → execute_database_operation() → Execute SQL in Local SQLite → Return Receipt
   (e.g., place order)         (SQL operations)                           (instant, <1ms)
                                               ↓
-                                    [Accumulate in Blockchain Queue]
+                                    [Accumulate in Blockchain Submit Queue]
                                               ↓
 BLOCKCHAIN OPERATIONS:
-                    Timer/Threshold → publish_to_blockchain() → generate_diff/snapshot()
+              Timer/Threshold → submit_to_blockchain() → generate_database_diff/snapshot()
                                               ↓
                                     Create Blockchain Transaction
                                               ↓
                                     Submit to Syndicate Chain
                                               ↓
-                                    Read Replicas Sync
+                                    Read Replicas Sync Database
 ```
 
 ### Tasks
@@ -1163,19 +1165,19 @@ use serde::{Serialize, Deserialize};
 use sha3::{Digest, Sha3_256};
 use zstd;
 
-/// DiffGenerator is used by the SEQUENCER to create state diffs
+/// DatabaseDiffGenerator is used by the SEQUENCER to create database diffs
 /// These diffs contain SQL statements that represent changes between database versions
-/// The generated diffs are published to the blockchain for read replicas to consume
-pub struct DiffGenerator {
+/// The generated diffs are submitted to the blockchain for read replicas to consume
+pub struct DatabaseDiffGenerator {
     last_published_version: u64,
     change_log: ChangeLog,
 }
 
-impl DiffGenerator {
-    /// Generates a state diff containing all SQL changes between two versions
-    /// This is called by the sequencer when publishing state updates
+impl DatabaseDiffGenerator {
+    /// Generates a database diff containing all SQL changes between two versions
+    /// This is called by the sequencer when submitting database updates to blockchain
     /// The output will be compressed and either stored on-chain or in IPFS/Arweave
-    pub async fn generate_diff(&self, from_version: u64, to_version: u64) -> Result<StateDiff> {
+    pub async fn generate_database_diff(&self, from_version: u64, to_version: u64) -> Result<DatabaseDiff> {
         // Get all changes between versions
         let changes = self.change_log.get_changes(from_version, to_version).await?;
 
@@ -1194,8 +1196,8 @@ impl DiffGenerator {
             .duration_since(SystemTime::UNIX_EPOCH)?
             .as_secs();
 
-        // Create state diff object
-        let diff = StateDiff {
+        // Create database diff object
+        let diff = DatabaseDiff {
             from_version,
             to_version,
             statements: sql_statements.clone(),
@@ -1211,7 +1213,7 @@ impl DiffGenerator {
         let compressed = zstd::encode_all(&json[..], 3)?;
         let compression_ratio = compressed.len() as f64 / json.len() as f64;
 
-        Ok(StateDiff {
+        Ok(DatabaseDiff {
             compressed,
             compressed_size: compressed.len(),
             compression_ratio,
@@ -1351,20 +1353,20 @@ class ArweaveStorage implements IOffchainStorageProvider {
 #### 4.5 State Publisher
 ```typescript
 /**
- * BlockchainStatePublisher handles the PUBLISH_TO_BLOCKCHAIN functionality of the Sequencer
- * It runs periodically to batch and publish accumulated database operations to the blockchain
+ * BlockchainSubmitter handles the SUBMIT_TO_BLOCKCHAIN functionality of the Sequencer
+ * It runs periodically to batch and submit accumulated database operations to the blockchain
  * This is separate from execute_database_operation which handles individual client requests
  */
-class BlockchainStatePublisher {
-  private queue: BlockchainPublishQueue;  // Queue of operations submitted via execute_database_operation
-  private storage: IStorageProvider;
+class BlockchainSubmitter {
+  private queue: BlockchainSubmitQueue;  // Queue of operations submitted via execute_database_operation
+  private storage: IOffchainStorageProvider;
   private blockchainClient: IBlockchainPublisher;
 
   /**
-   * Called periodically (e.g., every second) to publish accumulated state changes to blockchain
-   * This is the implementation of Sequencer.publish_to_blockchain()
+   * Called periodically (e.g., every second) to submit accumulated database changes to blockchain
+   * This is the implementation of Sequencer.submit_to_blockchain()
    */
-  async publishToBlockchain() {
+  async submitToBlockchain() {
     // Get batch of database operations that were submitted via execute_database_operation
     // These have already been executed locally in the sequencer's SQLite database
     const batch = await this.queue.getBatch();
@@ -1373,9 +1375,9 @@ class BlockchainStatePublisher {
       return;  // Nothing new to publish
     }
 
-    // Generate state diff from all operations since last publish
-    // This calls SyndDatabase.generate_diff() internally
-    const diff = await this.diffGenerator.generateDiff(
+    // Generate database diff from all operations since last submission
+    // This calls SyndDatabase.generate_database_diff() internally
+    const diff = await this.diffGenerator.generateDatabaseDiff(
       this.lastPublishedVersion,
       batch.version
     );
@@ -1398,12 +1400,12 @@ class BlockchainStatePublisher {
     }
   }
 
-  private determineBlockchainStrategy(diff: StateDiff): 'direct' | 'offchain' {
+  private determineBlockchainStrategy(diff: DatabaseDiff): 'direct' | 'offchain' {
     const MAX_ONCHAIN_SIZE = 100 * 1024; // 100KB
     return diff.compressedSize < MAX_ONCHAIN_SIZE ? 'direct' : 'offchain';
   }
 
-  private async publishDirectlyOnchain(diff: StateDiff) {
+  private async publishDirectlyOnchain(diff: DatabaseDiff) {
     // Chunk if necessary for blockchain size limits
     const chunks = this.chunkData(diff.compressed, 30000);
 
@@ -1412,7 +1414,7 @@ class BlockchainStatePublisher {
     }
   }
 
-  private async publishViaOffchainStorage(diff: StateDiff) {
+  private async publishViaOffchainStorage(diff: DatabaseDiff) {
     // Store to IPFS/Arweave
     const cid = await this.storage.storeToIPFS(diff.compressed);
 
@@ -1443,7 +1445,7 @@ class BlockchainStatePublisher {
 ```typescript
 class ReadReplicaNode {
   private db: SyndDatabase;
-  private syncer: StateSyncer;
+  private syncer: DatabaseSyncer;
   private queryEngine: QueryEngine;
   private monitor: ReplicaMonitor;
 
@@ -1496,11 +1498,11 @@ class ReadReplicaNode {
 #### 5.2 State Synchronization
 ```typescript
 /**
- * StateSyncer is used by READ REPLICAS to fetch and apply state updates
- * It retrieves snapshots/diffs published by the sequencer and applies them to the local database
- * This is the counterpart to the sequencer's generate_diff/generate_snapshot functions
+ * DatabaseSyncer is used by READ REPLICAS to fetch and apply database updates
+ * It retrieves snapshots/diffs submitted by the sequencer and applies them to the local database
+ * This is the counterpart to the sequencer's generate_database_diff/generate_database_snapshot functions
  */
-class StateSyncer {
+class DatabaseSyncer {
   private currentVersion: number = 0;
   private targetVersion: number = 0;
   private isSyncing: boolean = false;
@@ -1551,11 +1553,11 @@ class StateSyncer {
   }
 
   /**
-   * Applies a state diff to the local database (calls SyndDatabase.apply_diff)
-   * This reconstructs the sequencer's state changes by executing the SQL statements
-   * contained in the diff that was generated by the sequencer's generate_diff method
+   * Applies a database diff to the local database (calls SyndDatabase.apply_database_diff)
+   * This reconstructs the sequencer's database changes by executing the SQL statements
+   * contained in the diff that was generated by the sequencer's generate_database_diff method
    */
-  private async applyDiff(diffCommitment: DiffCommitment) {
+  private async applyDatabaseDiff(diffCommitment: DiffCommitment) {
     // Retrieve diff data
     let diffData: Buffer;
 
@@ -1569,7 +1571,7 @@ class StateSyncer {
 
     // Decompress
     const decompressed = await zstd.decompress(diffData);
-    const diff = JSON.parse(decompressed.toString()) as StateDiff;
+    const diff = JSON.parse(decompressed.toString()) as DatabaseDiff;
 
     // Verify integrity
     const calculatedHash = hash(decompressed);
@@ -1577,9 +1579,9 @@ class StateSyncer {
       throw new Error('Diff integrity check failed');
     }
 
-    // Apply SQL statements - this calls the SyndDatabase.apply_diff trait method
+    // Apply SQL statements - this calls the SyndDatabase.apply_database_diff trait method
     // which executes the SQL statements to update the replica's database
-    await this.db.executeInBatch(diff.statements);
+    await this.db.applyDatabaseDiff(diff);
   }
 }
 ```
