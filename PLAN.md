@@ -5,6 +5,18 @@ SyndDB is a high-performance blockchain database that replaces traditional EVM e
 
 ## Architecture Overview
 
+### Terminology Clarification
+To avoid confusion, this document uses specific terms:
+- **Database Operation / SQL Operation** - SQL statements executed in SQLite (INSERT, UPDATE, DELETE)
+- **Database Transaction** - A set of SQL operations executed atomically in SQLite
+- **Blockchain Transaction** - On-chain transaction published to Ethereum/Syndicate chain
+- **execute_database_operation()** - Executes SQL operations in the sequencer's local SQLite
+- **publish_to_blockchain()** - Creates and submits a BLOCKCHAIN transaction containing state updates
+- **BlockchainPublishQueue** - Queue holding operations waiting to be published to blockchain
+- **BlockchainPublishReceipt** - Confirmation that state was published to the blockchain
+
+The flow is: Database operations are executed locally → batched → published as blockchain transactions.
+
 ### System Components
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -189,7 +201,7 @@ use serde::{Deserialize, Serialize};
 #[async_trait]
 pub trait SyndDatabase: Send + Sync {
     async fn execute(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<ExecuteResult>;
-    async fn begin_transaction(&self) -> Result<DatabaseTransaction>;
+    async fn begin_database_transaction(&self) -> Result<DatabaseTransaction>;
 
     // GENERATE methods - Used by the SEQUENCER to create state representations for publishing
     // generate_snapshot: Creates a full database snapshot (complete SQLite file backup)
@@ -215,8 +227,21 @@ pub trait SyndDatabase: Send + Sync {
 pub trait Sequencer: Send + Sync {
     async fn start(&mut self) -> Result<()>;
     async fn stop(&mut self) -> Result<()>;
-    async fn submit_transaction(&self, tx: DatabaseTransaction) -> Result<TransactionReceipt>;
-    async fn publish_state(&self) -> Result<PublishReceipt>;
+
+    // EXECUTE_DATABASE_OPERATION - Accepts individual SQL operations from clients
+    // This executes SQL statements locally in the sequencer's SQLite database
+    // Returns immediately after local execution (low latency for clients)
+    // Example: User submits an order (INSERT), transfer (UPDATE), or other SQL operations
+    // Alternative names considered: submit_sql_transaction(), execute_sql()
+    async fn execute_database_operation(&self, op: DatabaseOperation) -> Result<OperationReceipt>;
+
+    // PUBLISH_TO_BLOCKCHAIN - Periodically publishes accumulated state changes to blockchain
+    // This batches many database operations and creates either:
+    // - A state diff (via generate_diff) for incremental updates, OR
+    // - A state snapshot (via generate_snapshot) for checkpointing
+    // Runs on a schedule (e.g., every 1 second or every 1000 transactions)
+    // This is what makes the state available for read replicas to sync
+    async fn publish_to_blockchain(&self) -> Result<BlockchainPublishReceipt>;
 }
 
 // synddb-replica/src/replica.rs
@@ -240,11 +265,11 @@ pub trait StorageProvider: Send + Sync {
 use alloy::primitives::B256;
 
 #[async_trait]
-pub trait ChainPublisher: Send + Sync {
-    async fn publish_diff(&self, diff: &[u8]) -> Result<B256>;
-    async fn publish_diff_pointer(&self, cid: &str) -> Result<B256>;
-    async fn publish_snapshot(&self, snapshot: &[u8]) -> Result<B256>;
-    async fn publish_snapshot_pointer(&self, cid: &str) -> Result<B256>;
+pub trait BlockchainPublisher: Send + Sync {
+    async fn submit_diff_to_chain(&self, diff: &[u8]) -> Result<B256>;
+    async fn submit_diff_pointer_to_chain(&self, cid: &str) -> Result<B256>;
+    async fn submit_snapshot_to_chain(&self, snapshot: &[u8]) -> Result<B256>;
+    async fn submit_snapshot_pointer_to_chain(&self, cid: &str) -> Result<B256>;
 }
 ```
 
@@ -338,6 +363,28 @@ impl SyndDatabase {
         })
     }
 
+    /// Called by execute_database_operation() - executes SQL immediately in local database
+    /// This provides low latency responses to clients (e.g., <1ms for order placement)
+    pub async fn execute_sql_operation(&self, op: DatabaseOperation) -> Result<OperationReceipt> {
+        let conn = self.pool.get()?;
+        let start = Instant::now();
+
+        // Execute SQL immediately in local SQLite
+        conn.execute(&op.sql, &op.params)?;
+
+        let receipt = OperationReceipt {
+            operation_id: generate_operation_id(),
+            status: "executed_locally",
+            latency: start.elapsed(),
+            will_be_published_in: "next batch (~1s)",
+        };
+
+        // Add to queue for later publishing via publish_to_blockchain()
+        self.blockchain_publish_queue.push(op).await?;
+
+        Ok(receipt)
+    }
+
     fn initialize_optimizations(conn: &Connection) -> Result<()> {
         // Performance-critical pragmas
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -352,28 +399,29 @@ impl SyndDatabase {
         Ok(())
     }
 
-    pub async fn execute_in_batch(&self, transactions: Vec<SqlTransaction>) -> Result<BatchResult> {
+    pub async fn execute_sql_batch(&self, operations: Vec<SqlOperation>) -> Result<BatchResult> {
         let start = Instant::now();
         let conn = self.pool.get()?;
 
-        let tx = conn.transaction()?;
+        // Start a database transaction (atomic batch of SQL operations)
+        let db_tx = conn.transaction()?;
         let mut results = Vec::new();
 
-        for sql_tx in transactions.iter() {
-            match self.execute_single(&tx, sql_tx) {
+        for sql_op in operations.iter() {
+            match self.execute_single(&db_tx, sql_op) {
                 Ok(result) => results.push(result),
                 Err(e) => {
-                    tx.rollback()?;
+                    db_tx.rollback()?;
                     return Err(e);
                 }
             }
         }
 
-        tx.commit()?;
+        db_tx.commit()?;
 
         let duration = start.elapsed();
         histogram!("synddb.batch.duration", duration);
-        counter!("synddb.batch.transactions", transactions.len() as u64);
+        counter!("synddb.batch.operations", operations.len() as u64);
 
         Ok(BatchResult {
             success: true,
@@ -563,8 +611,8 @@ pub fn bench_sqlite_operations(c: &mut Criterion) {
 
     c.bench_function("batch_insert_100", |b| {
         b.iter(|| {
-            let transactions = generate_test_transactions(100);
-            db.execute_in_batch(black_box(transactions))
+            let operations = generate_test_operations(100);
+            db.execute_sql_batch(black_box(operations))
         });
     });
 }
@@ -688,7 +736,7 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TransactionType {
+pub enum DatabaseOperationType {
     // Order book operations
     PlaceOrder,
     CancelOrder,
@@ -707,30 +755,30 @@ pub enum TransactionType {
     Custom(String),
 }
 
-pub trait TransactionDefinition: Send + Sync {
-    fn transaction_type(&self) -> TransactionType;
+pub trait OperationDefinition: Send + Sync {
+    fn operation_type(&self) -> DatabaseOperationType;
     fn version(&self) -> u32;
     fn schema(&self) -> &JsonValue;
-    fn validate(&self, tx: &JsonValue) -> Result<()>;
-    fn serialize(&self, tx: &JsonValue) -> Result<Vec<u8>>;
+    fn validate(&self, op: &JsonValue) -> Result<()>;
+    fn serialize(&self, op: &JsonValue) -> Result<Vec<u8>>;
     fn deserialize(&self, data: &[u8]) -> Result<JsonValue>;
-    fn generate_sql(&self, tx: &JsonValue) -> Result<Vec<String>>;
+    fn generate_sql(&self, op: &JsonValue) -> Result<Vec<String>>;
 }
 
-pub struct TransactionTypeRegistry {
-    definitions: Arc<RwLock<HashMap<String, Box<dyn TransactionDefinition>>>>,
+pub struct OperationTypeRegistry {
+    definitions: Arc<RwLock<HashMap<String, Box<dyn OperationDefinition>>>>,
 }
 
-impl TransactionTypeRegistry {
+impl OperationTypeRegistry {
     pub fn new() -> Self {
         Self {
             definitions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    pub fn register(&self, definition: Box<dyn TransactionDefinition>) -> Result<()> {
+    pub fn register(&self, definition: Box<dyn OperationDefinition>) -> Result<()> {
         let key = format!("{}:{}",
-            serde_json::to_string(&definition.transaction_type())?,
+            serde_json::to_string(&definition.operation_type())?,
             definition.version()
         );
 
@@ -743,7 +791,7 @@ impl TransactionTypeRegistry {
         Ok(())
     }
 
-    fn install_triggers(&self, definition: &dyn TransactionDefinition) -> Result<()> {
+    fn install_triggers(&self, definition: &dyn OperationDefinition) -> Result<()> {
         let trigger_sql = self.generate_trigger_sql(definition)?;
 
         // Execute trigger installation
@@ -861,27 +909,27 @@ BEGIN
 END;
 ```
 
-#### 3.3 Transaction Builder Pattern (Rust)
+#### 3.3 Database Operation Builder Pattern (Rust)
 ```rust
 // synddb-core/src/builders.rs
-use crate::transaction_types::TransactionType;
+use crate::operation_types::DatabaseOperationType;
 use uuid::Uuid;
 use std::time::SystemTime;
 
-pub struct TransactionBuilder;
+pub struct OperationBuilder;
 
-impl TransactionBuilder {
-    pub fn place_order() -> OrderTransactionBuilder {
-        OrderTransactionBuilder::new()
+impl OperationBuilder {
+    pub fn place_order() -> OrderOperationBuilder {
+        OrderOperationBuilder::new()
     }
 
-    pub fn transfer() -> TransferTransactionBuilder {
-        TransferTransactionBuilder::new()
+    pub fn transfer() -> TransferOperationBuilder {
+        TransferOperationBuilder::new()
     }
 }
 
 #[derive(Default)]
-pub struct OrderTransactionBuilder {
+pub struct OrderOperationBuilder {
     account_id: Option<String>,
     side: Option<OrderSide>,
     price: Option<f64>,
@@ -894,7 +942,7 @@ pub enum OrderSide {
     Sell,
 }
 
-impl OrderTransactionBuilder {
+impl OrderOperationBuilder {
     pub fn new() -> Self {
         Self::default()
     }
@@ -919,7 +967,7 @@ impl OrderTransactionBuilder {
         self
     }
 
-    pub fn build(self) -> Result<DatabaseTransaction> {
+    pub fn build(self) -> Result<DatabaseOperation> {
         // Validate required fields
         let account_id = self.account_id
             .ok_or_else(|| anyhow!("Missing account_id"))?;
@@ -942,8 +990,8 @@ impl OrderTransactionBuilder {
             .duration_since(SystemTime::UNIX_EPOCH)?
             .as_secs();
 
-        Ok(DatabaseTransaction {
-            transaction_type: TransactionType::PlaceOrder,
+        Ok(DatabaseOperation {
+            operation_type: DatabaseOperationType::PlaceOrder,
             sql: sql.to_string(),
             params: vec![
                 order_id.clone().into(),
@@ -981,6 +1029,24 @@ fn generate_nonce() -> u64 {
 - Build state diff and state snapshot generation system
 - Implement compression and chunking for large states
 - Create off-chain storage integration (IPFS/Arweave)
+
+### Operation Flow Overview
+```
+DATABASE OPERATIONS:
+Client Request → execute_database_operation() → Execute SQL in Local SQLite → Return Receipt
+  (e.g., place order)         (SQL operations)                           (instant, <1ms)
+                                              ↓
+                                    [Accumulate in Blockchain Queue]
+                                              ↓
+BLOCKCHAIN OPERATIONS:
+                    Timer/Threshold → publish_to_blockchain() → generate_diff/snapshot()
+                                              ↓
+                                    Create Blockchain Transaction
+                                              ↓
+                                    Submit to Syndicate Chain
+                                              ↓
+                                    Read Replicas Sync
+```
 
 ### Tasks
 
@@ -1231,10 +1297,10 @@ class SnapshotGenerator {
 
 #### 4.4 IPFS/Arweave Integration
 ```typescript
-class IPFSStorage implements IStorageProvider {
+class IPFSStorage implements IOffchainStorageProvider {
   private ipfs: IPFS;
 
-  async store(data: Buffer): Promise<string> {
+  async storeToIPFS(data: Buffer): Promise<string> {
     // Add to IPFS with chunking for large files
     const options = {
       pin: true,
@@ -1245,7 +1311,7 @@ class IPFSStorage implements IStorageProvider {
     return result.cid.toString();
   }
 
-  async retrieve(cid: string): Promise<Buffer> {
+  async retrieveFromIPFS(cid: string): Promise<Buffer> {
     const chunks: Buffer[] = [];
 
     for await (const chunk of this.ipfs.cat(cid)) {
@@ -1256,10 +1322,10 @@ class IPFSStorage implements IStorageProvider {
   }
 }
 
-class ArweaveStorage implements IStorageProvider {
+class ArweaveStorage implements IOffchainStorageProvider {
   private arweave: Arweave;
 
-  async store(data: Buffer): Promise<string> {
+  async storeToArweave(data: Buffer): Promise<string> {
     const transaction = await this.arweave.createTransaction({
       data: data.toString('base64'),
       tags: [
@@ -1275,7 +1341,7 @@ class ArweaveStorage implements IStorageProvider {
     return transaction.id;
   }
 
-  async retrieve(id: string): Promise<Buffer> {
+  async retrieveFromArweave(id: string): Promise<Buffer> {
     const data = await this.arweave.transactions.getData(id, { decode: true });
     return Buffer.from(data);
   }
@@ -1284,31 +1350,43 @@ class ArweaveStorage implements IStorageProvider {
 
 #### 4.5 State Publisher
 ```typescript
-class StatePublisher {
-  private queue: PublishQueue;
+/**
+ * BlockchainStatePublisher handles the PUBLISH_TO_BLOCKCHAIN functionality of the Sequencer
+ * It runs periodically to batch and publish accumulated database operations to the blockchain
+ * This is separate from execute_database_operation which handles individual client requests
+ */
+class BlockchainStatePublisher {
+  private queue: BlockchainPublishQueue;  // Queue of operations submitted via execute_database_operation
   private storage: IStorageProvider;
-  private chain: IChainPublisher;
+  private blockchainClient: IBlockchainPublisher;
 
-  async publishState() {
+  /**
+   * Called periodically (e.g., every second) to publish accumulated state changes to blockchain
+   * This is the implementation of Sequencer.publish_to_blockchain()
+   */
+  async publishToBlockchain() {
+    // Get batch of database operations that were submitted via execute_database_operation
+    // These have already been executed locally in the sequencer's SQLite database
     const batch = await this.queue.getBatch();
 
-    if (batch.transactions.length === 0) {
-      return;
+    if (batch.operations.length === 0) {
+      return;  // Nothing new to publish
     }
 
-    // Generate state diff from last published version
+    // Generate state diff from all operations since last publish
+    // This calls SyndDatabase.generate_diff() internally
     const diff = await this.diffGenerator.generateDiff(
       this.lastPublishedVersion,
       batch.version
     );
 
-    // Decide whether to publish directly or via pointer
-    const publishStrategy = this.determinePublishStrategy(diff);
+    // Decide whether to publish directly onchain or via offchain storage
+    const publishStrategy = this.determineBlockchainStrategy(diff);
 
     if (publishStrategy === 'direct') {
-      await this.publishDirect(diff);
+      await this.publishDirectlyOnchain(diff);
     } else {
-      await this.publishViaPointer(diff);
+      await this.publishViaOffchainStorage(diff);
     }
 
     // Update last published version
@@ -1316,30 +1394,30 @@ class StatePublisher {
 
     // Check if snapshot is needed
     if (this.shouldCreateSnapshot(batch.version)) {
-      await this.publishSnapshot(batch.version);
+      await this.publishSnapshotToBlockchain(batch.version);
     }
   }
 
-  private determinePublishStrategy(diff: StateDiff): 'direct' | 'pointer' {
+  private determineBlockchainStrategy(diff: StateDiff): 'direct' | 'offchain' {
     const MAX_ONCHAIN_SIZE = 100 * 1024; // 100KB
-    return diff.compressedSize < MAX_ONCHAIN_SIZE ? 'direct' : 'pointer';
+    return diff.compressedSize < MAX_ONCHAIN_SIZE ? 'direct' : 'offchain';
   }
 
-  private async publishDirect(diff: StateDiff) {
-    // Chunk if necessary
+  private async publishDirectlyOnchain(diff: StateDiff) {
+    // Chunk if necessary for blockchain size limits
     const chunks = this.chunkData(diff.compressed, 30000);
 
     for (let i = 0; i < chunks.length; i++) {
-      await this.chain.publishDiff(chunks[i]);
+      await this.blockchainClient.submitDiffToChain(chunks[i]);
     }
   }
 
-  private async publishViaPointer(diff: StateDiff) {
+  private async publishViaOffchainStorage(diff: StateDiff) {
     // Store to IPFS/Arweave
-    const cid = await this.storage.store(diff.compressed);
+    const cid = await this.storage.storeToIPFS(diff.compressed);
 
-    // Publish pointer to chain
-    await this.chain.publishDiffPointer(cid);
+    // Publish pointer to blockchain
+    await this.blockchainClient.submitDiffPointerToChain(cid);
   }
 }
 ```
@@ -2016,11 +2094,11 @@ contract SyndDBBridge {
 ##### Unit Tests
 ```typescript
 describe('SyndDatabase', () => {
-  describe('Transaction Execution', () => {
-    it('should execute transactions atomically', async () => {
+  describe('Database Operation Execution', () => {
+    it('should execute SQL operations atomically', async () => {
       const db = new SyndDatabase(testConfig);
 
-      await db.beginTransaction();
+      await db.beginDatabaseTransaction();
       await db.execute('INSERT INTO orders VALUES (?, ?, ?, ?, ?)', params1);
       await db.execute('UPDATE balances SET balance = balance - ? WHERE account_id = ?', params2);
       await db.commit();
@@ -2056,10 +2134,10 @@ describe('End-to-End Flow', () => {
   });
 
   it('should sync state from sequencer to read replica', async () => {
-    // Submit transactions to sequencer
-    const txs = generateTestTransactions(100);
-    for (const tx of txs) {
-      await sequencer.submitTransaction(tx);
+    // Submit database operations to sequencer
+    const ops = generateTestDatabaseOperations(100);
+    for (const op of ops) {
+      await sequencer.executeDatabaseOperation(op);
     }
 
     // Wait for publish
