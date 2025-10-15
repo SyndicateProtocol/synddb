@@ -93,9 +93,21 @@ pub struct SqliteDatabase {
 }
 
 impl SqliteDatabase {
-    /// Create a new SQLite database instance
+    /// Create a new SQLite database instance with default configuration
     pub fn new<P: AsRef<Path>>(path: P, pool_size: u32) -> Result<Self> {
         Self::new_with_config(path, pool_size, "WAL", "NORMAL", -2000000, 274877906944)
+    }
+
+    /// Create a new SQLite database instance from DatabaseConfig
+    pub fn from_config(config: &crate::config::DatabaseConfig) -> Result<Self> {
+        Self::new_with_config(
+            &config.path,
+            config.pool_size,
+            &config.journal_mode,
+            &config.synchronous,
+            config.cache_size,
+            config.mmap_size,
+        )
     }
 
     /// Create a new SQLite database instance with custom pragma configuration
@@ -567,5 +579,30 @@ mod tests {
         let result = db.query("SELECT * FROM test", vec![]).await.unwrap();
         assert_eq!(result.row_count, 1);
         assert_eq!(result.columns, vec!["id", "name"]);
+    }
+
+    #[tokio::test]
+    async fn test_from_config() {
+        use crate::config::DatabaseConfig;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = DatabaseConfig {
+            path: temp_dir.path().join("config-test.db"),
+            pool_size: 8,
+            journal_mode: "WAL".to_string(),
+            synchronous: "NORMAL".to_string(),
+            cache_size: -64000,    // 64MB
+            mmap_size: 1073741824, // 1GB
+        };
+
+        let db = SqliteDatabase::from_config(&config).unwrap();
+
+        // Verify database works
+        db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)", vec![])
+            .await
+            .unwrap();
+
+        let version = db.get_version().await.unwrap();
+        assert_eq!(version, 0);
     }
 }

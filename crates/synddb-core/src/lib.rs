@@ -31,15 +31,8 @@
 //! // Load configuration
 //! let config = SyndDBConfig::test_config();
 //!
-//! // Initialize database with configuration
-//! let database = Arc::new(SqliteDatabase::new_with_config(
-//!     &config.database.path,
-//!     config.database.pool_size,
-//!     &config.database.journal_mode,
-//!     &config.database.synchronous,
-//!     config.database.cache_size,
-//!     config.database.mmap_size,
-//! )?);
+//! // Initialize database from configuration
+//! let database = Arc::new(SqliteDatabase::from_config(&config.database)?);
 //!
 //! // Create extension registry
 //! let mut registry = ExtensionRegistry::new();
