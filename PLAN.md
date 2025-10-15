@@ -8,40 +8,40 @@ SyndDB is a high-performance blockchain database that replaces traditional EVM e
 ### System Components
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         SyndDB System                            │
+│                         SyndDB System                           │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────────┐      ┌────────────────────────────┐      │
-│  │  Sequencer (1)   │      │ Read Replicas (Anyone)    │      │
-│  │                   │      │                            │      │
-│  │  ┌─────────────┐  │      │  ┌─────────────────────┐  │      │
-│  │  │   SQLite    │  │      │  │  SQLite Replicas    │  │      │
-│  │  │   Engine    │  │      │  │  (Multiple Nodes)   │  │      │
-│  │  └─────────────┘  │      │  └─────────────────────┘  │      │
-│  │                   │      │                            │      │
-│  │  ┌─────────────┐  │      │  ┌─────────────────────┐  │      │
-│  │  │  Tx Handler │  │      │  │   State Sync &      │  │      │
-│  │  │  & Triggers │  │      │  │   Query Engines     │  │      │
-│  │  └─────────────┘  │      │  └─────────────────────┘  │      │
-│  │                   │      │                            │      │
-│  │  ┌─────────────┐  │      │  ┌─────────────────────┐  │      │
-│  │  │ Diff/Snap   │  │      │  │  Subset: TEE        │  │      │
-│  │  │  Generator  │  │      │  │  Validators Only    │  │      │
-│  │  └─────────────┘  │      │  └─────────────────────┘  │      │
-│  └──────────────────┘      └────────────────────────────┘      │
-│           │                            ▲                         │
-│           │                            │                         │
-│           ▼                            │                         │
-│  ┌──────────────────────────────────────────────────────┐      │
-│  │            Syndicate Chain Smart Contracts            │      │
-│  │  (writeDiff, writeSnapshot, pointers, ordering)       │      │
-│  └──────────────────────────────────────────────────────┘      │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────┐      │
-│  │              Off-chain Storage (IPFS/Arweave)         │      │
-│  └──────────────────────────────────────────────────────┘      │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+│                                                                 │
+│  ┌──────────────────┐      ┌──────────────────────────────┐   │
+│  │  Sequencer (1)   │      │  Read Replicas (Anyone)      │   │
+│  │                  │      │                              │   │
+│  │  ┌─────────────┐ │      │  ┌────────────────────────┐ │   │
+│  │  │   SQLite    │ │      │  │   SQLite Replicas      │ │   │
+│  │  │   Engine    │ │      │  │   (Multiple Nodes)     │ │   │
+│  │  └─────────────┘ │      │  └────────────────────────┘ │   │
+│  │                  │      │                              │   │
+│  │  ┌─────────────┐ │      │  ┌────────────────────────┐ │   │
+│  │  │  Tx Handler │ │      │  │   State Sync &         │ │   │
+│  │  │  & Triggers │ │      │  │   Query Engines        │ │   │
+│  │  └─────────────┘ │      │  └────────────────────────┘ │   │
+│  │                  │      │                              │   │
+│  │  ┌─────────────┐ │      │  ┌────────────────────────┐ │   │
+│  │  │ Diff/Snap   │ │      │  │  Subset: TEE           │ │   │
+│  │  │  Generator  │ │      │  │  Validators Only       │ │   │
+│  │  └─────────────┘ │      │  └────────────────────────┘ │   │
+│  └──────────────────┘      └──────────────────────────────┘   │
+│           │                            ▲                       │
+│           │                            │                       │
+│           ▼                            │                       │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │         Syndicate Chain Smart Contracts                  │ │
+│  │    (writeDiff, writeSnapshot, pointers, ordering)        │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                                                                │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │         Off-chain Storage (IPFS/Arweave)                 │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ## Technology Stack
@@ -109,55 +109,55 @@ All components will be implemented in Rust for:
 #### 1.1 Project Setup (Rust Workspace)
 ```
 synddb/
-├── Cargo.toml              # Workspace configuration
+├── Cargo.toml                 # Workspace configuration
 ├── crates/
-│   ├── synddb-core/        # Core database abstractions
+│   ├── synddb-core/           # Core database abstractions
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── database.rs    # SQLite abstraction layer
-│   │       ├── types.rs       # Core type definitions
-│   │       ├── config.rs      # Configuration management
+│   │       ├── database.rs       # SQLite abstraction layer
+│   │       ├── types.rs          # Core type definitions
+│   │       ├── config.rs         # Configuration management
 │   │       └── lib.rs
-│   ├── synddb-sequencer/   # Sequencer implementation
+│   ├── synddb-sequencer/      # Sequencer implementation
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── main.rs        # Sequencer binary
-│   │       ├── sequencer.rs   # Main sequencer orchestrator
-│   │       ├── batcher.rs     # Transaction batching logic
-│   │       ├── compressor.rs  # State diff/snapshot compression
-│   │       └── publisher.rs   # Blockchain publishing
-│   ├── synddb-replica/     # Read replica implementation
+│   │       ├── main.rs           # Sequencer binary
+│   │       ├── sequencer.rs      # Main sequencer orchestrator
+│   │       ├── batcher.rs        # Transaction batching logic
+│   │       ├── compressor.rs     # State diff/snapshot compression
+│   │       └── publisher.rs      # Blockchain publishing
+│   ├── synddb-replica/        # Read replica implementation
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── main.rs        # Replica binary
-│   │       ├── replica.rs     # Main read replica orchestrator
-│   │       ├── syncer.rs      # State sync
-│   │       ├── reconstructor.rs # State reconstruction
-│   │       ├── query.rs       # Query interface
-│   │       └── validator.rs   # Optional: TEE validator
-│   ├── synddb-contracts/   # Smart contract bindings
+│   │       ├── main.rs           # Replica binary
+│   │       ├── replica.rs        # Main read replica orchestrator
+│   │       ├── syncer.rs         # State sync
+│   │       ├── reconstructor.rs  # State reconstruction
+│   │       ├── query.rs          # Query interface
+│   │       └── validator.rs      # Optional: TEE validator
+│   ├── synddb-contracts/      # Smart contract bindings
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── abi/           # Contract ABIs
-│   │       ├── bindings.rs    # Generated bindings (alloy)
+│   │       ├── abi/              # Contract ABIs
+│   │       ├── bindings.rs       # Generated bindings (alloy)
 │   │       └── lib.rs
-│   ├── synddb-storage/     # Storage backends
+│   ├── synddb-storage/        # Storage backends
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── ipfs.rs        # IPFS integration
-│   │       ├── arweave.rs     # Arweave integration
+│   │       ├── ipfs.rs           # IPFS integration
+│   │       ├── arweave.rs        # Arweave integration
 │   │       └── lib.rs
-│   └── synddb-utils/       # Shared utilities
+│   └── synddb-utils/          # Shared utilities
 │       ├── Cargo.toml
 │       └── src/
-│           ├── compression.rs # Compression utilities
-│           ├── hashing.rs     # Hashing utilities
-│           ├── metrics.rs     # Metrics collection
+│           ├── compression.rs    # Compression utilities
+│           ├── hashing.rs        # Hashing utilities
+│           ├── metrics.rs        # Metrics collection
 │           └── lib.rs
-├── contracts/              # Solidity contracts
+├── contracts/                 # Solidity contracts
 │   ├── src/
 │   └── test/
-├── tests/                  # Integration tests
+├── tests/                     # Integration tests
 │   ├── integration/
 │   └── benchmarks/
 ├── scripts/
