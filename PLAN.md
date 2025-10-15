@@ -56,44 +56,55 @@ All components will be implemented in Rust for:
 ### Recommended Rust Libraries
 
 #### Database & Storage
-- **rusqlite** - SQLite bindings with full feature support
-- **sqlx** - Async SQL toolkit (alternative to rusqlite for async contexts)
-- **r2d2** - Database connection pooling
-- **sled** - Embedded database for metadata storage
+- **rusqlite** - SQLite bindings with full feature support ✅ (actively maintained)
+- **sqlx** - Async SQL toolkit (alternative to rusqlite for async contexts) ✅ (v0.8+, actively maintained)
+- **r2d2** - Database connection pooling ✅ (actively maintained)
+- **r2d2_sqlite** - SQLite support for r2d2 ✅ (actively maintained)
+- **sled** - Embedded database for metadata storage ✅ (actively maintained)
 
 #### Networking & Async
-- **tokio** - Async runtime for networking and I/O
-- **axum** or **actix-web** - Web framework for API endpoints
-- **jsonrpsee** - JSON-RPC server/client implementation for API compatibility
-- **tonic** - gRPC framework for inter-node communication
-- **quinn** - QUIC implementation for low-latency networking
+- **tokio** - Async runtime for networking and I/O ✅ (v1.41+, very actively maintained)
+- **axum** - Web framework for API endpoints ✅ (v0.7+, very actively maintained)
+- **actix-web** - Alternative web framework ✅ (v4.9+, actively maintained)
+- **jsonrpsee** - JSON-RPC server/client implementation ✅ (v0.24+, actively maintained)
+- **tonic** - gRPC framework for inter-node communication ✅ (v0.12+, actively maintained)
+- **quinn** - QUIC implementation for low-latency networking ✅ (v0.11+, actively maintained)
 
 #### Blockchain Integration
-- **alloy** - Modern, high-performance Ethereum library
+- **alloy** - Modern, high-performance Ethereum library ✅ (v1.0+, very actively maintained, replaces ethers-rs)
 
 #### Compression & Serialization
-- **zstd** - Zstandard compression
-- **bincode** - Binary serialization
-- **serde** - Serialization framework
-- **prost** - Protocol Buffers
+- **zstd** - Zstandard compression ✅ (actively maintained)
+- **bincode** - Binary serialization ✅ (v2.0-rc, actively maintained)
+- **serde** - Serialization framework ✅ (v1.0+, very actively maintained, 27M+ downloads/month)
+- **prost** - Protocol Buffers ✅ (v0.13+, actively maintained)
 
 #### Cryptography & Security
-- **sp1-sdk** - Succinct SP1 Zero Knowledge Virtual Machine for proving execution
-- **lit-sdk** - Lit Protocol SDK for TEE attestation and verification via Lit Actions
-- **ring** - Cryptographic operations
-- **sha3** - SHA-3 and Keccak hashing
-- **ed25519-dalek** - Ed25519 signatures
+- **sp1-sdk** - Succinct SP1 Zero Knowledge Virtual Machine ✅ (v3.0+, actively maintained by Succinct)
+- **lit-rust-sdk** - Lit Protocol SDK (Note: use `lit-rust-sdk` not `lit-sdk`) ✅ (v0.2+, recently updated)
+- **ring** - Cryptographic operations ✅ (v0.17+, actively maintained)
+- **sha3** - SHA-3 and Keccak hashing ✅ (v0.10+, actively maintained)
+- **ed25519-dalek** - ⚠️ **DEPRECATED** - Use **ed25519-consensus** instead due to vulnerability
 
 #### Storage Backends
-- **ipfs-api** - IPFS client
-- **arweave-rs** - Arweave client (community crate)
+- **ipfs-api** - IPFS client ✅ (actively maintained, uses Hyper/Actix)
+- **arweave-sdk-rs** - Arweave SDK (Note: use `arweave-sdk-rs` not `arweave-rs`) ✅ (actively maintained)
 
 #### Utilities
-- **tracing** - Structured logging and diagnostics
-- **metrics** - Performance metrics collection
-- **clap** - Command-line argument parsing
-- **config** - Configuration management
-- **thiserror** & **anyhow** - Error handling
+- **tracing** - Structured logging and diagnostics ✅ (v0.1+, very actively maintained)
+- **metrics** - Performance metrics collection ✅ (actively maintained)
+- **clap** - Command-line argument parsing ✅ (v4.5+, very actively maintained)
+- **config** - Configuration management ✅ (v0.14+, actively maintained)
+- **thiserror** - Error derive macro ✅ (v2.0+, very actively maintained, 27M+ downloads/month)
+- **anyhow** - Flexible error handling ✅ (v1.0+, very actively maintained)
+
+#### Important Notes:
+- ✅ = Available and actively maintained
+- ⚠️ = Deprecated or has issues
+- Replace `ed25519-dalek` with `ed25519-consensus` for Ed25519 signatures
+- Use `lit-rust-sdk` instead of `lit-sdk` for Lit Protocol integration
+- Use `arweave-sdk-rs` instead of `arweave-rs` for Arweave integration
+- All listed versions are as of late 2024/early 2025
 
 ## Implementation Phases
 
