@@ -309,10 +309,7 @@ impl ExtensionRegistry {
     pub fn register_query(&mut self, extension: Arc<dyn QueryExtension>) -> Result<()> {
         let id = extension.query_id().to_string();
         if self.queries.contains_key(&id) {
-            return Err(Error::Extension(format!(
-                "Query {} already registered",
-                id
-            )));
+            return Err(Error::Extension(format!("Query {} already registered", id)));
         }
         self.queries.insert(id, extension);
         Ok(())
@@ -387,12 +384,7 @@ impl ExtensionRegistry {
 
         // Simple topological sort
         for trigger in self.triggers.values() {
-            self.visit_trigger(
-                trigger.clone(),
-                &mut ordered,
-                &mut visited,
-                &mut visiting,
-            )?;
+            self.visit_trigger(trigger.clone(), &mut ordered, &mut visited, &mut visiting)?;
         }
 
         Ok(ordered)

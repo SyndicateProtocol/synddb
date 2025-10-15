@@ -3,11 +3,11 @@
 //! Run with: cargo bench --package synddb-core
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use std::sync::Arc;
 use synddb_core::{
     database::{SqliteDatabase, SyndDatabase},
     types::SqlValue,
 };
-use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -93,30 +93,26 @@ fn bench_batch_insert(c: &mut Criterion) {
 
     for batch_size in [10, 100, 1000].iter() {
         group.throughput(Throughput::Elements(*batch_size as u64));
-        group.bench_with_input(
-            format!("batch_{}", batch_size),
-            batch_size,
-            |b, &size| {
-                b.to_async(&setup.runtime).iter(|| async {
-                    let db = setup.database.clone();
+        group.bench_with_input(format!("batch_{}", batch_size), batch_size, |b, &size| {
+            b.to_async(&setup.runtime).iter(|| async {
+                let db = setup.database.clone();
 
-                    // Build batch of operations
-                    let operations: Vec<_> = (0..size)
-                        .map(|i| synddb_core::types::SqlOperation {
-                            sql: "INSERT INTO test_table (name, value, created_at) VALUES (?1, ?2, ?3)"
-                                .to_string(),
-                            params: vec![
-                                SqlValue::Text(format!("test_{}", i)),
-                                SqlValue::Integer(i as i64),
-                                SqlValue::Integer(1000000 + i as i64),
-                            ],
-                        })
-                        .collect();
+                // Build batch of operations
+                let operations: Vec<_> = (0..size)
+                    .map(|i| synddb_core::types::SqlOperation {
+                        sql: "INSERT INTO test_table (name, value, created_at) VALUES (?1, ?2, ?3)"
+                            .to_string(),
+                        params: vec![
+                            SqlValue::Text(format!("test_{}", i)),
+                            SqlValue::Integer(i as i64),
+                            SqlValue::Integer(1000000 + i as i64),
+                        ],
+                    })
+                    .collect();
 
-                    db.execute_batch(operations).await.unwrap();
-                });
-            },
-        );
+                db.execute_batch(operations).await.unwrap();
+            });
+        });
     }
 
     group.finish();

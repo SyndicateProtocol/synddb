@@ -2,11 +2,11 @@
 //!
 //! Run with: cargo run --example basic_usage
 
+use std::sync::Arc;
 use synddb_core::{
     database::{SqliteDatabase, SyndDatabase},
     types::SqlValue,
 };
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,12 +66,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Query all users
     println!("Querying all users...");
-    let results = db.query("SELECT * FROM users ORDER BY balance DESC", vec![]).await?;
+    let results = db
+        .query("SELECT * FROM users ORDER BY balance DESC", vec![])
+        .await?;
 
     println!("  Found {} users:", results.row_count);
     for row in &results.rows {
-        if let [SqlValue::Integer(id), SqlValue::Text(name), SqlValue::Text(email), SqlValue::Integer(balance), SqlValue::Integer(_created)] = &row[..] {
-            println!("    - {} (id: {}, email: {}, balance: {})", name, id, email, balance);
+        if let [SqlValue::Integer(id), SqlValue::Text(name), SqlValue::Text(email), SqlValue::Integer(balance), SqlValue::Integer(_created)] =
+            &row[..]
+        {
+            println!(
+                "    - {} (id: {}, email: {}, balance: {})",
+                name, id, email, balance
+            );
         }
     }
     println!();

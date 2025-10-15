@@ -9,7 +9,7 @@ use crate::types::*;
 use async_trait::async_trait;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Connection, OptionalExtension, ToSql};
+use rusqlite::{Connection, ToSql};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -91,6 +91,7 @@ pub struct SqliteDatabase {
     /// Current database version
     version: Arc<RwLock<u64>>,
     /// Performance statistics (deprecated - use metrics)
+    #[allow(dead_code)]
     stats: Arc<RwLock<PerformanceStats>>,
     /// Prepared statement cache
     prepared_statements: Arc<PreparedStatementCache>,
@@ -112,7 +113,9 @@ impl SqliteDatabase {
             .map_err(|e| Error::Other(anyhow::anyhow!("Failed to create pool: {}", e)))?;
 
         // Initialize database with optimizations
-        let conn = pool.get().map_err(|e| Error::Other(anyhow::anyhow!("{}", e)))?;
+        let conn = pool
+            .get()
+            .map_err(|e| Error::Other(anyhow::anyhow!("{}", e)))?;
         Self::initialize_optimizations(&conn)?;
         Self::create_metadata_tables(&conn)?;
 
@@ -234,15 +237,10 @@ impl SyndDatabase for SqliteDatabase {
         let conn = self.get_connection()?;
 
         // Convert SqlValue params to rusqlite params
-        let param_values: Vec<Box<dyn ToSql>> = params
-            .iter()
-            .map(|v| Self::sql_value_to_param(v))
-            .collect();
+        let param_values: Vec<Box<dyn ToSql>> =
+            params.iter().map(|v| Self::sql_value_to_param(v)).collect();
 
-        let param_refs: Vec<&dyn ToSql> = param_values
-            .iter()
-            .map(|p| p.as_ref())
-            .collect();
+        let param_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
 
         let rows_affected = conn.execute(sql, param_refs.as_slice())?;
         let last_insert_rowid = if rows_affected > 0 {
@@ -268,9 +266,7 @@ impl SyndDatabase for SqliteDatabase {
         let mut conn = self.get_connection()?;
 
         // Begin transaction
-        let tx = conn
-            .transaction()
-            .map_err(|e| Error::Database(e))?;
+        let tx = conn.transaction().map_err(Error::Database)?;
 
         let mut results = Vec::new();
 
@@ -279,17 +275,11 @@ impl SyndDatabase for SqliteDatabase {
             let op_start = Instant::now();
 
             // Convert SqlValue params to ToSql trait objects
-            let params: Vec<Box<dyn ToSql>> = op
-                .params
-                .iter()
-                .map(Self::sql_value_to_param)
-                .collect();
+            let params: Vec<Box<dyn ToSql>> =
+                op.params.iter().map(Self::sql_value_to_param).collect();
 
             // Convert to references for execute
-            let param_refs: Vec<&dyn ToSql> = params
-                .iter()
-                .map(|p| p.as_ref())
-                .collect();
+            let param_refs: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
             let rows_affected = tx.execute(&op.sql, param_refs.as_slice())?;
             let last_insert_rowid = if rows_affected > 0 {
@@ -331,22 +321,13 @@ impl SyndDatabase for SqliteDatabase {
         let mut stmt = conn.prepare(sql)?;
 
         // Get column names
-        let columns: Vec<String> = stmt
-            .column_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let columns: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
         // Convert SqlValue params to rusqlite params
-        let param_values: Vec<Box<dyn ToSql>> = params
-            .iter()
-            .map(|v| Self::sql_value_to_param(v))
-            .collect();
+        let param_values: Vec<Box<dyn ToSql>> =
+            params.iter().map(|v| Self::sql_value_to_param(v)).collect();
 
-        let param_refs: Vec<&dyn ToSql> = param_values
-            .iter()
-            .map(|p| p.as_ref())
-            .collect();
+        let param_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
 
         // Execute query and collect rows
         let mut rows_data = Vec::new();
@@ -431,7 +412,10 @@ impl SyndDatabase for SqliteDatabase {
             .unwrap()
             .as_millis() as u64;
 
-        info!("Generating diff from version {} to {}", from_version, to_version);
+        info!(
+            "Generating diff from version {} to {}",
+            from_version, to_version
+        );
 
         // TODO: Implement actual diff generation using WAL or change tracking
         // For now, this is a placeholder that would need to track changes
@@ -441,7 +425,7 @@ impl SyndDatabase for SqliteDatabase {
         let json = serde_json::to_vec(&statements)?;
         let compressed = zstd::encode_all(&json[..], 3)?;
         let compressed_size = compressed.len();
-        let compression_ratio = if json.len() > 0 {
+        let compression_ratio = if !json.is_empty() {
             compressed_size as f64 / json.len() as f64
         } else {
             0.0
@@ -495,7 +479,10 @@ impl SyndDatabase for SqliteDatabase {
     }
 
     async fn apply_diff(&self, diff: DatabaseDiff) -> Result<()> {
-        info!("Applying diff from version {} to {}", diff.from_version, diff.to_version);
+        info!(
+            "Applying diff from version {} to {}",
+            diff.from_version, diff.to_version
+        );
 
         // Verify checksum
         let calculated_checksum = calculate_checksum(&diff.compressed);
@@ -510,7 +497,7 @@ impl SyndDatabase for SqliteDatabase {
 
             // Execute all statements in the diff
             for statement in &diff.statements {
-                tx.execute(&statement, [])?;
+                tx.execute(statement, [])?;
             }
 
             tx.commit()?;
@@ -578,14 +565,17 @@ mod tests {
         let db = SqliteDatabase::new(db_path, 4).unwrap();
 
         // Create table
-        db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)", vec![])
-            .await
-            .unwrap();
+        db.execute(
+            "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)",
+            vec![],
+        )
+        .await
+        .unwrap();
 
         // Insert data
         db.execute(
             "INSERT INTO test (name) VALUES (?1)",
-            vec![SqlValue::Text("Alice".to_string())]
+            vec![SqlValue::Text("Alice".to_string())],
         )
         .await
         .unwrap();

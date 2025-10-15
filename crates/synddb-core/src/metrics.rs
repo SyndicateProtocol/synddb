@@ -298,7 +298,6 @@ impl ErrorCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
 
     #[test]
     fn test_metrics_collection() {

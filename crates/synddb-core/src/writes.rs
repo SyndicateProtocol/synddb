@@ -29,10 +29,7 @@ pub struct LocalWriteProcessor {
 
 impl LocalWriteProcessor {
     /// Create a new local write processor
-    pub fn new(
-        registry: Arc<ExtensionRegistry>,
-        database: Arc<dyn SyndDatabase>,
-    ) -> Self {
+    pub fn new(registry: Arc<ExtensionRegistry>, database: Arc<dyn SyndDatabase>) -> Self {
         Self {
             registry,
             database,
@@ -226,7 +223,8 @@ impl Default for ChainSubmitQueue {
 struct QueuedWrite {
     /// The write itself
     write: LocalWrite,
-    /// When it was queued
+    /// When it was queued (for future monitoring/analytics)
+    #[allow(dead_code)]
     queued_at: u64,
     /// Whether it has been submitted to blockchain
     submitted: bool,
@@ -301,7 +299,7 @@ pub mod validation {
 
     /// Validate that a field exists in the request
     pub fn require_field(request: &serde_json::Value, field: &str) -> Result<()> {
-        if !request.get(field).is_some() {
+        if request.get(field).is_none() {
             return Err(Error::InvalidOperation(format!(
                 "Missing required field: {}",
                 field
@@ -316,9 +314,7 @@ pub mod validation {
             .get(field)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| {
-                Error::InvalidOperation(format!("Field {} must be a string", field))
-            })
+            .ok_or_else(|| Error::InvalidOperation(format!("Field {} must be a string", field)))
     }
 
     /// Validate that a field is a number
@@ -326,9 +322,7 @@ pub mod validation {
         request
             .get(field)
             .and_then(|v| v.as_u64())
-            .ok_or_else(|| {
-                Error::InvalidOperation(format!("Field {} must be a number", field))
-            })
+            .ok_or_else(|| Error::InvalidOperation(format!("Field {} must be a number", field)))
     }
 
     /// Validate that a number is positive

@@ -346,7 +346,7 @@ impl SyndDBConfig {
                 pool_size: 4,
                 journal_mode: "WAL".to_string(),
                 synchronous: "NORMAL".to_string(),
-                cache_size: -64000, // 64MB for tests
+                cache_size: -64000,    // 64MB for tests
                 mmap_size: 1073741824, // 1GB for tests
             },
             sequencer: Some(SequencerConfig::default()),
@@ -354,7 +354,10 @@ impl SyndDBConfig {
             chain: ChainConfig {
                 rpc_url: "http://localhost:8545".to_string(),
                 contract_address: "0x0000000000000000000000000000000000000000".to_string(),
-                private_key: Some("0x0000000000000000000000000000000000000000000000000000000000000001".to_string()),
+                private_key: Some(
+                    "0x0000000000000000000000000000000000000000000000000000000000000001"
+                        .to_string(),
+                ),
                 gas_limit: 3000000,
                 max_gas_price: 100,
             },
@@ -372,20 +375,16 @@ impl SyndDBConfig {
         match self.role {
             NodeRole::Sequencer => {
                 if self.sequencer.is_none() {
-                    return Err(crate::types::Error::Config(
-                        config::ConfigError::Message(
-                            "Sequencer role requires sequencer configuration".to_string(),
-                        ),
-                    ));
+                    return Err(crate::types::Error::Config(config::ConfigError::Message(
+                        "Sequencer role requires sequencer configuration".to_string(),
+                    )));
                 }
             }
             NodeRole::Replica | NodeRole::Validator => {
                 if self.replica.is_none() {
-                    return Err(crate::types::Error::Config(
-                        config::ConfigError::Message(
-                            "Replica role requires replica configuration".to_string(),
-                        ),
-                    ));
+                    return Err(crate::types::Error::Config(config::ConfigError::Message(
+                        "Replica role requires replica configuration".to_string(),
+                    )));
                 }
             }
         }
@@ -394,28 +393,22 @@ impl SyndDBConfig {
         match self.storage.provider.as_str() {
             "ipfs" => {
                 if self.storage.ipfs.is_none() {
-                    return Err(crate::types::Error::Config(
-                        config::ConfigError::Message(
-                            "IPFS provider requires ipfs configuration".to_string(),
-                        ),
-                    ));
+                    return Err(crate::types::Error::Config(config::ConfigError::Message(
+                        "IPFS provider requires ipfs configuration".to_string(),
+                    )));
                 }
             }
             "arweave" => {
                 if self.storage.arweave.is_none() {
-                    return Err(crate::types::Error::Config(
-                        config::ConfigError::Message(
-                            "Arweave provider requires arweave configuration".to_string(),
-                        ),
-                    ));
+                    return Err(crate::types::Error::Config(config::ConfigError::Message(
+                        "Arweave provider requires arweave configuration".to_string(),
+                    )));
                 }
             }
             _ => {
-                return Err(crate::types::Error::Config(
-                    config::ConfigError::Message(
-                        format!("Unknown storage provider: {}", self.storage.provider),
-                    ),
-                ));
+                return Err(crate::types::Error::Config(config::ConfigError::Message(
+                    format!("Unknown storage provider: {}", self.storage.provider),
+                )));
             }
         }
 

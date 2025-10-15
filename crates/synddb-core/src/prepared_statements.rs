@@ -23,9 +23,7 @@ pub struct PreparedStatementCache {
 
 /// Cached statement information
 struct CachedStatement {
-    /// The SQL string
-    sql: String,
-    /// Number of times used
+    /// Number of times used (for LRU eviction)
     use_count: u64,
 }
 
@@ -74,7 +72,7 @@ impl PreparedStatementCache {
         // Fast path - check if already cached
         {
             let cache = self.cache.read();
-            if let Some(entry) = cache.get(&hash) {
+            if cache.contains_key(&hash) {
                 // Already cached, just increment use count
                 drop(cache);
                 let mut cache = self.cache.write();
@@ -100,7 +98,6 @@ impl PreparedStatementCache {
         cache.insert(
             hash,
             CachedStatement {
-                sql: sql.to_string(),
                 use_count: 1,
             },
         );
@@ -121,10 +118,7 @@ impl PreparedStatementCache {
 
     /// Evict least-recently-used entry
     fn evict_lru(&self, cache: &mut HashMap<u64, CachedStatement>) {
-        if let Some((&hash, _)) = cache
-            .iter()
-            .min_by_key(|(_, entry)| entry.use_count)
-        {
+        if let Some((&hash, _)) = cache.iter().min_by_key(|(_, entry)| entry.use_count) {
             cache.remove(&hash);
         }
     }
