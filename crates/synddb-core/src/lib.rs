@@ -72,7 +72,6 @@
 pub mod config;
 pub mod database;
 pub mod extensions;
-pub mod metrics;
 pub mod types;
 pub mod writes;
 

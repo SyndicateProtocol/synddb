@@ -159,13 +159,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Show metrics
-    println!("=== Performance Metrics ===");
-    let metrics = db.metrics().snapshot();
-    println!("{}\n", metrics.format());
-
     println!("=== SQLite Optimization ===");
     println!("  Using SQLite's built-in prepared statement optimization");
+    println!("  Performance metrics available via tracing/logging");
 
     println!("\n✓ Example complete!");
     println!("\nDatabase file created at: example.db");

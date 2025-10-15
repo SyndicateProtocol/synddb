@@ -3,7 +3,6 @@
 //! This module provides the main database trait and implementation using SQLite
 //! with performance optimizations for high-throughput blockchain workloads.
 
-use crate::metrics::MetricsCollector;
 use crate::types::*;
 use async_trait::async_trait;
 use r2d2::{Pool, PooledConnection};
@@ -89,11 +88,6 @@ pub struct SqliteDatabase {
     pool: Pool<SqliteConnectionManager>,
     /// Current database version
     version: Arc<RwLock<u64>>,
-    /// Performance statistics (deprecated - use metrics)
-    #[allow(dead_code)]
-    stats: Arc<RwLock<PerformanceStats>>,
-    /// Real-time metrics collector
-    metrics: Arc<MetricsCollector>,
     /// Database file path
     db_path: String,
 }
@@ -114,23 +108,13 @@ impl SqliteDatabase {
         Self::initialize_optimizations(&conn)?;
         Self::create_metadata_tables(&conn)?;
 
-        // Initialize metrics collector
-        let metrics = Arc::new(MetricsCollector::new());
-
         info!("SQLite database initialized at {}", db_path);
 
         Ok(Self {
             pool,
             version: Arc::new(RwLock::new(0)),
-            stats: Arc::new(RwLock::new(PerformanceStats::default())),
-            metrics,
             db_path,
         })
-    }
-
-    /// Get the metrics collector
-    pub fn metrics(&self) -> &MetricsCollector {
-        &self.metrics
     }
 
     /// Initialize SQLite with maximum performance optimizations
@@ -249,8 +233,7 @@ impl SyndDatabase for SqliteDatabase {
 
         let duration = start.elapsed();
 
-        // Record metrics
-        self.metrics.record_latency(duration);
+        debug!("Execute completed in {:?}", duration);
 
         Ok(ExecuteResult {
             rows_affected,
@@ -294,8 +277,7 @@ impl SyndDatabase for SqliteDatabase {
 
         let duration = start.elapsed();
 
-        // Record metrics for batch operation
-        self.metrics.record_latency(duration);
+        debug!("Batch execute completed in {:?}", duration);
 
         Ok(BatchResult {
             success: true,
@@ -342,8 +324,7 @@ impl SyndDatabase for SqliteDatabase {
         let row_count = rows_data.len();
         let duration = start.elapsed();
 
-        // Record metrics for query
-        self.metrics.record_latency(duration);
+        debug!("Query completed in {:?} ({} rows)", duration, row_count);
 
         Ok(QueryResult {
             columns,

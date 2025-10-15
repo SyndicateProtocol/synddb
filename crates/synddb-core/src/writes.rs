@@ -287,76 +287,6 @@ impl LocalWriteBuilder {
     }
 }
 
-// ============================================================================
-// Write Validation Helpers
-// ============================================================================
-
-/// Common validation helpers for write operations
-pub mod validation {
-    use super::*;
-
-    /// Validate that a field exists in the request
-    pub fn require_field(request: &serde_json::Value, field: &str) -> Result<()> {
-        if request.get(field).is_none() {
-            return Err(Error::InvalidOperation(format!(
-                "Missing required field: {}",
-                field
-            )));
-        }
-        Ok(())
-    }
-
-    /// Validate that a field is a string
-    pub fn require_string(request: &serde_json::Value, field: &str) -> Result<String> {
-        request
-            .get(field)
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| Error::InvalidOperation(format!("Field {} must be a string", field)))
-    }
-
-    /// Validate that a field is a number
-    pub fn require_number(request: &serde_json::Value, field: &str) -> Result<u64> {
-        request
-            .get(field)
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| Error::InvalidOperation(format!("Field {} must be a number", field)))
-    }
-
-    /// Validate that a number is positive
-    pub fn require_positive(value: u64, field: &str) -> Result<()> {
-        if value == 0 {
-            return Err(Error::InvalidOperation(format!(
-                "Field {} must be positive",
-                field
-            )));
-        }
-        Ok(())
-    }
-
-    /// Validate an account ID format
-    pub fn validate_account_id(account_id: &str) -> Result<()> {
-        if account_id.is_empty() {
-            return Err(Error::InvalidOperation(
-                "Account ID cannot be empty".to_string(),
-            ));
-        }
-        // Add more validation as needed
-        Ok(())
-    }
-
-    /// Validate an address format (basic hex check)
-    pub fn validate_address(address: &str) -> Result<()> {
-        if !address.starts_with("0x") || address.len() != 42 {
-            return Err(Error::InvalidOperation(format!(
-                "Invalid address format: {}",
-                address
-            )));
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,22 +315,5 @@ mod tests {
 
         let pending = queue.get_pending();
         assert_eq!(pending.len(), 1);
-    }
-
-    #[test]
-    fn test_validation_helpers() {
-        let request = serde_json::json!({
-            "account": "acct_123",
-            "amount": 100
-        });
-
-        assert!(validation::require_field(&request, "account").is_ok());
-        assert!(validation::require_field(&request, "missing").is_err());
-
-        assert_eq!(
-            validation::require_string(&request, "account").unwrap(),
-            "acct_123"
-        );
-        assert_eq!(validation::require_number(&request, "amount").unwrap(), 100);
     }
 }

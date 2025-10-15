@@ -36,7 +36,6 @@ pub struct SyndDBConfig {
 pub enum NodeRole {
     Sequencer,
     Replica,
-    Validator,
 }
 
 // ============================================================================
@@ -44,6 +43,9 @@ pub enum NodeRole {
 // ============================================================================
 
 /// Database configuration
+///
+/// SQLite performance pragmas are hardcoded in the database initialization
+/// for optimal performance. Only configurable parameters are exposed here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     /// Path to SQLite database file
@@ -52,42 +54,10 @@ pub struct DatabaseConfig {
     /// Connection pool size
     #[serde(default = "default_pool_size")]
     pub pool_size: u32,
-
-    /// Journal mode (WAL recommended)
-    #[serde(default = "default_journal_mode")]
-    pub journal_mode: String,
-
-    /// Synchronous mode (NORMAL recommended)
-    #[serde(default = "default_synchronous")]
-    pub synchronous: String,
-
-    /// Cache size in KB (negative for KB, positive for pages)
-    #[serde(default = "default_cache_size")]
-    pub cache_size: i64,
-
-    /// Memory-mapped I/O size in bytes
-    #[serde(default = "default_mmap_size")]
-    pub mmap_size: i64,
 }
 
 fn default_pool_size() -> u32 {
     16
-}
-
-fn default_journal_mode() -> String {
-    "WAL".to_string()
-}
-
-fn default_synchronous() -> String {
-    "NORMAL".to_string()
-}
-
-fn default_cache_size() -> i64 {
-    -2000000 // 2GB
-}
-
-fn default_mmap_size() -> i64 {
-    274877906944 // 256GB
 }
 
 // ============================================================================
@@ -378,10 +348,6 @@ impl SyndDBConfig {
             database: DatabaseConfig {
                 path: PathBuf::from("test.db"),
                 pool_size: 4,
-                journal_mode: "WAL".to_string(),
-                synchronous: "NORMAL".to_string(),
-                cache_size: -64000,    // 64MB for tests
-                mmap_size: 1073741824, // 1GB for tests
             },
             sequencer: Some(SequencerConfig::default()),
             replica: None,
@@ -416,7 +382,7 @@ impl SyndDBConfig {
                     )));
                 }
             }
-            NodeRole::Replica | NodeRole::Validator => {
+            NodeRole::Replica => {
                 if self.replica.is_none() {
                     return Err(crate::types::Error::Config(config::ConfigError::Message(
                         "Replica role requires replica configuration".to_string(),

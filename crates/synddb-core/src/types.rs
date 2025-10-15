@@ -306,25 +306,6 @@ pub struct DatabaseTransaction {
 }
 
 // ============================================================================
-// Performance Metrics
-// ============================================================================
-
-/// Performance statistics for the database
-#[derive(Debug, Clone, Default)]
-pub struct PerformanceStats {
-    /// Total number of operations executed
-    pub total_operations: u64,
-    /// Average operation latency in microseconds
-    pub avg_latency_us: f64,
-    /// P50 latency in microseconds
-    pub p50_latency_us: u64,
-    /// P99 latency in microseconds
-    pub p99_latency_us: u64,
-    /// Operations per second
-    pub ops_per_second: f64,
-}
-
-// ============================================================================
 // Utility Functions
 // ============================================================================
 
