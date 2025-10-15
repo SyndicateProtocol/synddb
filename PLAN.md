@@ -278,26 +278,14 @@ pub trait StorageProvider: Send + Sync {
 use alloy::primitives::B256;
 
 // BlockchainPublisher is a THIN WRAPPER for blockchain interactions
-// It does NOT manage versions or state - it's just responsible for:
-// 1. Taking already-prepared diffs/snapshots (with versions embedded)
-// 2. Submitting them to the smart contract
-// 3. Returning transaction hashes
-//
-// VERSION MANAGEMENT happens in the layer above (Sequencer/BlockchainSubmitter)
-// The diff/snapshot already contains from_version and to_version when passed here
+// It passes through prior hash and new hash to ensure chain consistency
 #[async_trait]
 pub trait BlockchainPublisher: Send + Sync {
-    // Submits a diff that already contains version info (from_version, to_version)
-    async fn submit_diff_to_chain(&self, diff: &[u8]) -> Result<B256>;
-
-    // Submits a pointer to offchain storage (diff at that location has version info)
-    async fn submit_diff_pointer_to_chain(&self, cid: &str) -> Result<B256>;
-
-    // Submits a snapshot that already contains its version number
-    async fn submit_snapshot_to_chain(&self, snapshot: &[u8]) -> Result<B256>;
-
-    // Submits a pointer to offchain storage (snapshot at that location has version info)
-    async fn submit_snapshot_pointer_to_chain(&self, cid: &str) -> Result<B256>;
+    // All methods require prior_hash to match lastHash on chain
+    async fn submit_diff_to_chain(&self, diff: &[u8], prior_hash: &[u8; 32], new_hash: &[u8; 32]) -> Result<B256>;
+    async fn submit_diff_pointer_to_chain(&self, cid: &str, prior_hash: &[u8; 32], new_hash: &[u8; 32]) -> Result<B256>;
+    async fn submit_snapshot_to_chain(&self, snapshot: &[u8], prior_hash: &[u8; 32], new_hash: &[u8; 32]) -> Result<B256>;
+    async fn submit_snapshot_pointer_to_chain(&self, cid: &str, prior_hash: &[u8; 32], new_hash: &[u8; 32]) -> Result<B256>;
 }
 ```
 
@@ -1122,41 +1110,13 @@ DISTRIBUTED REPLICATION (via Blockchain):
 pragma solidity ^0.8.0;
 
 contract SyndDB {
-    struct StateCommitment {
-        uint256 blockNumber;
-        uint256 timestamp;
-        bytes32 stateRoot;
-        uint256 version;
-        address publisher;
-    }
-
-    struct DiffCommitment {
-        bytes32 diffHash;
-        uint256 fromVersion;
-        uint256 toVersion;
-        uint256 chunkCount;
-        string storagePointer; // IPFS CID or Arweave ID
-    }
-
-    struct SnapshotCommitment {
-        bytes32 snapshotHash;
-        uint256 version;
-        uint256 chunkCount;
-        string storagePointer;
-    }
-
-    // State variables
-    mapping(uint256 => StateCommitment) public states;
-    mapping(uint256 => DiffCommitment) public diffs;
-    mapping(uint256 => SnapshotCommitment) public snapshots;
-
-    uint256 public currentVersion;
+    // Simple hash chain: each new hash must reference the prior hash
+    bytes32 public lastHash;  // The last published hash (global state)
     address public sequencer;
 
     // Events
     event DiffPublished(uint256 indexed fromVersion, uint256 indexed toVersion, bytes32 diffHash);
     event SnapshotPublished(uint256 indexed version, bytes32 snapshotHash);
-    event StateAdvanced(uint256 indexed version, bytes32 stateRoot);
 
     modifier onlySequencer() {
         require(msg.sender == sequencer, "Only sequencer can publish");
@@ -1165,58 +1125,57 @@ contract SyndDB {
 
     // Publish state diff directly to chain (for small state diffs)
     function publishDiff(
+        bytes32 priorHash,  // Must match lastHash
+        bytes32 newHash,    // New hash after this operation
         bytes32 diffHash,
         uint256 diffIndex,
         bytes calldata diffData
     ) external onlySequencer {
-        // Store diff chunk
-        // Implementation depends on max size constraints
+        require(priorHash == lastHash, "Prior hash mismatch");
+        lastHash = newHash;
+        // Store diff chunk - stub
     }
 
     // Publish state diff pointer (for large state diffs stored off-chain)
     function publishDiffPointer(
+        bytes32 priorHash,  // Must match lastHash
+        bytes32 newHash,    // New hash after this operation
         bytes32 diffHash,
         uint256 fromVersion,
         uint256 toVersion,
         string calldata storagePointer
     ) external onlySequencer {
+        require(priorHash == lastHash, "Prior hash mismatch");
         require(toVersion > fromVersion, "Invalid version range");
-        require(toVersion > currentVersion, "Version must advance");
 
-        diffs[currentVersion] = DiffCommitment({
-            diffHash: diffHash,
-            fromVersion: fromVersion,
-            toVersion: toVersion,
-            chunkCount: 0,
-            storagePointer: storagePointer
-        });
-
-        currentVersion = toVersion;
+        lastHash = newHash;
         emit DiffPublished(fromVersion, toVersion, diffHash);
     }
 
     // Publish state snapshot directly to chain
     function publishSnapshot(
+        bytes32 priorHash,  // Must match lastHash
+        bytes32 newHash,    // New hash after this operation
         bytes32 snapshotHash,
         uint256 snapshotIndex,
         bytes calldata snapshotData
     ) external onlySequencer {
-        // Store snapshot chunk
+        require(priorHash == lastHash, "Prior hash mismatch");
+        lastHash = newHash;
+        // Store snapshot chunk - stub
     }
 
     // Publish state snapshot pointer
     function publishSnapshotPointer(
+        bytes32 priorHash,  // Must match lastHash
+        bytes32 newHash,    // New hash after this operation
         bytes32 snapshotHash,
         uint256 version,
         string calldata storagePointer
     ) external onlySequencer {
-        snapshots[version] = SnapshotCommitment({
-            snapshotHash: snapshotHash,
-            version: version,
-            chunkCount: 0,
-            storagePointer: storagePointer
-        });
+        require(priorHash == lastHash, "Prior hash mismatch");
 
+        lastHash = newHash;
         emit SnapshotPublished(version, snapshotHash);
     }
 }
@@ -1260,9 +1219,8 @@ impl DatabaseDiffGenerator {
             .duration_since(SystemTime::UNIX_EPOCH)?
             .as_secs();
 
-        // Create database diff object with VERSIONS EMBEDDED IN THE DIFF
-        // This is key: the diff itself contains the version range
-        // BlockchainPublisher just submits this diff as-is without needing to know versions
+        // Create database diff object with versions embedded
+        // The sequencer will track the hash chain separately
         let diff = DatabaseDiff {
             from_version,     // Version currently on chain
             to_version,       // Version after applying this diff
@@ -1459,8 +1417,8 @@ class BlockchainSubmitter {
     // Decide whether to publish directly onchain or via offchain storage
     const publishStrategy = this.determineBlockchainStrategy(diff);
 
-    // BlockchainPublisher receives the diff with versions already embedded
-    // It doesn't need to track versions - just submits what it's given
+    // BlockchainPublisher receives the diff with versions AND state hashes embedded
+    // It passes these through to the smart contract for chain validation
     if (publishStrategy === 'direct') {
       await this.publishDirectlyOnchain(diff);
     } else {
@@ -1482,20 +1440,24 @@ class BlockchainSubmitter {
   }
 
   private async publishDirectlyOnchain(diff: DatabaseDiff) {
-    // Chunk if necessary for blockchain size limits
-    const chunks = this.chunkData(diff.compressed, 30000);
-
-    for (let i = 0; i < chunks.length; i++) {
-      await this.blockchainClient.submitDiffToChain(chunks[i]);
-    }
+    // Pass prior hash and new hash for chain consistency
+    await this.blockchainClient.submitDiffToChain(
+      diff.compressed,
+      this.lastPublishedHash,  // Must match lastHash on chain
+      this.computeNewHash(diff) // New hash after this diff
+    );
+    this.lastPublishedHash = this.computeNewHash(diff);
   }
 
   private async publishViaOffchainStorage(diff: DatabaseDiff) {
-    // Store to IPFS/Arweave
     const cid = await this.storage.storeToIPFS(diff.compressed);
 
-    // Publish pointer to blockchain
-    await this.blockchainClient.submitDiffPointerToChain(cid);
+    await this.blockchainClient.submitDiffPointerToChain(
+      cid,
+      this.lastPublishedHash,  // Must match lastHash on chain
+      this.computeNewHash(diff) // New hash after this diff
+    );
+    this.lastPublishedHash = this.computeNewHash(diff);
   }
 }
 ```
