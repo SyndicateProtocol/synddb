@@ -1,7 +1,7 @@
 # SyndDB Implementation Plan
 
 ## Executive Summary
-SyndDB is a high-performance blockchain database that replaces traditional EVM execution with SQLite, enabling ultra-low latency database operations while maintaining decentralized validation. The system consists of a single sequencer node and multiple read replica nodes that anyone can run permissionlessly. Only a small subset of read replicas with TEE hardware become validators for settlement operations. This plan outlines a phased approach to build the complete system, starting with core architecture, focusing on SQLite performance, and progressively adding blockchain integration and validation capabilities.
+SyndDB is a high-performance blockchain database that replaces traditional EVM execution with SQLite, enabling ultra-low latency database operations while maintaining decentralized validation. The system consists of a single sequencer node and multiple read replica nodes that anyone can run permissionlessly. Only a small subset of read replicas with TEE hardware become validators for settlement operations. This plan outlines a phased approach to build the complete system in **Rust**, starting with core architecture, focusing on SQLite performance, and progressively adding blockchain integration and validation capabilities.
 
 ## Architecture Overview
 
@@ -44,6 +44,57 @@ SyndDB is a high-performance blockchain database that replaces traditional EVM e
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Technology Stack
+
+### Core Language: Rust
+All components will be implemented in Rust for:
+- Memory safety without garbage collection
+- Excellent performance characteristics
+- Strong concurrency primitives
+- Production-ready ecosystem
+
+### Recommended Rust Libraries
+
+#### Database & Storage
+- **rusqlite** - SQLite bindings with full feature support
+- **sqlx** - Async SQL toolkit (alternative to rusqlite for async contexts)
+- **r2d2** - Database connection pooling
+- **sled** - Embedded database for metadata storage
+
+#### Networking & Async
+- **tokio** - Async runtime for networking and I/O
+- **axum** or **actix-web** - Web framework for API endpoints
+- **tonic** - gRPC framework for inter-node communication
+- **quinn** - QUIC implementation for low-latency networking
+
+#### Blockchain Integration
+- **ethers-rs** - Ethereum/EVM interaction
+- **alloy** - Next-gen Ethereum library (alternative to ethers)
+- **revm** - Ethereum Virtual Machine implementation in Rust
+
+#### Compression & Serialization
+- **zstd** - Zstandard compression
+- **bincode** - Binary serialization
+- **serde** - Serialization framework
+- **prost** - Protocol Buffers
+
+#### Cryptography & Security
+- **ring** - Cryptographic operations
+- **sha3** - SHA-3 and Keccak hashing
+- **ed25519-dalek** - Ed25519 signatures
+- **sgx** or **teaclave-sgx-sdk** - Intel SGX for TEE support
+
+#### Storage Backends
+- **ipfs-api** - IPFS client
+- **arweave-rs** - Arweave client (community crate)
+
+#### Utilities
+- **tracing** - Structured logging and diagnostics
+- **metrics** - Performance metrics collection
+- **clap** - Command-line argument parsing
+- **config** - Configuration management
+- **thiserror** & **anyhow** - Error handling
+
 ## Implementation Phases
 
 ## Phase 1: Architecture Skeleton & Core Infrastructure (Week 1-2)
@@ -55,88 +106,120 @@ SyndDB is a high-performance blockchain database that replaces traditional EVM e
 
 ### Tasks
 
-#### 1.1 Project Setup
+#### 1.1 Project Setup (Rust Workspace)
 ```
 synddb/
-├── src/
-│   ├── core/
-│   │   ├── database/       # SQLite abstraction layer
-│   │   ├── types/          # Core type definitions
-│   │   └── config/         # Configuration management
-│   ├── sequencer/
-│   │   ├── sequencer.ts    # Main sequencer orchestrator
-│   │   ├── batcher.ts      # Transaction batching logic
-│   │   ├── compressor.ts   # State diff/state snapshot compression
-│   │   └── publisher.ts    # Blockchain publishing
-│   ├── replica/
-│   │   ├── replica.ts      # Main read replica orchestrator
-│   │   ├── syncer.ts       # State sync
-│   │   ├── reconstructor.ts # State reconstruction
-│   │   ├── query.ts        # Query interface
-│   │   └── validator.ts    # Optional: TEE validator for settlement
-│   ├── contracts/
-│   │   ├── interfaces/     # Contract interfaces
-│   │   └── implementations/ # Solidity contracts
-│   ├── storage/
-│   │   ├── ipfs/           # IPFS integration
-│   │   └── arweave/        # Arweave integration
-│   └── utils/
-│       ├── compression.ts   # Compression utilities
-│       ├── hashing.ts      # Hashing utilities
-│       └── serialization.ts # Data serialization
-├── test/
-│   ├── unit/
+├── Cargo.toml              # Workspace configuration
+├── crates/
+│   ├── synddb-core/        # Core database abstractions
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── database.rs    # SQLite abstraction layer
+│   │       ├── types.rs       # Core type definitions
+│   │       ├── config.rs      # Configuration management
+│   │       └── lib.rs
+│   ├── synddb-sequencer/   # Sequencer implementation
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── main.rs        # Sequencer binary
+│   │       ├── sequencer.rs   # Main sequencer orchestrator
+│   │       ├── batcher.rs     # Transaction batching logic
+│   │       ├── compressor.rs  # State diff/snapshot compression
+│   │       └── publisher.rs   # Blockchain publishing
+│   ├── synddb-replica/     # Read replica implementation
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── main.rs        # Replica binary
+│   │       ├── replica.rs     # Main read replica orchestrator
+│   │       ├── syncer.rs      # State sync
+│   │       ├── reconstructor.rs # State reconstruction
+│   │       ├── query.rs       # Query interface
+│   │       └── validator.rs   # Optional: TEE validator
+│   ├── synddb-contracts/   # Smart contract bindings
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── abi/           # Contract ABIs
+│   │       ├── bindings.rs    # Generated bindings (ethers-rs)
+│   │       └── lib.rs
+│   ├── synddb-storage/     # Storage backends
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── ipfs.rs        # IPFS integration
+│   │       ├── arweave.rs     # Arweave integration
+│   │       └── lib.rs
+│   └── synddb-utils/       # Shared utilities
+│       ├── Cargo.toml
+│       └── src/
+│           ├── compression.rs # Compression utilities
+│           ├── hashing.rs     # Hashing utilities
+│           ├── metrics.rs     # Metrics collection
+│           └── lib.rs
+├── contracts/              # Solidity contracts
+│   ├── src/
+│   └── test/
+├── tests/                  # Integration tests
 │   ├── integration/
 │   └── benchmarks/
 ├── scripts/
-│   ├── deploy/
-│   └── migrate/
+│   ├── deploy.sh
+│   └── migrate.sh
 └── docs/
     ├── api/
     └── architecture/
 ```
 
-#### 1.2 Core Interfaces
-```typescript
-// Core database interface
-interface ISyndDatabase {
-  execute(sql: string, params?: any[]): Promise<Result>;
-  beginTransaction(): Promise<DatabaseTransaction>;
-  generateSnapshot(): Promise<StateSnapshot>;
-  generateDiff(fromVersion: number, toVersion: number): Promise<StateDiff>;
-  applySnapshot(snapshot: StateSnapshot): Promise<void>;
-  applyDiff(diff: StateDiff): Promise<void>;
+#### 1.2 Core Traits and Types (Rust)
+```rust
+// synddb-core/src/database.rs
+use async_trait::async_trait;
+use rusqlite::{Connection, Transaction};
+use serde::{Deserialize, Serialize};
+
+#[async_trait]
+pub trait SyndDatabase: Send + Sync {
+    async fn execute(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<ExecuteResult>;
+    async fn begin_transaction(&self) -> Result<DatabaseTransaction>;
+    async fn generate_snapshot(&self) -> Result<StateSnapshot>;
+    async fn generate_diff(&self, from_version: u64, to_version: u64) -> Result<StateDiff>;
+    async fn apply_snapshot(&self, snapshot: StateSnapshot) -> Result<()>;
+    async fn apply_diff(&self, diff: StateDiff) -> Result<()>;
 }
 
-// Sequencer interface
-interface ISequencer {
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  submitTransaction(tx: DatabaseTransaction): Promise<TransactionReceipt>;
-  publishState(): Promise<PublishReceipt>;
+// synddb-sequencer/src/sequencer.rs
+#[async_trait]
+pub trait Sequencer: Send + Sync {
+    async fn start(&mut self) -> Result<()>;
+    async fn stop(&mut self) -> Result<()>;
+    async fn submit_transaction(&self, tx: DatabaseTransaction) -> Result<TransactionReceipt>;
+    async fn publish_state(&self) -> Result<PublishReceipt>;
 }
 
-// Read Replica interface
-interface IReadReplica {
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  syncToLatest(): Promise<void>;
-  query(sql: string, params?: any[]): Promise<QueryResult>;
-  subscribeToUpdates(callback: UpdateCallback): Subscription;
+// synddb-replica/src/replica.rs
+#[async_trait]
+pub trait ReadReplica: Send + Sync {
+    async fn start(&mut self) -> Result<()>;
+    async fn stop(&mut self) -> Result<()>;
+    async fn sync_to_latest(&self) -> Result<()>;
+    async fn query(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<QueryResult>;
+    async fn subscribe_to_updates(&self, callback: UpdateCallback) -> Result<Subscription>;
 }
 
-// Storage interface
-interface IStorageProvider {
-  store(data: Buffer): Promise<string>; // Returns CID/pointer
-  retrieve(cid: string): Promise<Buffer>;
+// synddb-storage/src/lib.rs
+#[async_trait]
+pub trait StorageProvider: Send + Sync {
+    async fn store(&self, data: &[u8]) -> Result<String>; // Returns CID/pointer
+    async fn retrieve(&self, cid: &str) -> Result<Vec<u8>>;
 }
 
-// Chain publisher interface
-interface IChainPublisher {
-  publishDiff(diff: Buffer): Promise<TransactionHash>;
-  publishDiffPointer(cid: string): Promise<TransactionHash>;
-  publishSnapshot(snapshot: Buffer): Promise<TransactionHash>;
-  publishSnapshotPointer(cid: string): Promise<TransactionHash>;
+// synddb-contracts/src/lib.rs
+use ethers::types::H256;
+
+#[async_trait]
+pub trait ChainPublisher: Send + Sync {
+    async fn publish_diff(&self, diff: &[u8]) -> Result<H256>;
+    async fn publish_diff_pointer(&self, cid: &str) -> Result<H256>;
+    async fn publish_snapshot(&self, snapshot: &[u8]) -> Result<H256>;
+    async fn publish_snapshot_pointer(&self, cid: &str) -> Result<H256>;
 }
 ```
 
@@ -192,51 +275,87 @@ synddb:
 
 ### Tasks
 
-#### 2.1 SQLite Wrapper Implementation
-```typescript
-class SyndDatabase {
-  private db: Database;
-  private wal: WALManager;
-  private stats: PerformanceStats;
+#### 2.1 SQLite Wrapper Implementation (Rust)
+```rust
+// synddb-core/src/database.rs
+use rusqlite::{Connection, Transaction, OptionalExtension};
+use r2d2::{Pool, PooledConnection};
+use r2d2_sqlite::SqliteConnectionManager;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{info, debug};
+use metrics::{counter, histogram};
+use std::time::Instant;
 
-  constructor(config: DatabaseConfig) {
-    this.db = new Database(config.path);
-    this.initializeOptimizations();
-    this.setupWAL();
-  }
+pub struct SyndDatabase {
+    pool: Pool<SqliteConnectionManager>,
+    wal_manager: Arc<RwLock<WALManager>>,
+    stats: Arc<RwLock<PerformanceStats>>,
+    prepared_statements: Arc<RwLock<PreparedStatementCache>>,
+}
 
-  private initializeOptimizations() {
-    // Performance-critical pragmas
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
-    this.db.pragma('cache_size = -64000');
-    this.db.pragma('mmap_size = 30000000000');
-    this.db.pragma('temp_store = MEMORY');
-    this.db.pragma('locking_mode = EXCLUSIVE');
-    this.db.pragma('page_size = 4096');
+impl SyndDatabase {
+    pub fn new(config: DatabaseConfig) -> Result<Self> {
+        let manager = SqliteConnectionManager::file(&config.path);
+        let pool = Pool::builder()
+            .max_size(config.pool_size)
+            .build(manager)?;
 
-    // Compile prepared statements for common operations
-    this.prepareStatements();
-  }
+        // Initialize with optimizations
+        let conn = pool.get()?;
+        Self::initialize_optimizations(&conn)?;
 
-  async executeInBatch(transactions: SQLTransaction[]): Promise<BatchResult> {
-    const start = performance.now();
-
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const results = [];
-      for (const tx of transactions) {
-        results.push(await this.executeSingle(tx));
-      }
-      this.db.exec('COMMIT');
-
-      this.stats.recordBatch(transactions.length, performance.now() - start);
-      return { success: true, results };
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
+        Ok(Self {
+            pool,
+            wal_manager: Arc::new(RwLock::new(WALManager::new())),
+            stats: Arc::new(RwLock::new(PerformanceStats::new())),
+            prepared_statements: Arc::new(RwLock::new(PreparedStatementCache::new())),
+        })
     }
-  }
+
+    fn initialize_optimizations(conn: &Connection) -> Result<()> {
+        // Performance-critical pragmas
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "cache_size", -64000)?;
+        conn.pragma_update(None, "mmap_size", 30000000000i64)?;
+        conn.pragma_update(None, "temp_store", "MEMORY")?;
+        conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+        conn.pragma_update(None, "page_size", 4096)?;
+
+        info!("SQLite optimizations applied");
+        Ok(())
+    }
+
+    pub async fn execute_in_batch(&self, transactions: Vec<SqlTransaction>) -> Result<BatchResult> {
+        let start = Instant::now();
+        let conn = self.pool.get()?;
+
+        let tx = conn.transaction()?;
+        let mut results = Vec::new();
+
+        for sql_tx in transactions.iter() {
+            match self.execute_single(&tx, sql_tx) {
+                Ok(result) => results.push(result),
+                Err(e) => {
+                    tx.rollback()?;
+                    return Err(e);
+                }
+            }
+        }
+
+        tx.commit()?;
+
+        let duration = start.elapsed();
+        histogram!("synddb.batch.duration", duration);
+        counter!("synddb.batch.transactions", transactions.len() as u64);
+
+        Ok(BatchResult {
+            success: true,
+            results,
+            duration,
+        })
+    }
 }
 ```
 
@@ -323,124 +442,205 @@ CREATE TABLE deposit_records (
 );
 ```
 
-#### 2.3 Performance Benchmarking Suite
-```typescript
-class PerformanceBenchmark {
-  private scenarios = {
-    orderBookHighFrequency: {
-      name: "High-frequency order book",
-      setup: () => this.createOrderBookSchema(),
-      workload: () => this.generateOrderBookTransactions(10000),
-      targetTPS: 50000,
-      targetLatencyP99: 5 // ms
-    },
+#### 2.3 Performance Benchmarking Suite (Rust)
+```rust
+// tests/benchmarks/performance.rs
+use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use synddb_core::SyndDatabase;
+use std::time::Duration;
+use hdrhistogram::Histogram;
 
-    tokenTransfers: {
-      name: "Token transfers",
-      setup: () => this.createTokenSchema(),
-      workload: () => this.generateTokenTransfers(10000),
-      targetTPS: 100000,
-      targetLatencyP99: 2 // ms
-    },
-
-    complexQueries: {
-      name: "Complex analytical queries",
-      setup: () => this.createAnalyticsSchema(),
-      workload: () => this.generateAnalyticalQueries(100),
-      targetQPS: 1000,
-      targetLatencyP99: 50 // ms
-    }
-  };
-
-  async runBenchmarks() {
-    for (const [key, scenario] of Object.entries(this.scenarios)) {
-      console.log(`Running benchmark: ${scenario.name}`);
-
-      await scenario.setup();
-      const workload = await scenario.workload();
-
-      const results = await this.execute(workload);
-      this.analyzeResults(results, scenario);
-    }
-  }
-
-  private analyzeResults(results: BenchmarkResults, scenario: Scenario) {
-    const analysis = {
-      throughput: results.totalOps / results.duration,
-      latencyP50: percentile(results.latencies, 50),
-      latencyP99: percentile(results.latencies, 99),
-      latencyP999: percentile(results.latencies, 99.9),
-      errors: results.errors,
-
-      meetsTargets: {
-        throughput: results.tps >= scenario.targetTPS,
-        latency: results.p99 <= scenario.targetLatencyP99
-      }
-    };
-
-    this.generateReport(analysis, scenario);
-  }
+pub struct PerformanceBenchmark {
+    db: SyndDatabase,
+    scenarios: Vec<Scenario>,
 }
+
+pub struct Scenario {
+    name: String,
+    setup: Box<dyn Fn(&SyndDatabase) -> Result<()>>,
+    workload: Box<dyn Fn() -> Vec<SqlTransaction>>,
+    target_tps: u64,
+    target_latency_p99_ms: u64,
+}
+
+impl PerformanceBenchmark {
+    pub fn new(db: SyndDatabase) -> Self {
+        let scenarios = vec![
+            Scenario {
+                name: "High-frequency order book".to_string(),
+                setup: Box::new(|db| Self::create_order_book_schema(db)),
+                workload: Box::new(|| Self::generate_order_book_transactions(10000)),
+                target_tps: 50000,
+                target_latency_p99_ms: 5,
+            },
+            Scenario {
+                name: "Token transfers".to_string(),
+                setup: Box::new(|db| Self::create_token_schema(db)),
+                workload: Box::new(|| Self::generate_token_transfers(10000)),
+                target_tps: 100000,
+                target_latency_p99_ms: 2,
+            },
+            Scenario {
+                name: "Complex analytical queries".to_string(),
+                setup: Box::new(|db| Self::create_analytics_schema(db)),
+                workload: Box::new(|| Self::generate_analytical_queries(100)),
+                target_tps: 1000,
+                target_latency_p99_ms: 50,
+            },
+        ];
+
+        Self { db, scenarios }
+    }
+
+    pub async fn run_benchmarks(&self) -> Result<()> {
+        for scenario in &self.scenarios {
+            info!("Running benchmark: {}", scenario.name);
+
+            (scenario.setup)(&self.db)?;
+            let workload = (scenario.workload)();
+
+            let results = self.execute_workload(workload).await?;
+            self.analyze_results(&results, scenario);
+        }
+
+        Ok(())
+    }
+
+    fn analyze_results(&self, results: &BenchmarkResults, scenario: &Scenario) {
+        let throughput = results.total_ops as f64 / results.duration.as_secs_f64();
+        let p50 = results.latencies.value_at_percentile(50.0);
+        let p99 = results.latencies.value_at_percentile(99.0);
+        let p999 = results.latencies.value_at_percentile(99.9);
+
+        let meets_targets = MeetsTargets {
+            throughput: throughput >= scenario.target_tps as f64,
+            latency: p99 <= scenario.target_latency_p99_ms * 1000, // Convert to microseconds
+        };
+
+        info!("Benchmark results for {}:", scenario.name);
+        info!("  Throughput: {:.2} TPS (target: {})", throughput, scenario.target_tps);
+        info!("  Latency P50: {}μs", p50);
+        info!("  Latency P99: {}μs (target: {}ms)", p99, scenario.target_latency_p99_ms);
+        info!("  Latency P99.9: {}μs", p999);
+        info!("  Meets targets: {:?}", meets_targets);
+    }
+}
+
+// Criterion benchmarks
+pub fn bench_sqlite_operations(c: &mut Criterion) {
+    let db = SyndDatabase::new(test_config()).unwrap();
+
+    c.bench_function("single_insert", |b| {
+        b.iter(|| {
+            db.execute("INSERT INTO test VALUES (?)", &[&black_box(42)])
+        });
+    });
+
+    c.bench_function("batch_insert_100", |b| {
+        b.iter(|| {
+            let transactions = generate_test_transactions(100);
+            db.execute_in_batch(black_box(transactions))
+        });
+    });
+}
+
+criterion_group!(benches, bench_sqlite_operations);
+criterion_main!(benches);
 ```
 
 #### 2.4 Performance Optimization Techniques
 
-##### Prepared Statements Cache
-```typescript
-class PreparedStatementCache {
-  private statements = new Map<string, Statement>();
+##### Prepared Statements Cache (Rust)
+```rust
+// synddb-core/src/prepared_statements.rs
+use rusqlite::{Connection, Statement, Result};
+use std::collections::HashMap;
+use parking_lot::RwLock;
 
-  prepare(key: string, sql: string): Statement {
-    if (!this.statements.has(key)) {
-      this.statements.set(key, this.db.prepare(sql));
+pub struct PreparedStatementCache {
+    statements: RwLock<HashMap<String, String>>,
+}
+
+impl PreparedStatementCache {
+    pub fn new() -> Self {
+        Self {
+            statements: RwLock::new(HashMap::new()),
+        }
     }
-    return this.statements.get(key)!;
-  }
 
-  // Common prepared statements
-  initializeCommon() {
-    this.prepare('insertOrder', `
-      INSERT INTO orders (order_id, account_id, side, price, quantity, remaining_quantity, status, created_at, updated_at, nonce)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    pub fn register(&self, key: &str, sql: &str) {
+        let mut cache = self.statements.write();
+        cache.insert(key.to_string(), sql.to_string());
+    }
 
-    this.prepare('updateOrderStatus', `
-      UPDATE orders SET status = ?, remaining_quantity = ?, updated_at = ?
-      WHERE order_id = ?
-    `);
+    pub fn get(&self, key: &str) -> Option<String> {
+        let cache = self.statements.read();
+        cache.get(key).cloned()
+    }
 
-    this.prepare('transferBalance', `
-      UPDATE balances SET balance = balance + ?
-      WHERE account_id = ? AND token_address = ?
-    `);
-  }
+    // Initialize common prepared statements
+    pub fn initialize_common(&self) {
+        self.register(
+            "insert_order",
+            r#"
+            INSERT INTO orders (order_id, account_id, side, price, quantity,
+                              remaining_quantity, status, created_at, updated_at, nonce)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+        );
+
+        self.register(
+            "update_order_status",
+            r#"
+            UPDATE orders
+            SET status = ?1, remaining_quantity = ?2, updated_at = ?3
+            WHERE order_id = ?4
+            "#,
+        );
+
+        self.register(
+            "transfer_balance",
+            r#"
+            UPDATE balances
+            SET balance = balance + ?1
+            WHERE account_id = ?2 AND token_address = ?3
+            "#,
+        );
+    }
 }
 ```
 
-##### Connection Pooling
-```typescript
-class ConnectionPool {
-  private readonly connections: Database[] = [];
-  private readonly available: Database[] = [];
+##### Connection Pooling (Rust)
+```rust
+// Using r2d2 for connection pooling (already shown in database.rs)
+// Additional configuration example:
 
-  constructor(private config: PoolConfig) {
-    for (let i = 0; i < config.size; i++) {
-      const conn = this.createConnection();
-      this.connections.push(conn);
-      this.available.push(conn);
+use r2d2::{Pool, PooledConnection, CustomizeConnection};
+use r2d2_sqlite::SqliteConnectionManager;
+use std::time::Duration;
+
+#[derive(Debug)]
+struct ConnectionCustomizer;
+
+impl CustomizeConnection<rusqlite::Connection, rusqlite::Error> for ConnectionCustomizer {
+    fn on_acquire(&self, conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
+        // Set connection-specific pragmas
+        conn.pragma_update(None, "busy_timeout", 5000)?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        Ok(())
     }
-  }
+}
 
-  async acquire(): Promise<Database> {
-    while (this.available.length === 0) {
-      await sleep(10);
-    }
-    return this.available.pop()!;
-  }
+pub fn create_connection_pool(path: &str, size: u32) -> Result<Pool<SqliteConnectionManager>> {
+    let manager = SqliteConnectionManager::file(path);
 
-  release(conn: Database) {
-    this.available.push(conn);
-  }
+    Pool::builder()
+        .max_size(size)
+        .min_idle(Some(size / 4))
+        .connection_timeout(Duration::from_secs(30))
+        .idle_timeout(Some(Duration::from_secs(600)))
+        .connection_customizer(Box::new(ConnectionCustomizer))
+        .build(manager)
 }
 ```
 
@@ -454,51 +654,79 @@ class ConnectionPool {
 
 ### Tasks
 
-#### 3.1 Transaction Type Registry
-```typescript
-enum TransactionType {
-  // Order book operations
-  PLACE_ORDER = 'PLACE_ORDER',
-  CANCEL_ORDER = 'CANCEL_ORDER',
-  MATCH_ORDERS = 'MATCH_ORDERS',
+#### 3.1 Transaction Type Registry (Rust)
+```rust
+// synddb-core/src/transaction_types.rs
+use serde::{Serialize, Deserialize};
+use serde_json::Value as JsonValue;
+use std::collections::HashMap;
+use rusqlite::Connection;
 
-  // Token operations
-  TRANSFER = 'TRANSFER',
-  MINT = 'MINT',
-  BURN = 'BURN',
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransactionType {
+    // Order book operations
+    PlaceOrder,
+    CancelOrder,
+    MatchOrders,
 
-  // Bridge operations
-  DEPOSIT = 'DEPOSIT',
-  WITHDRAW = 'WITHDRAW',
+    // Token operations
+    Transfer,
+    Mint,
+    Burn,
 
-  // Custom operations
-  CUSTOM = 'CUSTOM'
+    // Bridge operations
+    Deposit,
+    Withdraw,
+
+    // Custom operations
+    Custom(String),
 }
 
-interface TransactionDefinition {
-  type: TransactionType;
-  version: number;
-  schema: JSONSchema;
-  validate: (tx: any) => ValidationResult;
-  serialize: (tx: any) => Buffer;
-  deserialize: (data: Buffer) => any;
-  generateSQL: (tx: any) => string[];
+pub trait TransactionDefinition: Send + Sync {
+    fn transaction_type(&self) -> TransactionType;
+    fn version(&self) -> u32;
+    fn schema(&self) -> &JsonValue;
+    fn validate(&self, tx: &JsonValue) -> Result<()>;
+    fn serialize(&self, tx: &JsonValue) -> Result<Vec<u8>>;
+    fn deserialize(&self, data: &[u8]) -> Result<JsonValue>;
+    fn generate_sql(&self, tx: &JsonValue) -> Result<Vec<String>>;
 }
 
-class TransactionTypeRegistry {
-  private definitions = new Map<string, TransactionDefinition>();
+pub struct TransactionTypeRegistry {
+    definitions: Arc<RwLock<HashMap<String, Box<dyn TransactionDefinition>>>>,
+}
 
-  register(definition: TransactionDefinition) {
-    const key = `${definition.type}:${definition.version}`;
-    this.definitions.set(key, definition);
-    this.installTriggers(definition);
-  }
+impl TransactionTypeRegistry {
+    pub fn new() -> Self {
+        Self {
+            definitions: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
 
-  private installTriggers(definition: TransactionDefinition) {
-    // Install SQLite triggers for validation and side effects
-    const triggerSQL = this.generateTriggerSQL(definition);
-    this.db.exec(triggerSQL);
-  }
+    pub fn register(&self, definition: Box<dyn TransactionDefinition>) -> Result<()> {
+        let key = format!("{}:{}",
+            serde_json::to_string(&definition.transaction_type())?,
+            definition.version()
+        );
+
+        let mut defs = self.definitions.write();
+        defs.insert(key, definition);
+
+        // Install triggers after registering
+        self.install_triggers(&*definition)?;
+
+        Ok(())
+    }
+
+    fn install_triggers(&self, definition: &dyn TransactionDefinition) -> Result<()> {
+        let trigger_sql = self.generate_trigger_sql(definition)?;
+
+        // Execute trigger installation
+        let conn = self.get_connection()?;
+        conn.execute_batch(&trigger_sql)?;
+
+        Ok(())
+    }
 }
 ```
 
@@ -608,78 +836,116 @@ BEGIN
 END;
 ```
 
-#### 3.3 Transaction Builder Pattern
-```typescript
-class TransactionBuilder {
-  private transaction: Partial<DatabaseTransaction> = {};
+#### 3.3 Transaction Builder Pattern (Rust)
+```rust
+// synddb-core/src/builders.rs
+use crate::transaction_types::TransactionType;
+use uuid::Uuid;
+use std::time::SystemTime;
 
-  static placeOrder(): OrderTransactionBuilder {
-    return new OrderTransactionBuilder();
-  }
+pub struct TransactionBuilder;
 
-  static transfer(): TransferTransactionBuilder {
-    return new TransferTransactionBuilder();
-  }
-}
-
-class OrderTransactionBuilder {
-  private order: Partial<Order> = {};
-
-  account(accountId: string): this {
-    this.order.accountId = accountId;
-    return this;
-  }
-
-  side(side: 'BUY' | 'SELL'): this {
-    this.order.side = side;
-    return this;
-  }
-
-  price(price: number): this {
-    this.order.price = price;
-    return this;
-  }
-
-  quantity(quantity: number): this {
-    this.order.quantity = quantity;
-    return this;
-  }
-
-  build(): DatabaseTransaction {
-    // Validate required fields
-    if (!this.order.accountId || !this.order.side || !this.order.price || !this.order.quantity) {
-      throw new Error('Missing required order fields');
+impl TransactionBuilder {
+    pub fn place_order() -> OrderTransactionBuilder {
+        OrderTransactionBuilder::new()
     }
 
-    // Generate SQL
-    const sql = `
-      INSERT INTO orders (order_id, account_id, side, price, quantity, remaining_quantity, status, created_at, updated_at, nonce)
-      VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
-    `;
+    pub fn transfer() -> TransferTransactionBuilder {
+        TransferTransactionBuilder::new()
+    }
+}
 
-    const orderId = generateOrderId();
-    const timestamp = Date.now();
+#[derive(Default)]
+pub struct OrderTransactionBuilder {
+    account_id: Option<String>,
+    side: Option<OrderSide>,
+    price: Option<f64>,
+    quantity: Option<f64>,
+}
 
-    return {
-      type: TransactionType.PLACE_ORDER,
-      sql,
-      params: [
-        orderId,
-        this.order.accountId,
-        this.order.side,
-        this.order.price,
-        this.order.quantity,
-        this.order.quantity, // remaining = initial quantity
-        timestamp,
-        timestamp,
-        generateNonce()
-      ],
-      metadata: {
-        orderId,
-        ...this.order
-      }
-    };
-  }
+#[derive(Debug, Clone)]
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
+
+impl OrderTransactionBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn account(mut self, account_id: impl Into<String>) -> Self {
+        self.account_id = Some(account_id.into());
+        self
+    }
+
+    pub fn side(mut self, side: OrderSide) -> Self {
+        self.side = Some(side);
+        self
+    }
+
+    pub fn price(mut self, price: f64) -> Self {
+        self.price = Some(price);
+        self
+    }
+
+    pub fn quantity(mut self, quantity: f64) -> Self {
+        self.quantity = Some(quantity);
+        self
+    }
+
+    pub fn build(self) -> Result<DatabaseTransaction> {
+        // Validate required fields
+        let account_id = self.account_id
+            .ok_or_else(|| anyhow!("Missing account_id"))?;
+        let side = self.side
+            .ok_or_else(|| anyhow!("Missing side"))?;
+        let price = self.price
+            .ok_or_else(|| anyhow!("Missing price"))?;
+        let quantity = self.quantity
+            .ok_or_else(|| anyhow!("Missing quantity"))?;
+
+        // Generate SQL
+        let sql = r#"
+            INSERT INTO orders (order_id, account_id, side, price, quantity,
+                              remaining_quantity, status, created_at, updated_at, nonce)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "#;
+
+        let order_id = Uuid::new_v4().to_string();
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_secs();
+
+        Ok(DatabaseTransaction {
+            transaction_type: TransactionType::PlaceOrder,
+            sql: sql.to_string(),
+            params: vec![
+                order_id.clone().into(),
+                account_id.into(),
+                format!("{:?}", side).into(),
+                price.into(),
+                quantity.into(),
+                quantity.into(), // remaining = initial quantity
+                "OPEN".into(),
+                timestamp.into(),
+                timestamp.into(),
+                generate_nonce().into(),
+            ],
+            metadata: serde_json::json!({
+                "order_id": order_id,
+                "account_id": account_id,
+                "side": side,
+                "price": price,
+                "quantity": quantity,
+            }),
+        })
+    }
+}
+
+fn generate_nonce() -> u64 {
+    use rand::Rng;
+    rand::thread_rng().gen()
 }
 ```
 
@@ -799,70 +1065,85 @@ contract SyndDB {
 }
 ```
 
-#### 4.2 State Diff Generation System
-```typescript
-class DiffGenerator {
-  private lastPublishedVersion: number = 0;
-  private changeLog: ChangeLog;
+#### 4.2 State Diff Generation System (Rust)
+```rust
+// synddb-sequencer/src/diff_generator.rs
+use serde::{Serialize, Deserialize};
+use sha3::{Digest, Sha3_256};
+use zstd;
 
-  async generateDiff(fromVersion: number, toVersion: number): Promise<StateDiff> {
-    // Get all changes between versions
-    const changes = await this.changeLog.getChanges(fromVersion, toVersion);
+pub struct DiffGenerator {
+    last_published_version: u64,
+    change_log: ChangeLog,
+}
 
-    // Group changes by table
-    const groupedChanges = this.groupByTable(changes);
+impl DiffGenerator {
+    pub async fn generate_diff(&self, from_version: u64, to_version: u64) -> Result<StateDiff> {
+        // Get all changes between versions
+        let changes = self.change_log.get_changes(from_version, to_version).await?;
 
-    // Generate SQL statements to replay changes
-    const sqlStatements: string[] = [];
-    for (const [table, tableChanges] of groupedChanges) {
-      sqlStatements.push(...this.generateTableDiff(table, tableChanges));
+        // Group changes by table
+        let grouped_changes = self.group_by_table(changes);
+
+        // Generate SQL statements to replay changes
+        let mut sql_statements = Vec::new();
+        for (table, table_changes) in grouped_changes {
+            sql_statements.extend(self.generate_table_diff(&table, table_changes)?);
+        }
+
+        // Calculate checksum
+        let checksum = self.calculate_checksum(&sql_statements);
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_secs();
+
+        // Create state diff object
+        let diff = StateDiff {
+            from_version,
+            to_version,
+            statements: sql_statements.clone(),
+            checksum,
+            timestamp,
+            compressed: Vec::new(),
+            compressed_size: 0,
+            compression_ratio: 0.0,
+        };
+
+        // Compress diff
+        let json = serde_json::to_vec(&diff)?;
+        let compressed = zstd::encode_all(&json[..], 3)?;
+        let compression_ratio = compressed.len() as f64 / json.len() as f64;
+
+        Ok(StateDiff {
+            compressed,
+            compressed_size: compressed.len(),
+            compression_ratio,
+            ..diff
+        })
     }
 
-    // Create state diff object
-    const diff: StateDiff = {
-      fromVersion,
-      toVersion,
-      statements: sqlStatements,
-      checksum: this.calculateChecksum(sqlStatements),
-      timestamp: Date.now()
-    };
+    fn generate_table_diff(&self, table: &str, changes: Vec<Change>) -> Result<Vec<String>> {
+        let mut statements = Vec::new();
 
-    // Compress diff
-    const compressed = await this.compress(diff);
+        for change in changes {
+            let statement = match change.operation {
+                Operation::Insert => self.generate_insert(table, &change.data)?,
+                Operation::Update => self.generate_update(table, &change.data, &change.old_data)?,
+                Operation::Delete => self.generate_delete(table, &change.data)?,
+            };
+            statements.push(statement);
+        }
 
-    return {
-      ...diff,
-      compressed,
-      compressedSize: compressed.length,
-      compressionRatio: compressed.length / JSON.stringify(diff).length
-    };
-  }
-
-  private generateTableDiff(table: string, changes: Change[]): string[] {
-    const statements: string[] = [];
-
-    for (const change of changes) {
-      switch (change.operation) {
-        case 'INSERT':
-          statements.push(this.generateInsert(table, change.data));
-          break;
-        case 'UPDATE':
-          statements.push(this.generateUpdate(table, change.data, change.oldData));
-          break;
-        case 'DELETE':
-          statements.push(this.generateDelete(table, change.data));
-          break;
-      }
+        Ok(statements)
     }
 
-    return statements;
-  }
-
-  private async compress(diff: StateDiff): Promise<Buffer> {
-    // Use zstd for best compression ratio with good speed
-    const json = JSON.stringify(diff);
-    return await zstd.compress(Buffer.from(json), 3);
-  }
+    fn calculate_checksum(&self, statements: &[String]) -> String {
+        let mut hasher = Sha3_256::new();
+        for statement in statements {
+            hasher.update(statement.as_bytes());
+        }
+        format!("{:x}", hasher.finalize())
+    }
 }
 ```
 
