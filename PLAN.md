@@ -1,4 +1,12 @@
-# SyndDB Implementation Plan
+# SyndDB Core Implementation Plan
+
+## Important Note on Extensibility
+This document describes the **core implementation** of the SyndDB engine - the foundational infrastructure that powers all applications. For information about:
+- **Building applications on SyndDB**: See [EXTENSIBILITY.md](EXTENSIBILITY.md)
+- **Use case examples** (DEXs, tokens, gaming): See [EXTENSIBILITY.md](EXTENSIBILITY.md)
+- **Extension development guide**: See [EXTENSIBILITY.md](EXTENSIBILITY.md)
+
+The core implementation is **use-case agnostic** - it provides the database execution, replication, and blockchain integration that all applications leverage through the extension framework.
 
 ## Executive Summary
 SyndDB is a high-performance blockchain database that replaces traditional EVM execution with SQLite, enabling ultra-low latency database operations while maintaining decentralized validation. The system consists of a single sequencer node and multiple read replica nodes that anyone can run permissionlessly. Only a small subset of read replicas with TEE hardware become validators for settlement operations. This plan outlines a phased approach to build the complete system in **Rust**, starting with core architecture, focusing on SQLite performance, and progressively adding blockchain integration and validation capabilities.
@@ -486,88 +494,23 @@ impl SyndDatabase {
 }
 ```
 
-#### 2.2 Schema Design for Common Use Cases
+#### 2.2 Schema Extension Framework
 
-##### Order Book Schema
-```sql
--- Core order book tables
-CREATE TABLE orders (
-  order_id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL,
-  side TEXT CHECK(side IN ('BUY', 'SELL')),
-  price REAL NOT NULL,
-  quantity REAL NOT NULL,
-  remaining_quantity REAL NOT NULL,
-  status TEXT CHECK(status IN ('OPEN', 'PARTIAL', 'FILLED', 'CANCELED')),
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  nonce INTEGER NOT NULL
-);
+Applications define their schemas through the extension framework rather than being hardcoded in the core. The core provides the infrastructure for executing and replicating these schemas.
 
-CREATE INDEX idx_orders_status_price ON orders(status, side, price);
-CREATE INDEX idx_orders_account ON orders(account_id, status);
-
-CREATE TABLE trades (
-  trade_id TEXT PRIMARY KEY,
-  buy_order_id TEXT NOT NULL,
-  sell_order_id TEXT NOT NULL,
-  price REAL NOT NULL,
-  quantity REAL NOT NULL,
-  timestamp INTEGER NOT NULL,
-  FOREIGN KEY (buy_order_id) REFERENCES orders(order_id),
-  FOREIGN KEY (sell_order_id) REFERENCES orders(order_id)
-);
-
--- ERC-20 token tables
-CREATE TABLE token_metadata (
-  token_address TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  symbol TEXT NOT NULL,
-  decimals INTEGER NOT NULL,
-  total_supply TEXT NOT NULL
-);
-
-CREATE TABLE balances (
-  account_id TEXT NOT NULL,
-  token_address TEXT NOT NULL,
-  balance TEXT NOT NULL,
-  nonce INTEGER NOT NULL,
-  PRIMARY KEY (account_id, token_address),
-  FOREIGN KEY (token_address) REFERENCES token_metadata(token_address)
-);
-
-CREATE TABLE transfer_events (
-  event_id TEXT PRIMARY KEY,
-  token_address TEXT NOT NULL,
-  from_address TEXT NOT NULL,
-  to_address TEXT NOT NULL,
-  amount TEXT NOT NULL,
-  timestamp INTEGER NOT NULL,
-  block_number INTEGER,
-  transaction_index INTEGER
-);
-
--- Bridge/settlement tables
-CREATE TABLE withdrawal_requests (
-  request_id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL,
-  token_address TEXT NOT NULL,
-  amount TEXT NOT NULL,
-  destination_address TEXT NOT NULL,
-  status TEXT CHECK(status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')),
-  timestamp INTEGER NOT NULL,
-  settlement_tx_hash TEXT
-);
-
-CREATE TABLE deposit_records (
-  deposit_id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL,
-  token_address TEXT NOT NULL,
-  amount TEXT NOT NULL,
-  source_tx_hash TEXT NOT NULL,
-  timestamp INTEGER NOT NULL
-);
+```rust
+// Applications implement SchemaExtension trait
+pub trait SchemaExtension: Send + Sync {
+    fn schema_id(&self) -> &str;
+    fn version(&self) -> u32;
+    fn create_statements(&self) -> Vec<String>;
+    fn migrate_statements(&self, from_version: u32) -> Result<Vec<String>>;
+    fn index_statements(&self) -> Vec<String>;
+    fn seed_statements(&self) -> Vec<String>;
+}
 ```
+
+For specific schema examples including order books, ERC-20 tokens, gaming leaderboards, and more, see [EXTENSIBILITY.md](EXTENSIBILITY.md). The core engine remains agnostic to these application-specific schemas.
 
 #### 2.3 Performance Benchmarking Suite (Rust)
 ```rust
@@ -592,31 +535,36 @@ pub struct Scenario {
 
 impl PerformanceBenchmark {
     pub fn new(db: SyndDatabase) -> Self {
-        let scenarios = vec![
+        // Load scenarios from registered extensions
+        let scenarios = Self::load_extension_scenarios();
+        Self { db, scenarios }
+    }
+
+    /// Extensions provide their own benchmark scenarios
+    pub fn load_extension_scenarios() -> Vec<Scenario> {
+        vec![
             Scenario {
-                name: "High-frequency order book".to_string(),
-                setup: Box::new(|db| Self::create_order_book_schema(db)),
-                workload: Box::new(|| Self::generate_order_book_transactions(10000)),
+                name: "High-frequency writes".to_string(),
+                setup: Box::new(|db| Self::setup_write_benchmark(db)),
+                workload: Box::new(|| Self::generate_write_workload(10000)),
                 target_tps: 50000,
                 target_latency_p99_ms: 5,
             },
             Scenario {
-                name: "Token transfers".to_string(),
-                setup: Box::new(|db| Self::create_token_schema(db)),
-                workload: Box::new(|| Self::generate_token_transfers(10000)),
+                name: "Bulk inserts".to_string(),
+                setup: Box::new(|db| Self::setup_bulk_benchmark(db)),
+                workload: Box::new(|| Self::generate_bulk_inserts(10000)),
                 target_tps: 100000,
                 target_latency_p99_ms: 2,
             },
             Scenario {
-                name: "Complex analytical queries".to_string(),
-                setup: Box::new(|db| Self::create_analytics_schema(db)),
-                workload: Box::new(|| Self::generate_analytical_queries(100)),
+                name: "Complex queries".to_string(),
+                setup: Box::new(|db| Self::setup_query_benchmark(db)),
+                workload: Box::new(|| Self::generate_complex_queries(100)),
                 target_tps: 1000,
                 target_latency_p99_ms: 50,
             },
-        ];
-
-        Self { db, scenarios }
+        ]
     }
 
     pub async fn run_benchmarks(&self) -> Result<()> {
@@ -781,298 +729,200 @@ pub fn create_connection_pool(path: &str, size: u32) -> Result<Pool<SqliteConnec
 
 ### Tasks
 
-#### 3.1 Local Write Type Registry (Rust)
+#### 3.1 Extension Registry System (Rust)
 ```rust
-// synddb-core/src/write_types.rs
-use serde::{Serialize, Deserialize};
-use serde_json::Value as JsonValue;
+// synddb-core/src/extensions.rs
 use std::collections::HashMap;
-use rusqlite::Connection;
+use async_trait::async_trait;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LocalWriteType {
-    // Order book writes
-    PlaceOrder,
-    CancelOrder,
-    MatchOrders,
-
-    // Token writes
-    Transfer,
-    Mint,
-    Burn,
-
-    // Bridge writes
-    Deposit,
-    Withdraw,
-
-    // Custom writes
-    Custom(String),
+/// Central registry for all extensions
+pub struct ExtensionRegistry {
+    schemas: HashMap<String, Box<dyn SchemaExtension>>,
+    writes: HashMap<String, Box<dyn LocalWriteExtension>>,
+    triggers: HashMap<String, Box<dyn TriggerExtension>>,
+    bridges: HashMap<String, Box<dyn BridgeExtension>>,
+    queries: HashMap<String, Box<dyn QueryExtension>>,
 }
 
-pub trait LocalWriteDefinition: Send + Sync {
-    fn write_type(&self) -> LocalWriteType;
-    fn version(&self) -> u32;
-    fn schema(&self) -> &JsonValue;
-    fn validate(&self, write: &JsonValue) -> Result<()>;
-    fn serialize(&self, write: &JsonValue) -> Result<Vec<u8>>;
-    fn deserialize(&self, data: &[u8]) -> Result<JsonValue>;
-    fn generate_sql(&self, write: &JsonValue) -> Result<Vec<String>>;
-}
-
-pub struct LocalWriteRegistry {
-    definitions: Arc<RwLock<HashMap<String, Box<dyn LocalWriteDefinition>>>>,
-}
-
-impl LocalWriteRegistry {
+impl ExtensionRegistry {
     pub fn new() -> Self {
         Self {
-            definitions: Arc::new(RwLock::new(HashMap::new())),
+            schemas: HashMap::new(),
+            writes: HashMap::new(),
+            triggers: HashMap::new(),
+            bridges: HashMap::new(),
+            queries: HashMap::new(),
         }
     }
 
-    pub fn register(&self, definition: Box<dyn LocalWriteDefinition>) -> Result<()> {
-        let key = format!("{}:{}",
-            serde_json::to_string(&definition.write_type())?,
-            definition.version()
-        );
-
-        let mut defs = self.definitions.write();
-        defs.insert(key, definition);
-
-        // Install triggers after registering
-        self.install_triggers(&*definition)?;
-
+    pub fn register_schema(&mut self, extension: Box<dyn SchemaExtension>) -> Result<()> {
+        let id = extension.schema_id().to_string();
+        if self.schemas.contains_key(&id) {
+            return Err(anyhow!("Schema {} already registered", id));
+        }
+        self.schemas.insert(id, extension);
         Ok(())
     }
 
+    pub fn register_write(&mut self, extension: Box<dyn LocalWriteExtension>) -> Result<()> {
+        let write_type = extension.write_type().to_string();
+        if self.writes.contains_key(&write_type) {
+            return Err(anyhow!("Write type {} already registered", write_type));
+        }
+        self.writes.insert(write_type, extension);
+        Ok(())
+    }
+
+    pub fn register_trigger(&mut self, extension: Box<dyn TriggerExtension>) -> Result<()> {
+        let id = extension.trigger_id().to_string();
+        if self.triggers.contains_key(&id) {
+            return Err(anyhow!("Trigger {} already registered", id));
+        }
+        self.triggers.insert(id, extension);
+        Ok(())
+    }
+
+    pub fn register_bridge(&mut self, extension: Box<dyn BridgeExtension>) -> Result<()> {
+        let id = extension.bridge_id().to_string();
+        if self.bridges.contains_key(&id) {
+            return Err(anyhow!("Bridge {} already registered", id));
+        }
+        self.bridges.insert(id, extension);
+        Ok(())
+    }
+
+    /// Initialize all registered extensions
+    pub async fn initialize(&self, database: &SyndDatabase) -> Result<()> {
+        // Install schemas
+        for schema in self.schemas.values() {
+            for statement in schema.create_statements() {
+                database.execute(&statement, &[]).await?;
+            }
+            for statement in schema.index_statements() {
+                database.execute(&statement, &[]).await?;
+            }
+        }
+
+        // Install triggers
+        for trigger in self.triggers.values() {
+            let sql = format!(
+                "CREATE TRIGGER {} {} {} ON {} BEGIN {} END",
+                trigger.trigger_id(),
+                match trigger.trigger_event() {
+                    TriggerEvent::BeforeInsert => "BEFORE INSERT",
+                    TriggerEvent::AfterInsert => "AFTER INSERT",
+                    TriggerEvent::BeforeUpdate => "BEFORE UPDATE",
+                    TriggerEvent::AfterUpdate => "AFTER UPDATE",
+                    TriggerEvent::BeforeDelete => "BEFORE DELETE",
+                    TriggerEvent::AfterDelete => "AFTER DELETE",
+                },
+                trigger.table_name(),
+                trigger.trigger_sql()
+            );
+            database.execute(&sql, &[]).await?;
+        }
+
+        Ok(())
+    }
+}
+```
+
+#### 3.2 SQLite Trigger Framework
+
+Applications register SQLite triggers through the extension framework to implement business logic at the database level. The core engine manages trigger installation and execution order.
+
+```rust
+// Applications implement TriggerExtension trait
+pub trait TriggerExtension: Send + Sync {
+    fn trigger_id(&self) -> &str;
+    fn table_name(&self) -> &str;
+    fn trigger_event(&self) -> TriggerEvent;
+    fn trigger_sql(&self) -> String;
+    fn dependencies(&self) -> Vec<String>;
+}
+
+pub enum TriggerEvent {
+    BeforeInsert, AfterInsert,
+    BeforeUpdate, AfterUpdate,
+    BeforeDelete, AfterDelete,
+}
+
+// Core engine handles trigger registration
+impl LocalWriteRegistry {
     fn install_triggers(&self, definition: &dyn LocalWriteDefinition) -> Result<()> {
         let trigger_sql = self.generate_trigger_sql(definition)?;
-
-        // Execute trigger installation
         let conn = self.get_connection()?;
         conn.execute_batch(&trigger_sql)?;
-
         Ok(())
     }
 }
 ```
 
-#### 3.2 SQLite Trigger System
+For specific trigger examples including order matching, balance validation, liquidation monitoring, and more complex business logic implementations, see [EXTENSIBILITY.md](EXTENSIBILITY.md). The core provides the trigger execution infrastructure while applications define their specific logic.
 
-##### Order Matching Trigger
-```sql
--- Trigger for automatic order matching when new order is placed
-CREATE TRIGGER match_orders_on_insert
-AFTER INSERT ON orders
-WHEN NEW.status = 'OPEN'
-BEGIN
-  -- Find matching orders on opposite side
-  WITH matches AS (
-    SELECT
-      order_id,
-      price,
-      remaining_quantity,
-      MIN(NEW.remaining_quantity, remaining_quantity) as match_quantity
-    FROM orders
-    WHERE side != NEW.side
-      AND status IN ('OPEN', 'PARTIAL')
-      AND (
-        (NEW.side = 'BUY' AND price <= NEW.price) OR
-        (NEW.side = 'SELL' AND price >= NEW.price)
-      )
-    ORDER BY
-      price ASC,  -- Best price first
-      created_at ASC  -- Time priority
-    LIMIT 1
-  )
-  INSERT INTO trades (trade_id, buy_order_id, sell_order_id, price, quantity, timestamp)
-  SELECT
-    hex(randomblob(16)),
-    CASE WHEN NEW.side = 'BUY' THEN NEW.order_id ELSE order_id END,
-    CASE WHEN NEW.side = 'SELL' THEN NEW.order_id ELSE order_id END,
-    price,
-    match_quantity,
-    strftime('%s', 'now')
-  FROM matches
-  WHERE match_quantity > 0;
-
-  -- Update matched orders
-  UPDATE orders
-  SET
-    remaining_quantity = remaining_quantity - (
-      SELECT match_quantity FROM matches WHERE matches.order_id = orders.order_id
-    ),
-    status = CASE
-      WHEN remaining_quantity = 0 THEN 'FILLED'
-      ELSE 'PARTIAL'
-    END,
-    updated_at = strftime('%s', 'now')
-  WHERE order_id IN (
-    SELECT order_id FROM matches
-    UNION SELECT NEW.order_id
-  );
-END;
-```
-
-##### Balance Validation Trigger
-```sql
--- Trigger to validate sufficient balance before transfer
-CREATE TRIGGER validate_balance_on_transfer
-BEFORE UPDATE ON balances
-WHEN NEW.balance < 0
-BEGIN
-  SELECT RAISE(ABORT, 'Insufficient balance for transfer');
-END;
-
--- Trigger to update total supply on mint/burn
-CREATE TRIGGER update_supply_on_balance_change
-AFTER UPDATE ON balances
-BEGIN
-  UPDATE token_metadata
-  SET total_supply = (
-    SELECT SUM(CAST(balance AS INTEGER))
-    FROM balances
-    WHERE token_address = NEW.token_address
-  )
-  WHERE token_address = NEW.token_address;
-END;
-```
-
-##### Withdrawal Request Processing
-```sql
--- Trigger to mark tokens as locked when withdrawal is requested
-CREATE TRIGGER lock_tokens_on_withdrawal
-AFTER INSERT ON withdrawal_requests
-BEGIN
-  -- Deduct from user's balance
-  UPDATE balances
-  SET balance = CAST(balance AS INTEGER) - CAST(NEW.amount AS INTEGER)
-  WHERE account_id = NEW.account_id
-    AND token_address = NEW.token_address;
-
-  -- Create audit log entry
-  INSERT INTO transfer_events (event_id, token_address, from_address, to_address, amount, timestamp)
-  VALUES (
-    hex(randomblob(16)),
-    NEW.token_address,
-    NEW.account_id,
-    '0x0000000000000000000000000000000000000000',  -- Burn address
-    NEW.amount,
-    NEW.timestamp
-  );
-END;
-```
-
-#### 3.3 Local Write Builder Pattern (Rust)
+#### 3.3 Local Write Framework (Rust)
 ```rust
-// synddb-core/src/builders.rs
-use crate::write_types::LocalWriteType;
-use uuid::Uuid;
-use std::time::SystemTime;
+// synddb-core/src/writes.rs
 
-pub struct WriteBuilder;
+// Core LocalWrite structure that all extensions use
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalWrite {
+    pub write_type: String,
+    pub request: serde_json::Value,
+    pub timestamp: u64,
+    pub nonce: u64,
+}
 
-impl WriteBuilder {
-    pub fn place_order() -> OrderWriteBuilder {
-        OrderWriteBuilder::new()
+// Extensions provide their own write implementations
+pub trait LocalWriteExtension: Send + Sync {
+    fn write_type(&self) -> &str;
+    fn schema(&self) -> &serde_json::Value;
+    fn validate(&self, request: &serde_json::Value) -> Result<()>;
+    fn to_sql(&self, request: &serde_json::Value) -> Result<Vec<SqlStatement>>;
+
+    // Optional hooks for pre/post processing
+    fn pre_execute(&self, request: &serde_json::Value) -> Result<()> {
+        Ok(())
     }
 
-    pub fn transfer() -> TransferWriteBuilder {
-        TransferWriteBuilder::new()
+    fn post_execute(&self, request: &serde_json::Value, result: &ExecuteResult) -> Result<()> {
+        Ok(())
     }
 }
 
-#[derive(Default)]
-pub struct OrderWriteBuilder {
-    account_id: Option<String>,
-    side: Option<OrderSide>,
-    price: Option<f64>,
-    quantity: Option<f64>,
-}
+// Core engine processes writes generically
+impl Sequencer {
+    pub async fn execute_local_write(&self, write: LocalWrite) -> Result<LocalWriteReceipt> {
+        // Find the registered extension for this write type
+        let extension = self.registry
+            .get_write_extension(&write.write_type)
+            .ok_or_else(|| anyhow!("Unknown write type: {}", write.write_type))?;
 
-#[derive(Debug, Clone)]
-pub enum OrderSide {
-    Buy,
-    Sell,
-}
+        // Validate using extension
+        extension.validate(&write.request)?;
 
-impl OrderWriteBuilder {
-    pub fn new() -> Self {
-        Self::default()
-    }
+        // Pre-execution hook
+        extension.pre_execute(&write.request)?;
 
-    pub fn account(mut self, account_id: impl Into<String>) -> Self {
-        self.account_id = Some(account_id.into());
-        self
-    }
+        // Convert to SQL using extension
+        let sql_statements = extension.to_sql(&write.request)?;
 
-    pub fn side(mut self, side: OrderSide) -> Self {
-        self.side = Some(side);
-        self
-    }
+        // Execute in local SQLite
+        let result = self.database.execute_batch(sql_statements).await?;
 
-    pub fn price(mut self, price: f64) -> Self {
-        self.price = Some(price);
-        self
-    }
+        // Post-execution hook
+        extension.post_execute(&write.request, &result)?;
 
-    pub fn quantity(mut self, quantity: f64) -> Self {
-        self.quantity = Some(quantity);
-        self
-    }
+        // Queue for blockchain submission
+        self.chain_submit_queue.enqueue(write).await?;
 
-    pub fn build(self) -> Result<LocalWrite> {
-        // Validate required fields
-        let account_id = self.account_id
-            .ok_or_else(|| anyhow!("Missing account_id"))?;
-        let side = self.side
-            .ok_or_else(|| anyhow!("Missing side"))?;
-        let price = self.price
-            .ok_or_else(|| anyhow!("Missing price"))?;
-        let quantity = self.quantity
-            .ok_or_else(|| anyhow!("Missing quantity"))?;
-
-        // Generate SQL
-        let sql = r#"
-            INSERT INTO orders (order_id, account_id, side, price, quantity,
-                              remaining_quantity, status, created_at, updated_at, nonce)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-        "#;
-
-        let order_id = Uuid::new_v4().to_string();
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)?
-            .as_secs();
-
-        Ok(LocalWrite {
-            write_type: LocalWriteType::PlaceOrder,
-            sql: sql.to_string(),
-            params: vec![
-                order_id.clone().into(),
-                account_id.into(),
-                format!("{:?}", side).into(),
-                price.into(),
-                quantity.into(),
-                quantity.into(), // remaining = initial quantity
-                "OPEN".into(),
-                timestamp.into(),
-                timestamp.into(),
-                generate_nonce().into(),
-            ],
-            metadata: serde_json::json!({
-                "order_id": order_id,
-                "account_id": account_id,
-                "side": side,
-                "price": price,
-                "quantity": quantity,
-            }),
+        Ok(LocalWriteReceipt {
+            write_id: generate_write_id(),
+            status: "committed_locally",
+            latency: result.duration,
+            replication_eta: "~1s",
         })
     }
-}
-
-fn generate_nonce() -> u64 {
-    use rand::Rng;
-    rand::thread_rng().gen()
 }
 ```
 
@@ -2274,21 +2124,25 @@ describe('End-to-End Flow', () => {
 
 ##### Query Optimization
 ```sql
--- Analyze query patterns and create appropriate indexes
+-- Core engine provides query optimization infrastructure
+-- Applications define their specific index requirements through extensions
+
+-- Example: Analyze query patterns
 EXPLAIN QUERY PLAN
-SELECT * FROM orders
-WHERE status = 'OPEN' AND side = 'BUY'
-ORDER BY price DESC, created_at ASC;
+SELECT * FROM application_table
+WHERE indexed_column = ?
+ORDER BY sort_column DESC;
 
--- Create covering index for common queries
-CREATE INDEX idx_orders_open_orders
-ON orders(status, side, price DESC, created_at ASC)
-WHERE status = 'OPEN';
-
--- Partial indexes for better performance
-CREATE INDEX idx_orders_active
-ON orders(account_id, status, updated_at)
-WHERE status IN ('OPEN', 'PARTIAL');
+-- Extensions define indexes through SchemaExtension trait
+impl SchemaExtension for MyExtension {
+    fn index_statements(&self) -> Vec<String> {
+        vec![
+            "CREATE INDEX idx_primary_lookup ON my_table(key_column)".to_string(),
+            "CREATE INDEX idx_composite ON my_table(col1, col2 DESC)".to_string(),
+            "CREATE INDEX idx_partial ON my_table(status) WHERE active = 1".to_string(),
+        ]
+    }
+}
 ```
 
 ##### Memory Optimization
