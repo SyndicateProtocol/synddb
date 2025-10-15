@@ -157,10 +157,7 @@ impl ChainSubmitQueue {
 
         self.pending.push(QueuedWrite {
             write,
-            queued_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64,
+            queued_at: crate::types::current_timestamp_ms(),
             submitted: false,
         });
 
@@ -186,10 +183,14 @@ impl ChainSubmitQueue {
             .collect()
     }
 
-    /// Mark writes as submitted
+    /// Mark writes as submitted to blockchain
+    ///
+    /// Note: Currently marks all pending writes as submitted since LocalWrite
+    /// doesn't store write_id. In production, LocalWrite should include a write_id
+    /// field to enable selective marking.
     pub fn mark_submitted(&mut self, _write_ids: &[String]) -> Result<()> {
-        // For simplicity, we'll mark all pending writes as submitted
-        // In production, would match by actual write IDs
+        // TODO: Add write_id field to LocalWrite to enable selective marking
+        // For now, mark all pending writes as submitted
         for queued in &mut self.pending {
             queued.submitted = true;
         }
@@ -273,12 +274,9 @@ impl LocalWriteBuilder {
 
     /// Build the local write
     pub fn build(self) -> LocalWrite {
-        let timestamp = self.timestamp.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64
-        });
+        let timestamp = self
+            .timestamp
+            .unwrap_or_else(crate::types::current_timestamp_ms);
 
         LocalWrite {
             write_type: self.write_type,

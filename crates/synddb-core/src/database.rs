@@ -366,10 +366,7 @@ impl SyndDatabase for SqliteDatabase {
 
     async fn generate_snapshot(&self) -> Result<DatabaseSnapshot> {
         let version = *self.version.read().await;
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let timestamp = current_timestamp_ms();
 
         info!("Generating database snapshot at version {}", version);
 
@@ -407,10 +404,7 @@ impl SyndDatabase for SqliteDatabase {
     }
 
     async fn generate_diff(&self, from_version: u64, to_version: u64) -> Result<DatabaseDiff> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let timestamp = current_timestamp_ms();
 
         info!(
             "Generating diff from version {} to {}",

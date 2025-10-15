@@ -10,6 +10,7 @@ use std::time::Duration;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Core error types for SyndDB
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Database error: {0}")]
@@ -73,12 +74,21 @@ pub struct LocalWriteReceipt {
 }
 
 /// Status of a local write operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LocalWriteStatus {
     /// Successfully committed to local database
     CommittedLocally,
     /// Failed during local execution
     Failed(String),
+}
+
+impl std::fmt::Display for LocalWriteStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LocalWriteStatus::CommittedLocally => write!(f, "Committed Locally"),
+            LocalWriteStatus::Failed(reason) => write!(f, "Failed: {}", reason),
+        }
+    }
 }
 
 // ============================================================================
@@ -139,8 +149,9 @@ pub struct SqlOperation {
 }
 
 /// SQL parameter value
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub enum SqlValue {
+    #[default]
     Null,
     Integer(i64),
     Real(f64),
@@ -205,7 +216,7 @@ pub struct ChainSubmitReceipt {
 }
 
 /// Type of blockchain submission
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChainSubmissionType {
     /// Direct diff storage on-chain
     DiffDirect,
@@ -215,6 +226,17 @@ pub enum ChainSubmissionType {
     SnapshotDirect,
     /// Snapshot pointer to off-chain storage
     SnapshotPointer(String),
+}
+
+impl std::fmt::Display for ChainSubmissionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChainSubmissionType::DiffDirect => write!(f, "Direct Diff"),
+            ChainSubmissionType::DiffPointer(ptr) => write!(f, "Diff Pointer ({})", ptr),
+            ChainSubmissionType::SnapshotDirect => write!(f, "Direct Snapshot"),
+            ChainSubmissionType::SnapshotPointer(ptr) => write!(f, "Snapshot Pointer ({})", ptr),
+        }
+    }
 }
 
 // ============================================================================
@@ -266,6 +288,18 @@ pub fn calculate_checksum(data: &[u8]) -> String {
     let mut hasher = Sha3_256::new();
     hasher.update(data);
     format!("{:x}", hasher.finalize())
+}
+
+/// Get current Unix timestamp in milliseconds
+///
+/// # Panics
+/// Panics if the system clock is set before the Unix epoch (January 1, 1970).
+/// This should never happen on any modern system.
+pub fn current_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("System clock set before Unix epoch")
+        .as_millis() as u64
 }
 
 #[cfg(test)]
