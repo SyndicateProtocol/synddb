@@ -67,6 +67,10 @@ pub struct DatabaseConfig {
     /// Memory-mapped I/O size in bytes
     #[serde(default = "default_mmap_size")]
     pub mmap_size: i64,
+
+    /// Locking mode (EXCLUSIVE for production, NORMAL for development)
+    #[serde(default = "default_locking_mode")]
+    pub locking_mode: String,
 }
 
 fn default_pool_size() -> u32 {
@@ -87,6 +91,10 @@ fn default_cache_size() -> i64 {
 
 fn default_mmap_size() -> i64 {
     274877906944 // 256GB
+}
+
+fn default_locking_mode() -> String {
+    "EXCLUSIVE".to_string()
 }
 
 // ============================================================================
@@ -379,8 +387,9 @@ impl SyndDBConfig {
                 pool_size: 4,
                 journal_mode: "WAL".to_string(),
                 synchronous: "NORMAL".to_string(),
-                cache_size: -64000,    // 64MB for tests
-                mmap_size: 1073741824, // 1GB for tests
+                cache_size: -64000,       // 64MB for tests
+                mmap_size: 1073741824,    // 1GB for tests
+                locking_mode: "NORMAL".to_string(), // Allow external access in tests
             },
             sequencer: Some(SequencerConfig::default()),
             replica: None,

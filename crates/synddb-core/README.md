@@ -268,6 +268,7 @@ synddb:
     synchronous: NORMAL
     cache_size: -2000000
     mmap_size: 274877906944
+    locking_mode: EXCLUSIVE  # Use NORMAL for development
 
   sequencer:
     batch_size: 1000

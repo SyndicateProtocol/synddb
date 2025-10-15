@@ -95,7 +95,15 @@ pub struct SqliteDatabase {
 impl SqliteDatabase {
     /// Create a new SQLite database instance with default configuration
     pub fn new<P: AsRef<Path>>(path: P, pool_size: u32) -> Result<Self> {
-        Self::new_with_config(path, pool_size, "WAL", "NORMAL", -2000000, 274877906944)
+        Self::new_with_config(
+            path,
+            pool_size,
+            "WAL",
+            "NORMAL",
+            -2000000,
+            274877906944,
+            "EXCLUSIVE",
+        )
     }
 
     /// Create a new SQLite database instance from DatabaseConfig
@@ -107,6 +115,7 @@ impl SqliteDatabase {
             &config.synchronous,
             config.cache_size,
             config.mmap_size,
+            &config.locking_mode,
         )
     }
 
@@ -118,6 +127,7 @@ impl SqliteDatabase {
         synchronous: &str,
         cache_size: i64,
         mmap_size: i64,
+        locking_mode: &str,
     ) -> Result<Self> {
         let db_path = path.as_ref().to_string_lossy().to_string();
         let manager = SqliteConnectionManager::file(&db_path);
@@ -129,7 +139,14 @@ impl SqliteDatabase {
 
         // Initialize database with optimizations
         let conn = pool.get().connection_err()?;
-        Self::initialize_optimizations(&conn, journal_mode, synchronous, cache_size, mmap_size)?;
+        Self::initialize_optimizations(
+            &conn,
+            journal_mode,
+            synchronous,
+            cache_size,
+            mmap_size,
+            locking_mode,
+        )?;
         Self::create_metadata_tables(&conn)?;
 
         info!("SQLite database initialized at {}", db_path);
@@ -148,6 +165,7 @@ impl SqliteDatabase {
         synchronous: &str,
         cache_size: i64,
         mmap_size: i64,
+        locking_mode: &str,
     ) -> Result<()> {
         info!("Applying SQLite performance optimizations");
 
@@ -156,14 +174,12 @@ impl SqliteDatabase {
         conn.pragma_update(None, "synchronous", synchronous)?;
         conn.pragma_update(None, "cache_size", cache_size)?;
         conn.pragma_update(None, "mmap_size", mmap_size)?;
+        conn.pragma_update(None, "locking_mode", locking_mode)?;
 
         // Fixed optimizations for SyndDB architecture
 
         // Keep temp tables/indices in memory
         conn.pragma_update(None, "temp_store", "MEMORY")?;
-
-        // EXCLUSIVE mode - single sequencer doesn't need to coordinate
-        conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
 
         // 64KB pages (max size) - reduces B-tree depth for large datasets
         conn.pragma_update(None, "page_size", 65536)?;
@@ -593,6 +609,7 @@ mod tests {
             synchronous: "NORMAL".to_string(),
             cache_size: -64000,    // 64MB
             mmap_size: 1073741824, // 1GB
+            locking_mode: "NORMAL".to_string(),
         };
 
         let db = SqliteDatabase::from_config(&config).unwrap();
