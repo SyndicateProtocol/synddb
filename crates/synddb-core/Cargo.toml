@@ -39,7 +39,6 @@ dotenvy = { workspace = true }
 
 # Utils
 parking_lot = { workspace = true }
-rustc-hash = { workspace = true }
 uuid = { version = "1.11", features = ["v4"] }
 
 [dev-dependencies]

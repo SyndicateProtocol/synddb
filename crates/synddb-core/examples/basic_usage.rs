@@ -164,14 +164,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let metrics = db.metrics().snapshot();
     println!("{}\n", metrics.format());
 
-    // Show cache stats
-    println!("=== Statement Cache ===");
-    let cache_stats = db.prepared_statements().stats();
-    println!(
-        "Cached statements: {} (hit rate: {:.2}%)",
-        db.prepared_statements().len(),
-        cache_stats.hit_rate()
-    );
+    println!("=== SQLite Optimization ===");
+    println!("  Using SQLite's built-in prepared statement optimization");
 
     println!("\n✓ Example complete!");
     println!("\nDatabase file created at: example.db");

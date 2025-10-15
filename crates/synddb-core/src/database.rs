@@ -4,7 +4,6 @@
 //! with performance optimizations for high-throughput blockchain workloads.
 
 use crate::metrics::MetricsCollector;
-use crate::prepared_statements::PreparedStatementCache;
 use crate::types::*;
 use async_trait::async_trait;
 use r2d2::{Pool, PooledConnection};
@@ -93,8 +92,6 @@ pub struct SqliteDatabase {
     /// Performance statistics (deprecated - use metrics)
     #[allow(dead_code)]
     stats: Arc<RwLock<PerformanceStats>>,
-    /// Prepared statement cache
-    prepared_statements: Arc<PreparedStatementCache>,
     /// Real-time metrics collector
     metrics: Arc<MetricsCollector>,
     /// Database file path
@@ -117,9 +114,6 @@ impl SqliteDatabase {
         Self::initialize_optimizations(&conn)?;
         Self::create_metadata_tables(&conn)?;
 
-        // Initialize prepared statement cache (automatic caching)
-        let prepared_statements = Arc::new(PreparedStatementCache::new());
-
         // Initialize metrics collector
         let metrics = Arc::new(MetricsCollector::new());
 
@@ -129,15 +123,9 @@ impl SqliteDatabase {
             pool,
             version: Arc::new(RwLock::new(0)),
             stats: Arc::new(RwLock::new(PerformanceStats::default())),
-            prepared_statements,
             metrics,
             db_path,
         })
-    }
-
-    /// Get the prepared statement cache
-    pub fn prepared_statements(&self) -> &PreparedStatementCache {
-        &self.prepared_statements
     }
 
     /// Get the metrics collector
@@ -247,9 +235,6 @@ impl SyndDatabase for SqliteDatabase {
     async fn execute(&self, sql: &str, params: Vec<SqlValue>) -> Result<ExecuteResult> {
         let start = Instant::now();
 
-        // Automatically cache this SQL statement
-        self.prepared_statements.cache_statement(sql);
-
         let conn = self.get_connection()?;
 
         let (rows_affected, last_insert_rowid) = Self::with_params(&params, |params| {
@@ -321,9 +306,6 @@ impl SyndDatabase for SqliteDatabase {
 
     async fn query(&self, sql: &str, params: Vec<SqlValue>) -> Result<QueryResult> {
         let start = Instant::now();
-
-        // Automatically cache this SQL statement
-        self.prepared_statements.cache_statement(sql);
 
         let conn = self.get_connection()?;
 
