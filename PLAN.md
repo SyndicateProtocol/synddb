@@ -1591,140 +1591,190 @@ class ReplicaMonitor {
 ## Phase 6: TEE Validators & Settlement (Week 12-13)
 
 ### Goals
-- Implement TEE-based validators (a small subset of read replicas with settlement capabilities)
+- Deploy validators as Docker containers in Google Cloud Confidential Space
+- Implement dual attestation via SP1 and Lit Actions
 - Build bridge message processing for validator-only operations
 - Create settlement transaction system that only validators can execute
-- Implement circuit breakers and safety mechanisms
 
-**Key Distinctions:**
-- **Validators are optional** - the system works with just regular read replicas for queries
-- **Only a small subset of read replicas become validators** - most replicas remain query-only nodes
-- **TEE hardware required** - validators need specialized TEE hardware that regular replicas don't
-- **Settlement authority** - only validators can sign bridge transactions, regular replicas cannot
-- **Higher trust requirements** - validators must be registered and attested, replicas need no permission
+**Implementation Approach:**
+- **Google Cloud Confidential Space** - Run validators as simple Docker containers with hardware-backed TEE protection
+- **Docker-based Deployment** - Standard containers with SQLite embedded, no complex TEE setup required
+- **Dual Attestation** - TEE attestation verified through both SP1 (ZK proof) and Lit Actions (decentralized verification)
+- **Key Management** - Each container holds its own key within the TEE environment
+- **Simple Operations** - Validators just run SQLite and sign transactions when needed
 
 ### Tasks
 
-#### 6.1 TEE Validator Architecture with Lit Protocol (Specialized Read Replica)
+#### 6.1 Google Cloud Confidential Space Validator Setup
+
+##### Docker Container Configuration
+```dockerfile
+# Dockerfile for TEE Validator
+FROM rust:1.75 as builder
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    sqlite3 \
+    libsqlite3-dev \
+    ca-certificates
+
+# Build the validator binary
+WORKDIR /app
+COPY . .
+RUN cargo build --release
+
+# Runtime image
+FROM gcr.io/confidential-space-images/base:latest
+
+# Copy validator binary and dependencies
+COPY --from=builder /app/target/release/synddb-validator /usr/local/bin/
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libsqlite3.so* /usr/lib/
+
+# Set up data directory
+RUN mkdir -p /data
+
+# Run validator
+ENTRYPOINT ["/usr/local/bin/synddb-validator"]
+```
+
+##### Deployment Configuration
+```yaml
+# confidential-space-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synddb-validator
+spec:
+  replicas: 3
+  template:
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-confidential-nodes: "true"
+      containers:
+      - name: validator
+        image: gcr.io/synddb/validator:latest
+        env:
+        - name: CONFIDENTIAL_SPACE
+          value: "true"
+        - name: ATTESTATION_SERVICE_ENDPOINT
+          value: "https://confidentialcomputing.googleapis.com"
+        resources:
+          limits:
+            memory: "32Gi"
+            cpu: "8"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: validator-data
+```
+
+##### Validator Implementation with Dual Attestation
 ```rust
-// synddb-replica/src/validator.rs
-// TEEValidator extends ReadReplica with Lit Protocol for TEE attestation and SP1 for ZK proofs
-
-use lit_sdk::{LitNodeClient, LitAction, AttestationReport};
+// synddb-validator/src/main.rs
+use google_confidential_space::{AttestationClient, ContainerAttestation};
+use lit_sdk::{LitNodeClient, LitAction};
 use sp1_sdk::{ProverClient, SP1Stdin, SP1Proof};
-use alloy::primitives::{Address, B256};
+use alloy::primitives::Address;
 
-pub struct TEEValidator {
-    // Base read replica functionality
-    replica: ReadReplica,
+pub struct ConfidentialSpaceValidator {
+    // SQLite database running in the container
+    database: SyndDatabase,
 
-    // Lit Protocol for TEE attestation
+    // Google Confidential Space attestation
+    attestation_client: AttestationClient,
+
+    // Lit Protocol for decentralized verification
     lit_client: LitNodeClient,
-    lit_action_ipfs_cid: String,  // IPFS CID of the Lit Action for validation
 
-    // SP1 for zero-knowledge proof generation
+    // SP1 for ZK proof generation
     sp1_prover: ProverClient,
-    sp1_program: Vec<u8>,  // Compiled SP1 program for state validation
 
-    // Settlement keys managed by Lit Protocol
-    settlement_address: Address,
+    // Key generated and stored within TEE
+    validator_key: ValidatorKey,
 
     // Bridge contract interface
     bridge: BridgeContract,
 }
 
-impl TEEValidator {
-    pub async fn new(config: ValidatorConfig) -> Result<Self> {
-        // Initialize base read replica
-        let replica = ReadReplica::new(config.replica_config).await?;
+impl ConfidentialSpaceValidator {
+    pub async fn new() -> Result<Self> {
+        // Initialize SQLite database within the container
+        let database = SyndDatabase::new("/data/synddb.sqlite")?;
+
+        // Get Google Confidential Space attestation
+        let attestation_client = AttestationClient::new()?;
 
         // Initialize Lit Protocol client
-        let lit_client = LitNodeClient::new(config.lit_network_url).await?;
+        let lit_client = LitNodeClient::new().await?;
 
         // Initialize SP1 prover
         let sp1_prover = ProverClient::new();
 
-        // Load SP1 program for state validation
-        let sp1_program = std::fs::read(&config.sp1_program_path)?;
-
-        // Deploy or reference Lit Action for TEE operations
-        let lit_action_ipfs_cid = config.lit_action_cid;
+        // Generate validator key within TEE
+        let validator_key = ValidatorKey::generate_in_tee()?;
 
         Ok(Self {
-            replica,
+            database,
+            attestation_client,
             lit_client,
-            lit_action_ipfs_cid,
             sp1_prover,
-            sp1_program,
-            settlement_address: config.settlement_address,
+            validator_key,
             bridge: BridgeContract::new(config.bridge_address),
         })
     }
 
     pub async fn initialize(&mut self) -> Result<()> {
-        // Register with Lit Protocol for TEE attestation
-        let attestation = self.generate_lit_attestation().await?;
+        // Step 1: Get Google Confidential Space attestation
+        let gcp_attestation = self.attestation_client
+            .get_container_attestation()
+            .await?;
 
-        // Generate SP1 proof of correct initialization
-        let init_proof = self.generate_initialization_proof().await?;
+        // Step 2: Generate SP1 ZK proof of correct TEE setup
+        let sp1_proof = self.generate_sp1_attestation_proof(&gcp_attestation).await?;
 
-        // Register validator with bridge contract
-        self.register_with_bridge(attestation, init_proof).await?;
+        // Step 3: Verify via Lit Actions for decentralized attestation
+        let lit_verification = self.verify_with_lit_actions(&gcp_attestation, &sp1_proof).await?;
 
+        // Step 4: Register validator on-chain only after dual verification
+        self.register_validator(lit_verification).await?;
+
+        info!("Validator registered with dual attestation verification");
         Ok(())
     }
 
-    async fn generate_lit_attestation(&self) -> Result<AttestationReport> {
-        // Use Lit Actions to generate TEE attestation
-        let lit_action_params = serde_json::json!({
-            "validator_address": self.settlement_address,
-            "replica_state_hash": self.replica.get_state_hash(),
-        });
-
-        let attestation = self.lit_client
-            .execute_lit_action(
-                &self.lit_action_ipfs_cid,
-                lit_action_params,
-            )
-            .await?;
-
-        Ok(attestation)
-    }
-
-    async fn generate_initialization_proof(&self) -> Result<SP1Proof> {
-        // Create input for SP1 program
+    async fn generate_sp1_attestation_proof(&self, attestation: &ContainerAttestation) -> Result<SP1Proof> {
+        // Create SP1 input with attestation data
         let mut stdin = SP1Stdin::new();
-        stdin.write(&self.replica.get_current_version());
-        stdin.write(&self.replica.get_state_hash());
+        stdin.write(&attestation.measurements);
+        stdin.write(&attestation.container_id);
+        stdin.write(&self.database.get_state_hash());
 
-        // Generate ZK proof of valid initialization
+        // Generate ZK proof that TEE is correctly configured
         let proof = self.sp1_prover
-            .prove(&self.sp1_program, stdin)
+            .prove_tee_setup(stdin)
             .await?;
 
         Ok(proof)
     }
 
-    async fn register_with_bridge(
-        &self,
-        attestation: AttestationReport,
-        init_proof: SP1Proof,
-    ) -> Result<()> {
-        // Submit attestation and proof to bridge contract
-        self.bridge
-            .register_validator(
-                self.settlement_address,
-                attestation.encode(),
-                init_proof.bytes(),
+    async fn verify_with_lit_actions(&self, attestation: &ContainerAttestation, sp1_proof: &SP1Proof) -> Result<LitVerification> {
+        // Submit to Lit network for decentralized verification
+        let verification = self.lit_client
+            .verify_attestation(
+                attestation.to_bytes(),
+                sp1_proof.to_bytes(),
             )
             .await?;
 
-        Ok(())
+        Ok(verification)
     }
 
     pub async fn process_withdrawals(&mut self) -> Result<()> {
-        // Query pending withdrawals from database
-        let withdrawals = self.replica.query(
+        // Simple SQLite query within the Docker container
+        let withdrawals = self.database.query(
             "SELECT * FROM withdrawal_requests
              WHERE status = 'PENDING'
              ORDER BY timestamp ASC
@@ -1733,30 +1783,35 @@ impl TEEValidator {
         ).await?;
 
         for withdrawal in withdrawals {
-            self.process_withdrawal(withdrawal).await?;
+            // Process each withdrawal with dual attestation
+            self.process_withdrawal_with_attestation(withdrawal).await?;
         }
 
         Ok(())
     }
 
-    async fn process_withdrawal(&mut self, withdrawal: WithdrawalRequest) -> Result<()> {
-        // Generate SP1 proof of valid withdrawal
+    async fn process_withdrawal_with_attestation(&mut self, withdrawal: WithdrawalRequest) -> Result<()> {
+        // Step 1: Generate SP1 proof that withdrawal is valid
         let withdrawal_proof = self.generate_withdrawal_proof(&withdrawal).await?;
 
-        // Use Lit Protocol to sign withdrawal with TEE-protected key
-        let signature = self.sign_with_lit_action(&withdrawal).await?;
+        // Step 2: Sign with TEE-protected key
+        let signature = self.validator_key.sign(&withdrawal)?;
 
-        // Submit to bridge with proof and signature
+        // Step 3: Get fresh attestation from Confidential Space
+        let attestation = self.attestation_client.get_fresh_attestation().await?;
+
+        // Step 4: Submit to bridge with all verifications
         let tx_hash = self.bridge
             .process_withdrawal(
                 withdrawal.clone(),
                 withdrawal_proof,
                 signature,
+                attestation,
             )
             .await?;
 
-        // Update database status
-        self.replica.execute(
+        // Step 5: Update SQLite database
+        self.database.execute(
             "UPDATE withdrawal_requests
              SET status = 'COMPLETED', settlement_tx_hash = ?1
              WHERE request_id = ?2",
@@ -1767,65 +1822,77 @@ impl TEEValidator {
     }
 
     async fn generate_withdrawal_proof(&self, withdrawal: &WithdrawalRequest) -> Result<SP1Proof> {
-        // Create SP1 input with withdrawal details and current state
+        // Simple proof generation using SP1
         let mut stdin = SP1Stdin::new();
-        stdin.write(&withdrawal.account_id);
-        stdin.write(&withdrawal.amount);
-        stdin.write(&withdrawal.token_address);
-        stdin.write(&self.replica.get_state_hash());
+        stdin.write(&withdrawal.encode());
+        stdin.write(&self.database.get_state_hash());
 
-        // Generate ZK proof that withdrawal is valid according to state
-        let proof = self.sp1_prover
-            .prove(&self.sp1_program, stdin)
-            .await?;
-
+        let proof = self.sp1_prover.prove_withdrawal(stdin).await?;
         Ok(proof)
     }
-
-    async fn sign_with_lit_action(&self, withdrawal: &WithdrawalRequest) -> Result<Vec<u8>> {
-        // Use Lit Action to sign withdrawal with TEE-protected key
-        let params = serde_json::json!({
-            "message": self.encode_withdrawal_message(withdrawal),
-            "key_id": "settlement_key",
-        });
-
-        let signature = self.lit_client
-            .execute_lit_action(
-                &self.lit_action_ipfs_cid,
-                params,
-            )
-            .await?;
-
-        Ok(signature.to_bytes())
-    }
 }
+```
 
-// Lit Action code (deployed to IPFS, executed in Lit nodes)
-// This would be JavaScript that runs in Lit's TEE environment
-const litActionCode = `
-async function main() {
-    // This code runs inside Lit Protocol's TEE
-    const { validator_address, action_type, params } = args;
+##### Simplified Lit Action for Attestation Verification
+```javascript
+// lit-action-validator.js - Deployed to IPFS for Lit Protocol execution
+const validatorLitAction = async () => {
+    // This runs in Lit Protocol's distributed network
+    const { attestation, sp1Proof, validatorAddress } = args;
 
-    if (action_type === "attestation") {
-        // Generate TEE attestation
-        const attestation = await Lit.Actions.generateAttestation({
-            data: params,
-            includeEnvironment: true,
-        });
-        return attestation;
-    } else if (action_type === "sign") {
-        // Sign with TEE-protected key
-        const signature = await Lit.Actions.signEcdsa({
-            toSign: params.message,
-            publicKey: params.key_id,
-            sigName: "withdrawal_signature",
-        });
-        return signature;
+    // Verify Google Confidential Space attestation
+    const isValidAttestation = await Lit.Actions.verifyAttestation({
+        attestation: attestation,
+        expectedMeasurements: {
+            imageDigest: "sha256:abc123...", // Expected container image
+            platform: "gcp-confidential-space"
+        }
+    });
+
+    // Verify SP1 proof
+    const isValidProof = await Lit.Actions.verifySP1Proof({
+        proof: sp1Proof,
+        publicInputs: [validatorAddress]
+    });
+
+    if (isValidAttestation && isValidProof) {
+        // Both attestations verified - authorize validator
+        return {
+            authorized: true,
+            validatorAddress: validatorAddress,
+            timestamp: Date.now()
+        };
     }
-}
-main();
-`;
+
+    return { authorized: false };
+};
+```
+
+##### Docker Compose for Local Testing
+```yaml
+# docker-compose-validator.yml
+version: '3.8'
+
+services:
+  validator:
+    build:
+      context: .
+      dockerfile: Dockerfile.validator
+    environment:
+      - ROLE=validator
+      - CHAIN_RPC=${CHAIN_RPC}
+      - BRIDGE_ADDRESS=${BRIDGE_ADDRESS}
+      - LIT_NETWORK=serrano # or habanero for mainnet
+      - SP1_PROVER_NETWORK=${SP1_NETWORK}
+    volumes:
+      - ./data:/data
+    ports:
+      - "8080:8080"
+    # Simulate TEE environment for local testing
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_ADMIN
 ```
 
 #### 6.2 Bridge Smart Contract
