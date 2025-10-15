@@ -206,8 +206,8 @@ use serde::{Deserialize, Serialize};
 
 #[async_trait]
 pub trait SyndDatabase: Send + Sync {
-    async fn execute(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<ExecuteResult>;
     async fn begin_database_transaction(&self) -> Result<DatabaseTransaction>;
+    async fn execute(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<ExecuteResult>;
 
     // SEQUENCER methods - Create replication data from local state
     // generate_snapshot: Creates a full database backup for replica bootstrapping
