@@ -221,8 +221,10 @@ impl Default for ReplicaConfig {
 /// - EIP-1559 fee estimation from the network
 /// - Transaction signing and submission
 ///
-/// We only configure policy parameters (multipliers, limits, confirmations)
-/// rather than hardcoding gas values that Alloy estimates automatically.
+/// We trust Alloy's gas estimation and only configure:
+/// - Fee caps (protection against market conditions)
+/// - Confirmation requirements (security vs latency tradeoff)
+/// - Polling behavior (how often to check transaction status)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChainConfig {
     /// RPC URL for the blockchain
@@ -235,32 +237,26 @@ pub struct ChainConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub private_key: Option<String>,
 
-    /// Gas limit multiplier for safety margin (e.g., 1.2 = 20% buffer on estimates)
-    /// Alloy will estimate gas and multiply by this value
-    #[serde(default = "default_gas_multiplier")]
-    pub gas_multiplier: f64,
-
     /// Maximum priority fee per gas in gwei (EIP-1559)
-    /// Set to None to use network-suggested values
+    /// Optional cap to protect against MEV or market volatility
+    /// If None, uses network-suggested values
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_priority_fee_per_gas: Option<u64>,
 
     /// Maximum fee per gas in gwei (EIP-1559)
-    /// Set to None to use network-suggested values
+    /// Optional cap to protect against gas price spikes
+    /// If None, uses network-suggested values
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_fee_per_gas: Option<u64>,
 
     /// Confirmation blocks to wait before considering transaction final
+    /// Higher values = more security, lower values = faster confirmation
     #[serde(default = "default_confirmations")]
     pub confirmations: u64,
 
     /// Transaction polling interval in milliseconds
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
-}
-
-fn default_gas_multiplier() -> f64 {
-    1.2 // 20% buffer on gas estimates
 }
 
 fn default_confirmations() -> u64 {
@@ -396,9 +392,8 @@ impl SyndDBConfig {
                     "0x0000000000000000000000000000000000000000000000000000000000000001"
                         .to_string(),
                 ),
-                gas_multiplier: 1.2,
-                max_priority_fee_per_gas: None, // Let Alloy estimate
-                max_fee_per_gas: None,          // Let Alloy estimate
+                max_priority_fee_per_gas: None, // Use Alloy's estimates
+                max_fee_per_gas: None,          // Use Alloy's estimates
                 confirmations: 1,
                 poll_interval_ms: 100, // Faster polling for tests
             },

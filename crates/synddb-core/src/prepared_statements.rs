@@ -95,12 +95,7 @@ impl PreparedStatementCache {
             self.evict_lru(&mut cache);
         }
 
-        cache.insert(
-            hash,
-            CachedStatement {
-                use_count: 1,
-            },
-        );
+        cache.insert(hash, CachedStatement { use_count: 1 });
 
         let mut stats = self.stats.write();
         stats.lookups += 1;
