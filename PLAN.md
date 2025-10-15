@@ -6,18 +6,25 @@ SyndDB is a high-performance blockchain database that replaces traditional EVM e
 ## Architecture Overview
 
 ### Terminology Clarification
-To avoid confusion, this document uses specific terms:
-- **Database Operation / SQL Operation** - SQL statements executed in SQLite (INSERT, UPDATE, DELETE)
-- **Database Transaction** - A set of SQL operations executed atomically in SQLite
-- **Blockchain Transaction** - On-chain transaction published to Ethereum/Syndicate chain
-- **execute_database_operation()** - Executes SQL operations in the sequencer's local SQLite
-- **submit_to_blockchain()** - Creates and submits a BLOCKCHAIN transaction containing database changes
-- **DatabaseSnapshot** - Complete SQLite database backup at a specific version
-- **DatabaseDiff** - Incremental SQL changes between database versions
-- **BlockchainSubmitQueue** - Queue holding operations waiting to be submitted to blockchain
-- **BlockchainSubmitReceipt** - Confirmation that database changes were submitted to blockchain
+To avoid confusion, this document uses specific terms that emphasize local vs distributed execution:
 
-The flow is: Database operations are executed locally → batched → submitted as blockchain transactions.
+**Local Execution (Sequencer Only):**
+- **LocalWrite** - SQL statements executed locally in the sequencer's SQLite (INSERT, UPDATE, DELETE)
+- **execute_local_write()** - Executes SQL immediately in the sequencer's local database
+- **LocalWriteReceipt** - Instant confirmation of local execution (<1ms latency)
+
+**Distributed Consensus (Blockchain):**
+- **submit_writes_to_chain()** - Batches local writes and submits to blockchain for replication
+- **ChainSubmitQueue** - Queue of local writes awaiting blockchain submission
+- **ChainSubmitReceipt** - Confirmation that writes were submitted to blockchain
+
+**State Replication Terms:**
+- **DatabaseSnapshot** - Complete SQLite database backup at a specific version (familiar to all devs)
+- **DatabaseDiff** - Incremental changes between versions (like git diff, familiar to all devs)
+- **generate_diff()** / **apply_diff()** - Create/apply incremental changes
+- **generate_snapshot()** / **apply_snapshot()** - Create/apply full database state
+
+The flow is: Local writes execute instantly → batched periodically → submitted to chain for replication.
 
 ### System Components
 ```
@@ -205,23 +212,23 @@ pub trait SyndDatabase: Send + Sync {
     async fn execute(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<ExecuteResult>;
     async fn begin_database_transaction(&self) -> Result<DatabaseTransaction>;
 
-    // GENERATE methods - Used by the SEQUENCER to create database state representations for publishing
-    // generate_database_snapshot: Creates a full database snapshot (complete SQLite file backup)
-    // This captures the entire database state at a specific version for new replicas to bootstrap from
-    async fn generate_database_snapshot(&self) -> Result<DatabaseSnapshot>;
+    // SEQUENCER methods - Create replication data from local state
+    // generate_snapshot: Creates a full database backup for replica bootstrapping
+    // Think of this like `pg_dump` or `mysqldump` - a complete state capture
+    async fn generate_snapshot(&self) -> Result<DatabaseSnapshot>;
 
-    // generate_database_diff: Creates a database diff containing all SQL changes between two versions
-    // This captures incremental changes (INSERT/UPDATE/DELETE statements) to publish to chain
-    async fn generate_database_diff(&self, from_version: u64, to_version: u64) -> Result<DatabaseDiff>;
+    // generate_diff: Creates incremental changes since last version
+    // Similar to git diff or database transaction logs - just the changes
+    async fn generate_diff(&self, from_version: u64, to_version: u64) -> Result<DatabaseDiff>;
 
-    // APPLY methods - Used by READ REPLICAS to reconstruct database state from published data
-    // apply_database_snapshot: Restores the database from a full snapshot (replaces entire DB state)
-    // Used when a new replica joins or needs to catch up from a checkpoint
-    async fn apply_database_snapshot(&self, snapshot: DatabaseSnapshot) -> Result<()>;
+    // REPLICA methods - Apply replication data to reconstruct state
+    // apply_snapshot: Restore from full backup (like `pg_restore`)
+    // Replaces entire local database with the snapshot state
+    async fn apply_snapshot(&self, snapshot: DatabaseSnapshot) -> Result<()>;
 
-    // apply_database_diff: Executes SQL statements from a database diff to update the database
-    // Used for incremental updates as replicas follow the sequencer's published changes
-    async fn apply_database_diff(&self, diff: DatabaseDiff) -> Result<()>;
+    // apply_diff: Apply incremental changes (like replaying a transaction log)
+    // Updates local database by executing the changes in the diff
+    async fn apply_diff(&self, diff: DatabaseDiff) -> Result<()>;
 }
 
 // synddb-sequencer/src/sequencer.rs
@@ -230,20 +237,20 @@ pub trait Sequencer: Send + Sync {
     async fn start(&mut self) -> Result<()>;
     async fn stop(&mut self) -> Result<()>;
 
-    // EXECUTE_DATABASE_OPERATION - Accepts individual SQL operations from clients
-    // This executes SQL statements locally in the sequencer's SQLite database
-    // Returns immediately after local execution (low latency for clients)
-    // Example: User submits an order (INSERT), transfer (UPDATE), or other SQL operations
-    // Alternative names considered: submit_sql_transaction(), execute_sql()
-    async fn execute_database_operation(&self, op: DatabaseOperation) -> Result<OperationReceipt>;
+    // EXECUTE_LOCAL_WRITE - Accepts SQL writes from clients for LOCAL execution only
+    // This executes immediately in the sequencer's local SQLite (not replicated yet)
+    // Returns instantly after local execution (<1ms latency)
+    // Example: User places order, transfers tokens, or any SQL write operation
+    // The "local" prefix makes it clear this is NOT distributed consensus
+    async fn execute_local_write(&self, write: LocalWrite) -> Result<LocalWriteReceipt>;
 
-    // SUBMIT_TO_BLOCKCHAIN - Periodically submits accumulated database changes to blockchain
-    // This batches many database operations and creates either:
-    // - A database diff (via generate_database_diff) for incremental updates, OR
-    // - A database snapshot (via generate_database_snapshot) for checkpointing
-    // Runs on a schedule (e.g., every 1 second or every 1000 database operations)
-    // This is what makes the database state available for read replicas to sync
-    async fn submit_to_blockchain(&self) -> Result<BlockchainSubmitReceipt>;
+    // SUBMIT_WRITES_TO_CHAIN - Periodically submits accumulated local writes to blockchain
+    // This batches many local writes and creates either:
+    // - A diff (incremental changes since last submission), OR
+    // - A snapshot (complete database state for checkpointing)
+    // Runs on a schedule (e.g., every 1 second or every 1000 local writes)
+    // This enables read replicas to replicate the sequencer's state
+    async fn submit_writes_to_chain(&self) -> Result<ChainSubmitReceipt>;
 }
 
 // synddb-replica/src/replica.rs
@@ -365,24 +372,25 @@ impl SyndDatabase {
         })
     }
 
-    /// Called by execute_database_operation() - executes SQL immediately in local database
-    /// This provides low latency responses to clients (e.g., <1ms for order placement)
-    pub async fn execute_sql_operation(&self, op: DatabaseOperation) -> Result<OperationReceipt> {
+    /// Called by execute_local_write() - executes SQL immediately in LOCAL database only
+    /// This provides ultra-low latency (<1ms) since there's no distributed consensus
+    /// The write is durable locally but not yet replicated to other nodes
+    pub async fn execute_local_write(&self, write: LocalWrite) -> Result<LocalWriteReceipt> {
         let conn = self.pool.get()?;
         let start = Instant::now();
 
-        // Execute SQL immediately in local SQLite
-        conn.execute(&op.sql, &op.params)?;
+        // Execute SQL immediately in LOCAL SQLite (not distributed)
+        conn.execute(&write.sql, &write.params)?;
 
-        let receipt = OperationReceipt {
-            operation_id: generate_operation_id(),
-            status: "executed_locally",
+        let receipt = LocalWriteReceipt {
+            write_id: generate_write_id(),
+            status: "committed_locally",
             latency: start.elapsed(),
-            will_be_published_in: "next batch (~1s)",
+            replication_eta: "~1s",  // Will be replicated in next chain submission
         };
 
-        // Add to queue for later submission via submit_to_blockchain()
-        self.blockchain_submit_queue.push(op).await?;
+        // Queue for later replication via submit_writes_to_chain()
+        self.chain_submit_queue.enqueue(write).await?;
 
         Ok(receipt)
     }
@@ -719,68 +727,68 @@ pub fn create_connection_pool(path: &str, size: u32) -> Result<Pool<SqliteConnec
 }
 ```
 
-## Phase 3: Database Operation Type System & SQLite Triggers (Week 6-7)
+## Phase 3: Local Write Type System & SQLite Triggers (Week 6-7)
 
 ### Goals
-- Build flexible database operation type system using SQLite triggers
+- Build flexible local write type system using SQLite triggers
 - Implement validation and business logic at database level
-- Create programmable hooks for custom operation types
-- Build operation serialization and deserialization
+- Create programmable hooks for custom write types
+- Build write serialization and deserialization
 
 ### Tasks
 
-#### 3.1 Operation Type Registry (Rust)
+#### 3.1 Local Write Type Registry (Rust)
 ```rust
-// synddb-core/src/operation_types.rs
+// synddb-core/src/write_types.rs
 use serde::{Serialize, Deserialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use rusqlite::Connection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DatabaseOperationType {
-    // Order book operations
+pub enum LocalWriteType {
+    // Order book writes
     PlaceOrder,
     CancelOrder,
     MatchOrders,
 
-    // Token operations
+    // Token writes
     Transfer,
     Mint,
     Burn,
 
-    // Bridge operations
+    // Bridge writes
     Deposit,
     Withdraw,
 
-    // Custom operations
+    // Custom writes
     Custom(String),
 }
 
-pub trait OperationDefinition: Send + Sync {
-    fn operation_type(&self) -> DatabaseOperationType;
+pub trait LocalWriteDefinition: Send + Sync {
+    fn write_type(&self) -> LocalWriteType;
     fn version(&self) -> u32;
     fn schema(&self) -> &JsonValue;
-    fn validate(&self, op: &JsonValue) -> Result<()>;
-    fn serialize(&self, op: &JsonValue) -> Result<Vec<u8>>;
+    fn validate(&self, write: &JsonValue) -> Result<()>;
+    fn serialize(&self, write: &JsonValue) -> Result<Vec<u8>>;
     fn deserialize(&self, data: &[u8]) -> Result<JsonValue>;
-    fn generate_sql(&self, op: &JsonValue) -> Result<Vec<String>>;
+    fn generate_sql(&self, write: &JsonValue) -> Result<Vec<String>>;
 }
 
-pub struct OperationTypeRegistry {
-    definitions: Arc<RwLock<HashMap<String, Box<dyn OperationDefinition>>>>,
+pub struct LocalWriteRegistry {
+    definitions: Arc<RwLock<HashMap<String, Box<dyn LocalWriteDefinition>>>>,
 }
 
-impl OperationTypeRegistry {
+impl LocalWriteRegistry {
     pub fn new() -> Self {
         Self {
             definitions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    pub fn register(&self, definition: Box<dyn OperationDefinition>) -> Result<()> {
+    pub fn register(&self, definition: Box<dyn LocalWriteDefinition>) -> Result<()> {
         let key = format!("{}:{}",
-            serde_json::to_string(&definition.operation_type())?,
+            serde_json::to_string(&definition.write_type())?,
             definition.version()
         );
 
@@ -793,7 +801,7 @@ impl OperationTypeRegistry {
         Ok(())
     }
 
-    fn install_triggers(&self, definition: &dyn OperationDefinition) -> Result<()> {
+    fn install_triggers(&self, definition: &dyn LocalWriteDefinition) -> Result<()> {
         let trigger_sql = self.generate_trigger_sql(definition)?;
 
         // Execute trigger installation
@@ -911,27 +919,27 @@ BEGIN
 END;
 ```
 
-#### 3.3 Database Operation Builder Pattern (Rust)
+#### 3.3 Local Write Builder Pattern (Rust)
 ```rust
 // synddb-core/src/builders.rs
-use crate::operation_types::DatabaseOperationType;
+use crate::write_types::LocalWriteType;
 use uuid::Uuid;
 use std::time::SystemTime;
 
-pub struct OperationBuilder;
+pub struct WriteBuilder;
 
-impl OperationBuilder {
-    pub fn place_order() -> OrderOperationBuilder {
-        OrderOperationBuilder::new()
+impl WriteBuilder {
+    pub fn place_order() -> OrderWriteBuilder {
+        OrderWriteBuilder::new()
     }
 
-    pub fn transfer() -> TransferOperationBuilder {
-        TransferOperationBuilder::new()
+    pub fn transfer() -> TransferWriteBuilder {
+        TransferWriteBuilder::new()
     }
 }
 
 #[derive(Default)]
-pub struct OrderOperationBuilder {
+pub struct OrderWriteBuilder {
     account_id: Option<String>,
     side: Option<OrderSide>,
     price: Option<f64>,
@@ -944,7 +952,7 @@ pub enum OrderSide {
     Sell,
 }
 
-impl OrderOperationBuilder {
+impl OrderWriteBuilder {
     pub fn new() -> Self {
         Self::default()
     }
@@ -969,7 +977,7 @@ impl OrderOperationBuilder {
         self
     }
 
-    pub fn build(self) -> Result<DatabaseOperation> {
+    pub fn build(self) -> Result<LocalWrite> {
         // Validate required fields
         let account_id = self.account_id
             .ok_or_else(|| anyhow!("Missing account_id"))?;
@@ -992,8 +1000,8 @@ impl OrderOperationBuilder {
             .duration_since(SystemTime::UNIX_EPOCH)?
             .as_secs();
 
-        Ok(DatabaseOperation {
-            operation_type: DatabaseOperationType::PlaceOrder,
+        Ok(LocalWrite {
+            write_type: LocalWriteType::PlaceOrder,
             sql: sql.to_string(),
             params: vec![
                 order_id.clone().into(),
@@ -1032,22 +1040,24 @@ fn generate_nonce() -> u64 {
 - Implement compression and chunking for large states
 - Create off-chain storage integration (IPFS/Arweave)
 
-### Operation Flow Overview
+### Local Write Flow Overview
 ```
-DATABASE OPERATIONS:
-Client Request → execute_database_operation() → Execute SQL in Local SQLite → Return Receipt
-  (e.g., place order)         (SQL operations)                           (instant, <1ms)
+LOCAL EXECUTION (Sequencer Only):
+Client Request → execute_local_write() → Commit to Local SQLite → Return Receipt
+  (e.g., place order)    (SQL write)        (local only)        (instant, <1ms)
                                               ↓
-                                    [Accumulate in Blockchain Submit Queue]
+                                    [Queue in ChainSubmitQueue]
                                               ↓
-BLOCKCHAIN OPERATIONS:
-              Timer/Threshold → submit_to_blockchain() → generate_database_diff/snapshot()
+DISTRIBUTED REPLICATION (via Blockchain):
+              Timer/Threshold → submit_writes_to_chain() → generate_diff() or generate_snapshot()
                                               ↓
                                     Create Blockchain Transaction
                                               ↓
-                                    Submit to Syndicate Chain
+                                    Submit to Chain for Consensus
                                               ↓
-                                    Read Replicas Sync Database
+                                    Read Replicas apply_diff() / apply_snapshot()
+                                              ↓
+                                    All Nodes Have Consistent State
 ```
 
 ### Tasks
@@ -1353,31 +1363,31 @@ class ArweaveStorage implements IOffchainStorageProvider {
 #### 4.5 State Publisher
 ```typescript
 /**
- * BlockchainSubmitter handles the SUBMIT_TO_BLOCKCHAIN functionality of the Sequencer
- * It runs periodically to batch and submit accumulated database operations to the blockchain
- * This is separate from execute_database_operation which handles individual client requests
+ * BlockchainSubmitter handles the SUBMIT_WRITES_TO_CHAIN functionality of the Sequencer
+ * It runs periodically to batch and submit accumulated local writes to the blockchain
+ * This is separate from execute_local_write which handles individual client requests
  */
 class BlockchainSubmitter {
-  private queue: BlockchainSubmitQueue;  // Queue of operations submitted via execute_database_operation
+  private queue: ChainSubmitQueue;  // Queue of local writes submitted via execute_local_write
   private storage: IOffchainStorageProvider;
   private blockchainClient: IBlockchainPublisher;
 
   /**
-   * Called periodically (e.g., every second) to submit accumulated database changes to blockchain
-   * This is the implementation of Sequencer.submit_to_blockchain()
+   * Called periodically (e.g., every second) to submit accumulated local writes to blockchain
+   * This is the implementation of Sequencer.submit_writes_to_chain()
    */
-  async submitToBlockchain() {
-    // Get batch of database operations that were submitted via execute_database_operation
+  async submitWritesToChain() {
+    // Get batch of local writes that were executed via execute_local_write
     // These have already been executed locally in the sequencer's SQLite database
     const batch = await this.queue.getBatch();
 
-    if (batch.operations.length === 0) {
+    if (batch.writes.length === 0) {
       return;  // Nothing new to publish
     }
 
-    // Generate database diff from all operations since last submission
-    // This calls SyndDatabase.generate_database_diff() internally
-    const diff = await this.diffGenerator.generateDatabaseDiff(
+    // Generate database diff from all local writes since last submission
+    // This calls SyndDatabase.generate_diff() internally
+    const diff = await this.diffGenerator.generateDiff(
       this.lastPublishedVersion,
       batch.version
     );
@@ -2096,8 +2106,8 @@ contract SyndDBBridge {
 ##### Unit Tests
 ```typescript
 describe('SyndDatabase', () => {
-  describe('Database Operation Execution', () => {
-    it('should execute SQL operations atomically', async () => {
+  describe('Local Write Execution', () => {
+    it('should execute SQL writes atomically', async () => {
       const db = new SyndDatabase(testConfig);
 
       await db.beginDatabaseTransaction();
@@ -2136,10 +2146,10 @@ describe('End-to-End Flow', () => {
   });
 
   it('should sync state from sequencer to read replica', async () => {
-    // Submit database operations to sequencer
-    const ops = generateTestDatabaseOperations(100);
-    for (const op of ops) {
-      await sequencer.executeDatabaseOperation(op);
+    // Submit local writes to sequencer
+    const writes = generateTestLocalWrites(100);
+    for (const write of writes) {
+      await sequencer.executeLocalWrite(write);
     }
 
     // Wait for publish
