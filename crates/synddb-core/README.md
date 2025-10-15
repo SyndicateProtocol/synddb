@@ -280,7 +280,12 @@ synddb:
   chain:
     rpc_url: https://rpc.syndicate.io
     contract_address: "0x..."
-    gas_limit: 3000000
+    gas_multiplier: 1.2  # 20% buffer on Alloy's gas estimates
+    # Optional EIP-1559 gas settings (omit to use network estimates)
+    # max_priority_fee_per_gas: 2
+    # max_fee_per_gas: 100
+    confirmations: 1
+    poll_interval_ms: 1000
 
   storage:
     provider: ipfs
