@@ -72,6 +72,8 @@
 pub mod config;
 pub mod database;
 pub mod extensions;
+pub mod metrics;
+pub mod prepared_statements;
 pub mod types;
 pub mod writes;
 

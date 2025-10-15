@@ -43,3 +43,8 @@ uuid = { version = "1.11", features = ["v4"] }
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.8"
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+
+[[bench]]
+name = "database_benchmarks"
+harness = false

@@ -3,6 +3,8 @@
 //! This module provides the main database trait and implementation using SQLite
 //! with performance optimizations for high-throughput blockchain workloads.
 
+use crate::metrics::MetricsCollector;
+use crate::prepared_statements::PreparedStatementCache;
 use crate::types::*;
 use async_trait::async_trait;
 use r2d2::{Pool, PooledConnection};
@@ -88,8 +90,12 @@ pub struct SqliteDatabase {
     pool: Pool<SqliteConnectionManager>,
     /// Current database version
     version: Arc<RwLock<u64>>,
-    /// Performance statistics
+    /// Performance statistics (deprecated - use metrics)
     stats: Arc<RwLock<PerformanceStats>>,
+    /// Prepared statement cache
+    prepared_statements: Arc<PreparedStatementCache>,
+    /// Real-time metrics collector
+    metrics: Arc<MetricsCollector>,
     /// Database file path
     db_path: String,
 }
@@ -110,14 +116,33 @@ impl SqliteDatabase {
         Self::initialize_optimizations(&conn)?;
         Self::create_metadata_tables(&conn)?;
 
+        // Initialize prepared statement cache
+        let prepared_statements = Arc::new(PreparedStatementCache::new());
+        prepared_statements.initialize_common();
+
+        // Initialize metrics collector
+        let metrics = Arc::new(MetricsCollector::new());
+
         info!("SQLite database initialized at {}", db_path);
 
         Ok(Self {
             pool,
             version: Arc::new(RwLock::new(0)),
             stats: Arc::new(RwLock::new(PerformanceStats::default())),
+            prepared_statements,
+            metrics,
             db_path,
         })
+    }
+
+    /// Get the prepared statement cache
+    pub fn prepared_statements(&self) -> &PreparedStatementCache {
+        &self.prepared_statements
+    }
+
+    /// Get the metrics collector
+    pub fn metrics(&self) -> &MetricsCollector {
+        &self.metrics
     }
 
     /// Initialize SQLite with maximum performance optimizations
@@ -225,6 +250,9 @@ impl SyndDatabase for SqliteDatabase {
 
         let duration = start.elapsed();
 
+        // Record metrics
+        self.metrics.record_latency(duration);
+
         Ok(ExecuteResult {
             rows_affected,
             last_insert_rowid,
@@ -278,6 +306,9 @@ impl SyndDatabase for SqliteDatabase {
         tx.commit()?;
 
         let duration = start.elapsed();
+
+        // Record metrics for batch operation
+        self.metrics.record_latency(duration);
 
         Ok(BatchResult {
             success: true,
@@ -333,6 +364,9 @@ impl SyndDatabase for SqliteDatabase {
 
         let row_count = rows_data.len();
         let duration = start.elapsed();
+
+        // Record metrics for query
+        self.metrics.record_latency(duration);
 
         Ok(QueryResult {
             columns,
