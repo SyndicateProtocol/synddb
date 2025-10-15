@@ -1,0 +1,12 @@
+[package]
+name = "synddb-replica"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+synddb-core = { path = "../synddb-core" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

@@ -38,6 +38,7 @@ config = { workspace = true }
 
 # Utils
 parking_lot = { workspace = true }
+uuid = { version = "1.11", features = ["v4"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
