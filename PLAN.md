@@ -102,14 +102,14 @@ All components will be implemented in Rust for:
 
 #### Cryptography & Security
 - **sp1-sdk** - Succinct SP1 Zero Knowledge Virtual Machine ✅ (v3.0+, actively maintained by Succinct)
-- **lit-rust-sdk** - Lit Protocol SDK (Note: use `lit-rust-sdk` not `lit-sdk`) ✅ (v0.2+, recently updated)
+- **lit-rust-sdk** - Lit Protocol SDK ✅ (v0.2+, recently updated)
 - **ring** - Cryptographic operations ✅ (v0.17+, actively maintained)
 - **sha3** - SHA-3 and Keccak hashing ✅ (v0.10+, actively maintained)
-- **ed25519-dalek** - ⚠️ **DEPRECATED** - Use **ed25519-consensus** instead due to vulnerability
+- **ed25519-consensus** - Ed25519 signatures ✅ (v2.1+, actively maintained)
 
 #### Storage Backends
 - **ipfs-api** - IPFS client ✅ (actively maintained, uses Hyper/Actix)
-- **arweave-sdk-rs** - Arweave SDK (Note: use `arweave-sdk-rs` not `arweave-rs`) ✅ (actively maintained)
+- **arweave-sdk-rs** - Arweave SDK ✅ (actively maintained)
 
 #### Utilities
 - **tracing** - Structured logging and diagnostics ✅ (v0.1+, very actively maintained)
@@ -121,10 +121,7 @@ All components will be implemented in Rust for:
 
 #### Important Notes:
 - ✅ = Available and actively maintained
-- ⚠️ = Deprecated or has issues
-- Replace `ed25519-dalek` with `ed25519-consensus` for Ed25519 signatures
-- Use `lit-rust-sdk` instead of `lit-sdk` for Lit Protocol integration
-- Use `arweave-sdk-rs` instead of `arweave-rs` for Arweave integration
+- All libraries have been verified as actively maintained with recent updates
 - All listed versions are as of late 2024/early 2025
 
 ## Implementation Phases
