@@ -11,14 +11,20 @@ This design balances performance and decentralization, recognizing that some use
 
 ## Key Benefits
 1. Incredibly fast and low latency system
-2. Simple settlement to/from blockchain pools (no need to bridge assets)
+2. Flexible asset management - assets can either:
+   - Live natively on the system for maximum performance, or
+   - Remain on the settlement chain with actions triggered via message passing
+   - Bridge assets only when needed (bridging is optional, not required)
 3. Few to no indexing requirements (indexing is built into the relational database)
 
 ## Trade-offs
 For this performance, applications must accept:
 1. Significant decentralization trade-offs in block production (decentralization in validators is maintained)
 2. Non-EVM execution framework
-3. Funds live on the settlement layer rather than the database layer
+3. Asset location flexibility comes with different trade-offs:
+   - Assets on settlement layer: Maximum security but requires message passing for actions
+   - Assets native on SyndDB: Maximum performance but relies on sequencer and validator security model
+   - Hybrid approach: Bridge assets as needed for specific operations (adds operational complexity)
 
 ## Architecture Overview
 At a high level, SyndDB consists of two primary roles:
@@ -179,7 +185,7 @@ For applications requiring stronger guarantees (e.g., bridging assets, financial
 * **Validators are a Subset of Read Replicas**: While anyone can run a standard read replica for querying data, only specially designated read replicas running inside TEEs become validators with settlement authority.
 * **Most Read Replicas are Not Validators**: The majority of read replica nodes will simply sync state and serve queries. They don't need TEE hardware or settlement responsibilities.
 * **State Verification**: Validators use their TEE-protected database replica to verify derived state, checking validity from state snapshots or genesis.
-* **Settlement Authority**: Only TEE validators hold settlement keys authorized via zkVM on the settlement chain.
+* **Settlement Authority**: Only TEE validators hold settlement keys authorized via attestation verification on the settlement chain.
 * **Bridge Operations**: Upon detecting special database transaction types (e.g., asset withdrawal requests), TEE validators (not regular read replicas) sign and submit settlement transactions through a bridge.
 
 This design allows anyone to run a read replica for data access while limiting settlement authority to a trusted subset of TEE validators, balancing accessibility with security. Circuit breakers and safeguards (implemented in settlement-layer contracts) mitigate risk from the trusted sequencer role.
