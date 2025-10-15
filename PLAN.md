@@ -1,7 +1,7 @@
 # SyndDB Implementation Plan
 
 ## Executive Summary
-SyndDB is a high-performance blockchain database that replaces traditional EVM execution with SQLite, enabling ultra-low latency database operations while maintaining decentralized validation. This plan outlines a phased approach to build the complete system, starting with core architecture, focusing on SQLite performance, and progressively adding blockchain integration and validation capabilities.
+SyndDB is a high-performance blockchain database that replaces traditional EVM execution with SQLite, enabling ultra-low latency database operations while maintaining decentralized validation. The system consists of a single writer node and multiple reader nodes that anyone can run permissionlessly. Only a small subset of readers with TEE hardware become validators for settlement operations. This plan outlines a phased approach to build the complete system, starting with core architecture, focusing on SQLite performance, and progressively adding blockchain integration and validation capabilities.
 
 ## Architecture Overview
 
@@ -11,35 +11,35 @@ SyndDB is a high-performance blockchain database that replaces traditional EVM e
 │                         SyndDB System                            │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  ┌──────────────────┐         ┌──────────────────┐             │
-│  │      Writer      │         │      Reader       │             │
-│  │                   │         │                   │             │
-│  │  ┌─────────────┐  │         │  ┌─────────────┐  │             │
-│  │  │   SQLite    │  │         │  │   SQLite    │  │             │
-│  │  │   Engine    │  │         │  │  Replica    │  │             │
-│  │  └─────────────┘  │         │  └─────────────┘  │             │
-│  │                   │         │                   │             │
-│  │  ┌─────────────┐  │         │  ┌─────────────┐  │             │
-│  │  │  Tx Handler │  │         │  │ State Sync  │  │             │
-│  │  │  & Triggers │  │         │  │   Engine    │  │             │
-│  │  └─────────────┘  │         │  └─────────────┘  │             │
-│  │                   │         │                   │             │
-│  │  ┌─────────────┐  │         │  ┌─────────────┐  │             │
-│  │  │ Diff/Snap   │  │         │  │   Query     │  │             │
-│  │  │  Generator  │  │         │  │   Engine    │  │             │
-│  │  └─────────────┘  │         │  └─────────────┘  │             │
-│  └──────────────────┘         └──────────────────┘             │
+│  ┌──────────────────┐      ┌────────────────────────────┐      │
+│  │   Writer (1)     │      │  Readers (Anyone Can Run)  │      │
+│  │                   │      │                            │      │
+│  │  ┌─────────────┐  │      │  ┌─────────────────────┐  │      │
+│  │  │   SQLite    │  │      │  │  SQLite Replicas    │  │      │
+│  │  │   Engine    │  │      │  │  (Multiple Nodes)   │  │      │
+│  │  └─────────────┘  │      │  └─────────────────────┘  │      │
+│  │                   │      │                            │      │
+│  │  ┌─────────────┐  │      │  ┌─────────────────────┐  │      │
+│  │  │  Tx Handler │  │      │  │   State Sync &      │  │      │
+│  │  │  & Triggers │  │      │  │   Query Engines     │  │      │
+│  │  └─────────────┘  │      │  └─────────────────────┘  │      │
+│  │                   │      │                            │      │
+│  │  ┌─────────────┐  │      │  ┌─────────────────────┐  │      │
+│  │  │ Diff/Snap   │  │      │  │  Subset: TEE        │  │      │
+│  │  │  Generator  │  │      │  │  Validators Only    │  │      │
+│  │  └─────────────┘  │      │  └─────────────────────┘  │      │
+│  └──────────────────┘      └────────────────────────────┘      │
 │           │                            ▲                         │
 │           │                            │                         │
 │           ▼                            │                         │
-│  ┌──────────────────────────────────────────────────┐          │
-│  │            Syndicate Chain Smart Contracts        │          │
-│  │  (writeDiff, writeSnapshot, pointers, ordering)   │          │
-│  └──────────────────────────────────────────────────┘          │
+│  ┌──────────────────────────────────────────────────────┐      │
+│  │            Syndicate Chain Smart Contracts            │      │
+│  │  (writeDiff, writeSnapshot, pointers, ordering)       │      │
+│  └──────────────────────────────────────────────────────┘      │
 │                                                                  │
-│  ┌──────────────────────────────────────────────────┐          │
-│  │              Off-chain Storage (IPFS/Arweave)     │          │
-│  └──────────────────────────────────────────────────┘          │
+│  ┌──────────────────────────────────────────────────────┐      │
+│  │              Off-chain Storage (IPFS/Arweave)         │      │
+│  └──────────────────────────────────────────────────────┘      │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -1035,11 +1035,17 @@ class StatePublisher {
 ## Phase 5: Reader Implementation (Week 10-11)
 
 ### Goals
-- Build reader nodes that sync from blockchain
+- Build reader nodes that sync from blockchain (anyone can run a reader)
 - Implement state reconstruction from diffs and snapshots
 - Create query interface for read replicas
-- Build monitoring and alerting system
-- Note: Validators are a special type of reader with TEE-based settlement capabilities (covered in Phase 6)
+- Build monitoring and alerting system for reader health
+- Enable permissionless reader deployment - no special authorization needed
+
+**Important Notes:**
+- **Anyone can run a reader node** - readers are permissionless and open to all
+- **Readers provide data access and queries** - most readers will only serve this function
+- **Validators are a subset of readers** - only some readers with TEE capabilities become validators (Phase 6)
+- **No settlement authority for regular readers** - only TEE validators can process withdrawals
 
 ### Tasks
 
@@ -1304,10 +1310,17 @@ class ReaderMonitor {
 ## Phase 6: TEE Validators & Settlement (Week 12-13)
 
 ### Goals
-- Implement TEE-based validators (specialized readers with settlement capabilities)
-- Build bridge message processing
-- Create settlement transaction system
+- Implement TEE-based validators (a small subset of readers with settlement capabilities)
+- Build bridge message processing for validator-only operations
+- Create settlement transaction system that only validators can execute
 - Implement circuit breakers and safety mechanisms
+
+**Key Distinctions:**
+- **Validators are optional** - the system works with just regular readers for queries
+- **Only a small subset of readers become validators** - most readers remain query-only nodes
+- **TEE hardware required** - validators need specialized TEE hardware that regular readers don't
+- **Settlement authority** - only validators can sign bridge transactions, regular readers cannot
+- **Higher trust requirements** - validators must be registered and attested, readers need no permission
 
 ### Tasks
 

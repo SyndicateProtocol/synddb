@@ -22,18 +22,18 @@ For this performance, applications must accept:
 
 ## Architecture Overview
 At a high level, SyndDB consists of two primary roles:
-* **Writer** – Runs a local SQLite instance, batches state transitions, and posts diffs/snapshots onchain or via offchain pointers (IPFS/Arweave).
-* **Reader** – Ingests the published state (snapshots or diffs) and reconstructs the database locally for query and indexing.
+* **Writer** – A single trusted node that runs a local SQLite instance, batches state transitions, and posts diffs/snapshots onchain or via offchain pointers (IPFS/Arweave).
+* **Reader** – Any node that ingests the published state (snapshots or diffs) and reconstructs the database locally for query and indexing. **Anyone can run a reader node** to access the data and serve queries.
 
-There is also a specialized type of reader:
-* **Validator** – A reader with additional TEE-based capabilities for processing withdrawals and settlement to the blockchain.
+A subset of readers can optionally become validators:
+* **Validator** – A specialized reader that runs inside a TEE (Trusted Execution Environment) with additional capabilities for processing withdrawals and settlement to the blockchain. Not all readers need to be validators - most readers will simply serve queries and provide data access.
 
 The ingestion pipeline resembles standard blockchain pipelines, but via a different execution framework. SQLite snapshots can be used to bootstrap new participants, while diffs allow continuous low-latency updates.
 
 In SyndDB, sequencing works analogously to an appchain, but with database-native semantics:
-* Writers batch SQL state transitions and post them periodically to the blockchain.
-* Readers synchronize to these updates, ensuring they have consistent replicated state.
-* Special transaction types allow message passing (e.g., withdrawals, liquidations) from SyndDB into the broader blockchain ecosystem.
+* The single writer batches SQL state transitions and posts them periodically to the blockchain.
+* Readers (which anyone can run) synchronize to these updates, ensuring they have consistent replicated state.
+* Special transaction types allow message passing (e.g., withdrawals, liquidations) from SyndDB into the broader blockchain ecosystem, processed only by the subset of readers that are validators.
 
 This approach enables appchain-style composability while keeping the writer optimized for database workloads.
 
@@ -173,15 +173,16 @@ VALUES ('evt_567', '0xabc...', '0x0', 'acct_789', 2000, 1698765435);
 COMMIT;
 ```
 
-### TEE Validators for Settlement
-For applications requiring stronger guarantees (e.g., bridging assets, financial contracts), SyndDB can incorporate Trusted Execution Environments (TEEs) to create specialized validators. Validators are readers with additional settlement capabilities:
+### TEE Validators for Settlement (Optional)
+For applications requiring stronger guarantees (e.g., bridging assets, financial contracts), SyndDB can incorporate Trusted Execution Environments (TEEs) to create specialized validators. **Important: Only a subset of readers need to become validators.**
 
-* **Validators are Readers**: A validator is fundamentally a reader node that also runs inside a TEE for additional security guarantees.
-* **State Verification**: The validator's read replica inside the TEE verifies ingested state, checking validity from snapshots or genesis.
-* **Settlement Authority**: TEE validators hold settlement keys authorized via zkVM on the settlement chain.
-* **Bridge Operations**: Upon detecting special transaction types (e.g., asset withdrawal requests), the TEE validator signs and submits settlement messages through a bridge on the settlement chain.
+* **Validators are a Subset of Readers**: While anyone can run a standard reader node for querying data, only specially designated readers running inside TEEs become validators with settlement authority.
+* **Most Readers are Not Validators**: The majority of reader nodes will simply sync state and serve queries. They don't need TEE hardware or settlement responsibilities.
+* **State Verification**: Validators use their TEE-protected read replica to verify ingested state, checking validity from snapshots or genesis.
+* **Settlement Authority**: Only TEE validators hold settlement keys authorized via zkVM on the settlement chain.
+* **Bridge Operations**: Upon detecting special transaction types (e.g., asset withdrawal requests), TEE validators (not regular readers) sign and submit settlement messages through a bridge.
 
-This design secures settlement without requiring every reader to act as a validator, balancing scalability with security assurances. Circuit breakers and safeguards (implemented in settlement-layer contracts) mitigate risk from the trusted writer role.
+This design allows anyone to run a reader for data access while limiting settlement authority to a trusted subset of TEE validators, balancing accessibility with security. Circuit breakers and safeguards (implemented in settlement-layer contracts) mitigate risk from the trusted writer role.
 
 ## Use Cases
 SyndDB is designed for high-scale applications that require ultra-low latency and high throughput, including:
