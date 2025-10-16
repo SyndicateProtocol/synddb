@@ -257,7 +257,14 @@ pub struct ChainConfig {
     pub max_fee_per_gas: Option<u64>,
 
     /// Confirmation blocks to wait before considering transaction final
-    /// Higher values = more security, lower values = faster confirmation
+    ///
+    /// Security vs Latency tradeoff for L2 deployments:
+    /// - 1 block: Fast (~0.5-2s) but vulnerable to single-block re-orgs
+    /// - 3-10 blocks: Balanced security for most production applications
+    /// - ~172800 blocks: 24-hour Arbitrum Orbit batch posting window (very safe)
+    /// - L1 finality: Wait for L2→L1 state root + L1 finalization (safest, hours/days)
+    ///
+    /// For L1 deployments: 1=fast, 6=reasonable, 32+=finality (2 epochs)
     #[serde(default = "default_confirmations")]
     pub confirmations: u64,
 
