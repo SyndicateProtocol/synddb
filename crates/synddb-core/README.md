@@ -263,7 +263,7 @@ synddb:
 
   database:
     path: ./data/synddb.sqlite
-    pool_size: 16
+    pool_size: 4  # 1 writer + 3 readers optimal for sequencer
     journal_mode: WAL
     synchronous: NORMAL
     cache_size: -2000000

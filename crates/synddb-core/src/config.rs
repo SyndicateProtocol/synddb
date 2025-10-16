@@ -74,7 +74,7 @@ pub struct DatabaseConfig {
 }
 
 fn default_pool_size() -> u32 {
-    16
+    4 // SQLite with WAL: 1 writer + 3 concurrent readers is optimal for sequencer
 }
 
 fn default_journal_mode() -> String {
