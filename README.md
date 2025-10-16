@@ -45,12 +45,14 @@ sqlite3 example.db "SELECT name, email, balance FROM users ORDER BY balance DESC
 
 ### Development Setup
 
-1. **Configure your environment:**
+1. **Configure your environment (recommended):**
    ```bash
-   # Create configuration file (optional, has defaults)
-   cp config.example.yaml config.yaml
-   # Edit config.yaml with your settings
+   # Create .env file for local development (optional, has defaults)
+   cp .env.example .env
+   # Edit .env with your local settings
    ```
+
+   Note: The `.env` file is the recommended way to configure SyndDB for local development. It's automatically loaded and never committed to git. For production deployments, use environment variables directly.
 
 2. **Build and test:**
    ```bash
