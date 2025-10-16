@@ -1,4 +1,6 @@
-# SyndDB Extension Development Guide
+# SyndDB Extension Framework Implementation Plan
+
+> **Note:** This document is an **implementation plan** for building the SyndDB extension framework infrastructure, not a developer guide for using it. Developer guides for creating custom extensions will be published separately once the framework is complete.
 
 ## Philosophy
 
