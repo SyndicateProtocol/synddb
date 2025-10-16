@@ -283,7 +283,8 @@ synddb:
     # Optional fee caps for protection (omit to use Alloy's estimates)
     # max_priority_fee_per_gas: 2  # Cap priority fee (MEV protection)
     # max_fee_per_gas: 100  # Cap total fee (gas spike protection)
-    confirmations: 1  # Blocks to wait (higher = more secure)
+    confirmations: 1  # Default: 1 block (fast but least secure)
+                     # L2: 1=fast, 10=safe, 172800=24h Arbitrum Orbit window, L1 finality=safest
     poll_interval_ms: 1000  # Transaction status polling interval
 
   storage:
