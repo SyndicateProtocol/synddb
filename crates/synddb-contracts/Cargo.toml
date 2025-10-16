@@ -1,0 +1,11 @@
+[package]
+name = "synddb-contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+alloy = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
