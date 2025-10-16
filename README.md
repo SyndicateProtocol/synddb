@@ -9,3 +9,109 @@ Infinitely scaling Syndicate Network via the magic of SQLite
 - **[crates/synddb-core/README.md](crates/synddb-core/README.md)** - Getting started with the SyndDB Core implementation
 
 For a detailed understanding of the overall architecture, node types, and state management, see [SPEC.md](SPEC.md).
+
+## Quick Start
+
+### Prerequisites
+
+- Rust 1.70+ (install from [rustup.rs](https://rustup.rs))
+- SQLite 3.35+ (bundled with rusqlite, no separate install needed)
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/syndicate-io/synddb.git
+cd synddb
+
+# Build all workspace crates
+cargo build --release
+
+# Run tests to verify installation
+cargo test
+```
+
+### Running the Example
+
+```bash
+# Run the basic usage example
+cargo run --package synddb-core --example basic_usage
+
+# Query the example database
+sqlite3 example.db "SELECT name, email, balance FROM users ORDER BY balance DESC;"
+```
+
+### Development Setup
+
+1. **Configure your environment:**
+   ```bash
+   # Create configuration file (optional, has defaults)
+   cp config.example.yaml config.yaml
+   # Edit config.yaml with your settings
+   ```
+
+2. **Build and test:**
+   ```bash
+   # Build specific crate
+   cargo build --package synddb-core
+
+   # Run tests with output
+   cargo test --package synddb-core -- --nocapture
+
+   # Format code
+   cargo fmt --all
+
+   # Run linter
+   cargo clippy --package synddb-core -- -D warnings
+   ```
+
+3. **View documentation:**
+   ```bash
+   cargo doc --package synddb-core --open
+   ```
+
+## CI/CD
+
+### Automated Testing
+
+Currently the project uses local testing workflows. Run these commands before submitting PRs:
+
+```bash
+# Run full test suite
+cargo test
+
+# Check formatting
+cargo fmt --all -- --check
+
+# Run clippy lints
+cargo clippy --all-targets -- -D warnings
+
+# Build all packages
+cargo build --release
+```
+
+### Planned CI Integration
+
+GitHub Actions workflows will be added for:
+- Automated testing on push/PR
+- Code formatting checks
+- Clippy linting
+- Build verification across platforms
+- Performance benchmarking
+- Documentation generation
+
+## Project Structure
+
+```
+synddb/
+├── crates/
+│   ├── synddb-core/        # Core database engine and extensions
+│   ├── synddb-sequencer/   # Sequencer node implementation
+│   ├── synddb-replica/     # Read replica node implementation
+│   ├── synddb-contracts/   # Smart contracts for state publication
+│   ├── synddb-storage/     # IPFS/Arweave storage providers
+│   └── synddb-utils/       # Shared utilities
+├── SPEC.md                 # Technical specification
+├── PLAN_CORE.md           # Core implementation plan
+└── PLAN_EXTENSIONS.md     # Extension development guide
+```
