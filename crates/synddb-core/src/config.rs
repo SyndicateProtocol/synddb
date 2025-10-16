@@ -395,8 +395,8 @@ impl SyndDBConfig {
                 pool_size: 4,
                 journal_mode: "WAL".to_string(),
                 synchronous: "NORMAL".to_string(),
-                cache_size: -64000,       // 64MB for tests
-                mmap_size: 1073741824,    // 1GB for tests
+                cache_size: -64000,                 // 64MB for tests
+                mmap_size: 1073741824,              // 1GB for tests
                 locking_mode: "NORMAL".to_string(), // Allow external access in tests
             },
             sequencer: Some(SequencerConfig::default()),
