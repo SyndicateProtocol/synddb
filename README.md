@@ -23,8 +23,8 @@ For a detailed understanding of the overall architecture, node types, and state 
 
 ```bash
 # Clone the repository
-git clone https://github.com/syndicate-io/synddb.git
-cd synddb
+git clone https://github.com/SyndicateProtocol/SyndDB.git
+cd SyndDB
 
 # Build all workspace crates
 cargo build --release
