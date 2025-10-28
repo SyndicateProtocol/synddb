@@ -1,7 +1,10 @@
-# PLAN_BRIDGE.md - SyndDB Bridge Smart Contract Architecture
+# PLAN\_BRIDGE.md - SyndDB Bridge Smart Contract Architecture
 
 ## Executive Summary
 The Bridge.sol contract serves as the settlement layer interface for SyndDB, enabling secure asset bridging between the high-performance database layer and the blockchain. It supports complex state transitions for onchain orderbooks, requires multi-signature validation from TEE validators, and allows permissionless relaying of signed messages.
+
+<!-- Not all bridge use cases will be onchain orderbooks, just some of them. It supports message passing to/from the SyndDB database, for use cases including onchain orderbooks for DeFi but also onchain telemetry for DePIN, onchain assets for gaming, onchain social data, etc. -->
+
 
 ## Core Architecture Principles
 
@@ -10,15 +13,25 @@ The Bridge.sol contract serves as the settlement layer interface for SyndDB, ena
 - **Withdrawals**: Require m-of-n validator signatures + sequencer approval
 - **State Updates**: Batched settlement for orderbook rebalancing
 
+<!-- The sequencer approval phrasing makes it sound like the sequencer approves as a last step. Instead, make it clear that the validators are only able to sign off on a signed sequencer message, and nothing else, for withdrawals.
+
+Also make it clear that this is not only orderbooks. It's just batched updates for message passing in general. -->
+
 ### 2. Permissionless Relaying
 - Anyone can submit signed messages to the bridge
 - Relayers are incentivized through fee rebates
 - Messages include nonces to prevent replay attacks
 
+<!-- Can we have batching live at the relayer level? That seems cleaner than having validators batch, since validator batching requires validators to be aware of past signature state/block times, while the relayer is better suited for that via separation of concerns. -->
+
+
 ### 3. Complex State Transitions
 - Not limited to 1:1 token swaps
 - Supports orderbook settlement with multiple balance updates
 - Handles partial fills and complex trading outcomes
+
+<!-- Not just orderbooks! Orderbooks are just an example -->
+
 
 ## Key Components
 
@@ -28,20 +41,37 @@ The Bridge.sol contract serves as the settlement layer interface for SyndDB, ena
 - **Multi-token support**: ETH, ERC-20, potentially ERC-721/1155
 - **Deposit limits**: Per-user and global circuit breakers
 
+<!-- Explain that this can be treated as a lock (unlocked upon settlement) or a bridge (tokens are expected to stay on the platform for a long time and eventually withdraw). Most use cases look more like locking than bridging, where it is short-lived until settlement rather than long-lived.
+
+Make sure that deposit limits are configurable and are simply for risk reduction on new launches, while the WASM logic is still early. -->
+
+
 ### 2. Validator Registry
 - **TEE attestation verification**: Validators prove TEE environment
 - **Dual attestation**: SP1 proofs + Lit Protocol verification
 - **Dynamic set**: Validators can be added/removed by governance
 - **Key rotation**: Support for validator key updates
 
+<!-- This can be permissioned right now. Validators should be able to permissionlessly propose being added if they submit the appropriate SP1 proof and Lit Protocol attestation that their TEE is running, but adding them should be permissioned.
+
+Explain that the dual attestation is useful for TEE + zkVM combination. -->
+
+
 ### 3. Message Processing
 - **Sequencer messages**: Signed state updates from sequencer
-- **Validator confirmations**: m-of-n threshold signatures required
+- **Validator confirmations**: m-of-n threshold signatures required 
+<!-- m-of-n signatures required to validate sequencer messages -->
+
 - **Message types**:
   - Withdrawals (single user, single token)
   - Batch settlements (multiple users, multiple tokens)
   - Rebalancing (orderbook state reconciliation)
   - Emergency actions (pause, circuit breaker triggers)
+
+<!-- We should be clear here that the Bridge.sol is just for message passing. It doesn't actually care about state updates. It just cares about tokens in -> tokens out. Diffs/snapshots/etc can live outside of Bridge.sol in a different file (Chain.sol?)
+
+Do some research on how OP Stack handles separation of concerns and then come back to me on your recommendations. -->
+
 
 ### 4. Settlement Engine
 - **Batch processing**: Multiple operations in single transaction
@@ -49,12 +79,18 @@ The Bridge.sol contract serves as the settlement layer interface for SyndDB, ena
 - **Gas optimization**: Efficient storage patterns and batch operations
 - **Slippage protection**: Max deviation from expected state
 
+<!-- Is the batch processing tunable? For minimum latency, batch times should be equal to block times for a given chain (or Flashblocks block times for chains like Base). Many groups care more about latency than gas costs. Also make it clear that this is the tradeoff. -->
+
+
 ### 5. Security Mechanisms
 - **Circuit breakers**: Daily/hourly withdrawal limits
 - **Time delays**: Optional delay for large withdrawals
 - **Pause functionality**: Emergency stop mechanism
 - **Rate limiting**: Per-user withdrawal frequency limits
 - **Merkle proofs**: For large batch settlements
+
+<!-- Validators can also simply refuse to sign risky withdrawals. So in some ways these onchain circuit breakers complement possible offchain circuit breakers. -->
+
 
 ## Data Structures
 
@@ -112,10 +148,20 @@ struct BalanceUpdate {
 1. User requests withdrawal in SyndDB
 2. Sequencer validates and signs withdrawal message
 3. Validators verify state and add signatures
-4. Relayer submits message with m-of-n signatures
+4. Relayer submits message with m-of-n signatures 
+<!-- Validator signatures. The sequencer signature is handled during bridge parsing -->
+
 5. Bridge validates signatures and nonce
-6. Bridge transfers tokens to recipient
-7. Bridge emits `Withdrawal` event
+
+<!-- Both the global nonce and the per-user nonce. The global and per user nonce should be a mapping of nonce data to TX data, to ensure that a re-org doesn't cause validators to overwrite old nonces. Add to the security mechanisms that re-org detection is available by having validators halt signing if global and per-user nonces change.
+
+Or maybe we call these accumulators? Do some research and come back with a recommendation. -->
+
+7. Bridge transfers tokens to recipient
+8. Bridge emits `Withdrawal` event
+
+<!-- Do we want to consider renaming these lock/unlock? I'm a bit torn over whether this feels more like locking and unlocking or depositing and withdrawing. I think depositing and withdrawing is more accurate because there's not a 1:1 relationship between tokens deposited and tokens withdrawn. -->
+
 
 ### Batch Settlement Flow (Orderbook)
 1. Sequencer computes net position changes after trading period
@@ -125,6 +171,9 @@ struct BalanceUpdate {
 5. Relayer submits batch with merkle root
 6. Bridge processes updates atomically
 7. Net token movements executed on-chain
+
+<!-- No, this should be using snapshot and diff updates. We need a second contract that represents tracked state (or a part of the Bridge, that works too) that only allows for signatures once the snapshots/diffs/etc have been written by the validators. Only then can withdrawals be processed, because the necessary state for withdrawals has been made available. -->
+
 
 ## Security Considerations
 
@@ -145,11 +194,15 @@ struct BalanceUpdate {
 - **Mitigation**: Strict nonce ordering
 - **Mitigation**: Message deadlines
 - **Mitigation**: Chain ID in signatures
+<!-- For deposit -->
+
 
 #### 4. Front-running
 - **Mitigation**: Commit-reveal for deposits
 - **Mitigation**: Deadlines on messages
 - **Mitigation**: First-come-first-served processing
+<!-- This is irrelevant, front-running isn't a concern  since most data is sent to the sequencer and deposits/withdrawals are not ordering-dependent. -->
+
 
 #### 5. Gas Griefing
 - **Mitigation**: Gas rebates for relayers
@@ -318,14 +371,14 @@ struct BalanceUpdate {
 - 100% withdrawal success rate
 
 ### 2. Performance
-- <5 minute withdrawal time
-- <$10 withdrawal cost
-- >1000 settlements/day capacity
+- \<5 minute withdrawal time
+- \<$10 withdrawal cost
+> - 1000 settlements/day capacity
 
 ### 3. Adoption
-- >$100M TVL within 6 months
-- >10 active validators
-- >5 independent relayers
+> - $100M TVL within 6 months
+> - 10 active validators
+> - 5 independent relayers
 
 ## Dependencies
 
