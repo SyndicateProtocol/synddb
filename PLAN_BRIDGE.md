@@ -62,12 +62,17 @@ The Bridge.sol contract serves as the settlement layer interface for SyndDB, ena
   - Batch settlements (multiple users, multiple tokens)
   - Emergency actions (pause, circuit breaker triggers)
 
-#### Chain.sol (Separate Contract) - State Management
+#### Chain.sol (Separate Contract) - State Management & Version Control
 Following OP Stack's separation pattern:
 - **State publication**: Handles diffs/snapshots from sequencer
 - **State verification**: Validators attest to state correctness
 - **State availability**: Makes state available for Bridge.sol validation
 - **Withdrawal gating**: Bridge.sol only processes withdrawals after Chain.sol confirms state
+- **WASM version pinning**:
+  - Stores current WASM version hash and IPFS/Arweave CID
+  - TEEs bootstrap from pinned version without full replacement
+  - Enables coordinated upgrades across sequencer/validators
+  - Version changes require governance approval
 
 This separation mirrors OP Stack's approach where:
 - OptimismPortal handles deposits/withdrawals
@@ -105,6 +110,7 @@ struct Validator {
     bytes32 attestationHash;
     bool isActive;
     uint256 addedAt;
+    bytes32 wasmVersionHash; // Version this validator is running
 }
 
 struct DepositRecord {
@@ -136,6 +142,22 @@ struct BalanceUpdate {
     address account;
     address token;
     int256 delta; // Can be negative for debits
+}
+
+// Chain.sol specific structures
+struct WASMVersion {
+    bytes32 versionHash;
+    string ipfsCID;      // IPFS CID of WASM binary
+    string arweaveTxId;  // Arweave transaction ID (backup)
+    uint256 activationBlock;
+    bool isActive;
+}
+
+struct StateCommitment {
+    bytes32 stateRoot;
+    bytes32 wasmVersionHash; // Version that produced this state
+    uint256 sequencerVersion;
+    uint256 timestamp;
 }
 ```
 
@@ -169,7 +191,8 @@ Note: The deposit/withdrawal naming is preferred over lock/unlock since there's 
 ### Batch Settlement Flow (State-Dependent)
 1. **State Publication Phase (Chain.sol)**:
    - Sequencer publishes state diffs/snapshots to Chain.sol
-   - Validators verify and attest to state correctness
+   - State commitment includes WASM version hash that produced it
+   - Validators verify state correctness and WASM version match
    - State becomes available onchain once validated
 
 2. **Settlement Phase (Bridge.sol)**:
@@ -183,6 +206,28 @@ Note: The deposit/withdrawal naming is preferred over lock/unlock since there's 
 
 Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol to ensure the required state has been published and validated before processing any withdrawals.
 
+### WASM Version Management Flow
+1. **Version Deployment**:
+   - New WASM binary uploaded to IPFS and Arweave
+   - Governance proposal to update version in Chain.sol
+   - Version hash and storage pointers recorded onchain
+
+2. **TEE Bootstrap Process**:
+   - TEE reads current version from Chain.sol
+   - Downloads WASM from IPFS/Arweave using pinned CID
+   - Verifies hash matches onchain record
+   - Loads and executes WASM without TEE replacement
+
+3. **Coordinated Upgrade**:
+   - Governance sets activation block for new version
+   - All TEEs monitor for version change
+   - At activation block, TEEs hot-swap to new WASM
+   - Old state remains valid, new state uses new version
+
+4. **Version Verification**:
+   - Each state commitment includes WASM version hash
+   - Validators only sign states from matching versions
+   - Bridge.sol can verify version consistency
 
 ## Security Considerations
 
@@ -210,7 +255,13 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 - **No selective processing**: Relayer must submit all valid messages
 - **Attestation enforcement**: TEE environment prevents malicious behavior
 
-#### 5. Gas Griefing
+#### 5. WASM Version Attacks
+- **Mitigation**: Version hash verification in TEE bootstrap
+- **Mitigation**: Dual storage (IPFS + Arweave) for availability
+- **Mitigation**: Governance-controlled version updates
+- **Mitigation**: State includes version hash for auditability
+
+#### 6. Gas Griefing
 - **Mitigation**: TEE relayer optimizes gas usage
 - **Mitigation**: Batch processing limits
 - **Mitigation**: Storage optimization
@@ -228,6 +279,7 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 - SP1 proof verification
 - Lit Protocol integration
 - Validator rotation logic
+- WASM version pinning in Chain.sol
 
 ### Phase 3: Batch Settlement (Week 4)
 - Merkle tree verification
@@ -246,6 +298,8 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 - NFT bridging (ERC-721/1155)
 - Cross-chain messaging
 - Governance integration
+- WASM hot-swapping mechanism
+- Version migration tooling
 
 ## Gas Optimization Strategies
 
@@ -273,6 +327,8 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 - `ValidatorAdded(address, attestation)`
 - `ValidatorRemoved(address, reason)`
 - `CircuitBreakerTriggered(reason, duration)`
+- `WASMVersionUpdated(oldHash, newHash, ipfsCID, activationBlock)`
+- `StateCommitted(stateRoot, wasmVersionHash, sequencerVersion)`
 
 ### Off-chain Monitoring
 - TVL tracking per token
@@ -418,4 +474,6 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 
 This Bridge architecture provides a secure, efficient, and flexible solution for SyndDB's unique requirements. The combination of TEE validators, permissioned TEE relayers, and multi-signature verification creates a highly secure system that eliminates common attack vectors like transaction withholding and front-running. The dual-layer TEE approach (validators + relayer) ensures both state attestation and transaction submission are protected.
 
-The support for diverse use cases - from DeFi orderbooks to gaming assets to DePIN telemetry - distinguishes this from simple token bridges. The separation of concerns between Bridge.sol (token movement) and Chain.sol (state management) follows proven patterns from the OP Stack, enabling modular development and maintenance while supporting SyndDB's high-performance database capabilities across multiple domains.
+The WASM version pinning mechanism in Chain.sol enables seamless upgrades without replacing TEE infrastructure - TEEs simply bootstrap from the pinned version stored on IPFS/Arweave. This allows for rapid iteration and bug fixes while maintaining the security guarantees of the TEE environment.
+
+The support for diverse use cases - from DeFi orderbooks to gaming assets to DePIN telemetry - distinguishes this from simple token bridges. The separation of concerns between Bridge.sol (token movement), Chain.sol (state management and version control), and the WASM execution layer follows proven patterns from the OP Stack, enabling modular development and maintenance while supporting SyndDB's high-performance database capabilities across multiple domains.
