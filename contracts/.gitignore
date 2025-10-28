@@ -13,6 +13,10 @@ docs/
 # Dotenv file
 .env
 
+# Ulysses editor files
+.Ulysses-Group.plist
+.ulysses-group-ignore
+
 # Ignore lib - contains Foundry dependencies
 # Dependencies are installed via forge install and tracked in foundry.lock
 lib/
