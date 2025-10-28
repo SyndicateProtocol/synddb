@@ -36,38 +36,18 @@ interface ITEEAttestationVerifier {
     // ============ Events ============
 
     event AttestationSubmitted(
-        address indexed validator,
-        bytes32 measurementHash,
-        bytes32 sp1ProofHash,
-        string platform
+        address indexed validator, bytes32 measurementHash, bytes32 sp1ProofHash, string platform
     );
 
-    event AttestationVerified(
-        address indexed validator,
-        bytes32 attestationHash,
-        uint256 timestamp
-    );
+    event AttestationVerified(address indexed validator, bytes32 attestationHash, uint256 timestamp);
 
-    event AttestationRevoked(
-        address indexed validator,
-        string reason
-    );
+    event AttestationRevoked(address indexed validator, string reason);
 
-    event ExpectedMeasurementAdded(
-        bytes32 indexed measurementId,
-        bytes32 imageDigest,
-        string platform
-    );
+    event ExpectedMeasurementAdded(bytes32 indexed measurementId, bytes32 imageDigest, string platform);
 
-    event ExpectedMeasurementRemoved(
-        bytes32 indexed measurementId,
-        string reason
-    );
+    event ExpectedMeasurementRemoved(bytes32 indexed measurementId, string reason);
 
-    event LitConfigUpdated(
-        string ipfsCid,
-        uint256 minNodes
-    );
+    event LitConfigUpdated(string ipfsCid, uint256 minNodes);
 
     // ============ Functions ============
 
@@ -95,27 +75,14 @@ interface ITEEAttestationVerifier {
             bool isRelayer
         );
 
-    function addExpectedMeasurement(
-        bytes32 imageDigest,
-        bytes32 enclaveHash,
-        string memory platform
-    ) external;
+    function addExpectedMeasurement(bytes32 imageDigest, bytes32 enclaveHash, string memory platform) external;
 
-    function removeExpectedMeasurement(
-        bytes32 measurementId,
-        string memory reason
-    ) external;
+    function removeExpectedMeasurement(bytes32 measurementId, string memory reason) external;
 
-    function revokeAttestation(
-        address validator,
-        string memory reason
-    ) external;
+    function revokeAttestation(address validator, string memory reason) external;
 
     function getMeasurementIds() external view returns (bytes32[] memory);
     function getLitNodes() external view returns (address[] memory);
 
-    function isMeasurementExpected(
-        bytes32 imageDigest,
-        string memory platform
-    ) external view returns (bool);
+    function isMeasurementExpected(bytes32 imageDigest, string memory platform) external view returns (bool);
 }

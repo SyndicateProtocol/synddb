@@ -46,24 +46,12 @@ interface IChain {
 
     // ============ Events ============
 
-    event WASMVersionAdded(
-        bytes32 indexed versionHash,
-        string ipfsCID,
-        string arweaveTxId,
-        uint256 activationBlock
-    );
+    event WASMVersionAdded(bytes32 indexed versionHash, string ipfsCID, string arweaveTxId, uint256 activationBlock);
 
-    event WASMVersionActivated(
-        bytes32 indexed oldVersion,
-        bytes32 indexed newVersion,
-        uint256 blockNumber
-    );
+    event WASMVersionActivated(bytes32 indexed oldVersion, bytes32 indexed newVersion, uint256 blockNumber);
 
     event StateCommitted(
-        uint256 indexed version,
-        bytes32 indexed stateRoot,
-        bytes32 indexed wasmVersionHash,
-        address submitter
+        uint256 indexed version, bytes32 indexed stateRoot, bytes32 indexed wasmVersionHash, address submitter
     );
 
     event DiffPublished(
@@ -74,12 +62,7 @@ interface IChain {
         string storagePointer
     );
 
-    event SnapshotPublished(
-        uint256 indexed version,
-        bytes32 snapshotHash,
-        bytes32 globalHash,
-        string storagePointer
-    );
+    event SnapshotPublished(uint256 indexed version, bytes32 snapshotHash, bytes32 globalHash, string storagePointer);
 
     // ============ WASM Version Functions ============
 
@@ -92,12 +75,10 @@ interface IChain {
 
     function activateWASMVersion() external;
 
-    function getCurrentWASMVersion() external view returns (
-        bytes32 versionHash,
-        string memory ipfsCID,
-        string memory arweaveTxId,
-        bool isActive
-    );
+    function getCurrentWASMVersion()
+        external
+        view
+        returns (bytes32 versionHash, string memory ipfsCID, string memory arweaveTxId, bool isActive);
 
     // ============ State Management Functions ============
 
@@ -109,36 +90,23 @@ interface IChain {
         uint256 size
     ) external;
 
-    function publishSnapshot(
-        uint256 version,
-        bytes32 snapshotHash,
-        string memory storagePointer,
-        uint256 size
-    ) external;
+    function publishSnapshot(uint256 version, bytes32 snapshotHash, string memory storagePointer, uint256 size) external;
 
-    function commitState(
-        uint256 version,
-        bytes32 stateRoot
-    ) external;
+    function commitState(uint256 version, bytes32 stateRoot) external;
 
     // ============ View Functions ============
 
     function isStateAvailable(uint256 requiredVersion) external view returns (bool);
 
-    function getStateCommitment(uint256 version) external view returns (
-        bytes32 stateRoot,
-        bytes32 wasmVersionHash,
-        uint256 blockNumber,
-        uint256 timestamp,
-        address submitter
-    );
+    function getStateCommitment(uint256 version)
+        external
+        view
+        returns (bytes32 stateRoot, bytes32 wasmVersionHash, uint256 blockNumber, uint256 timestamp, address submitter);
 
-    function getChainState() external view returns (
-        bytes32 globalHash,
-        bytes32 diffHash,
-        bytes32 snapshotHash,
-        uint256 version
-    );
+    function getChainState()
+        external
+        view
+        returns (bytes32 globalHash, bytes32 diffHash, bytes32 snapshotHash, uint256 version);
 
     function getLatestDiff() external view returns (StateDiff memory);
     function getLatestSnapshot() external view returns (StateSnapshot memory);

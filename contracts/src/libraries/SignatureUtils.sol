@@ -54,10 +54,7 @@ library SignatureUtils {
      * @param signature The signature bytes
      * @return The recovered signer address
      */
-    function recoverSigner(
-        bytes32 messageHash,
-        bytes memory signature
-    ) internal pure returns (address) {
+    function recoverSigner(bytes32 messageHash, bytes memory signature) internal pure returns (address) {
         return messageHash.recover(signature);
     }
 
@@ -75,11 +72,7 @@ library SignatureUtils {
         mapping(address => bool) storage validSigners,
         uint256 threshold
     ) internal view returns (bool) {
-        (uint256 validCount, ) = verifyMultipleSignatures(
-            messageHash,
-            signatures,
-            validSigners
-        );
+        (uint256 validCount,) = verifyMultipleSignatures(messageHash, signatures, validSigners);
         return validCount >= threshold;
     }
 
@@ -89,10 +82,7 @@ library SignatureUtils {
      * @param version The domain version
      * @return The domain separator
      */
-    function createDomainSeparator(
-        string memory name,
-        string memory version
-    ) internal view returns (bytes32) {
+    function createDomainSeparator(string memory name, string memory version) internal view returns (bytes32) {
         return keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
@@ -110,12 +100,7 @@ library SignatureUtils {
      * @param structHash The struct hash
      * @return The final hash
      */
-    function hashTypedData(
-        bytes32 domainSeparator,
-        bytes32 structHash
-    ) internal pure returns (bytes32) {
-        return keccak256(
-            abi.encodePacked("\x19\x01", domainSeparator, structHash)
-        );
+    function hashTypedData(bytes32 domainSeparator, bytes32 structHash) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 }

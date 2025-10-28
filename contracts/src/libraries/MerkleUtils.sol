@@ -57,12 +57,11 @@ library MerkleUtils {
      * @param index The leaf index in the tree
      * @return Whether the proof is valid
      */
-    function verifyMerkleProof(
-        bytes32 leaf,
-        bytes32[] memory proof,
-        bytes32 root,
-        uint256 index
-    ) internal pure returns (bool) {
+    function verifyMerkleProof(bytes32 leaf, bytes32[] memory proof, bytes32 root, uint256 index)
+        internal
+        pure
+        returns (bool)
+    {
         bytes32 computedHash = leaf;
 
         for (uint256 i = 0; i < proof.length; i++) {
@@ -89,9 +88,7 @@ library MerkleUtils {
      * @return The combined hash
      */
     function hashPair(bytes32 left, bytes32 right) internal pure returns (bytes32) {
-        return left < right
-            ? keccak256(abi.encodePacked(left, right))
-            : keccak256(abi.encodePacked(right, left));
+        return left < right ? keccak256(abi.encodePacked(left, right)) : keccak256(abi.encodePacked(right, left));
     }
 
     /**
@@ -101,15 +98,12 @@ library MerkleUtils {
      * @param deltas Array of balance deltas
      * @return The Merkle root of balance updates
      */
-    function calculateBalanceUpdateRoot(
-        address[] memory accounts,
-        address[] memory tokens,
-        int256[] memory deltas
-    ) internal pure returns (bytes32) {
-        require(
-            accounts.length == tokens.length && tokens.length == deltas.length,
-            "Array length mismatch"
-        );
+    function calculateBalanceUpdateRoot(address[] memory accounts, address[] memory tokens, int256[] memory deltas)
+        internal
+        pure
+        returns (bytes32)
+    {
+        require(accounts.length == tokens.length && tokens.length == deltas.length, "Array length mismatch");
 
         bytes32[] memory leaves = new bytes32[](accounts.length);
 
@@ -126,10 +120,11 @@ library MerkleUtils {
      * @param leafIndex The index of the leaf to prove
      * @return proof Array of sibling hashes for the proof
      */
-    function generateMerkleProof(
-        bytes32[] memory leaves,
-        uint256 leafIndex
-    ) internal pure returns (bytes32[] memory proof) {
+    function generateMerkleProof(bytes32[] memory leaves, uint256 leafIndex)
+        internal
+        pure
+        returns (bytes32[] memory proof)
+    {
         require(leafIndex < leaves.length, "Leaf index out of bounds");
 
         // Calculate proof size (log2 of leaves rounded up)

@@ -22,8 +22,8 @@ contract Chain is Ownable, Pausable {
     // WASM Version Management
     struct WASMVersion {
         bytes32 versionHash;
-        string ipfsCID;         // IPFS CID of WASM binary
-        string arweaveTxId;     // Arweave transaction ID (backup)
+        string ipfsCID; // IPFS CID of WASM binary
+        string arweaveTxId; // Arweave transaction ID (backup)
         uint256 activationBlock;
         bool isActive;
         uint256 addedAt;
@@ -73,8 +73,8 @@ contract Chain is Ownable, Pausable {
     uint256 public snapshotInterval = 10000; // Snapshot every 10k versions
 
     // Chain hash tracking (similar to OP Stack's approach)
-    bytes32 public lastHash;         // Global state hash
-    bytes32 public lastDiffHash;     // Last diff hash
+    bytes32 public lastHash; // Global state hash
+    bytes32 public lastDiffHash; // Last diff hash
     bytes32 public lastSnapshotHash; // Last snapshot hash
 
     // Access control
@@ -87,24 +87,12 @@ contract Chain is Ownable, Pausable {
     bool public stateAvailable;
 
     // ============ Events ============
-    event WASMVersionAdded(
-        bytes32 indexed versionHash,
-        string ipfsCID,
-        string arweaveTxId,
-        uint256 activationBlock
-    );
+    event WASMVersionAdded(bytes32 indexed versionHash, string ipfsCID, string arweaveTxId, uint256 activationBlock);
 
-    event WASMVersionActivated(
-        bytes32 indexed oldVersion,
-        bytes32 indexed newVersion,
-        uint256 blockNumber
-    );
+    event WASMVersionActivated(bytes32 indexed oldVersion, bytes32 indexed newVersion, uint256 blockNumber);
 
     event StateCommitted(
-        uint256 indexed version,
-        bytes32 indexed stateRoot,
-        bytes32 indexed wasmVersionHash,
-        address submitter
+        uint256 indexed version, bytes32 indexed stateRoot, bytes32 indexed wasmVersionHash, address submitter
     );
 
     event DiffPublished(
@@ -115,12 +103,7 @@ contract Chain is Ownable, Pausable {
         string storagePointer
     );
 
-    event SnapshotPublished(
-        uint256 indexed version,
-        bytes32 snapshotHash,
-        bytes32 globalHash,
-        string storagePointer
-    );
+    event SnapshotPublished(uint256 indexed version, bytes32 snapshotHash, bytes32 globalHash, string storagePointer);
 
     event ValidatorAdded(address indexed validator);
     event ValidatorRemoved(address indexed validator);
@@ -247,19 +230,13 @@ contract Chain is Ownable, Pausable {
     /**
      * @notice Get current WASM version details
      */
-    function getCurrentWASMVersion() external view returns (
-        bytes32 versionHash,
-        string memory ipfsCID,
-        string memory arweaveTxId,
-        bool isActive
-    ) {
+    function getCurrentWASMVersion()
+        external
+        view
+        returns (bytes32 versionHash, string memory ipfsCID, string memory arweaveTxId, bool isActive)
+    {
         WASMVersion memory version = wasmVersions[currentWASMVersion];
-        return (
-            version.versionHash,
-            version.ipfsCID,
-            version.arweaveTxId,
-            version.isActive
-        );
+        return (version.versionHash, version.ipfsCID, version.arweaveTxId, version.isActive);
     }
 
     // ============ State Management ============
@@ -301,13 +278,7 @@ contract Chain is Ownable, Pausable {
         lastHash = newGlobalHash;
         lastDiffHash = diffHash;
 
-        emit DiffPublished(
-            fromVersion,
-            toVersion,
-            diffHash,
-            newGlobalHash,
-            storagePointer
-        );
+        emit DiffPublished(fromVersion, toVersion, diffHash, newGlobalHash, storagePointer);
     }
 
     /**
@@ -317,12 +288,11 @@ contract Chain is Ownable, Pausable {
      * @param storagePointer IPFS CID or Arweave TX
      * @param size Size of the snapshot
      */
-    function publishSnapshot(
-        uint256 version,
-        bytes32 snapshotHash,
-        string memory storagePointer,
-        uint256 size
-    ) external onlySequencer whenNotPaused {
+    function publishSnapshot(uint256 version, bytes32 snapshotHash, string memory storagePointer, uint256 size)
+        external
+        onlySequencer
+        whenNotPaused
+    {
         require(version == currentStateVersion, "Version mismatch");
         require(snapshotHash != bytes32(0), "Invalid snapshot hash");
 
@@ -343,12 +313,7 @@ contract Chain is Ownable, Pausable {
         lastHash = newGlobalHash;
         lastSnapshotHash = snapshotHash;
 
-        emit SnapshotPublished(
-            version,
-            snapshotHash,
-            newGlobalHash,
-            storagePointer
-        );
+        emit SnapshotPublished(version, snapshotHash, newGlobalHash, storagePointer);
     }
 
     /**
@@ -356,10 +321,7 @@ contract Chain is Ownable, Pausable {
      * @param version State version
      * @param stateRoot The state root hash
      */
-    function commitState(
-        uint256 version,
-        bytes32 stateRoot
-    ) external onlyValidator whenNotPaused {
+    function commitState(uint256 version, bytes32 stateRoot) external onlyValidator whenNotPaused {
         require(version <= currentStateVersion, "Future version");
         require(stateRoot != bytes32(0), "Invalid state root");
 
@@ -375,12 +337,7 @@ contract Chain is Ownable, Pausable {
         currentStateRoot = stateRoot;
         stateAvailable = true;
 
-        emit StateCommitted(
-            version,
-            stateRoot,
-            currentWASMVersion,
-            msg.sender
-        );
+        emit StateCommitted(version, stateRoot, currentWASMVersion, msg.sender);
     }
 
     // ============ Bridge Integration ============
@@ -396,13 +353,11 @@ contract Chain is Ownable, Pausable {
     /**
      * @notice Get state commitment for a version
      */
-    function getStateCommitment(uint256 version) external view returns (
-        bytes32 stateRoot,
-        bytes32 wasmVersionHash,
-        uint256 blockNumber,
-        uint256 timestamp,
-        address submitter
-    ) {
+    function getStateCommitment(uint256 version)
+        external
+        view
+        returns (bytes32 stateRoot, bytes32 wasmVersionHash, uint256 blockNumber, uint256 timestamp, address submitter)
+    {
         StateCommitment memory commitment = stateCommitments[version];
         return (
             commitment.stateRoot,
@@ -465,12 +420,11 @@ contract Chain is Ownable, Pausable {
     /**
      * @notice Get current chain state
      */
-    function getChainState() external view returns (
-        bytes32 globalHash,
-        bytes32 diffHash,
-        bytes32 snapshotHash,
-        uint256 version
-    ) {
+    function getChainState()
+        external
+        view
+        returns (bytes32 globalHash, bytes32 diffHash, bytes32 snapshotHash, uint256 version)
+    {
         return (lastHash, lastDiffHash, lastSnapshotHash, currentStateVersion);
     }
 

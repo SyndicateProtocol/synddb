@@ -55,38 +55,18 @@ contract TEEAttestationVerifier is Ownable {
 
     // ============ Events ============
     event AttestationSubmitted(
-        address indexed validator,
-        bytes32 measurementHash,
-        bytes32 sp1ProofHash,
-        string platform
+        address indexed validator, bytes32 measurementHash, bytes32 sp1ProofHash, string platform
     );
 
-    event AttestationVerified(
-        address indexed validator,
-        bytes32 attestationHash,
-        uint256 timestamp
-    );
+    event AttestationVerified(address indexed validator, bytes32 attestationHash, uint256 timestamp);
 
-    event AttestationRevoked(
-        address indexed validator,
-        string reason
-    );
+    event AttestationRevoked(address indexed validator, string reason);
 
-    event ExpectedMeasurementAdded(
-        bytes32 indexed measurementId,
-        bytes32 imageDigest,
-        string platform
-    );
+    event ExpectedMeasurementAdded(bytes32 indexed measurementId, bytes32 imageDigest, string platform);
 
-    event ExpectedMeasurementRemoved(
-        bytes32 indexed measurementId,
-        string reason
-    );
+    event ExpectedMeasurementRemoved(bytes32 indexed measurementId, string reason);
 
-    event LitConfigUpdated(
-        string ipfsCid,
-        uint256 minNodes
-    );
+    event LitConfigUpdated(string ipfsCid, uint256 minNodes);
 
     // ============ Errors ============
     error InvalidAttestation();
@@ -97,12 +77,9 @@ contract TEEAttestationVerifier is Ownable {
     error MeasurementMismatch();
 
     // ============ Constructor ============
-    constructor(
-        address _sp1Verifier,
-        string memory _litActionCid,
-        address[] memory _litNodes,
-        uint256 _minLitNodes
-    ) Ownable(msg.sender) {
+    constructor(address _sp1Verifier, string memory _litActionCid, address[] memory _litNodes, uint256 _minLitNodes)
+        Ownable(msg.sender)
+    {
         require(_sp1Verifier != address(0), "Invalid SP1 verifier");
         require(bytes(_litActionCid).length > 0, "Invalid Lit CID");
         require(_litNodes.length >= MIN_LIT_NODES, "Too few Lit nodes");
@@ -111,10 +88,7 @@ contract TEEAttestationVerifier is Ownable {
         SP1_VERIFIER = _sp1Verifier;
 
         litConfig = LitConfig({
-            ipfsCid: _litActionCid,
-            chainId: block.chainid,
-            allowedNodes: _litNodes,
-            minNodes: _minLitNodes
+            ipfsCid: _litActionCid, chainId: block.chainid, allowedNodes: _litNodes, minNodes: _minLitNodes
         });
     }
 
@@ -138,19 +112,11 @@ contract TEEAttestationVerifier is Ownable {
         require(validator != address(0), "Invalid validator");
 
         // Parse measurement data
-        (
-            bytes32 imageDigest,
-            bytes32 enclaveHash,
-            string memory platform,
-            uint256 timestamp,
-            bytes32 wasmVersionHash
-        ) = decodeMeasurementData(measurementData);
+        (bytes32 imageDigest, bytes32 enclaveHash, string memory platform, uint256 timestamp, bytes32 wasmVersionHash) =
+            decodeMeasurementData(measurementData);
 
         // Check timestamp is recent
-        require(
-            block.timestamp - timestamp <= ATTESTATION_VALIDITY_PERIOD,
-            "Measurement too old"
-        );
+        require(block.timestamp - timestamp <= ATTESTATION_VALIDITY_PERIOD, "Measurement too old");
 
         // Verify measurement against expected values
         bytes32 measurementId = keccak256(abi.encode(imageDigest, platform));
@@ -165,18 +131,10 @@ contract TEEAttestationVerifier is Ownable {
         }
 
         // Verify SP1 proof
-        bytes32 sp1ProofHash = verifySP1Proof(
-            validator,
-            measurementData,
-            sp1Proof
-        );
+        bytes32 sp1ProofHash = verifySP1Proof(validator, measurementData, sp1Proof);
 
         // Verify Lit Protocol verification
-        bytes32 litVerificationHash = verifyLitProtocol(
-            validator,
-            measurementData,
-            litVerification
-        );
+        bytes32 litVerificationHash = verifyLitProtocol(validator, measurementData, litVerification);
 
         // Create attestation record
         bytes32 measurementHash = keccak256(measurementData);
@@ -193,12 +151,8 @@ contract TEEAttestationVerifier is Ownable {
         });
 
         // Calculate overall attestation hash
-        bytes32 attestationHash = keccak256(abi.encode(
-            measurementHash,
-            sp1ProofHash,
-            litVerificationHash,
-            block.timestamp
-        ));
+        bytes32 attestationHash =
+            keccak256(abi.encode(measurementHash, sp1ProofHash, litVerificationHash, block.timestamp));
 
         emit AttestationSubmitted(validator, measurementHash, sp1ProofHash, platform);
         emit AttestationVerified(validator, attestationHash, block.timestamp);
@@ -212,19 +166,13 @@ contract TEEAttestationVerifier is Ownable {
      * @param measurementData The measurement data
      * @param proof The SP1 proof
      */
-    function verifySP1Proof(
-        address validator,
-        bytes calldata measurementData,
-        bytes calldata proof
-    ) internal returns (bytes32) {
+    function verifySP1Proof(address validator, bytes calldata measurementData, bytes calldata proof)
+        internal
+        returns (bytes32)
+    {
         // Call SP1 verifier contract
         (bool success, bytes memory result) = SP1_VERIFIER.call(
-            abi.encodeWithSignature(
-                "verifyProof(bytes,bytes,address)",
-                proof,
-                measurementData,
-                validator
-            )
+            abi.encodeWithSignature("verifyProof(bytes,bytes,address)", proof, measurementData, validator)
         );
 
         if (!success) {
@@ -247,17 +195,14 @@ contract TEEAttestationVerifier is Ownable {
      * @param measurementData The measurement data
      * @param litVerification The Lit verification data
      */
-    function verifyLitProtocol(
-        address validator,
-        bytes calldata measurementData,
-        bytes calldata litVerification
-    ) internal view returns (bytes32) {
+    function verifyLitProtocol(address validator, bytes calldata measurementData, bytes calldata litVerification)
+        internal
+        view
+        returns (bytes32)
+    {
         // Decode Lit verification data
-        (
-            address[] memory signers,
-            bytes[] memory signatures,
-            bytes32 resultHash
-        ) = decodeLitVerification(litVerification);
+        (address[] memory signers, bytes[] memory signatures, bytes32 resultHash) =
+            decodeLitVerification(litVerification);
 
         // Verify we have enough Lit node signatures
         uint256 validSignatures = 0;
@@ -266,12 +211,7 @@ contract TEEAttestationVerifier is Ownable {
             // Check if signer is an allowed Lit node
             if (isAllowedLitNode(signers[i])) {
                 // Verify signature
-                bytes32 messageHash = keccak256(abi.encode(
-                    validator,
-                    measurementData,
-                    resultHash,
-                    litConfig.ipfsCid
-                ));
+                bytes32 messageHash = keccak256(abi.encode(validator, measurementData, resultHash, litConfig.ipfsCid));
 
                 if (verifySignature(messageHash, signatures[i], signers[i])) {
                     validSignatures++;
@@ -344,18 +284,14 @@ contract TEEAttestationVerifier is Ownable {
      * @param enclaveHash The TEE enclave measurement
      * @param platform The platform identifier
      */
-    function addExpectedMeasurement(
-        bytes32 imageDigest,
-        bytes32 enclaveHash,
-        string memory platform
-    ) external onlyOwner {
+    function addExpectedMeasurement(bytes32 imageDigest, bytes32 enclaveHash, string memory platform)
+        external
+        onlyOwner
+    {
         bytes32 measurementId = keccak256(abi.encode(imageDigest, platform));
 
         expectedMeasurements[measurementId] = ExpectedMeasurement({
-            imageDigest: imageDigest,
-            enclaveHash: enclaveHash,
-            platform: platform,
-            isActive: true
+            imageDigest: imageDigest, enclaveHash: enclaveHash, platform: platform, isActive: true
         });
 
         measurementIds.push(measurementId);
@@ -368,10 +304,7 @@ contract TEEAttestationVerifier is Ownable {
      * @param measurementId The measurement ID to remove
      * @param reason The reason for removal
      */
-    function removeExpectedMeasurement(
-        bytes32 measurementId,
-        string memory reason
-    ) external onlyOwner {
+    function removeExpectedMeasurement(bytes32 measurementId, string memory reason) external onlyOwner {
         expectedMeasurements[measurementId].isActive = false;
         emit ExpectedMeasurementRemoved(measurementId, reason);
     }
@@ -382,11 +315,10 @@ contract TEEAttestationVerifier is Ownable {
      * @param newNodes The new list of allowed Lit nodes
      * @param newMinNodes The new minimum nodes requirement
      */
-    function updateLitConfig(
-        string memory newIpfsCid,
-        address[] memory newNodes,
-        uint256 newMinNodes
-    ) external onlyOwner {
+    function updateLitConfig(string memory newIpfsCid, address[] memory newNodes, uint256 newMinNodes)
+        external
+        onlyOwner
+    {
         require(bytes(newIpfsCid).length > 0, "Invalid CID");
         require(newNodes.length >= MIN_LIT_NODES, "Too few nodes");
         require(newMinNodes >= MIN_LIT_NODES, "Min nodes too low");
@@ -403,10 +335,7 @@ contract TEEAttestationVerifier is Ownable {
      * @param validator The validator whose attestation to revoke
      * @param reason The reason for revocation
      */
-    function revokeAttestation(
-        address validator,
-        string memory reason
-    ) external onlyOwner {
+    function revokeAttestation(address validator, string memory reason) external onlyOwner {
         attestations[validator].isValid = false;
         emit AttestationRevoked(validator, reason);
     }
@@ -436,11 +365,7 @@ contract TEEAttestationVerifier is Ownable {
     function decodeLitVerification(bytes calldata data)
         internal
         pure
-        returns (
-            address[] memory signers,
-            bytes[] memory signatures,
-            bytes32 resultHash
-        )
+        returns (address[] memory signers, bytes[] memory signatures, bytes32 resultHash)
     {
         return abi.decode(data, (address[], bytes[], bytes32));
     }
@@ -460,14 +385,8 @@ contract TEEAttestationVerifier is Ownable {
     /**
      * @notice Verify a signature
      */
-    function verifySignature(
-        bytes32 messageHash,
-        bytes memory signature,
-        address signer
-    ) internal pure returns (bool) {
-        bytes32 ethSignedHash = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
-        );
+    function verifySignature(bytes32 messageHash, bytes memory signature, address signer) internal pure returns (bool) {
+        bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
 
         (uint8 v, bytes32 r, bytes32 s) = splitSignature(signature);
         address recovered = ecrecover(ethSignedHash, v, r, s);
@@ -478,11 +397,7 @@ contract TEEAttestationVerifier is Ownable {
     /**
      * @notice Split a signature into v, r, s components
      */
-    function splitSignature(bytes memory sig)
-        internal
-        pure
-        returns (uint8 v, bytes32 r, bytes32 s)
-    {
+    function splitSignature(bytes memory sig) internal pure returns (uint8 v, bytes32 r, bytes32 s) {
         require(sig.length == 65, "Invalid signature length");
 
         assembly {
@@ -513,10 +428,7 @@ contract TEEAttestationVerifier is Ownable {
     /**
      * @notice Check if a specific measurement is expected
      */
-    function isMeasurementExpected(
-        bytes32 imageDigest,
-        string memory platform
-    ) external view returns (bool) {
+    function isMeasurementExpected(bytes32 imageDigest, string memory platform) external view returns (bool) {
         bytes32 measurementId = keccak256(abi.encode(imageDigest, platform));
         return expectedMeasurements[measurementId].isActive;
     }

@@ -48,18 +48,9 @@ interface IBridge {
         uint256 depositId
     );
 
-    event Withdrawal(
-        address indexed recipient,
-        address indexed token,
-        uint256 amount,
-        uint256 nonce
-    );
+    event Withdrawal(address indexed recipient, address indexed token, uint256 amount, uint256 nonce);
 
-    event BatchSettlement(
-        bytes32 indexed stateRoot,
-        uint256 updateCount,
-        uint256 nonce
-    );
+    event BatchSettlement(bytes32 indexed stateRoot, uint256 updateCount, uint256 nonce);
 
     event ValidatorAdded(address indexed validator, bytes32 attestationHash);
     event ValidatorRemoved(address indexed validator, string reason);
@@ -75,11 +66,7 @@ interface IBridge {
 
     // ============ Deposit Functions ============
 
-    function deposit(
-        address token,
-        uint256 amount,
-        bytes32 syndDbAccountId
-    ) external;
+    function deposit(address token, uint256 amount, bytes32 syndDbAccountId) external;
 
     function depositEth(bytes32 syndDbAccountId) external payable;
 

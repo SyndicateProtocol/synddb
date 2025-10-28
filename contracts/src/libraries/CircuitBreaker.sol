@@ -29,14 +29,13 @@ library CircuitBreaker {
      * @return withinLimits Whether the amount is within limits
      * @return reason If not within limits, the reason why
      */
-    function checkLimits(
-        Limits memory limits,
-        Usage memory usage,
-        uint256 amount
-    ) internal view returns (bool withinLimits, string memory reason) {
+    function checkLimits(Limits memory limits, Usage memory usage, uint256 amount)
+        internal
+        view
+        returns (bool withinLimits, string memory reason)
+    {
         // Check cooldown period
-        if (usage.lastTriggered > 0 &&
-            block.timestamp < usage.lastTriggered + limits.cooldownPeriod) {
+        if (usage.lastTriggered > 0 && block.timestamp < usage.lastTriggered + limits.cooldownPeriod) {
             return (false, "In cooldown period");
         }
 
@@ -78,10 +77,7 @@ library CircuitBreaker {
      * @param usage The usage to update
      * @param amount The amount used
      */
-    function updateUsage(
-        Usage storage usage,
-        uint256 amount
-    ) internal {
+    function updateUsage(Usage storage usage, uint256 amount) internal {
         uint256 currentHour = block.timestamp / 3600;
         uint256 currentDay = block.timestamp / 86400;
 
@@ -116,12 +112,8 @@ library CircuitBreaker {
      * @param cooldownPeriod The cooldown period
      * @return Whether the circuit breaker is active
      */
-    function isActive(
-        Usage memory usage,
-        uint256 cooldownPeriod
-    ) internal view returns (bool) {
-        return usage.lastTriggered > 0 &&
-               block.timestamp < usage.lastTriggered + cooldownPeriod;
+    function isActive(Usage memory usage, uint256 cooldownPeriod) internal view returns (bool) {
+        return usage.lastTriggered > 0 && block.timestamp < usage.lastTriggered + cooldownPeriod;
     }
 
     /**
@@ -130,10 +122,7 @@ library CircuitBreaker {
      * @param cooldownPeriod The cooldown period
      * @return The remaining cooldown time in seconds
      */
-    function remainingCooldown(
-        Usage memory usage,
-        uint256 cooldownPeriod
-    ) internal view returns (uint256) {
+    function remainingCooldown(Usage memory usage, uint256 cooldownPeriod) internal view returns (uint256) {
         if (!isActive(usage, cooldownPeriod)) {
             return 0;
         }
@@ -146,9 +135,7 @@ library CircuitBreaker {
      * @return hourlyUsed Current hourly usage
      * @return dailyUsed Current daily usage
      */
-    function getCurrentUsage(
-        Usage memory usage
-    ) internal view returns (uint256 hourlyUsed, uint256 dailyUsed) {
+    function getCurrentUsage(Usage memory usage) internal view returns (uint256 hourlyUsed, uint256 dailyUsed) {
         uint256 currentHour = block.timestamp / 3600;
         uint256 currentDay = block.timestamp / 86400;
 
@@ -163,19 +150,16 @@ library CircuitBreaker {
      * @return hourlyAvailable Available hourly capacity
      * @return dailyAvailable Available daily capacity
      */
-    function getAvailableCapacity(
-        Limits memory limits,
-        Usage memory usage
-    ) internal view returns (uint256 hourlyAvailable, uint256 dailyAvailable) {
+    function getAvailableCapacity(Limits memory limits, Usage memory usage)
+        internal
+        view
+        returns (uint256 hourlyAvailable, uint256 dailyAvailable)
+    {
         (uint256 hourlyUsed, uint256 dailyUsed) = getCurrentUsage(usage);
 
-        hourlyAvailable = (hourlyUsed < limits.hourlyLimit)
-            ? limits.hourlyLimit - hourlyUsed
-            : 0;
+        hourlyAvailable = (hourlyUsed < limits.hourlyLimit) ? limits.hourlyLimit - hourlyUsed : 0;
 
-        dailyAvailable = (dailyUsed < limits.dailyLimit)
-            ? limits.dailyLimit - dailyUsed
-            : 0;
+        dailyAvailable = (dailyUsed < limits.dailyLimit) ? limits.dailyLimit - dailyUsed : 0;
     }
 
     /**
@@ -187,18 +171,15 @@ library CircuitBreaker {
      * @param period The period in seconds (e.g., 86400 for daily)
      * @return withinLimit Whether the amount is within the limit
      */
-    function checkUserLimit(
-        uint256 userLimit,
-        uint256 userUsed,
-        uint256 lastReset,
-        uint256 amount,
-        uint256 period
-    ) internal view returns (bool withinLimit) {
+    function checkUserLimit(uint256 userLimit, uint256 userUsed, uint256 lastReset, uint256 amount, uint256 period)
+        internal
+        view
+        returns (bool withinLimit)
+    {
         uint256 currentPeriod = block.timestamp / period;
         uint256 lastPeriod = lastReset / period;
 
         uint256 currentUsage = (currentPeriod == lastPeriod) ? userUsed : 0;
         return currentUsage + amount <= userLimit;
     }
-
 }

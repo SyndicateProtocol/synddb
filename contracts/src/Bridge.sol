@@ -88,8 +88,8 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
 
     mapping(address => mapping(address => uint256)) public userDailyWithdrawn; // user => token => amount
     mapping(address => mapping(address => uint256)) public userLastWithdrawalDay; // user => token => day
-    uint256 public globalDailyLimit = 10_000_000 * 10**18; // $10M default
-    uint256 public userDailyLimit = 1_000_000 * 10**18; // $1M default
+    uint256 public globalDailyLimit = 10_000_000 * 10 ** 18; // $10M default
+    uint256 public userDailyLimit = 1_000_000 * 10 ** 18; // $1M default
 
     // Fees
     uint256 public depositFeeBps = 10; // 0.1%
@@ -111,18 +111,9 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         uint256 depositId
     );
 
-    event Withdrawal(
-        address indexed recipient,
-        address indexed token,
-        uint256 amount,
-        uint256 nonce
-    );
+    event Withdrawal(address indexed recipient, address indexed token, uint256 amount, uint256 nonce);
 
-    event BatchSettlement(
-        bytes32 indexed stateRoot,
-        uint256 updateCount,
-        uint256 nonce
-    );
+    event BatchSettlement(bytes32 indexed stateRoot, uint256 updateCount, uint256 nonce);
 
     event ValidatorAdded(address indexed validator, bytes32 attestationHash);
     event ValidatorRemoved(address indexed validator, string reason);
@@ -215,11 +206,12 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      * @param amount The amount to deposit
      * @param syndDbAccountId The account ID in SyndDB to credit
      */
-    function deposit(
-        address token,
-        uint256 amount,
-        bytes32 syndDbAccountId
-    ) external nonReentrant whenNotPaused whenDepositsEnabled {
+    function deposit(address token, uint256 amount, bytes32 syndDbAccountId)
+        external
+        nonReentrant
+        whenNotPaused
+        whenDepositsEnabled
+    {
         require(token != address(0), "Invalid token");
         require(amount > 0, "Zero amount");
         require(syndDbAccountId != bytes32(0), "Invalid SyndDB account");
@@ -305,14 +297,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(checkWithdrawalLimits(token, amount, recipient), "Withdrawal limit exceeded");
 
         // Construct the withdrawal message
-        bytes32 structHash = keccak256(abi.encode(
-            WITHDRAWAL_TYPEHASH,
-            nonce,
-            recipient,
-            token,
-            amount,
-            deadline
-        ));
+        bytes32 structHash = keccak256(abi.encode(WITHDRAWAL_TYPEHASH, nonce, recipient, token, amount, deadline));
 
         bytes32 messageHash = _hashTypedDataV4(structHash);
 
@@ -361,7 +346,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         // Execute withdrawal
         if (token == address(0)) {
             // ETH withdrawal
-            (bool success, ) = recipient.call{value: amountAfterFee}("");
+            (bool success,) = recipient.call{value: amountAfterFee}("");
             require(success, "ETH transfer failed");
         } else {
             // ERC20 withdrawal
@@ -398,12 +383,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(calculatedRoot == stateRoot, "State root mismatch");
 
         // Construct the settlement message
-        bytes32 structHash = keccak256(abi.encode(
-            BATCH_SETTLEMENT_TYPEHASH,
-            nonce,
-            stateRoot,
-            deadline
-        ));
+        bytes32 structHash = keccak256(abi.encode(BATCH_SETTLEMENT_TYPEHASH, nonce, stateRoot, deadline));
 
         bytes32 messageHash = _hashTypedDataV4(structHash);
 
@@ -431,7 +411,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
                 updateWithdrawalTracking(update.token, amount, update.account);
 
                 if (update.token == address(0)) {
-                    (bool success, ) = update.account.call{value: amount}("");
+                    (bool success,) = update.account.call{value: amount}("");
                     require(success, "ETH transfer failed");
                 } else {
                     IERC20(update.token).safeTransfer(update.account, amount);
@@ -569,11 +549,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     /**
      * @notice Check if withdrawal is within limits
      */
-    function checkWithdrawalLimits(
-        address token,
-        uint256 amount,
-        address user
-    ) internal view returns (bool) {
+    function checkWithdrawalLimits(address token, uint256 amount, address user) internal view returns (bool) {
         uint256 currentDay = block.timestamp / 86400;
 
         // Check global daily limit for token
@@ -600,11 +576,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     /**
      * @notice Update withdrawal tracking for circuit breakers
      */
-    function updateWithdrawalTracking(
-        address token,
-        uint256 amount,
-        address user
-    ) internal {
+    function updateWithdrawalTracking(address token, uint256 amount, address user) internal {
         uint256 currentDay = block.timestamp / 86400;
 
         // Update global tracking
@@ -649,10 +621,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     /**
      * @notice Set withdrawal limits
      */
-    function setWithdrawalLimits(
-        uint256 _globalDailyLimit,
-        uint256 _userDailyLimit
-    ) external onlyOwner {
+    function setWithdrawalLimits(uint256 _globalDailyLimit, uint256 _userDailyLimit) external onlyOwner {
         globalDailyLimit = _globalDailyLimit;
         userDailyLimit = _userDailyLimit;
     }
@@ -660,11 +629,10 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     /**
      * @notice Set fee parameters
      */
-    function setFeeParameters(
-        uint256 _depositFeeBps,
-        uint256 _withdrawalFeeBps,
-        address _feeRecipient
-    ) external onlyOwner {
+    function setFeeParameters(uint256 _depositFeeBps, uint256 _withdrawalFeeBps, address _feeRecipient)
+        external
+        onlyOwner
+    {
         require(_depositFeeBps <= 100, "Deposit fee too high"); // Max 1%
         require(_withdrawalFeeBps <= 100, "Withdrawal fee too high"); // Max 1%
         require(_feeRecipient != address(0), "Invalid recipient");
@@ -684,7 +652,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         accumulatedFees[token] = 0;
 
         if (token == address(0)) {
-            (bool success, ) = feeRecipient.call{value: amount}("");
+            (bool success,) = feeRecipient.call{value: amount}("");
             require(success, "ETH transfer failed");
         } else {
             IERC20(token).safeTransfer(feeRecipient, amount);
@@ -757,10 +725,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     /**
      * @notice Verify validator signatures
      */
-    function verifyValidatorSignatures(
-        bytes32 messageHash,
-        bytes[] memory signatures
-    ) internal view returns (uint256) {
+    function verifyValidatorSignatures(bytes32 messageHash, bytes[] memory signatures) internal view returns (uint256) {
         uint256 validSignatures = 0;
         address[] memory signers = new address[](signatures.length);
 
