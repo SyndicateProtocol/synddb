@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title TEEAttestationVerifier
@@ -16,7 +16,7 @@ contract TEEAttestationVerifier is Ownable {
     // ============ State Variables ============
 
     // SP1 verification contract
-    address public immutable sp1Verifier;
+    address public immutable SP1_VERIFIER;
 
     // Lit Protocol configuration
     struct LitConfig {
@@ -108,7 +108,7 @@ contract TEEAttestationVerifier is Ownable {
         require(_litNodes.length >= MIN_LIT_NODES, "Too few Lit nodes");
         require(_minLitNodes >= MIN_LIT_NODES, "Min nodes too low");
 
-        sp1Verifier = _sp1Verifier;
+        SP1_VERIFIER = _sp1Verifier;
 
         litConfig = LitConfig({
             ipfsCid: _litActionCid,
@@ -218,7 +218,7 @@ contract TEEAttestationVerifier is Ownable {
         bytes calldata proof
     ) internal returns (bytes32) {
         // Call SP1 verifier contract
-        (bool success, bytes memory result) = sp1Verifier.call(
+        (bool success, bytes memory result) = SP1_VERIFIER.call(
             abi.encodeWithSignature(
                 "verifyProof(bytes,bytes,address)",
                 proof,

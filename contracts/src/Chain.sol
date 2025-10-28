@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @title Chain
@@ -129,18 +129,30 @@ contract Chain is Ownable, Pausable {
 
     // ============ Modifiers ============
     modifier onlySequencer() {
-        require(msg.sender == sequencer, "Not sequencer");
+        _checkSequencer();
         _;
     }
 
     modifier onlyValidator() {
-        require(validators[msg.sender], "Not validator");
+        _checkValidator();
         _;
     }
 
     modifier onlyBridge() {
-        require(msg.sender == bridgeContract, "Not bridge");
+        _checkBridge();
         _;
+    }
+
+    function _checkSequencer() private view {
+        require(msg.sender == sequencer, "Not sequencer");
+    }
+
+    function _checkValidator() private view {
+        require(validators[msg.sender], "Not validator");
+    }
+
+    function _checkBridge() private view {
+        require(msg.sender == bridgeContract, "Not bridge");
     }
 
     // ============ Constructor ============

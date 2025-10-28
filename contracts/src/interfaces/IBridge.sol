@@ -81,7 +81,7 @@ interface IBridge {
         bytes32 syndDbAccountId
     ) external;
 
-    function depositETH(bytes32 syndDbAccountId) external payable;
+    function depositEth(bytes32 syndDbAccountId) external payable;
 
     // ============ Withdrawal Functions ============
 

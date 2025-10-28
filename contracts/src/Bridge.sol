@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 /**
  * @title SyndDBBridge
@@ -141,23 +141,39 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
 
     // ============ Modifiers ============
     modifier onlySequencer() {
-        require(msg.sender == sequencer, "Not sequencer");
+        _checkSequencer();
         _;
     }
 
     modifier onlyRelayer() {
-        require(relayers[msg.sender].isActive, "Not active relayer");
+        _checkRelayer();
         _;
     }
 
     modifier whenDepositsEnabled() {
-        require(depositsEnabled, "Deposits disabled");
+        _checkDepositsEnabled();
         _;
     }
 
     modifier whenWithdrawalsEnabled() {
-        require(withdrawalsEnabled, "Withdrawals disabled");
+        _checkWithdrawalsEnabled();
         _;
+    }
+
+    function _checkSequencer() private view {
+        require(msg.sender == sequencer, "Not sequencer");
+    }
+
+    function _checkRelayer() private view {
+        require(relayers[msg.sender].isActive, "Not active relayer");
+    }
+
+    function _checkDepositsEnabled() private view {
+        require(depositsEnabled, "Deposits disabled");
+    }
+
+    function _checkWithdrawalsEnabled() private view {
+        require(withdrawalsEnabled, "Withdrawals disabled");
     }
 
     // ============ Constructor ============
@@ -235,7 +251,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      * @notice Deposit ETH to the bridge
      * @param syndDbAccountId The account ID in SyndDB to credit
      */
-    function depositETH(bytes32 syndDbAccountId) external payable nonReentrant whenNotPaused whenDepositsEnabled {
+    function depositEth(bytes32 syndDbAccountId) external payable nonReentrant whenNotPaused whenDepositsEnabled {
         require(msg.value > 0, "Zero amount");
         require(syndDbAccountId != bytes32(0), "Invalid SyndDB account");
 
