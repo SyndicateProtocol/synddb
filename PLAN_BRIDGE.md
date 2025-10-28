@@ -1,36 +1,28 @@
-# PLAN\_BRIDGE.md - SyndDB Bridge Smart Contract Architecture
+# PLAN_BRIDGE.md - SyndDB Bridge Smart Contract Architecture
 
 ## Executive Summary
-The Bridge.sol contract serves as the settlement layer interface for SyndDB, enabling secure asset bridging between the high-performance database layer and the blockchain. It supports complex state transitions for onchain orderbooks, requires multi-signature validation from TEE validators, and allows permissionless relaying of signed messages.
-
-<!-- Not all bridge use cases will be onchain orderbooks, just some of them. It supports message passing to/from the SyndDB database, for use cases including onchain orderbooks for DeFi but also onchain telemetry for DePIN, onchain assets for gaming, onchain social data, etc. -->
+The Bridge.sol contract serves as the settlement layer interface for SyndDB, enabling secure asset bridging between the high-performance database layer and the blockchain. It supports message passing to/from the SyndDB database for diverse use cases including onchain orderbooks for DeFi, onchain telemetry for DePIN, onchain assets for gaming, onchain social data, and more. The bridge requires multi-signature validation from TEE validators and allows permissionless relaying of signed messages.
 
 
 ## Core Architecture Principles
 
 ### 1. Asymmetric Trust Model
 - **Deposits**: Trustless (any user can deposit)
-- **Withdrawals**: Require m-of-n validator signatures + sequencer approval
-- **State Updates**: Batched settlement for orderbook rebalancing
-
-<!-- The sequencer approval phrasing makes it sound like the sequencer approves as a last step. Instead, make it clear that the validators are only able to sign off on a signed sequencer message, and nothing else, for withdrawals.
-
-Also make it clear that this is not only orderbooks. It's just batched updates for message passing in general. -->
+- **Withdrawals**: Validators can only sign messages that are first signed by the sequencer - they validate sequencer messages, not arbitrary withdrawals
+- **State Updates**: Batched updates for general message passing (not limited to orderbooks)
 
 ### 2. Permissionless Relaying
 - Anyone can submit signed messages to the bridge
+- Relayers handle batching of multiple messages for gas efficiency (separation of concerns)
 - Relayers are incentivized through fee rebates
 - Messages include nonces to prevent replay attacks
-
-<!-- Can we have batching live at the relayer level? That seems cleaner than having validators batch, since validator batching requires validators to be aware of past signature state/block times, while the relayer is better suited for that via separation of concerns. -->
+- Batching happens at relayer level, not validator level - validators simply sign individual messages
 
 
 ### 3. Complex State Transitions
 - Not limited to 1:1 token swaps
-- Supports orderbook settlement with multiple balance updates
-- Handles partial fills and complex trading outcomes
-
-<!-- Not just orderbooks! Orderbooks are just an example -->
+- Supports various settlement types with multiple balance updates (orderbooks, gaming, DePIN rewards, etc.)
+- Handles partial operations and complex state changes across different use cases
 
 
 ## Key Components
@@ -39,57 +31,67 @@ Also make it clear that this is not only orderbooks. It's just batched updates f
 - **Direct deposits**: Users lock tokens in bridge
 - **Deposit receipts**: Emitted for sequencer to credit in SyndDB
 - **Multi-token support**: ETH, ERC-20, potentially ERC-721/1155
-- **Deposit limits**: Per-user and global circuit breakers
-
-<!-- Explain that this can be treated as a lock (unlocked upon settlement) or a bridge (tokens are expected to stay on the platform for a long time and eventually withdraw). Most use cases look more like locking than bridging, where it is short-lived until settlement rather than long-lived.
-
-Make sure that deposit limits are configurable and are simply for risk reduction on new launches, while the WASM logic is still early. -->
+- **Deposit limits**: Configurable per-user and global circuit breakers for risk reduction during early launches
+- **Lock vs Bridge Model**:
+  - Most use cases are short-term locks (unlocked upon settlement)
+  - Some use cases are long-term bridges (tokens stay in platform for extended periods)
+  - System supports both models seamlessly
 
 
 ### 2. Validator Registry
 - **TEE attestation verification**: Validators prove TEE environment
-- **Dual attestation**: SP1 proofs + Lit Protocol verification
+- **Dual attestation**: Combines TEE + zkVM security through SP1 proofs and Lit Protocol verification
+- **Two-phase onboarding**:
+  - Validators can permissionlessly propose themselves by submitting valid SP1 proof and Lit Protocol attestation
+  - Actual addition to validator set remains permissioned (governance controlled)
 - **Dynamic set**: Validators can be added/removed by governance
 - **Key rotation**: Support for validator key updates
 
-<!-- This can be permissioned right now. Validators should be able to permissionlessly propose being added if they submit the appropriate SP1 proof and Lit Protocol attestation that their TEE is running, but adding them should be permissioned.
 
-Explain that the dual attestation is useful for TEE + zkVM combination. -->
+### 3. Message Processing & Contract Separation
 
-
-### 3. Message Processing
-- **Sequencer messages**: Signed state updates from sequencer
-- **Validator confirmations**: m-of-n threshold signatures required 
-<!-- m-of-n signatures required to validate sequencer messages -->
-
+#### Bridge.sol - Token Movement Focus
+- **Purpose**: Handles tokens in → tokens out, not state management
+- **Sequencer messages**: Signed withdrawal/settlement messages
+- **Validator confirmations**: m-of-n signatures required to validate sequencer messages
 - **Message types**:
   - Withdrawals (single user, single token)
   - Batch settlements (multiple users, multiple tokens)
-  - Rebalancing (orderbook state reconciliation)
   - Emergency actions (pause, circuit breaker triggers)
 
-<!-- We should be clear here that the Bridge.sol is just for message passing. It doesn't actually care about state updates. It just cares about tokens in -> tokens out. Diffs/snapshots/etc can live outside of Bridge.sol in a different file (Chain.sol?)
+#### Chain.sol (Separate Contract) - State Management
+Following OP Stack's separation pattern:
+- **State publication**: Handles diffs/snapshots from sequencer
+- **State verification**: Validators attest to state correctness
+- **State availability**: Makes state available for Bridge.sol validation
+- **Withdrawal gating**: Bridge.sol only processes withdrawals after Chain.sol confirms state
 
-Do some research on how OP Stack handles separation of concerns and then come back to me on your recommendations. -->
+This separation mirrors OP Stack's approach where:
+- OptimismPortal handles deposits/withdrawals
+- L2OutputOracle manages state roots
+- Clean interfaces between contracts for modularity
 
 
 ### 4. Settlement Engine
 - **Batch processing**: Multiple operations in single transaction
+- **Tunable batching**:
+  - Minimum latency mode: Batch time = block time (or Flashblocks for chains like Base)
+  - Gas optimization mode: Larger batches for cost efficiency
+  - Clear tradeoff: Lower latency vs. higher gas costs per operation
 - **Atomic execution**: All-or-nothing settlement
 - **Gas optimization**: Efficient storage patterns and batch operations
 - **Slippage protection**: Max deviation from expected state
 
-<!-- Is the batch processing tunable? For minimum latency, batch times should be equal to block times for a given chain (or Flashblocks block times for chains like Base). Many groups care more about latency than gas costs. Also make it clear that this is the tradeoff. -->
-
 
 ### 5. Security Mechanisms
 - **Circuit breakers**: Daily/hourly withdrawal limits
+- **Dual-layer protection**:
+  - Onchain circuit breakers (enforced by smart contracts)
+  - Offchain circuit breakers (validators can refuse to sign risky withdrawals)
 - **Time delays**: Optional delay for large withdrawals
 - **Pause functionality**: Emergency stop mechanism
 - **Rate limiting**: Per-user withdrawal frequency limits
 - **Merkle proofs**: For large batch settlements
-
-<!-- Validators can also simply refuse to sign risky withdrawals. So in some ways these onchain circuit breakers complement possible offchain circuit breakers. -->
 
 
 ## Data Structures
@@ -147,32 +149,35 @@ struct BalanceUpdate {
 ### Withdrawal Flow
 1. User requests withdrawal in SyndDB
 2. Sequencer validates and signs withdrawal message
-3. Validators verify state and add signatures
-4. Relayer submits message with m-of-n signatures 
-<!-- Validator signatures. The sequencer signature is handled during bridge parsing -->
+3. Validators verify state and add signatures to the sequencer's message
+4. Relayer submits message with m-of-n validator signatures (sequencer signature parsed separately)
+5. Bridge validates all signatures and nonce ordering:
+   - **Global nonce**: Ensures sequential message processing
+   - **Per-user nonce**: Prevents user-specific replay attacks
+   - **Re-org protection**: Nonces map to transaction data (not just increments)
+   - **Validator safety**: Validators halt signing if nonces unexpectedly change (re-org detection)
+6. Bridge transfers tokens to recipient
+7. Bridge emits `Withdrawal` event
 
-5. Bridge validates signatures and nonce
-
-<!-- Both the global nonce and the per-user nonce. The global and per user nonce should be a mapping of nonce data to TX data, to ensure that a re-org doesn't cause validators to overwrite old nonces. Add to the security mechanisms that re-org detection is available by having validators halt signing if global and per-user nonces change.
-
-Or maybe we call these accumulators? Do some research and come back with a recommendation. -->
-
-7. Bridge transfers tokens to recipient
-8. Bridge emits `Withdrawal` event
-
-<!-- Do we want to consider renaming these lock/unlock? I'm a bit torn over whether this feels more like locking and unlocking or depositing and withdrawing. I think depositing and withdrawing is more accurate because there's not a 1:1 relationship between tokens deposited and tokens withdrawn. -->
+Note: The deposit/withdrawal naming is preferred over lock/unlock since there's no 1:1 relationship between tokens in and out (due to fees, settlement netting, etc.)
 
 
-### Batch Settlement Flow (Orderbook)
-1. Sequencer computes net position changes after trading period
-2. Sequencer creates merkle tree of balance updates
-3. Sequencer signs batch settlement message
-4. Validators verify orderbook state and sign
-5. Relayer submits batch with merkle root
-6. Bridge processes updates atomically
-7. Net token movements executed on-chain
+### Batch Settlement Flow (State-Dependent)
+1. **State Publication Phase (Chain.sol)**:
+   - Sequencer publishes state diffs/snapshots to Chain.sol
+   - Validators verify and attest to state correctness
+   - State becomes available onchain once validated
 
-<!-- No, this should be using snapshot and diff updates. We need a second contract that represents tracked state (or a part of the Bridge, that works too) that only allows for signatures once the snapshots/diffs/etc have been written by the validators. Only then can withdrawals be processed, because the necessary state for withdrawals has been made available. -->
+2. **Settlement Phase (Bridge.sol)**:
+   - Sequencer computes net position changes based on published state
+   - Sequencer creates merkle tree of balance updates
+   - Sequencer signs batch settlement message referencing Chain.sol state
+   - Validators verify state availability in Chain.sol before signing
+   - Relayer submits batch only after state is confirmed in Chain.sol
+   - Bridge processes updates atomically
+   - Net token movements executed on-chain
+
+Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol to ensure the required state has been published and validated before processing any withdrawals.
 
 
 ## Security Considerations
@@ -193,18 +198,10 @@ Or maybe we call these accumulators? Do some research and come back with a recom
 #### 3. Replay Attacks
 - **Mitigation**: Strict nonce ordering
 - **Mitigation**: Message deadlines
-- **Mitigation**: Chain ID in signatures
-<!-- For deposit -->
+- **Mitigation**: Chain ID in signatures (especially for cross-chain deposits)
 
 
-#### 4. Front-running
-- **Mitigation**: Commit-reveal for deposits
-- **Mitigation**: Deadlines on messages
-- **Mitigation**: First-come-first-served processing
-<!-- This is irrelevant, front-running isn't a concern  since most data is sent to the sequencer and deposits/withdrawals are not ordering-dependent. -->
-
-
-#### 5. Gas Griefing
+#### 4. Gas Griefing
 - **Mitigation**: Gas rebates for relayers
 - **Mitigation**: Batch processing limits
 - **Mitigation**: Storage optimization
@@ -408,4 +405,4 @@ Or maybe we call these accumulators? Do some research and come back with a recom
 
 ## Conclusion
 
-This Bridge architecture provides a secure, efficient, and flexible solution for SyndDB's unique requirements. The combination of TEE validators, multi-signature verification, and circuit breakers ensures security while maintaining the performance benefits of the SyndDB architecture. The support for complex orderbook operations distinguishes this from simple token bridges, enabling sophisticated DeFi applications to leverage SyndDB's high-performance database capabilities.
+This Bridge architecture provides a secure, efficient, and flexible solution for SyndDB's unique requirements. The combination of TEE validators, multi-signature verification, and circuit breakers ensures security while maintaining the performance benefits of the SyndDB architecture. The support for diverse use cases - from DeFi orderbooks to gaming assets to DePIN telemetry - distinguishes this from simple token bridges. The separation of concerns between Bridge.sol (token movement) and Chain.sol (state management) follows proven patterns from the OP Stack, enabling modular development and maintenance while supporting SyndDB's high-performance database capabilities across multiple domains.
