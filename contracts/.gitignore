@@ -13,5 +13,6 @@ docs/
 # Dotenv file
 .env
 
-# Ignore lib - these are managed as git submodules by Foundry
-lib/
+# Don't ignore lib - Foundry uses git submodules which need to be tracked
+# Git only tracks the submodule pointers, not the actual files inside
+!lib/
