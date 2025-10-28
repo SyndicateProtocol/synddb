@@ -3,8 +3,8 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
@@ -166,7 +166,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         address[] memory _initialValidators,
         uint256 _requiredSignatures,
         address _feeRecipient
-    ) EIP712("SyndDBBridge", "1") {
+    ) Ownable(msg.sender) EIP712("SyndDBBridge", "1") {
         require(_sequencer != address(0), "Invalid sequencer");
         require(_feeRecipient != address(0), "Invalid fee recipient");
         require(_initialValidators.length >= MIN_VALIDATORS, "Too few validators");
@@ -184,7 +184,8 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
                 publicKey: _initialValidators[i],
                 attestationHash: bytes32(0),
                 isActive: true,
-                addedAt: block.timestamp
+                addedAt: block.timestamp,
+                wasmVersionHash: bytes32(0)
             });
             validatorList.push(_initialValidators[i]);
         }
@@ -446,7 +447,8 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
             publicKey: validator,
             attestationHash: attestationHash,
             isActive: true,
-            addedAt: block.timestamp
+            addedAt: block.timestamp,
+            wasmVersionHash: bytes32(0)
         });
 
         validatorList.push(validator);

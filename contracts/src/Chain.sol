@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
@@ -150,7 +150,7 @@ contract Chain is Ownable, Pausable {
         bytes32 _initialWASMVersion,
         string memory _ipfsCID,
         string memory _arweaveTxId
-    ) {
+    ) Ownable(msg.sender) {
         require(_sequencer != address(0), "Invalid sequencer");
         require(_bridgeContract != address(0), "Invalid bridge");
         require(_initialWASMVersion != bytes32(0), "Invalid WASM version");

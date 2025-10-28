@@ -201,27 +201,4 @@ library CircuitBreaker {
         return currentUsage + amount <= userLimit;
     }
 
-    /**
-     * @notice Update user-specific usage
-     * @param userUsed Reference to user's usage counter
-     * @param lastReset Reference to user's last reset timestamp
-     * @param amount The amount to add
-     * @param period The period in seconds
-     */
-    function updateUserUsage(
-        uint256 storage userUsed,
-        uint256 storage lastReset,
-        uint256 amount,
-        uint256 period
-    ) internal {
-        uint256 currentPeriod = block.timestamp / period;
-        uint256 lastPeriod = lastReset / period;
-
-        if (currentPeriod != lastPeriod) {
-            userUsed = amount;
-            lastReset = block.timestamp;
-        } else {
-            userUsed = userUsed + amount;
-        }
-    }
 }

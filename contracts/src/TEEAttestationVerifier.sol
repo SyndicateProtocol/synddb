@@ -102,7 +102,7 @@ contract TEEAttestationVerifier is Ownable {
         string memory _litActionCid,
         address[] memory _litNodes,
         uint256 _minLitNodes
-    ) {
+    ) Ownable(msg.sender) {
         require(_sp1Verifier != address(0), "Invalid SP1 verifier");
         require(bytes(_litActionCid).length > 0, "Invalid Lit CID");
         require(_litNodes.length >= MIN_LIT_NODES, "Too few Lit nodes");
