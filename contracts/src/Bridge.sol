@@ -37,12 +37,25 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         bytes32 attestationHash;
         bool isActive;
         uint256 addedAt;
+        bytes32 wasmVersionHash; // Version this validator is running
     }
 
     mapping(address => Validator) public validators;
     address[] public validatorList;
     uint256 public requiredSignatures; // m in m-of-n
     address public sequencer;
+
+    // TEE Relayer management
+    struct Relayer {
+        address publicKey;
+        bytes32 attestationHash;
+        bool isActive;
+        uint256 addedAt;
+        bytes32 wasmVersionHash;
+    }
+
+    mapping(address => Relayer) public relayers;
+    address[] public relayerList;
 
     // Deposit tracking
     struct DepositRecord {
@@ -115,6 +128,10 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     event ValidatorRemoved(address indexed validator, string reason);
     event ValidatorUpdated(address indexed validator, bytes32 newAttestationHash);
 
+    event RelayerAdded(address indexed relayer, bytes32 attestationHash);
+    event RelayerRemoved(address indexed relayer, string reason);
+    event RelayerUpdated(address indexed relayer, bytes32 newAttestationHash);
+
     event CircuitBreakerTriggered(string reason, uint256 duration);
     event SequencerUpdated(address indexed oldSequencer, address indexed newSequencer);
     event RequiredSignaturesUpdated(uint256 oldValue, uint256 newValue);
@@ -125,6 +142,11 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     // ============ Modifiers ============
     modifier onlySequencer() {
         require(msg.sender == sequencer, "Not sequencer");
+        _;
+    }
+
+    modifier onlyRelayer() {
+        require(relayers[msg.sender].isActive, "Not active relayer");
         _;
     }
 
@@ -239,7 +261,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     // ============ Withdrawal Functions ============
 
     /**
-     * @notice Process a withdrawal with validator signatures
+     * @notice Process a withdrawal with validator signatures (only callable by TEE relayer)
      * @param nonce The unique nonce for this withdrawal
      * @param recipient The recipient address
      * @param token The token to withdraw
@@ -256,7 +278,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         uint256 deadline,
         bytes memory sequencerSignature,
         bytes[] memory validatorSignatures
-    ) external nonReentrant whenNotPaused whenWithdrawalsEnabled {
+    ) external onlyRelayer nonReentrant whenNotPaused whenWithdrawalsEnabled {
         // Check deadline
         require(block.timestamp <= deadline, "Withdrawal expired");
         require(!processedNonces[nonce], "Nonce already processed");
@@ -333,7 +355,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     }
 
     /**
-     * @notice Process a batch settlement for orderbook operations
+     * @notice Process a batch settlement for various use cases (only callable by TEE relayer)
      * @param nonce The unique nonce for this settlement
      * @param stateRoot The merkle root of balance updates
      * @param updates Array of balance updates to apply
@@ -348,7 +370,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         uint256 deadline,
         bytes memory sequencerSignature,
         bytes[] memory validatorSignatures
-    ) external nonReentrant whenNotPaused whenWithdrawalsEnabled {
+    ) external onlyRelayer nonReentrant whenNotPaused whenWithdrawalsEnabled {
         require(block.timestamp <= deadline, "Settlement expired");
         require(!processedNonces[nonce], "Nonce already processed");
         require(validatorSignatures.length >= requiredSignatures, "Insufficient signatures");
@@ -465,6 +487,63 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(validators[validator].isActive, "Not active");
         validators[validator].attestationHash = newAttestationHash;
         emit ValidatorUpdated(validator, newAttestationHash);
+    }
+
+    // ============ Relayer Management ============
+
+    /**
+     * @notice Add a new TEE relayer with attestation
+     * @param relayer The relayer address
+     * @param attestationHash The hash of the TEE attestation
+     */
+    function addRelayer(address relayer, bytes32 attestationHash) external onlyOwner {
+        require(relayer != address(0), "Invalid relayer");
+        require(!relayers[relayer].isActive, "Already active");
+
+        relayers[relayer] = Relayer({
+            publicKey: relayer,
+            attestationHash: attestationHash,
+            isActive: true,
+            addedAt: block.timestamp,
+            wasmVersionHash: bytes32(0) // Will be set when relayer reports version
+        });
+
+        relayerList.push(relayer);
+        emit RelayerAdded(relayer, attestationHash);
+    }
+
+    /**
+     * @notice Remove a relayer
+     * @param relayer The relayer to remove
+     * @param reason The reason for removal
+     */
+    function removeRelayer(address relayer, string memory reason) external onlyOwner {
+        require(relayers[relayer].isActive, "Not active");
+        require(relayerList.length > 1, "Cannot remove last relayer");
+
+        relayers[relayer].isActive = false;
+
+        // Remove from list
+        for (uint256 i = 0; i < relayerList.length; i++) {
+            if (relayerList[i] == relayer) {
+                relayerList[i] = relayerList[relayerList.length - 1];
+                relayerList.pop();
+                break;
+            }
+        }
+
+        emit RelayerRemoved(relayer, reason);
+    }
+
+    /**
+     * @notice Update relayer attestation
+     * @param relayer The relayer address
+     * @param newAttestationHash The new attestation hash
+     */
+    function updateRelayerAttestation(address relayer, bytes32 newAttestationHash) external onlyOwner {
+        require(relayers[relayer].isActive, "Not active");
+        relayers[relayer].attestationHash = newAttestationHash;
+        emit RelayerUpdated(relayer, newAttestationHash);
     }
 
     // ============ Circuit Breaker Functions ============
@@ -724,6 +803,27 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      */
     function getAccumulatedFees(address token) external view returns (uint256) {
         return accumulatedFees[token];
+    }
+
+    /**
+     * @notice Get relayer count
+     */
+    function getRelayerCount() external view returns (uint256) {
+        return relayerList.length;
+    }
+
+    /**
+     * @notice Get all relayers
+     */
+    function getRelayers() external view returns (address[] memory) {
+        return relayerList;
+    }
+
+    /**
+     * @notice Check if an address is an active relayer
+     */
+    function isRelayer(address account) external view returns (bool) {
+        return relayers[account].isActive;
     }
 
     // ============ Receive Function ============
