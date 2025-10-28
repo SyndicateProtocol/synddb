@@ -12,3 +12,6 @@ docs/
 
 # Dotenv file
 .env
+
+# Ignore lib - these are managed as git submodules by Foundry
+lib/
