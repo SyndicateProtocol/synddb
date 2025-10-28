@@ -33,9 +33,11 @@ contract TEEAttestationVerifier is Ownable {
         bytes32 measurementHash; // Hash of TEE measurements
         bytes32 sp1ProofHash; // Hash of SP1 proof
         bytes32 litVerificationHash; // Hash of Lit verification
+        bytes32 wasmVersionHash; // WASM version running in TEE
         uint256 timestamp;
         bool isValid;
         string platform; // e.g., "gcp-confidential-space"
+        bool isRelayer; // Whether this is a relayer attestation
     }
 
     mapping(address => Attestation) public attestations;
@@ -124,12 +126,14 @@ contract TEEAttestationVerifier is Ownable {
      * @param measurementData The TEE measurement data
      * @param sp1Proof The SP1 zero-knowledge proof
      * @param litVerification The Lit Protocol verification result
+     * @param isRelayer Whether this is a relayer attestation
      */
     function submitAttestation(
         address validator,
         bytes calldata measurementData,
         bytes calldata sp1Proof,
-        bytes calldata litVerification
+        bytes calldata litVerification,
+        bool isRelayer
     ) external returns (bytes32) {
         require(validator != address(0), "Invalid validator");
 
@@ -138,7 +142,8 @@ contract TEEAttestationVerifier is Ownable {
             bytes32 imageDigest,
             bytes32 enclaveHash,
             string memory platform,
-            uint256 timestamp
+            uint256 timestamp,
+            bytes32 wasmVersionHash
         ) = decodeMeasurementData(measurementData);
 
         // Check timestamp is recent
@@ -180,9 +185,11 @@ contract TEEAttestationVerifier is Ownable {
             measurementHash: measurementHash,
             sp1ProofHash: sp1ProofHash,
             litVerificationHash: litVerificationHash,
+            wasmVersionHash: wasmVersionHash,
             timestamp: block.timestamp,
             isValid: true,
-            platform: platform
+            platform: platform,
+            isRelayer: isRelayer
         });
 
         // Calculate overall attestation hash
@@ -309,9 +316,11 @@ contract TEEAttestationVerifier is Ownable {
             bytes32 measurementHash,
             bytes32 sp1ProofHash,
             bytes32 litVerificationHash,
+            bytes32 wasmVersionHash,
             uint256 timestamp,
             bool isValid,
-            string memory platform
+            string memory platform,
+            bool isRelayer
         )
     {
         Attestation memory attestation = attestations[validator];
@@ -319,9 +328,11 @@ contract TEEAttestationVerifier is Ownable {
             attestation.measurementHash,
             attestation.sp1ProofHash,
             attestation.litVerificationHash,
+            attestation.wasmVersionHash,
             attestation.timestamp,
             attestation.isValid && (block.timestamp - attestation.timestamp <= ATTESTATION_VALIDITY_PERIOD),
-            attestation.platform
+            attestation.platform,
+            attestation.isRelayer
         );
     }
 
@@ -412,10 +423,11 @@ contract TEEAttestationVerifier is Ownable {
             bytes32 imageDigest,
             bytes32 enclaveHash,
             string memory platform,
-            uint256 timestamp
+            uint256 timestamp,
+            bytes32 wasmVersionHash
         )
     {
-        return abi.decode(data, (bytes32, bytes32, string, uint256));
+        return abi.decode(data, (bytes32, bytes32, string, uint256, bytes32));
     }
 
     /**

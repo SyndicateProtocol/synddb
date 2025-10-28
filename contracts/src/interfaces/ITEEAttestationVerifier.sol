@@ -12,9 +12,11 @@ interface ITEEAttestationVerifier {
         bytes32 measurementHash;
         bytes32 sp1ProofHash;
         bytes32 litVerificationHash;
+        bytes32 wasmVersionHash;
         uint256 timestamp;
         bool isValid;
         string platform;
+        bool isRelayer;
     }
 
     struct ExpectedMeasurement {
@@ -73,7 +75,8 @@ interface ITEEAttestationVerifier {
         address validator,
         bytes calldata measurementData,
         bytes calldata sp1Proof,
-        bytes calldata litVerification
+        bytes calldata litVerification,
+        bool isRelayer
     ) external returns (bytes32);
 
     function isAttestationValid(address validator) external view returns (bool);
@@ -85,9 +88,11 @@ interface ITEEAttestationVerifier {
             bytes32 measurementHash,
             bytes32 sp1ProofHash,
             bytes32 litVerificationHash,
+            bytes32 wasmVersionHash,
             uint256 timestamp,
             bool isValid,
-            string memory platform
+            string memory platform,
+            bool isRelayer
         );
 
     function addExpectedMeasurement(

@@ -13,6 +13,15 @@ interface IBridge {
         bytes32 attestationHash;
         bool isActive;
         uint256 addedAt;
+        bytes32 wasmVersionHash;
+    }
+
+    struct Relayer {
+        address publicKey;
+        bytes32 attestationHash;
+        bool isActive;
+        uint256 addedAt;
+        bytes32 wasmVersionHash;
     }
 
     struct DepositRecord {
@@ -56,6 +65,10 @@ interface IBridge {
     event ValidatorRemoved(address indexed validator, string reason);
     event ValidatorUpdated(address indexed validator, bytes32 newAttestationHash);
 
+    event RelayerAdded(address indexed relayer, bytes32 attestationHash);
+    event RelayerRemoved(address indexed relayer, string reason);
+    event RelayerUpdated(address indexed relayer, bytes32 newAttestationHash);
+
     event CircuitBreakerTriggered(string reason, uint256 duration);
     event SequencerUpdated(address indexed oldSequencer, address indexed newSequencer);
     event RequiredSignaturesUpdated(uint256 oldValue, uint256 newValue);
@@ -96,6 +109,11 @@ interface IBridge {
     function getValidatorCount() external view returns (uint256);
     function getValidators() external view returns (address[] memory);
     function isValidator(address account) external view returns (bool);
+
+    function getRelayerCount() external view returns (uint256);
+    function getRelayers() external view returns (address[] memory);
+    function isRelayer(address account) external view returns (bool);
+
     function getUserDepositBalance(address user, address token) external view returns (uint256);
     function getAccumulatedFees(address token) external view returns (uint256);
 
