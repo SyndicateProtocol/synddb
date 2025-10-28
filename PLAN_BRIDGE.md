@@ -11,10 +11,12 @@ The Bridge.sol contract serves as the settlement layer interface for SyndDB, ena
 - **Withdrawals**: Validators can only sign messages that are first signed by the sequencer - they validate sequencer messages, not arbitrary withdrawals
 - **State Updates**: Batched updates for general message passing (not limited to orderbooks)
 
-### 2. Permissionless Relaying
-- Anyone can submit signed messages to the bridge
-- Relayers handle batching of multiple messages for gas efficiency (separation of concerns)
-- Relayers are incentivized through fee rebates
+### 2. Permissioned TEE Relaying
+- **TEE-based relayer**: Relayer runs in TEE environment (similar to validators)
+- **Permissioned role**: Trusted relayer eliminates front-running and withholding attacks
+- **Batching optimization**: Relayer handles batching of multiple messages for gas efficiency
+- **Guaranteed submission**: No censorship or selective message withholding
+- **Attestation required**: Relayer must provide TEE attestation like validators
 - Messages include nonces to prevent replay attacks
 - Batching happens at relayer level, not validator level - validators simply sign individual messages
 
@@ -38,14 +40,15 @@ The Bridge.sol contract serves as the settlement layer interface for SyndDB, ena
   - System supports both models seamlessly
 
 
-### 2. Validator Registry
-- **TEE attestation verification**: Validators prove TEE environment
+### 2. Validator & Relayer Registry
+- **TEE attestation verification**: Both validators and relayers prove TEE environment
 - **Dual attestation**: Combines TEE + zkVM security through SP1 proofs and Lit Protocol verification
 - **Two-phase onboarding**:
-  - Validators can permissionlessly propose themselves by submitting valid SP1 proof and Lit Protocol attestation
-  - Actual addition to validator set remains permissioned (governance controlled)
-- **Dynamic set**: Validators can be added/removed by governance
-- **Key rotation**: Support for validator key updates
+  - Validators/relayers can permissionlessly propose themselves by submitting valid SP1 proof and Lit Protocol attestation
+  - Actual addition to validator/relayer set remains permissioned (governance controlled)
+- **Dynamic sets**: Validators and relayers can be added/removed by governance
+- **Key rotation**: Support for validator and relayer key updates
+- **Role separation**: Validators attest to state, relayers submit transactions
 
 
 ### 3. Message Processing & Contract Separation
@@ -150,14 +153,15 @@ struct BalanceUpdate {
 1. User requests withdrawal in SyndDB
 2. Sequencer validates and signs withdrawal message
 3. Validators verify state and add signatures to the sequencer's message
-4. Relayer submits message with m-of-n validator signatures (sequencer signature parsed separately)
-5. Bridge validates all signatures and nonce ordering:
+4. **TEE Relayer** collects m-of-n validator signatures
+5. **TEE Relayer** submits batch to bridge contract with guaranteed ordering
+6. Bridge validates all signatures and nonce ordering:
    - **Global nonce**: Ensures sequential message processing
    - **Per-user nonce**: Prevents user-specific replay attacks
    - **Re-org protection**: Nonces map to transaction data (not just increments)
    - **Validator safety**: Validators halt signing if nonces unexpectedly change (re-org detection)
-6. Bridge transfers tokens to recipient
-7. Bridge emits `Withdrawal` event
+7. Bridge transfers tokens to recipient
+8. Bridge emits `Withdrawal` event
 
 Note: The deposit/withdrawal naming is preferred over lock/unlock since there's no 1:1 relationship between tokens in and out (due to fees, settlement netting, etc.)
 
@@ -173,7 +177,7 @@ Note: The deposit/withdrawal naming is preferred over lock/unlock since there's 
    - Sequencer creates merkle tree of balance updates
    - Sequencer signs batch settlement message referencing Chain.sol state
    - Validators verify state availability in Chain.sol before signing
-   - Relayer submits batch only after state is confirmed in Chain.sol
+   - **TEE Relayer** submits batch only after state is confirmed in Chain.sol
    - Bridge processes updates atomically
    - Net token movements executed on-chain
 
@@ -201,8 +205,13 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 - **Mitigation**: Chain ID in signatures (especially for cross-chain deposits)
 
 
-#### 4. Gas Griefing
-- **Mitigation**: Gas rebates for relayers
+#### 4. Transaction Withholding/Censorship
+- **Eliminated by design**: Permissioned TEE relayer guarantees submission
+- **No selective processing**: Relayer must submit all valid messages
+- **Attestation enforcement**: TEE environment prevents malicious behavior
+
+#### 5. Gas Griefing
+- **Mitigation**: TEE relayer optimizes gas usage
 - **Mitigation**: Batch processing limits
 - **Mitigation**: Storage optimization
 
@@ -299,11 +308,13 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 - Sign messages when valid
 - Monitor for malicious activity
 
-### For Relayers
-- Monitor for signed messages
-- Estimate gas costs
-- Submit profitable transactions
-- Handle revert scenarios
+### For TEE Relayer
+- Run in TEE environment with attestation
+- Monitor for signed messages from validators
+- Batch messages efficiently for gas optimization
+- Submit all valid messages (no censorship)
+- Handle revert scenarios and retry logic
+- Maintain submission queue integrity
 
 ## Testing Requirements
 
@@ -333,14 +344,14 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 ## Economic Model
 
 ### Fee Structure
-- **Deposit fees**: 0.1% (for relayer incentives)
+- **Deposit fees**: 0.1% (for system maintenance)
 - **Withdrawal fees**: Flat fee + percentage
 - **Settlement fees**: Paid by traders in SyndDB
-- **Relayer rewards**: Gas + premium
+- **TEE Relayer funding**: Covered by protocol treasury (no profit motive needed)
 
 ### Incentive Alignment
 - **Validators**: Fees from settlements
-- **Relayers**: Gas rebates + tips
+- **TEE Relayer**: Operational costs covered by protocol
 - **Users**: Fast finality and low fees
 - **Sequencer**: Volume-based revenue
 
@@ -375,7 +386,7 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 ### 3. Adoption
 > - $100M TVL within 6 months
 > - 10 active validators
-> - 5 independent relayers
+> - 1-3 TEE relayers (redundancy for availability)
 
 ## Dependencies
 
@@ -405,4 +416,6 @@ Note: Withdrawals are gated on state availability - Bridge.sol checks Chain.sol 
 
 ## Conclusion
 
-This Bridge architecture provides a secure, efficient, and flexible solution for SyndDB's unique requirements. The combination of TEE validators, multi-signature verification, and circuit breakers ensures security while maintaining the performance benefits of the SyndDB architecture. The support for diverse use cases - from DeFi orderbooks to gaming assets to DePIN telemetry - distinguishes this from simple token bridges. The separation of concerns between Bridge.sol (token movement) and Chain.sol (state management) follows proven patterns from the OP Stack, enabling modular development and maintenance while supporting SyndDB's high-performance database capabilities across multiple domains.
+This Bridge architecture provides a secure, efficient, and flexible solution for SyndDB's unique requirements. The combination of TEE validators, permissioned TEE relayers, and multi-signature verification creates a highly secure system that eliminates common attack vectors like transaction withholding and front-running. The dual-layer TEE approach (validators + relayer) ensures both state attestation and transaction submission are protected.
+
+The support for diverse use cases - from DeFi orderbooks to gaming assets to DePIN telemetry - distinguishes this from simple token bridges. The separation of concerns between Bridge.sol (token movement) and Chain.sol (state management) follows proven patterns from the OP Stack, enabling modular development and maintenance while supporting SyndDB's high-performance database capabilities across multiple domains.
