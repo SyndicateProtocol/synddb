@@ -41,32 +41,16 @@ contract ChainTest is Test {
         assertEq(chain.versionActivationDelay(), newDelay, "Delay should be updated");
     }
 
-    function test_RevertWhen_DelayBelowMinimum() public {
-        uint256 tooSmallDelay = chain.MIN_VERSION_ACTIVATION_DELAY() - 1;
-
-        vm.expectRevert("Delay out of bounds");
-        chain.updateVersionActivationDelay(tooSmallDelay);
+    function test_UpdateDelayToZero() public {
+        // Admin can set zero delay for immediate activation if desired
+        chain.updateVersionActivationDelay(0);
+        assertEq(chain.versionActivationDelay(), 0, "Should accept zero delay");
     }
 
-    function test_RevertWhen_DelayAboveMaximum() public {
-        uint256 tooLargeDelay = chain.MAX_VERSION_ACTIVATION_DELAY() + 1;
-
-        vm.expectRevert("Delay out of bounds");
-        chain.updateVersionActivationDelay(tooLargeDelay);
-    }
-
-    function test_UpdateDelayAtMinimumBoundary() public {
-        uint256 minDelay = chain.MIN_VERSION_ACTIVATION_DELAY();
-
-        chain.updateVersionActivationDelay(minDelay);
-        assertEq(chain.versionActivationDelay(), minDelay, "Should accept minimum delay");
-    }
-
-    function test_UpdateDelayAtMaximumBoundary() public {
-        uint256 maxDelay = chain.MAX_VERSION_ACTIVATION_DELAY();
-
-        chain.updateVersionActivationDelay(maxDelay);
-        assertEq(chain.versionActivationDelay(), maxDelay, "Should accept maximum delay");
+    function test_UpdateDelayToLargeValue() public {
+        uint256 largeDelay = 365 days; // 1 year
+        chain.updateVersionActivationDelay(largeDelay);
+        assertEq(chain.versionActivationDelay(), largeDelay, "Should accept large delay");
     }
 
     function test_RevertWhen_NonOwnerUpdatesDelay() public {
@@ -79,9 +63,6 @@ contract ChainTest is Test {
     }
 
     function testFuzz_UpdateVersionActivationDelay(uint256 newDelay) public {
-        // Bound the delay to valid range
-        newDelay = bound(newDelay, chain.MIN_VERSION_ACTIVATION_DELAY(), chain.MAX_VERSION_ACTIVATION_DELAY());
-
         uint256 oldDelay = chain.versionActivationDelay();
 
         // Expect the event
@@ -127,10 +108,6 @@ contract ChainTest is Test {
         assertEq(activationTimestamp2, block.timestamp + newDelay, "New version should use updated delay");
     }
 
-    function test_ConstantValues() public view {
-        assertEq(chain.MIN_VERSION_ACTIVATION_DELAY(), 12 hours, "Min delay should be 12 hours");
-        assertEq(chain.MAX_VERSION_ACTIVATION_DELAY(), 10 days, "Max delay should be 10 days");
-    }
 
     function test_VersionActivationWithTimestamp() public {
         bytes32 versionHash = keccak256("v1.0.0");

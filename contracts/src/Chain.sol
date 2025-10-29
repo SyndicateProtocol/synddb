@@ -32,11 +32,7 @@ contract Chain is Ownable, Pausable {
     mapping(bytes32 => WASMVersion) public wasmVersions;
     bytes32 public currentWASMVersion;
     bytes32 public pendingWASMVersion;
-    uint256 public versionActivationDelay = 1 days; // 1 day default delay (configurable)
-
-    // Governance constraints for activation delay (in seconds)
-    uint256 public constant MIN_VERSION_ACTIVATION_DELAY = 12 hours; // 12 hours minimum
-    uint256 public constant MAX_VERSION_ACTIVATION_DELAY = 10 days; // 10 days maximum
+    uint256 public versionActivationDelay = 1 days; // 1 day default delay (configurable by governance)
 
     // State Management
     struct StateCommitment {
@@ -422,15 +418,10 @@ contract Chain is Ownable, Pausable {
 
     /**
      * @notice Update the WASM version activation delay
-     * @param newDelay New delay in seconds (must be between MIN and MAX constraints)
+     * @param newDelay New delay in seconds
      * @dev Only owner can update. Affects future version activations, not pending ones.
      */
     function updateVersionActivationDelay(uint256 newDelay) external onlyOwner {
-        require(
-            newDelay >= MIN_VERSION_ACTIVATION_DELAY && newDelay <= MAX_VERSION_ACTIVATION_DELAY,
-            "Delay out of bounds"
-        );
-
         uint256 oldDelay = versionActivationDelay;
         versionActivationDelay = newDelay;
 
