@@ -32,7 +32,11 @@ contract Chain is Ownable, Pausable {
     mapping(bytes32 => WASMVersion) public wasmVersions;
     bytes32 public currentWASMVersion;
     bytes32 public pendingWASMVersion;
-    uint256 public versionActivationDelay = 7200; // 1 day at 12s blocks
+    uint256 public versionActivationDelay = 7200; // 1 day at 12s blocks (configurable)
+
+    // Governance constraints for activation delay
+    uint256 public constant MIN_VERSION_ACTIVATION_DELAY = 3600; // 12 hours minimum
+    uint256 public constant MAX_VERSION_ACTIVATION_DELAY = 86400; // 10 days maximum
 
     // State Management
     struct StateCommitment {
@@ -109,6 +113,7 @@ contract Chain is Ownable, Pausable {
     event ValidatorRemoved(address indexed validator);
     event SequencerUpdated(address indexed oldSequencer, address indexed newSequencer);
     event BridgeUpdated(address indexed oldBridge, address indexed newBridge);
+    event VersionActivationDelayUpdated(uint256 oldDelay, uint256 newDelay);
 
     // ============ Modifiers ============
     modifier onlySequencer() {
@@ -413,6 +418,23 @@ contract Chain is Ownable, Pausable {
         address oldBridge = bridgeContract;
         bridgeContract = newBridge;
         emit BridgeUpdated(oldBridge, newBridge);
+    }
+
+    /**
+     * @notice Update the WASM version activation delay
+     * @param newDelay New delay in blocks (must be between MIN and MAX constraints)
+     * @dev Only owner can update. Affects future version activations, not pending ones.
+     */
+    function updateVersionActivationDelay(uint256 newDelay) external onlyOwner {
+        require(
+            newDelay >= MIN_VERSION_ACTIVATION_DELAY && newDelay <= MAX_VERSION_ACTIVATION_DELAY,
+            "Delay out of bounds"
+        );
+
+        uint256 oldDelay = versionActivationDelay;
+        versionActivationDelay = newDelay;
+
+        emit VersionActivationDelayUpdated(oldDelay, newDelay);
     }
 
     // ============ View Functions ============

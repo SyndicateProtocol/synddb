@@ -64,6 +64,8 @@ interface IChain {
 
     event SnapshotPublished(uint256 indexed version, bytes32 snapshotHash, bytes32 globalHash, string storagePointer);
 
+    event VersionActivationDelayUpdated(uint256 oldDelay, uint256 newDelay);
+
     // ============ WASM Version Functions ============
 
     function addWASMVersion(
@@ -93,6 +95,10 @@ interface IChain {
     function publishSnapshot(uint256 version, bytes32 snapshotHash, string memory storagePointer, uint256 size) external;
 
     function commitState(uint256 version, bytes32 stateRoot) external;
+
+    // ============ Governance Functions ============
+
+    function updateVersionActivationDelay(uint256 newDelay) external;
 
     // ============ View Functions ============
 
