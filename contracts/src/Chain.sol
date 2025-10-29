@@ -87,7 +87,9 @@ contract Chain is Ownable, Pausable {
     bool public stateAvailable;
 
     // ============ Events ============
-    event WASMVersionAdded(bytes32 indexed versionHash, string ipfsCID, string arweaveTxId, uint256 activationTimestamp);
+    event WASMVersionAdded(
+        bytes32 indexed versionHash, string ipfsCID, string arweaveTxId, uint256 activationTimestamp
+    );
 
     event WASMVersionActivated(bytes32 indexed oldVersion, bytes32 indexed newVersion, uint256 blockNumber);
 
