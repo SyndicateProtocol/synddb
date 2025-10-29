@@ -2,7 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {Test, console} from "forge-std/Test.sol";
-import {Chain} from "../src/Chain.sol";
+import "../src/Chain.sol";
 
 contract ChainTest is Test {
     Chain public chain;
@@ -20,7 +20,12 @@ contract ChainTest is Test {
         validator = makeAddr("validator");
         bridge = makeAddr("bridge");
 
-        chain = new Chain(sequencer, bridge);
+        // Initialize with a test WASM version
+        bytes32 initialWasmVersion = keccak256("initial-version");
+        string memory ipfsCID = "QmInitialVersion";
+        string memory arweaveTxId = "arweave-initial";
+
+        chain = new Chain(sequencer, bridge, initialWasmVersion, ipfsCID, arweaveTxId);
     }
 
     function test_InitialActivationDelay() public view {
