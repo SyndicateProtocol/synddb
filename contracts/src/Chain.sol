@@ -24,7 +24,7 @@ contract Chain is Ownable, Pausable {
         bytes32 versionHash;
         string ipfsCID; // IPFS CID of WASM binary
         string arweaveTxId; // Arweave transaction ID (backup)
-        uint256 activationBlock;
+        uint256 activationTimestamp; // Unix timestamp when version becomes active
         bool isActive;
         uint256 addedAt;
     }
@@ -32,11 +32,11 @@ contract Chain is Ownable, Pausable {
     mapping(bytes32 => WASMVersion) public wasmVersions;
     bytes32 public currentWASMVersion;
     bytes32 public pendingWASMVersion;
-    uint256 public versionActivationDelay = 7200; // 1 day at 12s blocks (configurable)
+    uint256 public versionActivationDelay = 1 days; // 1 day default delay (configurable)
 
-    // Governance constraints for activation delay
-    uint256 public constant MIN_VERSION_ACTIVATION_DELAY = 3600; // 12 hours minimum
-    uint256 public constant MAX_VERSION_ACTIVATION_DELAY = 86400; // 10 days maximum
+    // Governance constraints for activation delay (in seconds)
+    uint256 public constant MIN_VERSION_ACTIVATION_DELAY = 12 hours; // 12 hours minimum
+    uint256 public constant MAX_VERSION_ACTIVATION_DELAY = 10 days; // 10 days maximum
 
     // State Management
     struct StateCommitment {
@@ -91,7 +91,7 @@ contract Chain is Ownable, Pausable {
     bool public stateAvailable;
 
     // ============ Events ============
-    event WASMVersionAdded(bytes32 indexed versionHash, string ipfsCID, string arweaveTxId, uint256 activationBlock);
+    event WASMVersionAdded(bytes32 indexed versionHash, string ipfsCID, string arweaveTxId, uint256 activationTimestamp);
 
     event WASMVersionActivated(bytes32 indexed oldVersion, bytes32 indexed newVersion, uint256 blockNumber);
 
@@ -163,7 +163,7 @@ contract Chain is Ownable, Pausable {
             versionHash: _initialWASMVersion,
             ipfsCID: _ipfsCID,
             arweaveTxId: _arweaveTxId,
-            activationBlock: block.number,
+            activationTimestamp: block.timestamp,
             isActive: true,
             addedAt: block.timestamp
         });
@@ -178,7 +178,7 @@ contract Chain is Ownable, Pausable {
      * @param versionHash The hash of the WASM binary
      * @param ipfsCID IPFS CID where WASM is stored
      * @param arweaveTxId Arweave transaction ID (backup storage)
-     * @param activationDelay Blocks until activation
+     * @param activationDelay Time in seconds until activation
      */
     function addWASMVersion(
         bytes32 versionHash,
@@ -191,20 +191,20 @@ contract Chain is Ownable, Pausable {
         require(activationDelay >= versionActivationDelay, "Activation too soon");
         require(!wasmVersions[versionHash].isActive, "Version already exists");
 
-        uint256 activationBlock = block.number + activationDelay;
+        uint256 activationTimestamp = block.timestamp + activationDelay;
 
         wasmVersions[versionHash] = WASMVersion({
             versionHash: versionHash,
             ipfsCID: ipfsCID,
             arweaveTxId: arweaveTxId,
-            activationBlock: activationBlock,
+            activationTimestamp: activationTimestamp,
             isActive: false,
             addedAt: block.timestamp
         });
 
         pendingWASMVersion = versionHash;
 
-        emit WASMVersionAdded(versionHash, ipfsCID, arweaveTxId, activationBlock);
+        emit WASMVersionAdded(versionHash, ipfsCID, arweaveTxId, activationTimestamp);
     }
 
     /**
@@ -214,7 +214,7 @@ contract Chain is Ownable, Pausable {
         require(pendingWASMVersion != bytes32(0), "No pending version");
 
         WASMVersion storage pending = wasmVersions[pendingWASMVersion];
-        require(block.number >= pending.activationBlock, "Activation not ready");
+        require(block.timestamp >= pending.activationTimestamp, "Activation not ready");
         require(!pending.isActive, "Already active");
 
         bytes32 oldVersion = currentWASMVersion;
@@ -422,7 +422,7 @@ contract Chain is Ownable, Pausable {
 
     /**
      * @notice Update the WASM version activation delay
-     * @param newDelay New delay in blocks (must be between MIN and MAX constraints)
+     * @param newDelay New delay in seconds (must be between MIN and MAX constraints)
      * @dev Only owner can update. Affects future version activations, not pending ones.
      */
     function updateVersionActivationDelay(uint256 newDelay) external onlyOwner {

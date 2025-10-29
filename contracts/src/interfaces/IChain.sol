@@ -12,7 +12,7 @@ interface IChain {
         bytes32 versionHash;
         string ipfsCID;
         string arweaveTxId;
-        uint256 activationBlock;
+        uint256 activationTimestamp;
         bool isActive;
         uint256 addedAt;
     }
@@ -46,7 +46,7 @@ interface IChain {
 
     // ============ Events ============
 
-    event WASMVersionAdded(bytes32 indexed versionHash, string ipfsCID, string arweaveTxId, uint256 activationBlock);
+    event WASMVersionAdded(bytes32 indexed versionHash, string ipfsCID, string arweaveTxId, uint256 activationTimestamp);
 
     event WASMVersionActivated(bytes32 indexed oldVersion, bytes32 indexed newVersion, uint256 blockNumber);
 
