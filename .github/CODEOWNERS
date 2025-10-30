@@ -1,0 +1,14 @@
+# This file defines code ownership for the SyndDB repository
+# Each line is a file pattern followed by one or more owners
+
+# Global owners - apply to everything in the repo unless overridden
+* @WillPapper @tsite
+
+# Rust core package
+/synddb-core/ @WillPapper @tsite
+
+# Documentation
+*.md @WillPapper @tsite
+
+# CI/CD
+/.github/ @WillPapper @tsite
