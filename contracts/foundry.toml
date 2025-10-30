@@ -5,10 +5,6 @@ libs = ["lib"]
 solc_version = "0.8.30"
 optimizer = true
 optimizer_runs = 200
-via_ir = true
-remappings = [
-    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
-    "forge-std/=lib/forge-std/src/"
-]
+via_ir = true  # Required to avoid "Stack too deep" errors
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
