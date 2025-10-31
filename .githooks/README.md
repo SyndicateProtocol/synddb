@@ -29,6 +29,26 @@ Runs before each commit to ensure code quality:
 
 If any files are reformatted, they are automatically re-staged for commit.
 
+### commit-msg
+
+Validates commit messages follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+**Valid types**: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `perf`, `ci`, `build`, `revert`
+
+**Examples**:
+- `feat: add user authentication`
+- `fix(api): handle null pointer exception`
+- `docs: update README with installation steps`
+- `chore!: drop support for Node 12` (breaking change)
+
 ## Requirements
 
 - **Rust**: Install from https://rustup.rs/
