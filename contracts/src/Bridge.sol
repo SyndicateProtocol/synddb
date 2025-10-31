@@ -8,6 +8,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
 /**
  * @title SyndDBBridge
@@ -17,13 +18,9 @@ import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     using SafeERC20 for IERC20;
     using ECDSA for bytes32;
+    using Address for address payable;
 
     // ============ Constants ============
-    // CLAUDE: Remove all fees. Why did you try to add fees?
-    uint256 public constant BASIS_POINTS = 10000;
-    // CLAUDE: Don't have min and max validators, just trust governance to set the proper number
-    uint256 public constant MAX_VALIDATORS = 20;
-    uint256 public constant MIN_VALIDATORS = 3;
 
     // EIP-712 type hashes
     bytes32 public constant WITHDRAWAL_TYPEHASH =
@@ -39,13 +36,12 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         bytes32 attestationHash;
         bool isActive;
         uint256 addedAt;
-        // CLAUDE: WASM versions can be updated without restarting the validator. Do we want to incorporate this into signatures instead? Or do we just care about the initial WASM version?
-        bytes32 wasmVersionHash; // Version this validator is running
+        bytes32 initialWasmVersionHash; // Initial WASM version at registration
     }
 
     mapping(address => Validator) public validators;
-    // CLAUDE: Arrays are bad because they can run out of gas. Switch this to a mapping of indices.
-    address[] public validatorList;
+    mapping(uint256 => address) public validatorByIndex;
+    uint256 public validatorCount;
     uint256 public requiredSignatures; // m in m-of-n
     address public sequencer;
 
@@ -55,67 +51,50 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         bytes32 attestationHash;
         bool isActive;
         uint256 addedAt;
-        // CLAUDE: The TEE is not running WASM versions. All we care about is the TEE version.
-        bytes32 wasmVersionHash;
+        bytes32 teeVersionHash;
     }
 
     mapping(address => Relayer) public relayers;
-    // CLAUDE: Same comment about arrays.
-    address[] public relayerList;
+    mapping(uint256 => address) public relayerByIndex;
+    uint256 public relayerCount;
 
-    // Deposit tracking
-    // CLAUDE: This is quite heavy and bloated. Can we make this lighter?
-    struct DepositRecord {
-        address depositor;
-        address token;
-        uint256 amount;
-        uint256 blockNumber;
-        bytes32 syndDbAccountId;
-    }
-
+    // Deposit tracking - rely primarily on events for deposit history
     uint256 public totalDeposits;
-    mapping(uint256 => DepositRecord) public deposits;
-    // CLAUDE: Why do we need per-user deposit tracking? A user's balance can change after bridging, so it doesn't seem like permanently tracking deposits is useful.
-    mapping(address => mapping(address => uint256)) public userDeposits; // user => token => amount
 
     // Withdrawal tracking
     mapping(uint256 => bool) public processedNonces;
     uint256 public currentNonce;
 
     // Balance updates for batch settlements
-    // CLAUDE: int256 seems likely to cause more problems than it's worth. Can we just have a boolean type that represents a credit or a debit?
+    enum BalanceUpdateType {
+        Credit, // Withdrawal from SyndDB to user
+        Debit // Should have been pre-deposited
+    }
+
     struct BalanceUpdate {
         address account;
         address token;
-        int256 delta; // Can be negative for debits
+        uint256 amount;
+        BalanceUpdateType updateType;
     }
 
-    // Circuit breakers
-    // CLAUDE: Clearly differentiate between global and per-token limits
-    // CLAUDE: Also use named mappings. It's not even obvious if this is per-token or per-user.
-    mapping(address => uint256) public dailyWithdrawalLimit; // Per token
-    mapping(address => uint256) public dailyWithdrawn; // token => amount withdrawn today
-    // CLAUDE: What is this for? Why  not just have withdrawal windows automatically roll over based on timestamps?
-    mapping(address => uint256) public lastWithdrawalDay; // token => day number
+    // Circuit breakers - global limits across all tokens
+    struct WithdrawalWindow {
+        uint256 amount;
+        uint256 windowStart;
+    }
 
-    mapping(address => mapping(address => uint256)) public userDailyWithdrawn; // user => token => amount
-    mapping(address => mapping(address => uint256)) public userLastWithdrawalDay; // user => token => day
-    // CLAUDE: This is not always USD
-    uint256 public globalDailyLimit = 10_000_000 * 10 ** 18; // $10M default
-    uint256 public userDailyLimit = 1_000_000 * 10 ** 18; // $1M default
+    mapping(address => WithdrawalWindow) public perTokenDailyWithdrawal; // token => withdrawal tracking
+    mapping(address => mapping(address => WithdrawalWindow)) public perUserPerTokenDailyWithdrawal; // user => token => withdrawal tracking
 
-    // Fees
-    // CLAUDE: Completely remove fees. Why did you add fees? Fees can be added at the application layer if needed.
-    uint256 public depositFeeBps = 10; // 0.1%
-    uint256 public withdrawalFeeBps = 30; // 0.3%
-    address public feeRecipient;
-    mapping(address => uint256) public accumulatedFees; // token => amount
+    uint256 public globalDailyLimitPerToken; // Max withdrawal per token per day
+    uint256 public perUserDailyLimitPerToken; // Max withdrawal per user per token per day
+    uint256 public constant WITHDRAWAL_WINDOW_DURATION = 1 days;
 
     // Emergency controls
     bool public depositsEnabled = true;
     bool public withdrawalsEnabled = true;
-    // CLAUDE: What is the deadline used for? Is it an automatic unpause or a pause delay? We would want an automatic unpause, since pausing should be immediate.
-    uint256 public emergencyPauseDeadline;
+    uint256 public emergencyPauseDeadline; // Minimum time before unpause is allowed (automatic unpause)
 
     // ============ Events ============
     event Deposit(
@@ -142,65 +121,71 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     event SequencerUpdated(address indexed oldSequencer, address indexed newSequencer);
     event RequiredSignaturesUpdated(uint256 oldValue, uint256 newValue);
 
-    event FeesCollected(address indexed token, uint256 amount, address indexed recipient);
     event EmergencyPause(uint256 deadline);
 
     // ============ Modifiers ============
-    // CLAUDE: I understand making each check into a function if what you want to do is allow users to easily check their status, but you also make it private. That makes it less useful. Consider making them public view functions instead.
     modifier onlySequencer() {
-        _checkSequencer();
+        require(isSequencer(msg.sender), "Not sequencer");
         _;
     }
 
     modifier onlyRelayer() {
-        _checkRelayer();
+        require(isActiveRelayer(msg.sender), "Not active relayer");
         _;
     }
 
     modifier whenDepositsEnabled() {
-        _checkDepositsEnabled();
+        require(areDepositsEnabled(), "Deposits disabled");
         _;
     }
 
     modifier whenWithdrawalsEnabled() {
-        _checkWithdrawalsEnabled();
+        require(areWithdrawalsEnabled(), "Withdrawals disabled");
         _;
     }
 
-    function _checkSequencer() private view {
-        require(msg.sender == sequencer, "Not sequencer");
+    // Public view functions for checking status
+    function isSequencer(address account) public view returns (bool) {
+        return account == sequencer;
     }
 
-    function _checkRelayer() private view {
-        require(relayers[msg.sender].isActive, "Not active relayer");
+    function isActiveRelayer(address account) public view returns (bool) {
+        return relayers[account].isActive;
     }
 
-    function _checkDepositsEnabled() private view {
-        require(depositsEnabled, "Deposits disabled");
+    function areDepositsEnabled() public view returns (bool) {
+        return depositsEnabled;
     }
 
-    function _checkWithdrawalsEnabled() private view {
-        require(withdrawalsEnabled, "Withdrawals disabled");
+    function areWithdrawalsEnabled() public view returns (bool) {
+        return withdrawalsEnabled;
     }
 
     // ============ Constructor ============
-    // CLAUDE: Add NatSpec documentation for constructor parameters.
+    /**
+     * @notice Initializes the SyndDB Bridge contract
+     * @param _sequencer The address of the sequencer responsible for ordering transactions
+     * @param _initialValidators Array of initial validator addresses to bootstrap the bridge
+     * @param _requiredSignatures The number of validator signatures required for withdrawals (m in m-of-n multisig)
+     * @param _globalDailyLimitPerToken Maximum amount that can be withdrawn per token per day
+     * @param _perUserDailyLimitPerToken Maximum amount that can be withdrawn per user per token per day
+     */
     constructor(
         address _sequencer,
         address[] memory _initialValidators,
         uint256 _requiredSignatures,
-        address _feeRecipient
+        uint256 _globalDailyLimitPerToken,
+        uint256 _perUserDailyLimitPerToken
     ) Ownable(msg.sender) EIP712("SyndDBBridge", "1") {
         require(_sequencer != address(0), "Invalid sequencer");
-        require(_feeRecipient != address(0), "Invalid fee recipient");
-        require(_initialValidators.length >= MIN_VALIDATORS, "Too few validators");
-        require(_initialValidators.length <= MAX_VALIDATORS, "Too many validators");
+        require(_initialValidators.length > 0, "Need at least one validator");
         require(_requiredSignatures <= _initialValidators.length, "Invalid signature requirement");
         require(_requiredSignatures >= 1, "At least 1 signature required");
 
         sequencer = _sequencer;
         requiredSignatures = _requiredSignatures;
-        feeRecipient = _feeRecipient;
+        globalDailyLimitPerToken = _globalDailyLimitPerToken;
+        perUserDailyLimitPerToken = _perUserDailyLimitPerToken;
 
         for (uint256 i = 0; i < _initialValidators.length; i++) {
             require(_initialValidators[i] != address(0), "Invalid validator");
@@ -209,10 +194,11 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
                 attestationHash: bytes32(0),
                 isActive: true,
                 addedAt: block.timestamp,
-                wasmVersionHash: bytes32(0)
+                initialWasmVersionHash: bytes32(0)
             });
-            validatorList.push(_initialValidators[i]);
+            validatorByIndex[i] = _initialValidators[i];
         }
+        validatorCount = _initialValidators.length;
     }
 
     // ============ Deposit Functions ============
@@ -233,29 +219,13 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(amount > 0, "Zero amount");
         require(syndDbAccountId != bytes32(0), "Invalid SyndDB account");
 
-        // Calculate fees
-        // CLAUDE: Remove fees entirely.
-        uint256 fee = (amount * depositFeeBps) / BASIS_POINTS;
-        uint256 amountAfterFee = amount - fee;
-
         // Transfer tokens from user
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
-        // Track deposit
-        // CLAUDE: Is this needed? Why don't we just rely on events to track deposits? This is a TON of unnecessary on-chain storage.
+        // Increment deposit counter
         uint256 depositId = totalDeposits++;
-        deposits[depositId] = DepositRecord({
-            depositor: msg.sender,
-            token: token,
-            amount: amountAfterFee,
-            blockNumber: block.number,
-            syndDbAccountId: syndDbAccountId
-        });
 
-        userDeposits[msg.sender][token] += amountAfterFee;
-        accumulatedFees[token] += fee;
-
-        emit Deposit(msg.sender, token, amountAfterFee, syndDbAccountId, depositId);
+        emit Deposit(msg.sender, token, amount, syndDbAccountId, depositId);
     }
 
     /**
@@ -266,24 +236,10 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(msg.value > 0, "Zero amount");
         require(syndDbAccountId != bytes32(0), "Invalid SyndDB account");
 
-        // Calculate fees
-        uint256 fee = (msg.value * depositFeeBps) / BASIS_POINTS;
-        uint256 amountAfterFee = msg.value - fee;
-
-        // Track deposit
+        // Increment deposit counter
         uint256 depositId = totalDeposits++;
-        deposits[depositId] = DepositRecord({
-            depositor: msg.sender,
-            token: address(0), // ETH represented as address(0)
-            amount: amountAfterFee,
-            blockNumber: block.number,
-            syndDbAccountId: syndDbAccountId
-        });
 
-        userDeposits[msg.sender][address(0)] += amountAfterFee;
-        accumulatedFees[address(0)] += fee;
-
-        emit Deposit(msg.sender, address(0), amountAfterFee, syndDbAccountId, depositId);
+        emit Deposit(msg.sender, address(0), msg.value, syndDbAccountId, depositId);
     }
 
     // ============ Withdrawal Functions ============
@@ -315,10 +271,10 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         // Check circuit breakers
         require(checkWithdrawalLimits(token, amount, recipient), "Withdrawal limit exceeded");
 
-        // Construct the withdrawal message
-        // CLAUDE: Why are we constructing a withdrawal message here? Shouldn't we just be validating the signatures and parsing those instead?
+        // Construct and verify the EIP-712 withdrawal message
+        // The sequencer and validators sign the withdrawal parameters (nonce, recipient, token, amount, deadline)
+        // We reconstruct the message here to verify that their signatures are valid for these specific parameters
         bytes32 structHash = keccak256(abi.encode(WITHDRAWAL_TYPEHASH, nonce, recipient, token, amount, deadline));
-
         bytes32 messageHash = _hashTypedDataV4(structHash);
 
         // Verify sequencer signature
@@ -355,33 +311,28 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         // Mark nonce as processed
         processedNonces[nonce] = true;
 
-        // Calculate fees
-        // CLAUDE: Remove fees
-        uint256 fee = (amount * withdrawalFeeBps) / BASIS_POINTS;
-        uint256 amountAfterFee = amount - fee;
-        accumulatedFees[token] += fee;
-
         // Update circuit breaker tracking
         updateWithdrawalTracking(token, amount, recipient);
 
         // Execute withdrawal
         if (token == address(0)) {
             // ETH withdrawal
-            // CLAUDE: Use OpenZeppelin's SafeTransferETH utility for safer ETH transfers.
-            (bool success,) = recipient.call{value: amountAfterFee}("");
-            require(success, "ETH transfer failed");
+            payable(recipient).sendValue(amount);
         } else {
             // ERC20 withdrawal
-            IERC20(token).safeTransfer(recipient, amountAfterFee);
+            IERC20(token).safeTransfer(recipient, amount);
         }
 
-        emit Withdrawal(recipient, token, amountAfterFee, nonce);
+        emit Withdrawal(recipient, token, amount, nonce);
     }
 
     /**
      * @notice Process a batch settlement for various use cases (only callable by TEE relayer)
+     * @dev The state root provides a commitment to the batch of updates for efficient verification
+     *      and enables off-chain validation/data availability. Validators sign the state root
+     *      rather than individual updates for gas efficiency.
      * @param nonce The unique nonce for this settlement
-     * @param stateRoot The merkle root of balance updates
+     * @param stateRoot The merkle root of balance updates (commitment for batch verification)
      * @param updates Array of balance updates to apply
      * @param deadline The deadline for this settlement
      * @param sequencerSignature The sequencer's signature
@@ -389,7 +340,6 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      */
     function processBatchSettlement(
         uint256 nonce,
-        // CLAUDE: Why do we have Merkle state roots at all? Is this related to batch posting? We should make that relationship clearer.
         bytes32 stateRoot,
         BalanceUpdate[] memory updates,
         uint256 deadline,
@@ -405,16 +355,15 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         bytes32 calculatedRoot = calculateMerkleRoot(updates);
         require(calculatedRoot == stateRoot, "State root mismatch");
 
-        // Construct the settlement message
+        // Construct the settlement message - validators sign the state root for efficiency
         bytes32 structHash = keccak256(abi.encode(BATCH_SETTLEMENT_TYPEHASH, nonce, stateRoot, deadline));
-
         bytes32 messageHash = _hashTypedDataV4(structHash);
 
         // Verify sequencer signature
         address recoveredSequencer = messageHash.recover(sequencerSignature);
         require(recoveredSequencer == sequencer, "Invalid sequencer signature");
 
-        // Verify validator signatures (similar to withdrawal)
+        // Verify validator signatures
         uint256 validSignatures = verifyValidatorSignatures(messageHash, validatorSignatures);
         require(validSignatures >= requiredSignatures, "Insufficient valid signatures");
 
@@ -425,25 +374,20 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         for (uint256 i = 0; i < updates.length; i++) {
             BalanceUpdate memory update = updates[i];
 
-            if (update.delta > 0) {
-                // Credit to user (withdrawal from SyndDB)
-                uint256 amount = uint256(update.delta);
-
-                // Check circuit breakers for withdrawals
-                require(checkWithdrawalLimits(update.token, amount, update.account), "Withdrawal limit exceeded");
-                updateWithdrawalTracking(update.token, amount, update.account);
+            if (update.updateType == BalanceUpdateType.Credit) {
+                // Credit to user (withdrawal from SyndDB to L1)
+                require(checkWithdrawalLimits(update.token, update.amount, update.account), "Withdrawal limit exceeded");
+                updateWithdrawalTracking(update.token, update.amount, update.account);
 
                 if (update.token == address(0)) {
-                    (bool success,) = update.account.call{value: amount}("");
-                    require(success, "ETH transfer failed");
+                    payable(update.account).sendValue(update.amount);
                 } else {
-                    IERC20(update.token).safeTransfer(update.account, amount);
+                    IERC20(update.token).safeTransfer(update.account, update.amount);
                 }
-            } else if (update.delta < 0) {
-                // Debit from user (should have been pre-deposited)
-                uint256 amount = uint256(-update.delta);
-                require(userDeposits[update.account][update.token] >= amount, "Insufficient deposit balance");
-                userDeposits[update.account][update.token] -= amount;
+            } else {
+                // Debit type - currently not used, but reserved for future functionality
+                // Note: Debits would require pre-approved deposit tracking
+                revert("Debit operations not supported in batch settlements");
             }
         }
 
@@ -456,55 +400,56 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      * @notice Add a new validator with TEE attestation
      * @param validator The validator address
      * @param attestationHash The hash of the TEE attestation
+     * @param wasmVersionHash The hash of the initial WASM version (static, set at registration)
      */
-    function addValidator(address validator, bytes32 attestationHash) external onlyOwner {
+    function addValidator(address validator, bytes32 attestationHash, bytes32 wasmVersionHash) external onlyOwner {
         require(validator != address(0), "Invalid validator");
         require(!validators[validator].isActive, "Already active");
-        require(validatorList.length < MAX_VALIDATORS, "Too many validators");
 
         validators[validator] = Validator({
             publicKey: validator,
             attestationHash: attestationHash,
             isActive: true,
             addedAt: block.timestamp,
-            wasmVersionHash: bytes32(0)
+            initialWasmVersionHash: wasmVersionHash
         });
 
-        validatorList.push(validator);
+        validatorByIndex[validatorCount] = validator;
+        validatorCount++;
 
         emit ValidatorAdded(validator, attestationHash);
     }
 
     /**
      * @notice Remove a validator
-     * @param validator The validator to remove
+     * @param validatorIndex The index of the validator to remove
      * @param reason The reason for removal
      */
-    function removeValidator(address validator, string memory reason) external onlyOwner {
+    function removeValidator(uint256 validatorIndex, string memory reason) external onlyOwner {
+        require(validatorIndex < validatorCount, "Invalid index");
+        address validator = validatorByIndex[validatorIndex];
         require(validators[validator].isActive, "Not active");
-        require(validatorList.length - 1 >= MIN_VALIDATORS, "Too few validators");
-        require(validatorList.length - 1 >= requiredSignatures, "Would break signature requirement");
+        require(validatorCount - 1 >= requiredSignatures, "Would break signature requirement");
 
         validators[validator].isActive = false;
 
-        // Remove from list
-        for (uint256 i = 0; i < validatorList.length; i++) {
-            if (validatorList[i] == validator) {
-                validatorList[i] = validatorList[validatorList.length - 1];
-                validatorList.pop();
-                break;
-            }
+        // Move last validator to the removed slot
+        if (validatorIndex != validatorCount - 1) {
+            validatorByIndex[validatorIndex] = validatorByIndex[validatorCount - 1];
         }
+        delete validatorByIndex[validatorCount - 1];
+        validatorCount--;
 
         emit ValidatorRemoved(validator, reason);
     }
 
     /**
-     * @notice Update validator attestation
+     * @notice Update validator attestation when the TEE attestation needs to be refreshed
+     * @dev This updates the attestation hash when the validator's TEE re-attests.
+     *      The WASM version is immutable and set at registration time.
      * @param validator The validator address
      * @param newAttestationHash The new attestation hash
      */
-    // CLAUDE: What is the purpose of this? Also should this tie into the WASM version somehow?
     function updateValidatorAttestation(address validator, bytes32 newAttestationHash) external onlyOwner {
         require(validators[validator].isActive, "Not active");
         validators[validator].attestationHash = newAttestationHash;
@@ -517,9 +462,9 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      * @notice Add a new TEE relayer with attestation
      * @param relayer The relayer address
      * @param attestationHash The hash of the TEE attestation
+     * @param teeVersionHash The hash of the TEE version
      */
-    // CLAUDE: Can we deduplicate the relayer and validator management code somehow? For example, by adding a role enum or something similar.
-    function addRelayer(address relayer, bytes32 attestationHash) external onlyOwner {
+    function addRelayer(address relayer, bytes32 attestationHash, bytes32 teeVersionHash) external onlyOwner {
         require(relayer != address(0), "Invalid relayer");
         require(!relayers[relayer].isActive, "Already active");
 
@@ -528,44 +473,51 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
             attestationHash: attestationHash,
             isActive: true,
             addedAt: block.timestamp,
-            wasmVersionHash: bytes32(0) // Will be set when relayer reports version
+            teeVersionHash: teeVersionHash
         });
 
-        relayerList.push(relayer);
+        relayerByIndex[relayerCount] = relayer;
+        relayerCount++;
+
         emit RelayerAdded(relayer, attestationHash);
     }
 
     /**
      * @notice Remove a relayer
-     * @param relayer The relayer to remove
+     * @param relayerIndex The index of the relayer to remove
      * @param reason The reason for removal
      */
-    function removeRelayer(address relayer, string memory reason) external onlyOwner {
+    function removeRelayer(uint256 relayerIndex, string memory reason) external onlyOwner {
+        require(relayerIndex < relayerCount, "Invalid index");
+        address relayer = relayerByIndex[relayerIndex];
         require(relayers[relayer].isActive, "Not active");
-        require(relayerList.length > 1, "Cannot remove last relayer");
+        require(relayerCount > 1, "Cannot remove last relayer");
 
         relayers[relayer].isActive = false;
 
-        // Remove from list
-        for (uint256 i = 0; i < relayerList.length; i++) {
-            if (relayerList[i] == relayer) {
-                relayerList[i] = relayerList[relayerList.length - 1];
-                relayerList.pop();
-                break;
-            }
+        // Move last relayer to the removed slot
+        if (relayerIndex != relayerCount - 1) {
+            relayerByIndex[relayerIndex] = relayerByIndex[relayerCount - 1];
         }
+        delete relayerByIndex[relayerCount - 1];
+        relayerCount--;
 
         emit RelayerRemoved(relayer, reason);
     }
 
     /**
-     * @notice Update relayer attestation
+     * @notice Update relayer attestation and TEE version
      * @param relayer The relayer address
      * @param newAttestationHash The new attestation hash
+     * @param newTeeVersionHash The new TEE version hash
      */
-    function updateRelayerAttestation(address relayer, bytes32 newAttestationHash) external onlyOwner {
+    function updateRelayerAttestation(address relayer, bytes32 newAttestationHash, bytes32 newTeeVersionHash)
+        external
+        onlyOwner
+    {
         require(relayers[relayer].isActive, "Not active");
         relayers[relayer].attestationHash = newAttestationHash;
+        relayers[relayer].teeVersionHash = newTeeVersionHash;
         emit RelayerUpdated(relayer, newAttestationHash);
     }
 
@@ -575,49 +527,61 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      * @notice Check if withdrawal is within limits
      */
     function checkWithdrawalLimits(address token, uint256 amount, address user) internal view returns (bool) {
-        uint256 currentDay = block.timestamp / 86400;
+        // Check global per-token daily limit
+        WithdrawalWindow memory tokenWindow = perTokenDailyWithdrawal[token];
+        if (block.timestamp >= tokenWindow.windowStart + WITHDRAWAL_WINDOW_DURATION) {
+            // Window has expired, amount would be the first in new window
+            if (amount > globalDailyLimitPerToken) {
+                return false;
+            }
+        } else {
+            // Window is still active
+            if (tokenWindow.amount + amount > globalDailyLimitPerToken) {
+                return false;
+            }
+        }
 
-        // Check global daily limit for token
-        uint256 tokenDailyWithdrawn = dailyWithdrawn[token];
-        if (currentDay != lastWithdrawalDay[token]) {
-            tokenDailyWithdrawn = 0;
-        }
-        if (tokenDailyWithdrawn + amount > globalDailyLimit) {
-            return false;
-        }
-
-        // Check user daily limit
-        uint256 userTokenDailyWithdrawn = userDailyWithdrawn[user][token];
-        if (currentDay != userLastWithdrawalDay[user][token]) {
-            userTokenDailyWithdrawn = 0;
-        }
-        if (userTokenDailyWithdrawn + amount > userDailyLimit) {
-            return false;
+        // Check per-user per-token daily limit
+        WithdrawalWindow memory userWindow = perUserPerTokenDailyWithdrawal[user][token];
+        if (block.timestamp >= userWindow.windowStart + WITHDRAWAL_WINDOW_DURATION) {
+            // Window has expired, amount would be the first in new window
+            if (amount > perUserDailyLimitPerToken) {
+                return false;
+            }
+        } else {
+            // Window is still active
+            if (userWindow.amount + amount > perUserDailyLimitPerToken) {
+                return false;
+            }
         }
 
         return true;
     }
 
     /**
-     * @notice Update withdrawal tracking for circuit breakers
+     * @notice Update withdrawal tracking for circuit breakers with automatic window rollover
      */
     function updateWithdrawalTracking(address token, uint256 amount, address user) internal {
-        uint256 currentDay = block.timestamp / 86400;
-
-        // Update global tracking
-        if (currentDay != lastWithdrawalDay[token]) {
-            dailyWithdrawn[token] = amount;
-            lastWithdrawalDay[token] = currentDay;
+        // Update global per-token tracking
+        WithdrawalWindow storage tokenWindow = perTokenDailyWithdrawal[token];
+        if (block.timestamp >= tokenWindow.windowStart + WITHDRAWAL_WINDOW_DURATION) {
+            // Start new window
+            tokenWindow.amount = amount;
+            tokenWindow.windowStart = block.timestamp;
         } else {
-            dailyWithdrawn[token] += amount;
+            // Add to current window
+            tokenWindow.amount += amount;
         }
 
-        // Update user tracking
-        if (currentDay != userLastWithdrawalDay[user][token]) {
-            userDailyWithdrawn[user][token] = amount;
-            userLastWithdrawalDay[user][token] = currentDay;
+        // Update per-user per-token tracking
+        WithdrawalWindow storage userWindow = perUserPerTokenDailyWithdrawal[user][token];
+        if (block.timestamp >= userWindow.windowStart + WITHDRAWAL_WINDOW_DURATION) {
+            // Start new window
+            userWindow.amount = amount;
+            userWindow.windowStart = block.timestamp;
         } else {
-            userDailyWithdrawn[user][token] += amount;
+            // Add to current window
+            userWindow.amount += amount;
         }
     }
 
@@ -637,7 +601,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      * @notice Update required signatures
      */
     function updateRequiredSignatures(uint256 newRequired) external onlyOwner {
-        require(newRequired > 0 && newRequired <= validatorList.length, "Invalid requirement");
+        require(newRequired > 0 && newRequired <= validatorCount, "Invalid requirement");
         uint256 oldRequired = requiredSignatures;
         requiredSignatures = newRequired;
         emit RequiredSignaturesUpdated(oldRequired, newRequired);
@@ -646,44 +610,12 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     /**
      * @notice Set withdrawal limits
      */
-    function setWithdrawalLimits(uint256 _globalDailyLimit, uint256 _userDailyLimit) external onlyOwner {
-        globalDailyLimit = _globalDailyLimit;
-        userDailyLimit = _userDailyLimit;
-    }
-
-    /**
-     * @notice Set fee parameters
-     */
-    function setFeeParameters(uint256 _depositFeeBps, uint256 _withdrawalFeeBps, address _feeRecipient)
+    function setWithdrawalLimits(uint256 _globalDailyLimitPerToken, uint256 _perUserDailyLimitPerToken)
         external
         onlyOwner
     {
-        require(_depositFeeBps <= 100, "Deposit fee too high"); // Max 1%
-        require(_withdrawalFeeBps <= 100, "Withdrawal fee too high"); // Max 1%
-        require(_feeRecipient != address(0), "Invalid recipient");
-
-        depositFeeBps = _depositFeeBps;
-        withdrawalFeeBps = _withdrawalFeeBps;
-        feeRecipient = _feeRecipient;
-    }
-
-    /**
-     * @notice Collect accumulated fees
-     */
-    function collectFees(address token) external {
-        uint256 amount = accumulatedFees[token];
-        require(amount > 0, "No fees to collect");
-
-        accumulatedFees[token] = 0;
-
-        if (token == address(0)) {
-            (bool success,) = feeRecipient.call{value: amount}("");
-            require(success, "ETH transfer failed");
-        } else {
-            IERC20(token).safeTransfer(feeRecipient, amount);
-        }
-
-        emit FeesCollected(token, amount, feeRecipient);
+        globalDailyLimitPerToken = _globalDailyLimitPerToken;
+        perUserDailyLimitPerToken = _perUserDailyLimitPerToken;
     }
 
     /**
@@ -782,14 +714,18 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      * @notice Get validator count
      */
     function getValidatorCount() external view returns (uint256) {
-        return validatorList.length;
+        return validatorCount;
     }
 
     /**
      * @notice Get all validators
      */
     function getValidators() external view returns (address[] memory) {
-        return validatorList;
+        address[] memory validatorAddresses = new address[](validatorCount);
+        for (uint256 i = 0; i < validatorCount; i++) {
+            validatorAddresses[i] = validatorByIndex[i];
+        }
+        return validatorAddresses;
     }
 
     /**
@@ -800,31 +736,21 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     }
 
     /**
-     * @notice Get user's deposited balance
-     */
-    function getUserDepositBalance(address user, address token) external view returns (uint256) {
-        return userDeposits[user][token];
-    }
-
-    /**
-     * @notice Get accumulated fees for a token
-     */
-    function getAccumulatedFees(address token) external view returns (uint256) {
-        return accumulatedFees[token];
-    }
-
-    /**
      * @notice Get relayer count
      */
     function getRelayerCount() external view returns (uint256) {
-        return relayerList.length;
+        return relayerCount;
     }
 
     /**
      * @notice Get all relayers
      */
     function getRelayers() external view returns (address[] memory) {
-        return relayerList;
+        address[] memory relayerAddresses = new address[](relayerCount);
+        for (uint256 i = 0; i < relayerCount; i++) {
+            relayerAddresses[i] = relayerByIndex[i];
+        }
+        return relayerAddresses;
     }
 
     /**
@@ -835,8 +761,14 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     }
 
     // ============ Receive Function ============
-    // CLAUDE: This means that all ETH sent to the contract is not tracked as a deposit. Make this trigger the deposit function instead?
+    /**
+     * @notice Accept ETH for withdrawals
+     * @dev ETH sent directly to the contract is held in the bridge for withdrawal operations.
+     *      Use depositEth() with a syndDbAccountId to deposit ETH and credit a SyndDB account.
+     */
     receive() external payable {
-        // Accept ETH for withdrawals
+        // Accept ETH for withdrawal operations
+        // Note: Direct ETH transfers are NOT credited to any SyndDB account
+        // Use depositEth() to deposit with account tracking
     }
 }
