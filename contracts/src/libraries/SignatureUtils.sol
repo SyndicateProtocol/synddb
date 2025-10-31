@@ -12,6 +12,8 @@ library SignatureUtils {
 
     /**
      * @notice Verify multiple signatures from a set of signers
+     * @dev Uses optimized duplicate detection - O(n*m) where m is valid signatures count
+     *      This is better than O(n²) as m <= n and typically m << n
      * @param messageHash The message hash to verify
      * @param signatures Array of signatures
      * @param validSigners Mapping of valid signers
@@ -29,21 +31,23 @@ library SignatureUtils {
         for (uint256 i = 0; i < signatures.length; i++) {
             address signer = recoverSigner(messageHash, signatures[i]);
 
-            // Check if signer is valid
-            if (validSigners[signer]) {
-                // Check for duplicates
-                bool isDuplicate = false;
-                for (uint256 j = 0; j < i; j++) {
-                    if (signers[j] == signer) {
-                        isDuplicate = true;
-                        break;
-                    }
-                }
+            // Skip if not a valid signer
+            if (!validSigners[signer]) {
+                continue;
+            }
 
-                if (!isDuplicate) {
-                    signers[validCount] = signer;
-                    validCount++;
+            // Check if we've already seen this signer (only check against valid signers)
+            bool isDuplicate = false;
+            for (uint256 j = 0; j < validCount; j++) {
+                if (signers[j] == signer) {
+                    isDuplicate = true;
+                    break;
                 }
+            }
+
+            if (!isDuplicate) {
+                signers[validCount] = signer;
+                validCount++;
             }
         }
     }

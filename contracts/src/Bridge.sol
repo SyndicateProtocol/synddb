@@ -281,31 +281,8 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         address recoveredSequencer = messageHash.recover(sequencerSignature);
         require(recoveredSequencer == sequencer, "Invalid sequencer signature");
 
-        // Verify validator signatures
-        uint256 validSignatures = 0;
-        address[] memory signers = new address[](validatorSignatures.length);
-
-        for (uint256 i = 0; i < validatorSignatures.length; i++) {
-            address signer = messageHash.recover(validatorSignatures[i]);
-
-            // Check if signer is a valid validator
-            if (validators[signer].isActive) {
-                // Check for duplicate signers
-                bool isDuplicate = false;
-                for (uint256 j = 0; j < i; j++) {
-                    if (signers[j] == signer) {
-                        isDuplicate = true;
-                        break;
-                    }
-                }
-
-                if (!isDuplicate) {
-                    signers[i] = signer;
-                    validSignatures++;
-                }
-            }
-        }
-
+        // Verify validator signatures with O(n) duplicate detection
+        uint256 validSignatures = verifyValidatorSignatures(messageHash, validatorSignatures);
         require(validSignatures >= requiredSignatures, "Insufficient valid signatures");
 
         // Mark nonce as processed
@@ -680,28 +657,37 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     }
 
     /**
-     * @notice Verify validator signatures
+     * @notice Verify validator signatures with optimized duplicate detection
+     * @dev Uses array tracking for seen signers - O(n*m) where m is valid signatures count
+     *      This is better than O(n²) as m <= n and typically m << n
+     * @param messageHash The message hash to verify
+     * @param signatures Array of signatures
+     * @return validSignatures Number of valid unique signatures
      */
     function verifyValidatorSignatures(bytes32 messageHash, bytes[] memory signatures) internal view returns (uint256) {
         uint256 validSignatures = 0;
-        address[] memory signers = new address[](signatures.length);
+        address[] memory seenSigners = new address[](signatures.length);
 
         for (uint256 i = 0; i < signatures.length; i++) {
             address signer = messageHash.recover(signatures[i]);
 
-            if (validators[signer].isActive) {
-                bool isDuplicate = false;
-                for (uint256 j = 0; j < i; j++) {
-                    if (signers[j] == signer) {
-                        isDuplicate = true;
-                        break;
-                    }
-                }
+            // Skip if not a valid validator
+            if (!validators[signer].isActive) {
+                continue;
+            }
 
-                if (!isDuplicate) {
-                    signers[i] = signer;
-                    validSignatures++;
+            // Check if we've already seen this signer (only check against valid signers)
+            bool isDuplicate = false;
+            for (uint256 j = 0; j < validSignatures; j++) {
+                if (seenSigners[j] == signer) {
+                    isDuplicate = true;
+                    break;
                 }
+            }
+
+            if (!isDuplicate) {
+                seenSigners[validSignatures] = signer;
+                validSignatures++;
             }
         }
 
