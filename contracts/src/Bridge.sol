@@ -139,7 +139,11 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     );
 
     event BatchSettlement(
-        uint256 indexed stateVersion, bytes32 hashChainHead, bytes32 balanceStateHash, uint256 updateCount, uint256 nonce
+        uint256 indexed stateVersion,
+        bytes32 hashChainHead,
+        bytes32 balanceStateHash,
+        uint256 updateCount,
+        uint256 nonce
     );
 
     event BalanceStateCommitted(
@@ -327,8 +331,9 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         // Construct and verify the EIP-712 withdrawal message
         // Sequencer and validators attest to: (nonce, recipient, token, amount, stateVersion, accountBalance, deadline)
         // This proves that at stateVersion, the account had accountBalance, and they're withdrawing amount
-        bytes32 structHash =
-            keccak256(abi.encode(WITHDRAWAL_TYPEHASH, nonce, recipient, token, amount, stateVersion, accountBalance, deadline));
+        bytes32 structHash = keccak256(
+            abi.encode(WITHDRAWAL_TYPEHASH, nonce, recipient, token, amount, stateVersion, accountBalance, deadline)
+        );
         bytes32 messageHash = _hashTypedDataV4(structHash);
 
         // Verify sequencer signature
@@ -445,8 +450,9 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(commitment.balanceStateHash == balanceStateHash, "Balance state mismatch");
 
         // Construct the settlement message - validators attest to state version and hashes
-        bytes32 structHash =
-            keccak256(abi.encode(BATCH_SETTLEMENT_TYPEHASH, nonce, stateVersion, hashChainHead, balanceStateHash, deadline));
+        bytes32 structHash = keccak256(
+            abi.encode(BATCH_SETTLEMENT_TYPEHASH, nonce, stateVersion, hashChainHead, balanceStateHash, deadline)
+        );
         bytes32 messageHash = _hashTypedDataV4(structHash);
 
         // Verify sequencer signature
