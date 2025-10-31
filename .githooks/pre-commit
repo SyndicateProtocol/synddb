@@ -3,6 +3,7 @@
 # Pre-commit hook to run formatters on staged files
 #
 
+# Exit on error, but allow individual checks to fail gracefully
 set -e
 
 # Colors for output
@@ -14,6 +15,9 @@ NC='\033[0m' # No Color
 
 # Get the root directory of the git repository
 REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# Track if any files were formatted
+FILES_FORMATTED=false
 
 echo -e "${BLUE}Running pre-commit checks...${NC}"
 
@@ -40,9 +44,10 @@ if [ -n "$STAGED_RUST_FILES" ]; then
     else
         echo -e "${YELLOW}Formatting Rust files...${NC}"
         cargo fmt
+        FILES_FORMATTED=true
 
         # Re-add the formatted files
-        echo "$STAGED_RUST_FILES" | while read -r file; do
+        echo "$STAGED_RUST_FILES" | while IFS= read -r file; do
             if [ -f "$file" ]; then
                 git add "$file"
                 echo -e "${GREEN}  ✓ Formatted and re-staged: $file${NC}"
@@ -82,10 +87,11 @@ if [ -n "$STAGED_SOL_FILES" ]; then
     else
         echo -e "${YELLOW}Formatting Solidity files...${NC}"
         forge fmt
+        FILES_FORMATTED=true
 
         # Re-add the formatted files (need to be relative to repo root)
         cd "$REPO_ROOT"
-        echo "$STAGED_SOL_FILES" | while read -r file; do
+        echo "$STAGED_SOL_FILES" | while IFS= read -r file; do
             if [ -f "$file" ]; then
                 git add "$file"
                 echo -e "${GREEN}  ✓ Formatted and re-staged: $file${NC}"
@@ -96,9 +102,13 @@ if [ -n "$STAGED_SOL_FILES" ]; then
     fi
 fi
 
-# Check if any files were actually staged
+# Summary output
 if [ -z "$STAGED_RUST_FILES" ] && [ -z "$STAGED_SOL_FILES" ]; then
     echo -e "${BLUE}No Rust or Solidity files staged, skipping formatting checks${NC}"
+elif [ "$FILES_FORMATTED" = true ]; then
+    echo ""
+    echo -e "${YELLOW}⚠ Files were automatically formatted and re-staged${NC}"
+    echo -e "${YELLOW}Review the changes with 'git diff --cached' before pushing${NC}"
 fi
 
 echo -e "${GREEN}✓ Pre-commit checks passed${NC}"
