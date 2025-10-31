@@ -9,7 +9,6 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
-import {MerkleUtils} from "./libraries/MerkleUtils.sol";
 
 /**
  * @title SyndDBBridge
@@ -24,10 +23,15 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     // ============ Constants ============
 
     // EIP-712 type hashes
-    bytes32 public constant WITHDRAWAL_TYPEHASH =
-        keccak256("Withdrawal(uint256 nonce,address recipient,address token,uint256 amount,uint256 deadline)");
-    bytes32 public constant BATCH_SETTLEMENT_TYPEHASH =
-        keccak256("BatchSettlement(uint256 nonce,bytes32 stateRoot,uint256 deadline)");
+    bytes32 public constant WITHDRAWAL_TYPEHASH = keccak256(
+        "Withdrawal(uint256 nonce,address recipient,address token,uint256 amount,uint256 stateVersion,uint256 accountBalance,uint256 deadline)"
+    );
+    bytes32 public constant BATCH_SETTLEMENT_TYPEHASH = keccak256(
+        "BatchSettlement(uint256 nonce,uint256 stateVersion,bytes32 hashChainHead,bytes32 balanceStateHash,uint256 deadline)"
+    );
+    bytes32 public constant BALANCE_STATE_COMMITMENT_TYPEHASH = keccak256(
+        "BalanceStateCommitment(uint256 stateVersion,uint256 sequenceIdRangeStart,uint256 sequenceIdRangeEnd,bytes32 hashChainHead,bytes32 balanceStateHash,uint256 totalAccounts,uint256 timestamp)"
+    );
 
     // ============ State Variables ============
 
@@ -80,6 +84,22 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         BalanceUpdateType updateType;
     }
 
+    // SQL-native balance state commitment (hybrid approach)
+    // This represents a snapshot of the SQLite database state
+    struct BalanceStateCommitment {
+        uint256 stateVersion; // Monotonic version number from SQLite
+        uint256 sequenceIdRangeStart; // First sequence_id in this commitment
+        uint256 sequenceIdRangeEnd; // Last sequence_id in this commitment
+        bytes32 hashChainHead; // Last state_hash from balance_updates table
+        bytes32 balanceStateHash; // keccak256 of all (account, token, balance) sorted
+        uint256 totalAccounts; // Number of unique accounts with balances
+        uint256 timestamp; // When this commitment was created
+    }
+
+    // Track committed balance states
+    mapping(uint256 => BalanceStateCommitment) public balanceStateCommitments;
+    uint256 public latestBalanceStateVersion;
+
     // Circuit breakers - global limits across all tokens
     struct WithdrawalWindow {
         uint256 amount;
@@ -107,9 +127,26 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         uint256 depositId
     );
 
-    event Withdrawal(address indexed recipient, address indexed token, uint256 amount, uint256 nonce);
+    event Withdrawal(
+        address indexed recipient,
+        address indexed token,
+        uint256 amount,
+        uint256 nonce,
+        uint256 stateVersion,
+        uint256 accountBalance
+    );
 
-    event BatchSettlement(bytes32 indexed stateRoot, uint256 updateCount, uint256 nonce);
+    event BatchSettlement(
+        uint256 indexed stateVersion, bytes32 hashChainHead, bytes32 balanceStateHash, uint256 updateCount, uint256 nonce
+    );
+
+    event BalanceStateCommitted(
+        uint256 indexed stateVersion,
+        bytes32 hashChainHead,
+        bytes32 balanceStateHash,
+        uint256 totalAccounts,
+        uint256 sequenceIdRangeEnd
+    );
 
     event ValidatorAdded(address indexed validator, bytes32 attestationHash);
     event ValidatorRemoved(address indexed validator, string reason);
@@ -247,11 +284,14 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     // ============ Withdrawal Functions ============
 
     /**
-     * @notice Process a withdrawal with validator signatures (only callable by TEE relayer)
+     * @notice Process a withdrawal with validator attestation of balance state (only callable by TEE relayer)
+     * @dev Uses SQL-native balance tracking with hash chains and state commitments
      * @param nonce The unique nonce for this withdrawal
      * @param recipient The recipient address
      * @param token The token to withdraw
      * @param amount The amount to withdraw
+     * @param stateVersion The SQLite state version this withdrawal is based on
+     * @param accountBalance The account's balance at stateVersion (must be >= amount)
      * @param deadline The deadline for this withdrawal
      * @param sequencerSignature The sequencer's signature
      * @param validatorSignatures Array of validator signatures
@@ -261,22 +301,32 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         address recipient,
         address token,
         uint256 amount,
+        uint256 stateVersion,
+        uint256 accountBalance,
         uint256 deadline,
         bytes memory sequencerSignature,
         bytes[] memory validatorSignatures
     ) external onlyRelayer nonReentrant whenNotPaused whenWithdrawalsEnabled {
-        // Check deadline
+        // Check deadline and nonce
         require(block.timestamp <= deadline, "Withdrawal expired");
         require(!processedNonces[nonce], "Nonce already processed");
         require(validatorSignatures.length >= requiredSignatures, "Insufficient signatures");
+
+        // Verify state version is committed and not too old
+        require(stateVersion <= latestBalanceStateVersion, "Future state version");
+        require(balanceStateCommitments[stateVersion].stateVersion == stateVersion, "State not committed");
+
+        // Verify amount doesn't exceed attested balance
+        require(amount <= accountBalance, "Amount exceeds balance");
 
         // Check circuit breakers
         require(checkWithdrawalLimits(token, amount, recipient), "Withdrawal limit exceeded");
 
         // Construct and verify the EIP-712 withdrawal message
-        // The sequencer and validators sign the withdrawal parameters (nonce, recipient, token, amount, deadline)
-        // We reconstruct the message here to verify that their signatures are valid for these specific parameters
-        bytes32 structHash = keccak256(abi.encode(WITHDRAWAL_TYPEHASH, nonce, recipient, token, amount, deadline));
+        // Sequencer and validators attest to: (nonce, recipient, token, amount, stateVersion, accountBalance, deadline)
+        // This proves that at stateVersion, the account had accountBalance, and they're withdrawing amount
+        bytes32 structHash =
+            keccak256(abi.encode(WITHDRAWAL_TYPEHASH, nonce, recipient, token, amount, stateVersion, accountBalance, deadline));
         bytes32 messageHash = _hashTypedDataV4(structHash);
 
         // Verify sequencer signature
@@ -302,24 +352,79 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
             IERC20(token).safeTransfer(recipient, amount);
         }
 
-        emit Withdrawal(recipient, token, amount, nonce);
+        emit Withdrawal(recipient, token, amount, nonce, stateVersion, accountBalance);
     }
 
     /**
-     * @notice Process a batch settlement for various use cases (only callable by TEE relayer)
-     * @dev The state root provides a commitment to the batch of updates for efficient verification
-     *      and enables off-chain validation/data availability. Validators sign the state root
-     *      rather than individual updates for gas efficiency.
+     * @notice Commit a balance state from SQLite (only callable by TEE relayer with validator attestation)
+     * @dev This records a snapshot of the SQLite database balance state on-chain
+     * @param commitment The balance state commitment from SQLite
+     * @param sequencerSignature The sequencer's signature
+     * @param validatorSignatures Array of validator signatures
+     */
+    function commitBalanceState(
+        BalanceStateCommitment calldata commitment,
+        bytes memory sequencerSignature,
+        bytes[] memory validatorSignatures
+    ) external onlyRelayer nonReentrant whenNotPaused {
+        require(validatorSignatures.length >= requiredSignatures, "Insufficient signatures");
+        require(commitment.stateVersion > latestBalanceStateVersion, "State version not monotonic");
+        require(commitment.timestamp <= block.timestamp, "Future timestamp");
+        require(commitment.timestamp >= block.timestamp - 1 hours, "Timestamp too old");
+
+        // Construct the EIP-712 commitment message
+        bytes32 structHash = keccak256(
+            abi.encode(
+                BALANCE_STATE_COMMITMENT_TYPEHASH,
+                commitment.stateVersion,
+                commitment.sequenceIdRangeStart,
+                commitment.sequenceIdRangeEnd,
+                commitment.hashChainHead,
+                commitment.balanceStateHash,
+                commitment.totalAccounts,
+                commitment.timestamp
+            )
+        );
+        bytes32 messageHash = _hashTypedDataV4(structHash);
+
+        // Verify sequencer signature
+        address recoveredSequencer = messageHash.recover(sequencerSignature);
+        require(recoveredSequencer == sequencer, "Invalid sequencer signature");
+
+        // Verify validator signatures
+        uint256 validSignatures = verifyValidatorSignatures(messageHash, validatorSignatures);
+        require(validSignatures >= requiredSignatures, "Insufficient valid signatures");
+
+        // Store the commitment
+        balanceStateCommitments[commitment.stateVersion] = commitment;
+        latestBalanceStateVersion = commitment.stateVersion;
+
+        emit BalanceStateCommitted(
+            commitment.stateVersion,
+            commitment.hashChainHead,
+            commitment.balanceStateHash,
+            commitment.totalAccounts,
+            commitment.sequenceIdRangeEnd
+        );
+    }
+
+    /**
+     * @notice Process a batch settlement with SQL-native balance state attestation (only callable by TEE relayer)
+     * @dev Validators attest to the balance state hash, then batch withdrawals are executed
      * @param nonce The unique nonce for this settlement
-     * @param stateRoot The merkle root of balance updates (commitment for batch verification)
-     * @param updates Array of balance updates to apply
+     * @param stateVersion The SQLite state version for this batch
+     * @param hashChainHead The hash chain head at this state
+     * @param balanceStateHash The balance state hash at this version
+     * @param updates Array of balance updates to apply (withdrawals)
      * @param deadline The deadline for this settlement
      * @param sequencerSignature The sequencer's signature
      * @param validatorSignatures Array of validator signatures
      */
     function processBatchSettlement(
         uint256 nonce,
-        bytes32 stateRoot,
+        uint256 stateVersion,
+        bytes32 hashChainHead,
+        bytes32 balanceStateHash,
         BalanceUpdate[] memory updates,
         uint256 deadline,
         bytes memory sequencerSignature,
@@ -330,12 +435,16 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(validatorSignatures.length >= requiredSignatures, "Insufficient signatures");
         require(updates.length > 0 && updates.length <= 100, "Invalid update count");
 
-        // Verify state root matches updates
-        bytes32 calculatedRoot = calculateMerkleRoot(updates);
-        require(calculatedRoot == stateRoot, "State root mismatch");
+        // Verify state version is committed
+        require(stateVersion <= latestBalanceStateVersion, "Future state version");
+        BalanceStateCommitment storage commitment = balanceStateCommitments[stateVersion];
+        require(commitment.stateVersion == stateVersion, "State not committed");
+        require(commitment.hashChainHead == hashChainHead, "Hash chain mismatch");
+        require(commitment.balanceStateHash == balanceStateHash, "Balance state mismatch");
 
-        // Construct the settlement message - validators sign the state root for efficiency
-        bytes32 structHash = keccak256(abi.encode(BATCH_SETTLEMENT_TYPEHASH, nonce, stateRoot, deadline));
+        // Construct the settlement message - validators attest to state version and hashes
+        bytes32 structHash =
+            keccak256(abi.encode(BATCH_SETTLEMENT_TYPEHASH, nonce, stateVersion, hashChainHead, balanceStateHash, deadline));
         bytes32 messageHash = _hashTypedDataV4(structHash);
 
         // Verify sequencer signature
@@ -349,7 +458,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         // Mark nonce as processed
         processedNonces[nonce] = true;
 
-        // Process all balance updates atomically
+        // Process all balance updates atomically (all should be credits/withdrawals)
         for (uint256 i = 0; i < updates.length; i++) {
             BalanceUpdate memory update = updates[i];
 
@@ -370,7 +479,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
             }
         }
 
-        emit BatchSettlement(stateRoot, updates.length, nonce);
+        emit BatchSettlement(stateVersion, hashChainHead, balanceStateHash, updates.length, nonce);
     }
 
     // ============ Validator Management ============
@@ -634,24 +743,6 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     }
 
     // ============ Helper Functions ============
-
-    /**
-     * @notice Calculate merkle root for balance updates using MerkleUtils library
-     * @param updates Array of balance updates
-     * @return The Merkle root
-     */
-    function calculateMerkleRoot(BalanceUpdate[] memory updates) internal pure returns (bytes32) {
-        if (updates.length == 0) return bytes32(0);
-
-        // Convert balance updates to leaf hashes
-        bytes32[] memory leaves = new bytes32[](updates.length);
-        for (uint256 i = 0; i < updates.length; i++) {
-            leaves[i] = keccak256(abi.encode(updates[i]));
-        }
-
-        // Use MerkleUtils library for tree construction
-        return MerkleUtils.calculateMerkleRoot(leaves);
-    }
 
     /**
      * @notice Verify validator signatures with optimized duplicate detection
