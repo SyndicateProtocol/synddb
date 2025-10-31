@@ -348,13 +348,60 @@ COMMIT;
 
 ## Validators and Settlement
 
+### Default Validator Implementation
+SyndDB provides a default validator implementation that:
+
+1. **Replays SQL State Transitions**: Executes all SQL operations to rebuild state
+2. **Verifies Bridge Claims**: Confirms all withdrawal/deposit amounts match bridge table entries
+3. **Validates Basic Invariants**: Ensures balances never go negative, totals sum correctly
+4. **Signs Valid States**: Approves states that pass all basic checks
+
+### Extending the Default Validator
+The default validator is designed to be extended with custom logic:
+
+```rust
+// Start with the default validator
+use synddb_validator::DefaultValidator;
+
+impl CustomValidator {
+    fn validate(&self, sql_ops: &[SqlOp]) -> Result<()> {
+        // Run default validation first
+        self.default.validate(sql_ops)?;
+
+        // Add external API checks
+        if self.config.check_oracles {
+            self.verify_price_feeds(sql_ops)?;
+        }
+
+        // Add guardrails on amounts
+        for op in sql_ops {
+            if let Some(withdrawal) = parse_withdrawal(op) {
+                // Reject anomalous movements
+                if withdrawal.amount > self.config.max_withdrawal {
+                    return Err("Withdrawal exceeds maximum");
+                }
+                if withdrawal.amount > self.get_historical_average() * 10 {
+                    return Err("Withdrawal 10x above average");
+                }
+            }
+        }
+
+        // Add any other custom logic
+        self.check_kyc_requirements(sql_ops)?;
+        self.verify_rate_limits(sql_ops)?;
+
+        Ok(())
+    }
+}
+```
+
 ### SQL Verification Without Re-execution
-Validators in SyndDB verify SQL operations rather than re-executing application logic:
+Validators verify SQL operations rather than re-executing application logic:
 
 1. **SQL Audit**: Validators replay SQL operations to verify state transitions
-2. **Business Logic Checks**: Add custom validation rules without re-implementing the application
-3. **No External Dependencies**: Don't need to re-fetch API data or reproduce computations
-4. **Settlement Authority**: Can approve bridge operations based on SQL verification
+2. **Extensible Checks**: Start with default validation, add custom rules as needed
+3. **Optional External Verification**: Can attempt to verify external data sources
+4. **Settlement Authority**: Approve bridge operations based on validation results
 
 ### TEE Deployment (Optional)
 For additional security, validators can run in Trusted Execution Environments:
@@ -364,47 +411,60 @@ For additional security, validators can run in Trusted Execution Environments:
 * **SQL Verification**: Same verification process, but with hardware-backed guarantees
 * **Bridge Processing**: TEE validators can hold bridge signing authority
 
-### Validator Implementation
-Validators are standardized Rust implementations that verify SQL operations:
+### Validator Types and Deployment
+
+#### Running the Default Validator
+The simplest deployment just runs the default validator:
+
+```bash
+# Run the default validator out-of-the-box
+synddb-validator \
+    --chain-rpc https://... \
+    --mode default \
+    --bridge-contract 0x123...
+```
+
+The default validator will:
+- Sync and replay all SQL operations
+- Verify bridge withdrawal/deposit amounts match
+- Check basic invariants (no negative balances, etc.)
+- Sign valid states for settlement
+
+#### Custom Validator Extensions
+Operators can extend the default validator:
 
 ```rust
-// Standardized Rust validator code
-// (The sequencer application can be in any language)
+// Custom validator with additional checks
+use synddb_validator::{DefaultValidator, ValidatorConfig};
 
-// Sync SQL operations from blockchain
-let sql_ops = sync_from_blockchain().await?;
-replay_sql_operations(&db, sql_ops).await?;
+fn main() {
+    let config = ValidatorConfig {
+        // Enable optional features
+        check_external_apis: true,
+        max_withdrawal: 1_000_000,
+        anomaly_detection: true,
+        rate_limiting: true,
+    };
 
-// Verify operations
-for op in &sql_ops {
-    // Check business rules
-    if is_withdrawal(op) && amount > MAX_WITHDRAWAL {
-        return Err("Withdrawal exceeds limit");
-    }
+    let validator = DefaultValidator::new(config)
+        .with_price_oracle("https://api.oracle.com")
+        .with_anomaly_threshold(10.0)  // 10x historical average
+        .with_custom_check(my_custom_validation);
 
-    // Verify state consistency
-    if !verify_balance_invariants(&db).await? {
-        return Err("Balance inconsistency detected");
-    }
+    validator.run().await?;
 }
 
-// Optional: Best-effort external data verification
-if let Some(price_update) = extract_price_update(op) {
-    // Try to verify the price was reasonable
-    if let Ok(external_price) = fetch_price_from_oracle().await {
-        if (price_update - external_price).abs() / external_price > 0.1 {
-            log::warn!("Price deviation >10% detected");
-        }
+// Custom validation logic
+fn my_custom_validation(sql_ops: &[SqlOp]) -> Result<()> {
+    // Add any application-specific checks
+    for op in sql_ops {
+        // Custom business logic validation
     }
-}
-
-// Process bridge operations if authorized
-if is_authorized_validator {
-    process_pending_withdrawals(&db).await?;
+    Ok(())
 }
 ```
 
-While the sequencer can be in any language, validators use standardized Rust code to ensure consistent verification across the network.
+While the sequencer can be in any language, all validators use the same Rust-based foundation to ensure consistent verification across the network.
 
 ## Use Cases
 SyndDB is designed for high-scale applications that require ultra-low latency and high throughput, including:
@@ -540,9 +600,11 @@ The shift to "language-agnostic applications with SQL verifiability" fundamental
 * **Local Development**: Test everything locally before deploying with blockchain
 
 ### For Validators
-* **Standardized Verification**: All validators run the same Rust code for consistent verification
+* **Default Implementation Provided**: Run a validator out-of-the-box with zero configuration
+* **Extensible Architecture**: Start with default validation, add custom checks as needed
+* **Standardized Verification**: All validators share the same Rust foundation for consistency
 * **Simple SQL Checks**: Verify SQL operations, not polyglot application logic
-* **Best-Effort External Verification**: Can attempt to re-derive external data when possible
+* **Optional External Verification**: Can add checks for external APIs, anomalies, or custom business rules
 * **No Language Dependencies**: Don't need to understand or run the original application's language
 * **Clear Audit Trail**: SQL provides a universal, well-understood verification language
 
