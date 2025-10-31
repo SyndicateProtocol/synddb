@@ -9,6 +9,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
+import {SignatureUtils} from "./libraries/SignatureUtils.sol";
 
 /**
  * @title SyndDBBridge
@@ -47,6 +48,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     mapping(address => Validator) public validators;
     mapping(uint256 => address) public validatorByIndex;
     mapping(address => uint256) private validatorIndexByAddress; // Reverse mapping for O(1) index lookups
+    mapping(address => bool) private activeValidators; // Helper mapping for SignatureUtils library
     uint256 public validatorCount;
     uint256 public requiredSignatures; // m in m-of-n
     address public sequencer;
@@ -504,6 +506,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
 
         validatorByIndex[validatorCount] = validator;
         validatorIndexByAddress[validator] = validatorCount;
+        activeValidators[validator] = true; // Sync with helper mapping for SignatureUtils
         validatorCount++;
 
         emit ValidatorAdded(validator, attestationHash);
@@ -522,6 +525,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
 
         validators[validator].isActive = false;
         delete validatorIndexByAddress[validator];
+        activeValidators[validator] = false; // Sync with helper mapping for SignatureUtils
 
         // Move last validator to the removed slot and update reverse mapping
         if (validatorIndex != validatorCount - 1) {
@@ -745,41 +749,15 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     // ============ Helper Functions ============
 
     /**
-     * @notice Verify validator signatures with optimized duplicate detection
-     * @dev Uses array tracking for seen signers - O(n*m) where m is valid signatures count
-     *      This is better than O(n²) as m <= n and typically m << n
+     * @notice Verify validator signatures using SignatureUtils library
+     * @dev Delegates to SignatureUtils.verifyMultipleSignatures for O(n*m) duplicate detection
      * @param messageHash The message hash to verify
      * @param signatures Array of signatures
      * @return validSignatures Number of valid unique signatures
      */
     function verifyValidatorSignatures(bytes32 messageHash, bytes[] memory signatures) internal view returns (uint256) {
-        uint256 validSignatures = 0;
-        address[] memory seenSigners = new address[](signatures.length);
-
-        for (uint256 i = 0; i < signatures.length; i++) {
-            address signer = messageHash.recover(signatures[i]);
-
-            // Skip if not a valid validator
-            if (!validators[signer].isActive) {
-                continue;
-            }
-
-            // Check if we've already seen this signer (only check against valid signers)
-            bool isDuplicate = false;
-            for (uint256 j = 0; j < validSignatures; j++) {
-                if (seenSigners[j] == signer) {
-                    isDuplicate = true;
-                    break;
-                }
-            }
-
-            if (!isDuplicate) {
-                seenSigners[validSignatures] = signer;
-                validSignatures++;
-            }
-        }
-
-        return validSignatures;
+        (uint256 validCount,) = SignatureUtils.verifyMultipleSignatures(messageHash, signatures, activeValidators);
+        return validCount;
     }
 
     // ============ View Functions ============
