@@ -68,38 +68,43 @@ STAGED_SOL_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.sol
 if [ -n "$STAGED_SOL_FILES" ]; then
     echo -e "${YELLOW}Checking Solidity formatting...${NC}"
 
-    # Change to the contracts directory
-    cd "$REPO_ROOT/contracts" || {
+    # Try to change to the contracts directory
+    CONTRACTS_DIR_MISSING=false
+    cd "$REPO_ROOT/contracts" || CONTRACTS_DIR_MISSING=true
+
+    if [ "$CONTRACTS_DIR_MISSING" = true ]; then
         echo -e "${YELLOW}Warning: contracts directory not found, skipping Solidity formatting${NC}"
-        exit 0
-    }
-
-    # Check if forge is installed
-    if ! command -v forge &> /dev/null; then
-        echo -e "${RED}Error: forge is not installed or not in PATH${NC}"
-        echo "Please install Foundry: https://book.getfoundry.sh/getting-started/installation"
-        exit 1
-    fi
-
-    # Run forge fmt
-    if forge fmt --check > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ All Solidity files are properly formatted${NC}"
     else
-        echo -e "${YELLOW}Formatting Solidity files...${NC}"
-        forge fmt
-        FILES_FORMATTED=true
+        # Check if forge is installed
+        if ! command -v forge &> /dev/null; then
+            echo -e "${RED}Error: forge is not installed or not in PATH${NC}"
+            echo "Please install Foundry: https://book.getfoundry.sh/getting-started/installation"
+            exit 1
+        fi
 
-        # Re-add the formatted files (need to be relative to repo root)
-        cd "$REPO_ROOT"
-        echo "$STAGED_SOL_FILES" | while IFS= read -r file; do
-            if [ -f "$file" ]; then
-                git add "$file"
-                echo -e "${GREEN}  ✓ Formatted and re-staged: $file${NC}"
-            fi
-        done
+        # Run forge fmt
+        if forge fmt --check > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ All Solidity files are properly formatted${NC}"
+        else
+            echo -e "${YELLOW}Formatting Solidity files...${NC}"
+            forge fmt
+            FILES_FORMATTED=true
 
-        echo -e "${GREEN}✓ Solidity files formatted and re-staged${NC}"
+            # Re-add the formatted files (need to be relative to repo root)
+            cd "$REPO_ROOT"
+            echo "$STAGED_SOL_FILES" | while IFS= read -r file; do
+                if [ -f "$file" ]; then
+                    git add "$file"
+                    echo -e "${GREEN}  ✓ Formatted and re-staged: $file${NC}"
+                fi
+            done
+
+            echo -e "${GREEN}✓ Solidity files formatted and re-staged${NC}"
+        fi
     fi
+
+    # Ensure we're back at repo root
+    cd "$REPO_ROOT"
 fi
 
 # Summary output
