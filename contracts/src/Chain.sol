@@ -146,12 +146,9 @@ contract Chain is Ownable, Pausable {
      * @param _initialWASMVersion The hash of the initial WASM version
      * @param _storageURI Storage URI for the initial WASM binary (recommend ipfs:// or ar:// schemes for immutability)
      */
-    constructor(
-        address _sequencer,
-        address _bridgeContract,
-        bytes32 _initialWASMVersion,
-        string memory _storageURI
-    ) Ownable(msg.sender) {
+    constructor(address _sequencer, address _bridgeContract, bytes32 _initialWASMVersion, string memory _storageURI)
+        Ownable(msg.sender)
+    {
         require(_sequencer != address(0), "Invalid sequencer");
         require(_bridgeContract != address(0), "Invalid bridge");
         require(_initialWASMVersion != bytes32(0), "Invalid WASM version");
@@ -162,10 +159,7 @@ contract Chain is Ownable, Pausable {
 
         // Set initial WASM version
         wasmVersions[_initialWASMVersion] = WASMVersion({
-            versionHash: _initialWASMVersion,
-            storageURI: _storageURI,
-            isActive: true,
-            addedAt: block.timestamp
+            versionHash: _initialWASMVersion, storageURI: _storageURI, isActive: true, addedAt: block.timestamp
         });
 
         currentWASMVersion = _initialWASMVersion;
@@ -192,12 +186,8 @@ contract Chain is Ownable, Pausable {
         }
 
         // Add and activate new version immediately
-        wasmVersions[versionHash] = WASMVersion({
-            versionHash: versionHash,
-            storageURI: storageURI,
-            isActive: true,
-            addedAt: block.timestamp
-        });
+        wasmVersions[versionHash] =
+            WASMVersion({versionHash: versionHash, storageURI: storageURI, isActive: true, addedAt: block.timestamp});
 
         currentWASMVersion = versionHash;
 
@@ -443,7 +433,6 @@ contract Chain is Ownable, Pausable {
         bridgeContract = newBridge;
         emit BridgeUpdated(oldBridge, newBridge);
     }
-
 
     // ============ View Functions ============
 
