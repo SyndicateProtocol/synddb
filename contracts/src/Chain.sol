@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
  * @title Chain
@@ -12,6 +13,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
  */
 contract Chain is Ownable, Pausable {
     using ECDSA for bytes32;
+    using MessageHashUtils for bytes32;
 
     // ============ Constants ============
     uint256 public constant MAX_DIFF_SIZE = 1_000_000; // 1MB max diff size
@@ -22,18 +24,13 @@ contract Chain is Ownable, Pausable {
     // WASM Version Management
     struct WASMVersion {
         bytes32 versionHash;
-        string ipfsCID; // IPFS CID of WASM binary
-        string arweaveTxId; // Arweave transaction ID (backup)
-        uint256 activationTimestamp; // Unix timestamp when version becomes active
+        string storageURI; // Immutable storage URI (recommend ipfs:// or ar:// schemes)
         bool isActive;
         uint256 addedAt;
     }
 
     mapping(bytes32 => WASMVersion) public wasmVersions;
     bytes32 public currentWASMVersion;
-    bytes32 public pendingWASMVersion;
-    // CLAUDE: Don't have an activation delay in the contract. We can always add a timelock on the governance side.
-    uint256 public versionActivationDelay = 1 days; // 1 day default delay (configurable by governance)
 
     // State Management
     struct StateCommitment {
@@ -71,19 +68,17 @@ contract Chain is Ownable, Pausable {
     uint256 public currentStateVersion;
     bytes32 public currentStateRoot;
     uint256 public lastSnapshotVersion;
-    // CLAUDE: Why are we setting the snapshot interval here? Shouldn't this be set on the application side (inside the TEE), and we just receive snapshots when they are ready?
-    uint256 public snapshotInterval = 10000; // Snapshot every 10k versions
 
     // Chain hash tracking (similar to OP Stack's approach)
     bytes32 public lastHash; // Global state hash
     bytes32 public lastDiffHash; // Last diff hash
     bytes32 public lastSnapshotHash; // Last snapshot hash
 
-    // Access control
-    // CLAUDE: Can we pull this from Bridge.sol? Why are we duplicating this? Duplicating it makes no sense? Or vice versa -- can Bridge pull from here?
-    // CLAUDE: Upon reflection, Bridge.sol should pull from Chain.sol. We are more likely to upgrade the bridge than the chain, so the chain should be the primary source of truth for the bridge (and not the other way around).
+    // Access control - Chain is source of truth for sequencer and validators
+    // Bridge.sol should read from Chain.sol
     address public sequencer;
     mapping(address => bool) public validators;
+    mapping(uint256 => address) public validatorByIndex;
     uint256 public validatorCount;
 
     // Bridge integration
@@ -91,10 +86,7 @@ contract Chain is Ownable, Pausable {
     bool public stateAvailable;
 
     // ============ Events ============
-    event WASMVersionAdded(
-        bytes32 indexed versionHash, string ipfsCID, string arweaveTxId, uint256 activationTimestamp
-    );
-
+    event WASMVersionAdded(bytes32 indexed versionHash, string storageURI);
     event WASMVersionActivated(bytes32 indexed oldVersion, bytes32 indexed newVersion, uint256 blockNumber);
 
     event StateCommitted(
@@ -115,59 +107,63 @@ contract Chain is Ownable, Pausable {
     event ValidatorRemoved(address indexed validator);
     event SequencerUpdated(address indexed oldSequencer, address indexed newSequencer);
     event BridgeUpdated(address indexed oldBridge, address indexed newBridge);
-    event VersionActivationDelayUpdated(uint256 oldDelay, uint256 newDelay);
+    event ChainHalted(address indexed challenger, uint256 version, string reason);
 
     // ============ Modifiers ============
-    // CLAUDE: Same feedback as Bridge.sol about making these variables public
     modifier onlySequencer() {
-        _checkSequencer();
+        require(isSequencer(msg.sender), "Not sequencer");
         _;
     }
 
     modifier onlyValidator() {
-        _checkValidator();
+        require(isValidatorActive(msg.sender), "Not validator");
         _;
     }
 
     modifier onlyBridge() {
-        _checkBridge();
+        require(isBridge(msg.sender), "Not bridge");
         _;
     }
 
-    function _checkSequencer() private view {
-        require(msg.sender == sequencer, "Not sequencer");
+    // Public view functions for checking status
+    function isSequencer(address account) public view returns (bool) {
+        return account == sequencer;
     }
 
-    function _checkValidator() private view {
-        require(validators[msg.sender], "Not validator");
+    function isValidatorActive(address account) public view returns (bool) {
+        return validators[account];
     }
 
-    function _checkBridge() private view {
-        require(msg.sender == bridgeContract, "Not bridge");
+    function isBridge(address account) public view returns (bool) {
+        return account == bridgeContract;
     }
 
     // ============ Constructor ============
+    /**
+     * @notice Initializes the Chain contract
+     * @param _sequencer The address of the sequencer responsible for ordering transactions
+     * @param _bridgeContract The address of the Bridge contract for integration
+     * @param _initialWASMVersion The hash of the initial WASM version
+     * @param _storageURI Storage URI for the initial WASM binary (recommend ipfs:// or ar:// schemes for immutability)
+     */
     constructor(
         address _sequencer,
         address _bridgeContract,
         bytes32 _initialWASMVersion,
-        string memory _ipfsCID,
-        string memory _arweaveTxId
+        string memory _storageURI
     ) Ownable(msg.sender) {
         require(_sequencer != address(0), "Invalid sequencer");
         require(_bridgeContract != address(0), "Invalid bridge");
         require(_initialWASMVersion != bytes32(0), "Invalid WASM version");
+        require(bytes(_storageURI).length > 0, "Invalid storage URI");
 
         sequencer = _sequencer;
         bridgeContract = _bridgeContract;
 
         // Set initial WASM version
-        // CLAUDE: Just use a generic activation URL -- no need to have both IPFS and Arweave here. In the comments, note that you recommend ipfs:// or ar:// URIs that are immutable
         wasmVersions[_initialWASMVersion] = WASMVersion({
             versionHash: _initialWASMVersion,
-            ipfsCID: _ipfsCID,
-            arweaveTxId: _arweaveTxId,
-            activationTimestamp: block.timestamp,
+            storageURI: _storageURI,
             isActive: true,
             addedAt: block.timestamp
         });
@@ -178,50 +174,15 @@ contract Chain is Ownable, Pausable {
     // ============ WASM Version Management ============
 
     /**
-     * @notice Add a new WASM version (governance controlled)
+     * @notice Add and activate a new WASM version (governance controlled)
+     * @dev Use immutable storage URIs (ipfs:// or ar:// schemes recommended)
      * @param versionHash The hash of the WASM binary
-     * @param ipfsCID IPFS CID where WASM is stored
-     * @param arweaveTxId Arweave transaction ID (backup storage)
-     * @param activationDelay Time in seconds until activation
+     * @param storageURI Storage URI where WASM binary is stored
      */
-    // CLAUDE: Same comments on storage URIs here
-    function addWASMVersion(
-        bytes32 versionHash,
-        string memory ipfsCID,
-        string memory arweaveTxId,
-        uint256 activationDelay
-    ) external onlyOwner {
+    function addWASMVersion(bytes32 versionHash, string memory storageURI) external onlyOwner {
         require(versionHash != bytes32(0), "Invalid version hash");
-        require(bytes(ipfsCID).length > 0, "Invalid IPFS CID");
-        require(activationDelay >= versionActivationDelay, "Activation too soon");
-        require(!wasmVersions[versionHash].isActive, "Version already exists");
-
-        uint256 activationTimestamp = block.timestamp + activationDelay;
-
-        wasmVersions[versionHash] = WASMVersion({
-            versionHash: versionHash,
-            ipfsCID: ipfsCID,
-            arweaveTxId: arweaveTxId,
-            activationTimestamp: activationTimestamp,
-            isActive: false,
-            addedAt: block.timestamp
-        });
-
-        pendingWASMVersion = versionHash;
-
-        emit WASMVersionAdded(versionHash, ipfsCID, arweaveTxId, activationTimestamp);
-    }
-
-    /**
-     * @notice Activate a pending WASM version
-     */
-    // CLAUDE: You can remove this logic entirely when we remove the activation delay
-    function activateWASMVersion() external {
-        require(pendingWASMVersion != bytes32(0), "No pending version");
-
-        WASMVersion storage pending = wasmVersions[pendingWASMVersion];
-        require(block.timestamp >= pending.activationTimestamp, "Activation not ready");
-        require(!pending.isActive, "Already active");
+        require(bytes(storageURI).length > 0, "Invalid storage URI");
+        require(wasmVersions[versionHash].addedAt == 0, "Version already exists");
 
         bytes32 oldVersion = currentWASMVersion;
 
@@ -230,12 +191,18 @@ contract Chain is Ownable, Pausable {
             wasmVersions[oldVersion].isActive = false;
         }
 
-        // Activate new version
-        pending.isActive = true;
-        currentWASMVersion = pendingWASMVersion;
-        pendingWASMVersion = bytes32(0);
+        // Add and activate new version immediately
+        wasmVersions[versionHash] = WASMVersion({
+            versionHash: versionHash,
+            storageURI: storageURI,
+            isActive: true,
+            addedAt: block.timestamp
+        });
 
-        emit WASMVersionActivated(oldVersion, currentWASMVersion, block.number);
+        currentWASMVersion = versionHash;
+
+        emit WASMVersionAdded(versionHash, storageURI);
+        emit WASMVersionActivated(oldVersion, versionHash, block.number);
     }
 
     /**
@@ -244,37 +211,43 @@ contract Chain is Ownable, Pausable {
     function getCurrentWASMVersion()
         external
         view
-        returns (bytes32 versionHash, string memory ipfsCID, string memory arweaveTxId, bool isActive)
+        returns (bytes32 versionHash, string memory storageURI, bool isActive)
     {
         WASMVersion memory version = wasmVersions[currentWASMVersion];
-        return (version.versionHash, version.ipfsCID, version.arweaveTxId, version.isActive);
+        return (version.versionHash, version.storageURI, version.isActive);
     }
 
     // ============ State Management ============
 
     /**
-     * @notice Publish a state diff
-     * @param fromVersion Starting version
-     * @param toVersion Ending version
+     * @notice Publish a state diff with validator sign-off
+     * @dev Validators publish data after verifying sequencer signature. Ensures sequential version progression.
+     * @param fromVersion Starting version (must equal currentStateVersion)
+     * @param toVersion Ending version (must be fromVersion + 1 for sequential progression)
      * @param diffHash Hash of the diff
-     * @param storagePointer IPFS CID or Arweave TX
+     * @param storagePointer Storage URI (recommend ipfs:// or ar:// schemes)
      * @param size Size of the diff
+     * @param sequencerSignature Sequencer's signature over the diff data
      */
-    // CLAUDE: All data is published by validators, not sequencers. Sequencers only make data available for validators. Track the number of validator sign-offs.
-    // CLAUDE: Make sure that we validate sequencer signatures so that the sequencer is still posting valid data and the validators are simply signing off on it. (The actual data should be posted by a relayer)
-    // CLAUDE: Also always track e.g. lastDiff to ensure that diffs are sequential and no versions are skipped. This prevents chain forks. Do this for every relevant area (diffs, snapshots, global hash, etc)
-    // CLAUDE: Also allow any validator to trigger a chain halt by challenging a diff/snapshot/etc. We want to prioritize safety over liveness and halt if any validators disagree with each other.
     function publishDiff(
         uint256 fromVersion,
         uint256 toVersion,
         bytes32 diffHash,
         string memory storagePointer,
-        uint256 size
-    ) external onlySequencer whenNotPaused {
-        require(toVersion > fromVersion, "Invalid version range");
+        uint256 size,
+        bytes memory sequencerSignature
+    ) external onlyValidator whenNotPaused {
+        // Sequential validation - prevent skipping versions
+        require(toVersion == fromVersion + 1, "Non-sequential version");
         require(fromVersion == currentStateVersion, "Version mismatch");
         require(size <= MAX_DIFF_SIZE, "Diff too large");
         require(diffHash != bytes32(0), "Invalid diff hash");
+
+        // Verify sequencer signature
+        bytes32 messageHash = keccak256(abi.encodePacked(fromVersion, toVersion, diffHash, storagePointer, size));
+        bytes32 ethSignedHash = messageHash.toEthSignedMessageHash();
+        address recovered = ethSignedHash.recover(sequencerSignature);
+        require(recovered == sequencer, "Invalid sequencer signature");
 
         // Update global hash chain
         bytes32 newGlobalHash = keccak256(abi.encode(lastHash, diffHash, toVersion));
@@ -297,19 +270,32 @@ contract Chain is Ownable, Pausable {
     }
 
     /**
-     * @notice Publish a state snapshot
-     * @param version Version of the snapshot
+     * @notice Publish a state snapshot with validator sign-off
+     * @dev Validators publish snapshots after verifying sequencer signature. Snapshots are sequential.
+     * @param version Version of the snapshot (must equal currentStateVersion)
      * @param snapshotHash Hash of the snapshot
-     * @param storagePointer IPFS CID or Arweave TX
+     * @param storagePointer Storage URI (recommend ipfs:// or ar:// schemes)
      * @param size Size of the snapshot
+     * @param sequencerSignature Sequencer's signature over the snapshot data
      */
-    function publishSnapshot(uint256 version, bytes32 snapshotHash, string memory storagePointer, uint256 size)
-        external
-        onlySequencer
-        whenNotPaused
-    {
+    function publishSnapshot(
+        uint256 version,
+        bytes32 snapshotHash,
+        string memory storagePointer,
+        uint256 size,
+        bytes memory sequencerSignature
+    ) external onlyValidator whenNotPaused {
         require(version == currentStateVersion, "Version mismatch");
         require(snapshotHash != bytes32(0), "Invalid snapshot hash");
+
+        // Ensure sequential snapshots
+        require(version > lastSnapshotVersion, "Non-sequential snapshot");
+
+        // Verify sequencer signature
+        bytes32 messageHash = keccak256(abi.encodePacked(version, snapshotHash, storagePointer, size));
+        bytes32 ethSignedHash = messageHash.toEthSignedMessageHash();
+        address recovered = ethSignedHash.recover(sequencerSignature);
+        require(recovered == sequencer, "Invalid sequencer signature");
 
         // Update global hash chain
         bytes32 newGlobalHash = keccak256(abi.encode(lastHash, snapshotHash, version));
@@ -332,17 +318,19 @@ contract Chain is Ownable, Pausable {
     }
 
     /**
-     * @notice Commit a state root (called by validators)
+     * @notice Commit a state hash (called by validators)
+     * @dev In a SQL environment, this represents a hash of the database state for verification purposes.
+     *      Not a Merkle root like in EVM - instead a deterministic hash of the full DB state.
+     *      Used for validators to attest that they agree on the current state.
      * @param version State version
-     * @param stateRoot The state root hash
+     * @param stateHash The deterministic hash of the database state
      */
-    // CLAUDE: What is this used for? The environment is a SQL environment, not an EVM environment. Do we need state roots at all? What would you recommend instead?
-    function commitState(uint256 version, bytes32 stateRoot) external onlyValidator whenNotPaused {
+    function commitState(uint256 version, bytes32 stateHash) external onlyValidator whenNotPaused {
         require(version <= currentStateVersion, "Future version");
-        require(stateRoot != bytes32(0), "Invalid state root");
+        require(stateHash != bytes32(0), "Invalid state hash");
 
         stateCommitments[version] = StateCommitment({
-            stateRoot: stateRoot,
+            stateRoot: stateHash,
             wasmVersionHash: currentWASMVersion,
             sequencerVersion: version,
             blockNumber: block.number,
@@ -350,10 +338,25 @@ contract Chain is Ownable, Pausable {
             submitter: msg.sender
         });
 
-        currentStateRoot = stateRoot;
+        currentStateRoot = stateHash;
         stateAvailable = true;
 
-        emit StateCommitted(version, stateRoot, currentWASMVersion, msg.sender);
+        emit StateCommitted(version, stateHash, currentWASMVersion, msg.sender);
+    }
+
+    /**
+     * @notice Challenge and halt the chain if a validator detects invalid data
+     * @dev Prioritizes safety over liveness - any validator can halt the chain
+     * @param version The version being challenged
+     * @param reason Description of the challenge
+     */
+    function challengeAndHalt(uint256 version, string memory reason) external onlyValidator {
+        require(bytes(reason).length > 0, "Must provide reason");
+
+        // Immediately pause the chain
+        _pause();
+
+        emit ChainHalted(msg.sender, version, reason);
     }
 
     // ============ Bridge Integration ============
@@ -388,25 +391,34 @@ contract Chain is Ownable, Pausable {
 
     /**
      * @notice Add a validator
+     * @dev Bridge.sol should read validator info from Chain.sol to avoid duplication
      */
-    // CLAUDE: Have Bridge.sol read this from Chain.sol instead of duplicating it.
     function addValidator(address validator) external onlyOwner {
         require(validator != address(0), "Invalid validator");
         require(!validators[validator], "Already validator");
 
         validators[validator] = true;
+        validatorByIndex[validatorCount] = validator;
         validatorCount++;
 
         emit ValidatorAdded(validator);
     }
 
     /**
-     * @notice Remove a validator
+     * @notice Remove a validator by index
      */
-    function removeValidator(address validator) external onlyOwner {
+    function removeValidator(uint256 validatorIndex) external onlyOwner {
+        require(validatorIndex < validatorCount, "Invalid index");
+        address validator = validatorByIndex[validatorIndex];
         require(validators[validator], "Not validator");
 
         validators[validator] = false;
+
+        // Move last validator to removed slot
+        if (validatorIndex != validatorCount - 1) {
+            validatorByIndex[validatorIndex] = validatorByIndex[validatorCount - 1];
+        }
+        delete validatorByIndex[validatorCount - 1];
         validatorCount--;
 
         emit ValidatorRemoved(validator);
@@ -432,17 +444,6 @@ contract Chain is Ownable, Pausable {
         emit BridgeUpdated(oldBridge, newBridge);
     }
 
-    /**
-     * @notice Update the WASM version activation delay
-     * @param newDelay New delay in seconds
-     * @dev Only owner can update. Affects future version activations, not pending ones.
-     */
-    function updateVersionActivationDelay(uint256 newDelay) external onlyOwner {
-        uint256 oldDelay = versionActivationDelay;
-        versionActivationDelay = newDelay;
-
-        emit VersionActivationDelayUpdated(oldDelay, newDelay);
-    }
 
     // ============ View Functions ============
 
@@ -499,5 +500,24 @@ contract Chain is Ownable, Pausable {
      */
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    /**
+     * @notice Get all validators
+     */
+    function getValidators() external view returns (address[] memory) {
+        address[] memory validatorAddresses = new address[](validatorCount);
+        for (uint256 i = 0; i < validatorCount; i++) {
+            validatorAddresses[i] = validatorByIndex[i];
+        }
+        return validatorAddresses;
+    }
+
+    // ============ Receive Function ============
+    /**
+     * @notice Reject direct ETH transfers to prevent loss of funds
+     */
+    receive() external payable {
+        revert("Direct ETH transfers not accepted");
     }
 }

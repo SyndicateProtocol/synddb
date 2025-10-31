@@ -762,14 +762,10 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
 
     // ============ Receive Function ============
     /**
-     * @notice Accept ETH for withdrawals
-     * @dev ETH sent directly to the contract is held in the bridge for withdrawal operations.
-     *      Use depositEth() with a syndDbAccountId to deposit ETH and credit a SyndDB account.
+     * @notice Reject direct ETH transfers to prevent loss of funds
+     * @dev Use depositEth() with a syndDbAccountId to deposit ETH and credit a SyndDB account
      */
     receive() external payable {
-        // CLAUDE: Just block this entirely. Do the same in Chain.sol. We don't want funds to get lost.
-        // Accept ETH for withdrawal operations
-        // Note: Direct ETH transfers are NOT credited to any SyndDB account
-        // Use depositEth() to deposit with account tracking
+        revert("Direct ETH transfers not accepted - use depositEth()");
     }
 }
