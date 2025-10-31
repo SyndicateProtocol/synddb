@@ -45,7 +45,15 @@ sqlite3 example.db "SELECT name, email, balance FROM users ORDER BY balance DESC
 
 ### Development Setup
 
-1. **Configure your environment (recommended):**
+1. **Install git hooks (required for contributors):**
+   ```bash
+   # Install pre-commit hooks for automatic formatting
+   ./.githooks/install.sh
+   ```
+
+   The hooks will automatically format Rust and Solidity code before each commit. See [.githooks/README.md](.githooks/README.md) for details.
+
+2. **Configure your environment (recommended):**
    ```bash
    # Create .env file for local development (optional, has defaults)
    cp .env.example .env
@@ -54,7 +62,7 @@ sqlite3 example.db "SELECT name, email, balance FROM users ORDER BY balance DESC
 
    Note: The `.env` file is the recommended way to configure SyndDB for local development. It's automatically loaded and never committed to git. For production deployments, use environment variables directly.
 
-2. **Build and test:**
+3. **Build and test:**
    ```bash
    # Build specific crate
    cargo build --package synddb-core
@@ -62,14 +70,14 @@ sqlite3 example.db "SELECT name, email, balance FROM users ORDER BY balance DESC
    # Run tests with output
    cargo test --package synddb-core -- --nocapture
 
-   # Format code
+   # Format code (done automatically by git hooks)
    cargo fmt --all
 
    # Run linter
    cargo clippy --package synddb-core -- -D warnings
    ```
 
-3. **View documentation:**
+4. **View documentation:**
    ```bash
    cargo doc --package synddb-core --open
    ```
