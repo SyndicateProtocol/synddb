@@ -19,7 +19,9 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     using ECDSA for bytes32;
 
     // ============ Constants ============
+    // CLAUDE: Remove all fees. Why did you try to add fees?
     uint256 public constant BASIS_POINTS = 10000;
+    // CLAUDE: Don't have min and max validators, just trust governance to set the proper number
     uint256 public constant MAX_VALIDATORS = 20;
     uint256 public constant MIN_VALIDATORS = 3;
 
@@ -37,10 +39,12 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         bytes32 attestationHash;
         bool isActive;
         uint256 addedAt;
+        // CLAUDE: WASM versions can be updated without restarting the validator. Do we want to incorporate this into signatures instead? Or do we just care about the initial WASM version?
         bytes32 wasmVersionHash; // Version this validator is running
     }
 
     mapping(address => Validator) public validators;
+    // CLAUDE: Arrays are bad because they can run out of gas. Switch this to a mapping of indices.
     address[] public validatorList;
     uint256 public requiredSignatures; // m in m-of-n
     address public sequencer;
@@ -51,13 +55,16 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         bytes32 attestationHash;
         bool isActive;
         uint256 addedAt;
+        // CLAUDE: The TEE is not running WASM versions. All we care about is the TEE version.
         bytes32 wasmVersionHash;
     }
 
     mapping(address => Relayer) public relayers;
+    // CLAUDE: Same comment about arrays.
     address[] public relayerList;
 
     // Deposit tracking
+    // CLAUDE: This is quite heavy and bloated. Can we make this lighter?
     struct DepositRecord {
         address depositor;
         address token;
@@ -68,6 +75,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
 
     uint256 public totalDeposits;
     mapping(uint256 => DepositRecord) public deposits;
+    // CLAUDE: Why do we need per-user deposit tracking? A user's balance can change after bridging, so it doesn't seem like permanently tracking deposits is useful.
     mapping(address => mapping(address => uint256)) public userDeposits; // user => token => amount
 
     // Withdrawal tracking
@@ -75,6 +83,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     uint256 public currentNonce;
 
     // Balance updates for batch settlements
+    // CLAUDE: int256 seems likely to cause more problems than it's worth. Can we just have a boolean type that represents a credit or a debit?
     struct BalanceUpdate {
         address account;
         address token;
@@ -82,16 +91,21 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     }
 
     // Circuit breakers
+    // CLAUDE: Clearly differentiate between global and per-token limits
+    // CLAUDE: Also use named mappings. It's not even obvious if this is per-token or per-user.
     mapping(address => uint256) public dailyWithdrawalLimit; // Per token
     mapping(address => uint256) public dailyWithdrawn; // token => amount withdrawn today
+    // CLAUDE: What is this for? Why  not just have withdrawal windows automatically roll over based on timestamps?
     mapping(address => uint256) public lastWithdrawalDay; // token => day number
 
     mapping(address => mapping(address => uint256)) public userDailyWithdrawn; // user => token => amount
     mapping(address => mapping(address => uint256)) public userLastWithdrawalDay; // user => token => day
+    // CLAUDE: This is not always USD
     uint256 public globalDailyLimit = 10_000_000 * 10 ** 18; // $10M default
     uint256 public userDailyLimit = 1_000_000 * 10 ** 18; // $1M default
 
     // Fees
+    // CLAUDE: Completely remove fees. Why did you add fees? Fees can be added at the application layer if needed.
     uint256 public depositFeeBps = 10; // 0.1%
     uint256 public withdrawalFeeBps = 30; // 0.3%
     address public feeRecipient;
@@ -100,6 +114,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     // Emergency controls
     bool public depositsEnabled = true;
     bool public withdrawalsEnabled = true;
+    // CLAUDE: What is the deadline used for? Is it an automatic unpause or a pause delay? We would want an automatic unpause, since pausing should be immediate.
     uint256 public emergencyPauseDeadline;
 
     // ============ Events ============
@@ -131,6 +146,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     event EmergencyPause(uint256 deadline);
 
     // ============ Modifiers ============
+    // CLAUDE: I understand making each check into a function if what you want to do is allow users to easily check their status, but you also make it private. That makes it less useful. Consider making them public view functions instead.
     modifier onlySequencer() {
         _checkSequencer();
         _;
@@ -168,6 +184,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     }
 
     // ============ Constructor ============
+    // CLAUDE: Add NatSpec documentation for constructor parameters.
     constructor(
         address _sequencer,
         address[] memory _initialValidators,
@@ -217,6 +234,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(syndDbAccountId != bytes32(0), "Invalid SyndDB account");
 
         // Calculate fees
+        // CLAUDE: Remove fees entirely.
         uint256 fee = (amount * depositFeeBps) / BASIS_POINTS;
         uint256 amountAfterFee = amount - fee;
 
@@ -224,6 +242,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
         // Track deposit
+        // CLAUDE: Is this needed? Why don't we just rely on events to track deposits? This is a TON of unnecessary on-chain storage.
         uint256 depositId = totalDeposits++;
         deposits[depositId] = DepositRecord({
             depositor: msg.sender,
@@ -297,6 +316,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(checkWithdrawalLimits(token, amount, recipient), "Withdrawal limit exceeded");
 
         // Construct the withdrawal message
+        // CLAUDE: Why are we constructing a withdrawal message here? Shouldn't we just be validating the signatures and parsing those instead?
         bytes32 structHash = keccak256(abi.encode(WITHDRAWAL_TYPEHASH, nonce, recipient, token, amount, deadline));
 
         bytes32 messageHash = _hashTypedDataV4(structHash);
@@ -336,6 +356,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         processedNonces[nonce] = true;
 
         // Calculate fees
+        // CLAUDE: Remove fees
         uint256 fee = (amount * withdrawalFeeBps) / BASIS_POINTS;
         uint256 amountAfterFee = amount - fee;
         accumulatedFees[token] += fee;
@@ -346,6 +367,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         // Execute withdrawal
         if (token == address(0)) {
             // ETH withdrawal
+            // CLAUDE: Use OpenZeppelin's SafeTransferETH utility for safer ETH transfers.
             (bool success,) = recipient.call{value: amountAfterFee}("");
             require(success, "ETH transfer failed");
         } else {
@@ -367,6 +389,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      */
     function processBatchSettlement(
         uint256 nonce,
+        // CLAUDE: Why do we have Merkle state roots at all? Is this related to batch posting? We should make that relationship clearer.
         bytes32 stateRoot,
         BalanceUpdate[] memory updates,
         uint256 deadline,
@@ -481,6 +504,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      * @param validator The validator address
      * @param newAttestationHash The new attestation hash
      */
+    // CLAUDE: What is the purpose of this? Also should this tie into the WASM version somehow?
     function updateValidatorAttestation(address validator, bytes32 newAttestationHash) external onlyOwner {
         require(validators[validator].isActive, "Not active");
         validators[validator].attestationHash = newAttestationHash;
@@ -494,6 +518,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      * @param relayer The relayer address
      * @param attestationHash The hash of the TEE attestation
      */
+    // CLAUDE: Can we deduplicate the relayer and validator management code somehow? For example, by adding a role enum or something similar.
     function addRelayer(address relayer, bytes32 attestationHash) external onlyOwner {
         require(relayer != address(0), "Invalid relayer");
         require(!relayers[relayer].isActive, "Already active");
@@ -810,6 +835,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     }
 
     // ============ Receive Function ============
+    // CLAUDE: This means that all ETH sent to the contract is not tracked as a deposit. Make this trigger the deposit function instead?
     receive() external payable {
         // Accept ETH for withdrawals
     }
