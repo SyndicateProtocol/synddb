@@ -32,6 +32,7 @@ contract Chain is Ownable, Pausable {
     mapping(bytes32 => WASMVersion) public wasmVersions;
     bytes32 public currentWASMVersion;
     bytes32 public pendingWASMVersion;
+    // CLAUDE: Don't have an activation delay in the contract. We can always add a timelock on the governance side.
     uint256 public versionActivationDelay = 1 days; // 1 day default delay (configurable by governance)
 
     // State Management
@@ -70,6 +71,7 @@ contract Chain is Ownable, Pausable {
     uint256 public currentStateVersion;
     bytes32 public currentStateRoot;
     uint256 public lastSnapshotVersion;
+    // CLAUDE: Why are we setting the snapshot interval here? Shouldn't this be set on the application side (inside the TEE), and we just receive snapshots when they are ready?
     uint256 public snapshotInterval = 10000; // Snapshot every 10k versions
 
     // Chain hash tracking (similar to OP Stack's approach)
@@ -78,6 +80,8 @@ contract Chain is Ownable, Pausable {
     bytes32 public lastSnapshotHash; // Last snapshot hash
 
     // Access control
+    // CLAUDE: Can we pull this from Bridge.sol? Why are we duplicating this? Duplicating it makes no sense? Or vice versa -- can Bridge pull from here?
+    // CLAUDE: Upon reflection, Bridge.sol should pull from Chain.sol. We are more likely to upgrade the bridge than the chain, so the chain should be the primary source of truth for the bridge (and not the other way around).
     address public sequencer;
     mapping(address => bool) public validators;
     uint256 public validatorCount;
@@ -114,6 +118,7 @@ contract Chain is Ownable, Pausable {
     event VersionActivationDelayUpdated(uint256 oldDelay, uint256 newDelay);
 
     // ============ Modifiers ============
+    // CLAUDE: Same feedback as Bridge.sol about making these variables public
     modifier onlySequencer() {
         _checkSequencer();
         _;
@@ -157,6 +162,7 @@ contract Chain is Ownable, Pausable {
         bridgeContract = _bridgeContract;
 
         // Set initial WASM version
+        // CLAUDE: Just use a generic activation URL -- no need to have both IPFS and Arweave here. In the comments, note that you recommend ipfs:// or ar:// URIs that are immutable
         wasmVersions[_initialWASMVersion] = WASMVersion({
             versionHash: _initialWASMVersion,
             ipfsCID: _ipfsCID,
@@ -178,6 +184,7 @@ contract Chain is Ownable, Pausable {
      * @param arweaveTxId Arweave transaction ID (backup storage)
      * @param activationDelay Time in seconds until activation
      */
+    // CLAUDE: Same comments on storage URIs here
     function addWASMVersion(
         bytes32 versionHash,
         string memory ipfsCID,
@@ -208,6 +215,7 @@ contract Chain is Ownable, Pausable {
     /**
      * @notice Activate a pending WASM version
      */
+    // CLAUDE: You can remove this logic entirely when we remove the activation delay
     function activateWASMVersion() external {
         require(pendingWASMVersion != bytes32(0), "No pending version");
 
@@ -252,6 +260,10 @@ contract Chain is Ownable, Pausable {
      * @param storagePointer IPFS CID or Arweave TX
      * @param size Size of the diff
      */
+    // CLAUDE: All data is published by validators, not sequencers. Sequencers only make data available for validators. Track the number of validator sign-offs.
+    // CLAUDE: Make sure that we validate sequencer signatures so that the sequencer is still posting valid data and the validators are simply signing off on it. (The actual data should be posted by a relayer)
+    // CLAUDE: Also always track e.g. lastDiff to ensure that diffs are sequential and no versions are skipped. This prevents chain forks. Do this for every relevant area (diffs, snapshots, global hash, etc)
+    // CLAUDE: Also allow any validator to trigger a chain halt by challenging a diff/snapshot/etc. We want to prioritize safety over liveness and halt if any validators disagree with each other.
     function publishDiff(
         uint256 fromVersion,
         uint256 toVersion,
@@ -324,6 +336,7 @@ contract Chain is Ownable, Pausable {
      * @param version State version
      * @param stateRoot The state root hash
      */
+    // CLAUDE: What is this used for? The environment is a SQL environment, not an EVM environment. Do we need state roots at all? What would you recommend instead?
     function commitState(uint256 version, bytes32 stateRoot) external onlyValidator whenNotPaused {
         require(version <= currentStateVersion, "Future version");
         require(stateRoot != bytes32(0), "Invalid state root");
@@ -376,6 +389,7 @@ contract Chain is Ownable, Pausable {
     /**
      * @notice Add a validator
      */
+    // CLAUDE: Have Bridge.sol read this from Chain.sol instead of duplicating it.
     function addValidator(address validator) external onlyOwner {
         require(validator != address(0), "Invalid validator");
         require(!validators[validator], "Already validator");
