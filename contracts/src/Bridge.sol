@@ -767,6 +767,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
      *      Use depositEth() with a syndDbAccountId to deposit ETH and credit a SyndDB account.
      */
     receive() external payable {
+        // CLAUDE: Just block this entirely. Do the same in Chain.sol. We don't want funds to get lost.
         // Accept ETH for withdrawal operations
         // Note: Direct ETH transfers are NOT credited to any SyndDB account
         // Use depositEth() to deposit with account tracking
