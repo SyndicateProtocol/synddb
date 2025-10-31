@@ -2,9 +2,8 @@
 #
 # Pre-commit hook to run formatters on staged files
 #
-
-# Exit on error, but allow individual checks to fail gracefully
-set -e
+# This script allows individual checks to fail gracefully - each check runs
+# independently and all checks will be attempted even if some fail
 
 # Colors for output
 RED='\033[0;31m'
@@ -18,6 +17,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 
 # Track if any files were formatted
 FILES_FORMATTED=false
+
+# Track failures
+FAILED_CHECKS=0
 
 echo -e "${BLUE}Running pre-commit checks...${NC}"
 
@@ -33,28 +35,33 @@ if [ -n "$STAGED_RUST_FILES" ]; then
 
     # Check if cargo is installed
     if ! command -v cargo &> /dev/null; then
-        echo -e "${RED}Error: cargo is not installed or not in PATH${NC}"
-        echo "Please install Rust: https://rustup.rs/"
-        exit 1
-    fi
-
-    # Run cargo fmt --check
-    if cargo fmt --check > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ All Rust files are properly formatted${NC}"
+        echo -e "${RED}✗ cargo is not installed or not in PATH${NC}"
+        echo -e "${YELLOW}  Please install Rust: https://rustup.rs/${NC}"
+        echo -e "${YELLOW}  Skipping Rust formatting check${NC}"
+        FAILED_CHECKS=$((FAILED_CHECKS + 1))
     else
-        echo -e "${YELLOW}Formatting Rust files...${NC}"
-        cargo fmt
-        FILES_FORMATTED=true
+        # Run cargo fmt --check
+        if cargo fmt --check > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ All Rust files are properly formatted${NC}"
+        else
+            echo -e "${YELLOW}Formatting Rust files...${NC}"
+            if cargo fmt; then
+                FILES_FORMATTED=true
 
-        # Re-add the formatted files
-        echo "$STAGED_RUST_FILES" | while IFS= read -r file; do
-            if [ -f "$file" ]; then
-                git add "$file"
-                echo -e "${GREEN}  ✓ Formatted and re-staged: $file${NC}"
+                # Re-add the formatted files
+                echo "$STAGED_RUST_FILES" | while IFS= read -r file; do
+                    if [ -f "$file" ]; then
+                        git add "$file"
+                        echo -e "${GREEN}  ✓ Formatted and re-staged: $file${NC}"
+                    fi
+                done
+
+                echo -e "${GREEN}✓ Rust files formatted and re-staged${NC}"
+            else
+                echo -e "${RED}✗ Failed to format Rust files${NC}"
+                FAILED_CHECKS=$((FAILED_CHECKS + 1))
             fi
-        done
-
-        echo -e "${GREEN}✓ Rust files formatted and re-staged${NC}"
+        fi
     fi
 fi
 
@@ -69,36 +76,43 @@ if [ -n "$STAGED_SOL_FILES" ]; then
     echo -e "${YELLOW}Checking Solidity formatting...${NC}"
 
     # Change to the contracts directory
-    cd "$REPO_ROOT/contracts" || {
-        echo -e "${YELLOW}Warning: contracts directory not found, skipping Solidity formatting${NC}"
-        exit 0
-    }
-
-    # Check if forge is installed
-    if ! command -v forge &> /dev/null; then
-        echo -e "${RED}Error: forge is not installed or not in PATH${NC}"
-        echo "Please install Foundry: https://book.getfoundry.sh/getting-started/installation"
-        exit 1
-    fi
-
-    # Run forge fmt
-    if forge fmt --check > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ All Solidity files are properly formatted${NC}"
+    if ! cd "$REPO_ROOT/contracts" 2>/dev/null; then
+        echo -e "${YELLOW}⚠ contracts directory not found, skipping Solidity formatting${NC}"
     else
-        echo -e "${YELLOW}Formatting Solidity files...${NC}"
-        forge fmt
-        FILES_FORMATTED=true
+        # Check if forge is installed
+        if ! command -v forge &> /dev/null; then
+            echo -e "${RED}✗ forge is not installed or not in PATH${NC}"
+            echo -e "${YELLOW}  Please install Foundry: https://book.getfoundry.sh/getting-started/installation${NC}"
+            echo -e "${YELLOW}  Skipping Solidity formatting check${NC}"
+            FAILED_CHECKS=$((FAILED_CHECKS + 1))
+            cd "$REPO_ROOT"
+        else
+            # Run forge fmt
+            if forge fmt --check > /dev/null 2>&1; then
+                echo -e "${GREEN}✓ All Solidity files are properly formatted${NC}"
+                cd "$REPO_ROOT"
+            else
+                echo -e "${YELLOW}Formatting Solidity files...${NC}"
+                if forge fmt; then
+                    FILES_FORMATTED=true
 
-        # Re-add the formatted files (need to be relative to repo root)
-        cd "$REPO_ROOT"
-        echo "$STAGED_SOL_FILES" | while IFS= read -r file; do
-            if [ -f "$file" ]; then
-                git add "$file"
-                echo -e "${GREEN}  ✓ Formatted and re-staged: $file${NC}"
+                    # Re-add the formatted files (need to be relative to repo root)
+                    cd "$REPO_ROOT"
+                    echo "$STAGED_SOL_FILES" | while IFS= read -r file; do
+                        if [ -f "$file" ]; then
+                            git add "$file"
+                            echo -e "${GREEN}  ✓ Formatted and re-staged: $file${NC}"
+                        fi
+                    done
+
+                    echo -e "${GREEN}✓ Solidity files formatted and re-staged${NC}"
+                else
+                    echo -e "${RED}✗ Failed to format Solidity files${NC}"
+                    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+                    cd "$REPO_ROOT"
+                fi
             fi
-        done
-
-        echo -e "${GREEN}✓ Solidity files formatted and re-staged${NC}"
+        fi
     fi
 fi
 
@@ -111,5 +125,14 @@ elif [ "$FILES_FORMATTED" = true ]; then
     echo -e "${YELLOW}Review the changes with 'git diff --cached' before pushing${NC}"
 fi
 
-echo -e "${GREEN}✓ Pre-commit checks passed${NC}"
-exit 0
+# Report final status
+if [ "$FAILED_CHECKS" -gt 0 ]; then
+    echo ""
+    echo -e "${RED}✗ Pre-commit checks completed with $FAILED_CHECKS failure(s)${NC}"
+    echo -e "${YELLOW}Some checks failed but the commit can proceed${NC}"
+    echo -e "${YELLOW}Please review the errors above and fix them before pushing${NC}"
+    exit 0
+else
+    echo -e "${GREEN}✓ Pre-commit checks passed${NC}"
+    exit 0
+fi
