@@ -79,6 +79,7 @@ contract Chain is Ownable, Pausable {
     address public sequencer;
     mapping(address => bool) public validators;
     mapping(uint256 => address) public validatorByIndex;
+    mapping(address => uint256) private validatorIndexByAddress; // Reverse mapping for O(1) index lookups
     uint256 public validatorCount;
 
     // Bridge integration
@@ -389,6 +390,7 @@ contract Chain is Ownable, Pausable {
 
         validators[validator] = true;
         validatorByIndex[validatorCount] = validator;
+        validatorIndexByAddress[validator] = validatorCount;
         validatorCount++;
 
         emit ValidatorAdded(validator);
@@ -403,10 +405,13 @@ contract Chain is Ownable, Pausable {
         require(validators[validator], "Not validator");
 
         validators[validator] = false;
+        delete validatorIndexByAddress[validator];
 
-        // Move last validator to removed slot
+        // Move last validator to removed slot and update reverse mapping
         if (validatorIndex != validatorCount - 1) {
-            validatorByIndex[validatorIndex] = validatorByIndex[validatorCount - 1];
+            address lastValidator = validatorByIndex[validatorCount - 1];
+            validatorByIndex[validatorIndex] = lastValidator;
+            validatorIndexByAddress[lastValidator] = validatorIndex; // Update moved validator's index
         }
         delete validatorByIndex[validatorCount - 1];
         validatorCount--;

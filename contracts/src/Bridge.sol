@@ -9,6 +9,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
+import {MerkleUtils} from "./libraries/MerkleUtils.sol";
 
 /**
  * @title SyndDBBridge
@@ -41,6 +42,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
 
     mapping(address => Validator) public validators;
     mapping(uint256 => address) public validatorByIndex;
+    mapping(address => uint256) private validatorIndexByAddress; // Reverse mapping for O(1) index lookups
     uint256 public validatorCount;
     uint256 public requiredSignatures; // m in m-of-n
     address public sequencer;
@@ -392,6 +394,7 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         });
 
         validatorByIndex[validatorCount] = validator;
+        validatorIndexByAddress[validator] = validatorCount;
         validatorCount++;
 
         emit ValidatorAdded(validator, attestationHash);
@@ -409,10 +412,13 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
         require(validatorCount - 1 >= requiredSignatures, "Would break signature requirement");
 
         validators[validator].isActive = false;
+        delete validatorIndexByAddress[validator];
 
-        // Move last validator to the removed slot
+        // Move last validator to the removed slot and update reverse mapping
         if (validatorIndex != validatorCount - 1) {
-            validatorByIndex[validatorIndex] = validatorByIndex[validatorCount - 1];
+            address lastValidator = validatorByIndex[validatorCount - 1];
+            validatorByIndex[validatorIndex] = lastValidator;
+            validatorIndexByAddress[lastValidator] = validatorIndex; // Update moved validator's index
         }
         delete validatorByIndex[validatorCount - 1];
         validatorCount--;
@@ -630,30 +636,21 @@ contract SyndDBBridge is ReentrancyGuard, Pausable, Ownable, EIP712 {
     // ============ Helper Functions ============
 
     /**
-     * @notice Calculate merkle root for balance updates
+     * @notice Calculate merkle root for balance updates using MerkleUtils library
+     * @param updates Array of balance updates
+     * @return The Merkle root
      */
     function calculateMerkleRoot(BalanceUpdate[] memory updates) internal pure returns (bytes32) {
         if (updates.length == 0) return bytes32(0);
 
+        // Convert balance updates to leaf hashes
         bytes32[] memory leaves = new bytes32[](updates.length);
         for (uint256 i = 0; i < updates.length; i++) {
             leaves[i] = keccak256(abi.encode(updates[i]));
         }
 
-        // Simple merkle tree construction (for demonstration)
-        while (leaves.length > 1) {
-            bytes32[] memory newLevel = new bytes32[]((leaves.length + 1) / 2);
-            for (uint256 i = 0; i < leaves.length; i += 2) {
-                if (i + 1 < leaves.length) {
-                    newLevel[i / 2] = keccak256(abi.encodePacked(leaves[i], leaves[i + 1]));
-                } else {
-                    newLevel[i / 2] = leaves[i];
-                }
-            }
-            leaves = newLevel;
-        }
-
-        return leaves[0];
+        // Use MerkleUtils library for tree construction
+        return MerkleUtils.calculateMerkleRoot(leaves);
     }
 
     /**

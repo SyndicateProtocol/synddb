@@ -28,6 +28,9 @@ contract TEEAttestationVerifier is Ownable {
 
     LitConfig public litConfig;
 
+    // Mapping for O(1) Lit node lookups
+    mapping(address => bool) private allowedLitNodes;
+
     // Attestation records
     struct Attestation {
         bytes32 measurementHash; // Hash of TEE measurements
@@ -90,6 +93,11 @@ contract TEEAttestationVerifier is Ownable {
         litConfig = LitConfig({
             ipfsCid: _litActionCid, chainId: block.chainid, allowedNodes: _litNodes, minNodes: _minLitNodes
         });
+
+        // Populate allowed nodes mapping for O(1) lookups
+        for (uint256 i = 0; i < _litNodes.length; i++) {
+            allowedLitNodes[_litNodes[i]] = true;
+        }
     }
 
     // ============ Main Functions ============
@@ -323,9 +331,20 @@ contract TEEAttestationVerifier is Ownable {
         require(newNodes.length >= MIN_LIT_NODES, "Too few nodes");
         require(newMinNodes >= MIN_LIT_NODES, "Min nodes too low");
 
+        // Clear old allowed nodes from mapping
+        for (uint256 i = 0; i < litConfig.allowedNodes.length; i++) {
+            allowedLitNodes[litConfig.allowedNodes[i]] = false;
+        }
+
+        // Update config
         litConfig.ipfsCid = newIpfsCid;
         litConfig.allowedNodes = newNodes;
         litConfig.minNodes = newMinNodes;
+
+        // Populate new allowed nodes in mapping
+        for (uint256 i = 0; i < newNodes.length; i++) {
+            allowedLitNodes[newNodes[i]] = true;
+        }
 
         emit LitConfigUpdated(newIpfsCid, newMinNodes);
     }
@@ -371,15 +390,12 @@ contract TEEAttestationVerifier is Ownable {
     }
 
     /**
-     * @notice Check if an address is an allowed Lit node
+     * @notice Check if an address is an allowed Lit node with O(1) lookup
+     * @param node The node address to check
+     * @return Whether the node is allowed
      */
     function isAllowedLitNode(address node) internal view returns (bool) {
-        for (uint256 i = 0; i < litConfig.allowedNodes.length; i++) {
-            if (litConfig.allowedNodes[i] == node) {
-                return true;
-            }
-        }
-        return false;
+        return allowedLitNodes[node];
     }
 
     /**
