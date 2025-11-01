@@ -17,9 +17,6 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "wal_autocheckpoint", 10000)?; // Checkpoint every 10000 pages (reduced frequency)
     conn.pragma_update(None, "journal_size_limit", 67_108_864)?; // 64MB WAL limit
 
-    // Multi-threaded operations (sorting, indexing)
-    conn.pragma_update(None, "threads", 4)?;
-
     // Increase prepared statement cache capacity
     conn.set_prepared_statement_cache_capacity(128);
 
@@ -94,14 +91,6 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
     )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_orders_symbol_status ON orders(symbol, status)",
-        [],
-    )?;
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders(status, id)",
-        [],
-    )?;
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_orders_status_side_id ON orders(status, side, id)",
         [],
     )?;
     conn.execute(
