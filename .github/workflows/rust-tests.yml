@@ -1,4 +1,4 @@
-name: Rust Tests
+name: Rust Tests & Benchmarks
 
 on:
   # Run workflow on every push to main (always run to ensure cross-service compatibility)
@@ -18,7 +18,7 @@ env:
 
 jobs:
   rust-tests:
-    name: SyndDB
+    name: SyndDB Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -34,3 +34,95 @@ jobs:
 
       - name: Run tests
         run: cargo test --all
+
+  benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: rust-tests
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to compare with main
+
+      - run: rustup toolchain install stable --profile minimal
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build benchmark tool (release mode)
+        run: cargo build --package synddb-benchmark --release
+
+      - name: Run benchmark on current commit
+        id: current-bench
+        run: |
+          # Run benchmark for 30 seconds in simple mode to get quick results
+          cargo run --package synddb-benchmark --release -- init --db bench-current.db
+          cargo run --package synddb-benchmark --release -- run --db bench-current.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-current.log 2>&1
+
+          # Extract peak achieved rate from output (portable sed approach)
+          CURRENT_RATE=$(grep "Peak achieved rate:" bench-current.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          echo "rate=$CURRENT_RATE" >> $GITHUB_OUTPUT
+          echo "Current benchmark: $CURRENT_RATE ops/sec"
+          cat bench-current.log
+
+      - name: Get baseline from main branch
+        id: baseline-bench
+        if: github.event_name == 'pull_request'
+        run: |
+          # Checkout main branch
+          git fetch origin main:main
+          git checkout main
+
+          # Build and run benchmark on main
+          cargo build --package synddb-benchmark --release
+          cargo run --package synddb-benchmark --release -- init --db bench-main.db
+          cargo run --package synddb-benchmark --release -- run --db bench-main.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-main.log 2>&1
+
+          # Extract peak achieved rate from output (portable sed approach)
+          BASELINE_RATE=$(grep "Peak achieved rate:" bench-main.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          echo "rate=$BASELINE_RATE" >> $GITHUB_OUTPUT
+          echo "Baseline benchmark (main): $BASELINE_RATE ops/sec"
+          cat bench-main.log
+
+          # Return to PR branch
+          git checkout -
+
+      - name: Compare performance and check for regressions
+        if: github.event_name == 'pull_request'
+        run: |
+          CURRENT_RATE=${{ steps.current-bench.outputs.rate }}
+          BASELINE_RATE=${{ steps.baseline-bench.outputs.rate }}
+
+          echo "=== Performance Comparison ==="
+          echo "Baseline (main): $BASELINE_RATE ops/sec"
+          echo "Current (PR):    $CURRENT_RATE ops/sec"
+
+          # Calculate percentage change
+          CHANGE=$(echo "scale=2; (($CURRENT_RATE - $BASELINE_RATE) / $BASELINE_RATE) * 100" | bc)
+          echo "Change: $CHANGE%"
+
+          # Check for regression > 20%
+          REGRESSION_THRESHOLD=-20
+          IS_REGRESSION=$(echo "$CHANGE < $REGRESSION_THRESHOLD" | bc)
+
+          if [ "$IS_REGRESSION" -eq 1 ]; then
+            echo "❌ PERFORMANCE REGRESSION DETECTED!"
+            echo "Current performance is ${CHANGE}% compared to main branch."
+            echo "This exceeds the acceptable regression threshold of ${REGRESSION_THRESHOLD}%."
+            exit 1
+          elif [ $(echo "$CHANGE < 0" | bc) -eq 1 ]; then
+            echo "⚠️  Minor performance decrease of ${CHANGE}%"
+            echo "This is within acceptable range (< ${REGRESSION_THRESHOLD}%)."
+          else
+            echo "✅ Performance improved by ${CHANGE}%"
+          fi
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            bench-*.log
+            bench-*.db
