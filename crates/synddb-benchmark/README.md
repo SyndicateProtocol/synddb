@@ -308,7 +308,7 @@ cargo run --release -- run --rate 0 --workers 1
 
 **Performance Results** (5 workers on 10-core M1 Max):
 - Peak achieved: **125,662 ops/sec** (simple mode)
-- Sustained stable: **122,202 ops/sec** (verified over 15s)
+- Sustained stable: **122,202 ops/sec** (verified over 30s)
 - CPU utilization: Better distribution across cores compared to single-threaded
 
 **Recommendations by CPU Count**:
@@ -501,7 +501,7 @@ Verifying stability at 230400 ops/sec
 
 Maximum Throughput Found:
   Peak achieved rate: 124,750 ops/sec
-  Sustained stable rate: 121,649 ops/sec (verified over 15s)
+  Sustained stable rate: 121,649 ops/sec (verified over 30s)
 ```
 
 **Why this approach?**

@@ -296,7 +296,7 @@ impl OrderbookSimulator {
                 // Back off by 10% and verify stability
                 let backoff_rate = (current_rate as f64 * 0.9) as u64;
                 info!(
-                    "\n--- Verifying stability at {} ops/sec (5 samples) ---",
+                    "\n--- Verifying stability at {} ops/sec (10 samples over 30s) ---",
                     backoff_rate
                 );
 
@@ -312,7 +312,7 @@ impl OrderbookSimulator {
                 info!(
                     "\n=== Maximum Throughput Found ===\n\
                      Peak achieved rate: {:.0} ops/sec\n\
-                     Sustained stable rate: {:.0} ops/sec (verified over 15s)\n\
+                     Sustained stable rate: {:.0} ops/sec (verified over 30s)\n\
                      Degradation detected at: {} ops/sec target\n",
                     peak_achieved_rate, verify_mean, current_rate
                 );
@@ -388,7 +388,7 @@ impl OrderbookSimulator {
         batch_size: usize,
         simple_mode: bool,
     ) -> Result<f64> {
-        let num_samples = 5; // More samples to prove stability
+        let num_samples = 10; // 10 samples × 3s = 30s total verification
         let sample_duration = Duration::from_secs(3);
         let mut sample_rates = Vec::new();
 
