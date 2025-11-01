@@ -272,14 +272,41 @@ pub enum OperationType {
 }
 ```
 
-### Why Session Extension is Better Than WAL Parsing
+### Why Session Extension (Changesets) is the Right Choice
 
-1. **Official SQLite API** - Maintained by SQLite team, stable across versions
-2. **Deterministic** - Captures logical changes (INSERT/UPDATE/DELETE), not physical page changes
-3. **Compact** - Only stores changed rows, not entire database pages
-4. **No Parsing Brittleness** - SQLite handles format internally, we just consume changesets
-5. **Conflict Detection** - Built-in conflict resolution when applying to replicas
-6. **Validator-Friendly** - Replicas can apply exact same logical changes deterministically
+**Changesets vs. Patchsets:**
+- **Changesets** include original values for UPDATE/DELETE operations, making them **easier to audit** on validators
+- Validators can verify: "Was the old value really X before updating to Y?"
+- Patchsets only store new values, requiring trust that the primary had correct old values
+- Changesets support full reversibility (rollback) and better conflict detection
+
+**Changesets vs. WAL Parsing:**
+1. **Official SQLite API** - Maintained by SQLite team, stable across versions (WAL format is internal/undocumented)
+2. **Not Brittle** - SQLite handles format internally, we just consume changesets (WAL parsing breaks on format changes)
+3. **Deterministic** - Captures logical changes (INSERT/UPDATE/DELETE), not physical page changes
+4. **Compact** - Only stores changed rows with primary keys, not entire database pages (10-100x smaller)
+5. **Validator-Friendly** - Replicas apply exact same logical changes deterministically via `sqlite3changeset_apply()`
+6. **Conflict Detection** - Built-in conflict resolution when applying to replicas (WAL has none)
+7. **Auditable** - Changesets can be inspected to see what changed (WAL pages are opaque binary data)
+
+**Example: How Validators Audit Changesets**
+```rust
+// Validator receives changeset and can inspect it before applying
+for change in changeset.iter() {
+    match change.operation {
+        Update { table, pk, old_values, new_values } => {
+            // Verify: "Did users.id=1 really have name='Alice' before changing to 'Bob'?"
+            assert_eq!(old_values["name"], "Alice"); // Audit check
+            // Apply change knowing exact before/after state
+        }
+        Delete { table, pk, old_values } => {
+            // Verify: "Did the row we're deleting actually exist with these values?"
+            // With patchsets, we'd have no way to verify this
+        }
+        _ => {}
+    }
+}
+```
 
 ### 2. Batcher
 
