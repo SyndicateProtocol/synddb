@@ -214,6 +214,7 @@ impl OrderbookSimulator {
         let mut current_rate = 1_000u64;
         let mut best_rate = 0u64;
         let mut peak_achieved_rate = 0f64; // Peak across all phases
+        let mut best_actual_rate = 0f64; // Best stable actual rate
         let mut best_stability = 0f64;
 
         loop {
@@ -348,8 +349,9 @@ impl OrderbookSimulator {
             }
 
             // Update best stable rate if this is better and stable
-            if mean_rate > peak_achieved_rate - (peak_achieved_rate * 0.05) && !is_unstable {
+            if mean_rate > best_actual_rate && !is_unstable {
                 best_rate = current_rate;
+                best_actual_rate = mean_rate;
                 best_stability = coefficient_of_variation;
             }
 
