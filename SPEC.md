@@ -6,6 +6,7 @@
 
 - **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes database operations to blockchain
 - **Sidecar Listener** - Lightweight process that attaches to SQLite databases and automatically captures/publishes state changes
+  CLAUDE: Add a mention of the fact that SQLite is run deterministically, making it fully verifiable.
 - **SQL Audit Trail** - The sequence of SQL operations that serves as the verifiable record of application state changes
 
 ### Node Types
@@ -46,6 +47,8 @@ Developers don't need to change how they build applications - just ensure all st
 ## Why SyndDB?
 
 **Use any language, get blockchain verifiability for free.** SyndDB lets you build high-performance applications in Python, JavaScript, Go, Rust, or any language with SQLite - no framework to learn, no code changes required. Get offchain performance (sub-millisecond latency, unlimited throughput) with onchain transparency (all state verifiable through SQL operations). The sequencer runs in a TEE for accountability, while validators provide additional guardrails before settlement. Perfect for applications where ultra-low latency matters more than full decentralization: orderbooks, gaming, social feeds, real-time analytics.
+
+CLAUDE: We should add a why SQLite section here. Make it clear that it's trivial to colocate with the app inside of a single TEE, it's deterministic, it's high performance, easy to extend via functions and triggers (I'm not sure of the phrasing on functions/triggers, get the phrasing right for me here) and it's widely supported across languages.
 
 ## Key Benefits
 
@@ -97,14 +100,15 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - Replay operations to maintain consistent database state
    - Serve queries with full SQL capabilities
 
-4. **Validators - Standardized in Rust**
-   - Read replicas with additional validation logic executed before signing
-   - Run standardized Rust code with default validation (extensible with custom business logic)
-   - Must operate in TEEs to ensure they run unmodified code
-   - Verify SQL operations and their results deterministically
-   - Can make best-effort attempts to re-derive external API data
-   - Process message passing operations from special tables
-   - Add custom business logic checks before signing for settlement
+CLAUDE: Stop using the framing standardized. Just don't emphasize the Rust part, it doesn't really matter. Add it as a bullet or a brief mention but stop leading with this Rust standardization all over the place. Check the rest of the document for this as well 4. **Validators - Standardized in Rust**
+
+- Read replicas with additional validation logic executed before signing
+- Run standardized Rust code with default validation (extensible with custom business logic)
+- Must operate in TEEs to ensure they run unmodified code
+- Verify SQL operations and their results deterministically
+- Can make best-effort attempts to re-derive external API data
+- Process message passing operations from special tables
+- Add custom business logic checks before signing for settlement
 
 5. **Bridge (Message Passing)**
    - Smart contract for processing cross-chain messages
@@ -113,6 +117,8 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - Receives inbound messages (deposits, cross-chain responses)
 
 ### Data Flow
+
+CLAUDE: We should make it clear that the app and sequencer is the same thing.
 
 ```
 App (Any Language) → SQLite → Sidecar → DA Layers ← Validators (Rust in TEE) → Blockchain
@@ -194,12 +200,14 @@ Instead of trying to make everything deterministic and re-executable, we focus v
 ### Example: High-Performance Orderbook
 
 **Traditional Onchain Approach** (validated but slow):
+
 - Every order placement/cancellation is a blockchain transaction
 - Matching logic runs in EVM
 - Throughput limited to ~10-50 orders/second
 - Transparent and verifiable, but impractical for high-frequency trading
 
 **Traditional Offchain Approach** (fast but not validated):
+
 - Orders processed in centralized database
 - No transparency into matching logic
 - High throughput, but trust the exchange operator
@@ -227,6 +235,7 @@ def match_orders(buy_order, sell_order):
 ```
 
 **Benefits**:
+
 - Offchain performance: Sub-millisecond order matching, unlimited throughput
 - Onchain transparency: All trades verifiable through SQL operations
 - Validator checks: Can add business logic like "no self-trading" or "price must be within spread" without re-implementing the matching engine
@@ -278,6 +287,7 @@ function sendMessage(
 ```
 
 Common message types include:
+
 - Asset withdrawals/deposits (bridge operations)
 - Cross-chain function calls
 - Oracle data requests/responses
@@ -322,6 +332,7 @@ CREATE TABLE outbound_messages (
 ```
 
 **Message Flow**:
+
 1. Application writes to message table (e.g., `outbound_withdrawals`)
 2. Sidecar publishes SQL operations to DA layers with sequencer signature
 3. Validators read from DA layers and detect message table changes
