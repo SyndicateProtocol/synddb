@@ -403,7 +403,11 @@ The parallel workers actually **decreased** max throughput when comparing identi
 These benchmarks show the performance progression through various optimization attempts between the pre- and post-optimization states. All tests used the following command:
 
 ```bash
+# Historical command (as run at the time):
 cargo run --package synddb-benchmark --release -- run --rate 0 --simple --batch-size 5000 --clear
+
+# Current equivalent (flag renamed to --clean):
+cargo run --package synddb-benchmark --release -- run --rate 0 --simple --batch-size 5000 --clean
 ```
 
 #### Commit 1894b4a
