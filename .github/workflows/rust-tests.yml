@@ -102,6 +102,16 @@ jobs:
           CHANGE=$(echo "scale=2; (($CURRENT_RATE - $BASELINE_RATE) / $BASELINE_RATE) * 100" | bc)
           echo "Change: $CHANGE%"
 
+          # Write summary for GitHub Actions
+          echo "## 📊 Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Baseline (main) | $BASELINE_RATE ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Current (PR) | $CURRENT_RATE ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Change | $CHANGE% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
           # Check for regression > 20%
           REGRESSION_THRESHOLD=-20
           IS_REGRESSION=$(echo "$CHANGE < $REGRESSION_THRESHOLD" | bc)
@@ -110,12 +120,21 @@ jobs:
             echo "❌ PERFORMANCE REGRESSION DETECTED!"
             echo "Current performance is ${CHANGE}% compared to main branch."
             echo "This exceeds the acceptable regression threshold of ${REGRESSION_THRESHOLD}%."
+            echo "### ❌ Performance Regression Detected" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Performance decreased by **${CHANGE}%**, exceeding the acceptable threshold of ${REGRESSION_THRESHOLD}%." >> $GITHUB_STEP_SUMMARY
             exit 1
           elif [ $(echo "$CHANGE < 0" | bc) -eq 1 ]; then
             echo "⚠️  Minor performance decrease of ${CHANGE}%"
             echo "This is within acceptable range (< ${REGRESSION_THRESHOLD}%)."
+            echo "### ⚠️ Minor Performance Decrease" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Performance decreased by **${CHANGE}%**, which is within acceptable range." >> $GITHUB_STEP_SUMMARY
           else
             echo "✅ Performance improved by ${CHANGE}%"
+            echo "### ✅ Performance Improvement" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Performance improved by **${CHANGE}%**!" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Upload benchmark results
