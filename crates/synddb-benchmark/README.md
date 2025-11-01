@@ -307,8 +307,8 @@ cargo run --release -- run --rate 0 --workers 1
 **Default**: Automatically uses `CPU_CORES / 2` workers to leave headroom for OS and other processes.
 
 **Performance Results** (5 workers on 10-core M1 Max):
-- Max throughput: **125,662 ops/sec** (simple mode, sustained)
-- Verified stable at: **122,202 ops/sec**
+- Peak achieved: **125,662 ops/sec** (simple mode)
+- Sustained stable: **122,202 ops/sec** (verified over 15s)
 - CPU utilization: Better distribution across cores compared to single-threaded
 
 **Recommendations by CPU Count**:
@@ -500,8 +500,8 @@ Verifying stability at 230400 ops/sec
   [...]
 
 Maximum Throughput Found:
-  Best sustained rate: 124,750 ops/sec
-  Verified stable rate: 121,649 ops/sec
+  Peak achieved rate: 124,750 ops/sec
+  Sustained stable rate: 121,649 ops/sec (verified over 15s)
 ```
 
 **Why this approach?**

@@ -213,7 +213,7 @@ impl OrderbookSimulator {
 
         let mut current_rate = 1_000u64;
         let mut best_rate = 0u64;
-        let mut best_actual_rate = 0f64;
+        let mut peak_achieved_rate = 0f64; // Peak across all phases
         let mut best_stability = 0f64;
 
         loop {
@@ -295,18 +295,26 @@ impl OrderbookSimulator {
 
                 // Back off by 10% and verify stability
                 let backoff_rate = (current_rate as f64 * 0.9) as u64;
-                info!("\n--- Verifying stability at {} ops/sec ---", backoff_rate);
+                info!(
+                    "\n--- Verifying stability at {} ops/sec (5 samples) ---",
+                    backoff_rate
+                );
 
                 let verify_mean = self
                     .run_verification_test(backoff_rate, batch_size, simple_mode)
                     .await?;
 
+                // Update peak if verification achieved higher rate
+                if verify_mean > peak_achieved_rate {
+                    peak_achieved_rate = verify_mean;
+                }
+
                 info!(
                     "\n=== Maximum Throughput Found ===\n\
-                     Best sustained rate: {:.0} ops/sec\n\
-                     Verified stable rate: {:.0} ops/sec\n\
+                     Peak achieved rate: {:.0} ops/sec\n\
+                     Sustained stable rate: {:.0} ops/sec (verified over 15s)\n\
                      Degradation detected at: {} ops/sec target\n",
-                    best_actual_rate, verify_mean, current_rate
+                    peak_achieved_rate, verify_mean, current_rate
                 );
                 break;
             }
@@ -321,23 +329,27 @@ impl OrderbookSimulator {
                 if best_rate > 0 && coefficient_of_variation > best_stability * 1.5 {
                     info!(
                         "\n=== Maximum Stable Throughput Found ===\n\
-                         Best sustained rate: {:.0} ops/sec (CV {:.1}%)\n\
-                         Current rate unstable: {:.0} ops/sec (CV {:.1}%)\n\
-                         Recommendation: Use {} ops/sec for stable operation\n",
-                        best_actual_rate,
+                         Peak achieved rate: {:.0} ops/sec\n\
+                         Sustained stable rate: Best at {} ops/sec (CV {:.1}%)\n\
+                         Current rate unstable: {:.0} ops/sec (CV {:.1}%)\n",
+                        peak_achieved_rate,
+                        best_rate,
                         best_stability * 100.0,
                         mean_rate,
-                        coefficient_of_variation * 100.0,
-                        best_rate
+                        coefficient_of_variation * 100.0
                     );
                     break;
                 }
             }
 
-            // Update best rate if this is better
-            if mean_rate > best_actual_rate && !is_unstable {
+            // Update peak if this is better
+            if mean_rate > peak_achieved_rate {
+                peak_achieved_rate = mean_rate;
+            }
+
+            // Update best stable rate if this is better and stable
+            if mean_rate > peak_achieved_rate - (peak_achieved_rate * 0.05) && !is_unstable {
                 best_rate = current_rate;
-                best_actual_rate = mean_rate;
                 best_stability = coefficient_of_variation;
             }
 
@@ -354,10 +366,10 @@ impl OrderbookSimulator {
             if next_rate > 10_000_000 {
                 info!(
                     "\n=== Reached Testing Limit ===\n\
-                     Maximum tested rate: {:.0} ops/sec\n\
+                     Peak achieved rate: {:.0} ops/sec\n\
                      Stability: {:.1}% CV\n\
                      System can sustain even higher throughput\n",
-                    best_actual_rate,
+                    peak_achieved_rate,
                     best_stability * 100.0
                 );
                 break;
@@ -376,7 +388,7 @@ impl OrderbookSimulator {
         batch_size: usize,
         simple_mode: bool,
     ) -> Result<f64> {
-        let num_samples = 3;
+        let num_samples = 5; // More samples to prove stability
         let sample_duration = Duration::from_secs(3);
         let mut sample_rates = Vec::new();
 
