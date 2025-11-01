@@ -31,28 +31,18 @@ A simple benchmarking tool that simulates orderbook operations to generate reali
 - **SQLite with WAL mode**: Ready for Session Extension monitoring
 - **Comprehensive statistics**: Track orders, trades, and database activity
 
-CLAUDE: This quick start is duplicative of the later orderbook simulation code. Keep the quick start to just the build and basic commands, and remove the later duplication.
-
 ### Quick Start
 
 ```bash
 # Build the benchmark tool
 cargo build --package synddb-benchmark --release
 
-# Initialize the database with orderbook schema
+# Initialize database and run simulation
 cargo run --package synddb-benchmark --release -- init
-
-# Run continuous load at 100 ops/sec
 cargo run --package synddb-benchmark --release -- run --rate 100
 
-# Run burst mode (1000 ops every 5 seconds)
-cargo run --package synddb-benchmark --release -- run --pattern burst --burst-size 1000 --burst-interval 5
-
-# Show database statistics
+# View statistics
 cargo run --package synddb-benchmark --release -- stats
-
-# Clear all data
-cargo run --package synddb-benchmark --release -- clear
 ```
 
 ### Command Reference
