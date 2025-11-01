@@ -2,35 +2,41 @@
 
 ## Overview
 
-The synddb-sidecar is a zero-configuration Rust process that attaches to any SQLite database via WAL (Write-Ahead Logging) monitoring, captures all SQL operations, and publishes them to multiple DA layers. It requires zero application changes and works with SQLite databases from any programming language.
+The synddb-sidecar is a zero-configuration Rust process that attaches to any SQLite database using the **SQLite Session Extension** to capture deterministic changesets. It publishes logical database changes (INSERT/UPDATE/DELETE operations) to multiple DA layers. This approach is far more robust than WAL parsing and ensures validators can deterministically re-derive state. It requires zero application code changes and works with SQLite databases from any programming language.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Application (Any Language)              │
-│  Python/JS/Go/Rust/Java → SQLite API → app.db             │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                  Application (Any Language)                  │
+│         Python/JS/Go/Rust/Java → SQLite API → app.db        │
+└──────────────────────────────────────────────────────────────┘
                                 │
-                        WAL File Changes
+                    Database Transactions (via Session Extension)
                                 ↓
-┌─────────────────────────────────────────────────────────────┐
-│                      synddb-sidecar                         │
-│ ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│ │ WAL Monitor  │→ │   Batcher    │→ │  Compressor  │      │
-│ └──────────────┘  └──────────────┘  └──────────────┘      │
-│         ↓                                     ↓              │
-│ ┌──────────────┐                    ┌──────────────┐      │
-│ │ SQL Extractor│                    │  Snapshotter │      │
-│ └──────────────┘                    └──────────────┘      │
-│         ↓                                     ↓              │
-│ ┌────────────────────────────────────────────────┐        │
-│ │            Multi-DA Publisher                    │        │
-│ │  ┌─────────┐ ┌─────────┐ ┌──────┐ ┌─────────┐ │        │
-│ │  │Celestia │ │EigenDA  │ │ IPFS │ │ Arweave │ │        │
-│ │  └─────────┘ └─────────┘ └──────┘ └─────────┘ │        │
-│ └────────────────────────────────────────────────┘        │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      synddb-sidecar                          │
+│ ┌─────────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│ │ Session Monitor │→ │   Batcher   │→ │  Attestor   │      │
+│ │ (Changesets)    │  │ (+ Snapshot)│  │(Sign+Compress)     │
+│ └─────────────────┘  └─────────────┘  └─────────────┘      │
+│        ↓                                        ↓             │
+│  Logical Changes                      Signed Changesets     │
+│  (INSERT/UPDATE/DELETE)               + Periodic Snapshots  │
+│        ↓                                        ↓             │
+│ ┌──────────────────────────────────────────────────┐        │
+│ │            Multi-DA Publisher                     │        │
+│ │  ┌─────────┐ ┌─────────┐ ┌──────┐ ┌─────────┐  │        │
+│ │  │Celestia │ │EigenDA  │ │ IPFS │ │ Arweave │  │        │
+│ │  └─────────┘ └─────────┘ └──────┘ └─────────┘  │        │
+│ └──────────────────────────────────────────────────┘        │
+└──────────────────────────────────────────────────────────────┘
+
+Key Benefits:
+- Session Extension: Official SQLite API (no brittle WAL parsing)
+- Deterministic: Logical changes (not physical pages)
+- Compact: Only changed rows (not full database pages)
+- Safe: Periodic snapshots provide recovery points
 ```
 
 ## Core Libraries
@@ -38,8 +44,8 @@ The synddb-sidecar is a zero-configuration Rust process that attaches to any SQL
 ```toml
 [dependencies]
 # Core SQLite monitoring
-rusqlite = { version = "0.32", features = ["bundled", "backup", "hooks"] }
-notify = "6.1"  # File system monitoring for WAL changes
+rusqlite = { version = "0.32", features = ["bundled", "backup", "session"] }
+# Session extension provides deterministic changesets (official SQLite API)
 
 # Compression and serialization
 zstd = "0.13"  # Fast compression with good ratios
@@ -92,10 +98,10 @@ synddb-sidecar/
 │   ├── lib.rs                     # Public API
 │   ├── config.rs                  # Configuration structures
 │   ├── monitor/
-│   │   ├── mod.rs                 # WAL monitoring module
-│   │   ├── wal_reader.rs          # Direct WAL file parsing
-│   │   ├── page_cache.rs          # Track modified pages
-│   │   └── sql_extractor.rs       # Extract SQL from WAL frames
+│   │   ├── mod.rs                 # Session monitoring module
+│   │   ├── session_tracker.rs     # SQLite Session Extension wrapper
+│   │   ├── changeset_reader.rs    # Parse changeset format
+│   │   └── hooks.rs               # Commit hooks for changeset extraction
 │   ├── batch/
 │   │   ├── mod.rs                 # Batching logic
 │   │   ├── accumulator.rs         # Accumulate operations
@@ -132,70 +138,163 @@ synddb-sidecar/
 
 ## Core Components
 
-### 1. WAL Monitor
+### 1. Session Monitor
 
-The WAL monitor watches the SQLite WAL file for changes and extracts SQL operations:
+The Session Monitor uses SQLite's official Session Extension to capture deterministic changesets. This is far more robust than WAL parsing and provides logical changes that validators can reliably replay.
 
 ```rust
-// src/monitor/wal_reader.rs
-pub struct WalMonitor {
+// src/monitor/session_tracker.rs
+use rusqlite::{Connection, hooks::Action};
+
+pub struct SessionMonitor {
     db_path: PathBuf,
-    wal_path: PathBuf,
-    last_frame: u32,
-    page_cache: PageCache,
-    sql_extractor: SqlExtractor,
+    conn: Connection,
+    session: rusqlite::Session<'static>,
+    tx: Sender<Changeset>,
 }
 
-impl WalMonitor {
-    pub async fn start(self, tx: Sender<SqlBatch>) -> Result<()> {
-        // Use inotify/fsevents to watch WAL file
-        let mut watcher = notify::recommended_watcher(move |event| {
-            if let Ok(Event::Modify(_)) = event {
-                self.process_new_frames().await?;
+impl SessionMonitor {
+    pub async fn new(db_path: PathBuf, tx: Sender<Changeset>) -> Result<Self> {
+        // Open database connection
+        let mut conn = Connection::open(&db_path)?;
+
+        // Create session to track changes
+        // Session extension must be enabled at compile time:
+        // RUSTFLAGS="-C link-arg=-lsqlite3" cargo build --features session
+        let session = rusqlite::Session::new(&conn)?;
+
+        // Attach to all tables (None = all tables)
+        session.attach(None)?;
+
+        // Install commit hook to capture changesets after each transaction
+        conn.commit_hook(Some(Self::on_commit));
+
+        Ok(Self {
+            db_path,
+            conn,
+            session,
+            tx,
+        })
+    }
+
+    /// Commit hook called after each successful transaction
+    fn on_commit(&mut self) -> bool {
+        match self.extract_changeset() {
+            Ok(changeset) => {
+                // Send to batcher
+                if let Err(e) = self.tx.blocking_send(changeset) {
+                    error!("Failed to send changeset: {}", e);
+                }
+                false // Allow commit to proceed
             }
-        })?;
+            Err(e) => {
+                error!("Failed to extract changeset: {}", e);
+                false // Allow commit to proceed (logging only)
+            }
+        }
+    }
 
-        watcher.watch(&self.wal_path, RecursiveMode::NonRecursive)?;
+    fn extract_changeset(&mut self) -> Result<Changeset> {
+        // Extract changeset from session
+        // This contains all INSERT/UPDATE/DELETE operations since last extract
+        let changeset_blob = self.session.changeset()?;
 
-        // Polling fallback ensures we never miss changes if filesystem events are dropped
-        // This is idiomatic for critical data pipelines where reliability > efficiency
-        let poll_interval = Duration::from_millis(100);
+        // Parse changeset to understand what changed (for logging/metrics)
+        let metadata = self.parse_changeset_metadata(&changeset_blob)?;
+
+        Ok(Changeset {
+            data: changeset_blob,
+            table_changes: metadata.table_changes,
+            operation_count: metadata.operation_count,
+            timestamp: SystemTime::now(),
+        })
+    }
+
+    fn parse_changeset_metadata(&self, changeset: &[u8]) -> Result<ChangesetMetadata> {
+        // Parse changeset format to extract metadata
+        // Format: https://www.sqlite.org/sessionintro.html
+        let mut operations = Vec::new();
+        let mut offset = 0;
+
+        while offset < changeset.len() {
+            let table_name = self.read_table_name(changeset, &mut offset)?;
+            let op_type = self.read_operation_type(changeset, &mut offset)?;
+            let row_count = self.read_row_count(changeset, &mut offset)?;
+
+            operations.push(TableChange {
+                table: table_name,
+                operation: op_type,
+                rows: row_count,
+            });
+        }
+
+        Ok(ChangesetMetadata {
+            table_changes: operations,
+            operation_count: operations.iter().map(|op| op.rows).sum(),
+        })
+    }
+
+    pub async fn run(mut self) -> Result<()> {
+        // Session monitor is passive - changesets are extracted via commit hook
+        // This task just keeps the connection alive and handles shutdown
         loop {
-            tokio::time::sleep(poll_interval).await;
-            self.process_new_frames(&tx).await?;
+            tokio::time::sleep(Duration::from_secs(60)).await;
+
+            // Periodic health check
+            self.conn.execute("SELECT 1", [])?;
         }
     }
+}
 
-    async fn process_new_frames(&self, tx: &Sender<SqlBatch>) -> Result<()> {
-        // Read new WAL frames since last_frame
-        let frames = self.read_wal_frames(self.last_frame)?;
+#[derive(Debug, Clone)]
+pub struct Changeset {
+    /// Binary changeset blob (SQLite Session format)
+    pub data: Vec<u8>,
+    /// Metadata about what tables changed
+    pub table_changes: Vec<TableChange>,
+    /// Total number of row operations
+    pub operation_count: usize,
+    pub timestamp: SystemTime,
+}
 
-        // SQLite doesn't have built-in diff extraction from WAL.
-        // We parse WAL frames manually to extract SQL operations.
-        // Alternative: Use session extension (sqlite3session) for change tracking.
-        let sql_ops = self.sql_extractor.extract(&frames)?;
+#[derive(Debug, Clone)]
+pub struct TableChange {
+    pub table: String,
+    pub operation: OperationType,
+    pub rows: usize,
+}
 
-        // Send to batcher
-        if !sql_ops.is_empty() {
-            tx.send(SqlBatch::new(sql_ops)).await?;
-            self.last_frame = frames.last().map(|f| f.frame_number).unwrap_or(self.last_frame);
-        }
-
-        Ok(())
-    }
+#[derive(Debug, Clone, Copy)]
+pub enum OperationType {
+    Insert,
+    Update,
+    Delete,
 }
 ```
 
+### Why Session Extension is Better Than WAL Parsing
+
+1. **Official SQLite API** - Maintained by SQLite team, stable across versions
+2. **Deterministic** - Captures logical changes (INSERT/UPDATE/DELETE), not physical page changes
+3. **Compact** - Only stores changed rows, not entire database pages
+4. **No Parsing Brittleness** - SQLite handles format internally, we just consume changesets
+5. **Conflict Detection** - Built-in conflict resolution when applying to replicas
+6. **Validator-Friendly** - Replicas can apply exact same logical changes deterministically
+
 ### 2. Batcher
 
-Accumulates SQL operations and triggers publishing based on time/size thresholds:
+Accumulates changesets and triggers publishing based on time/size thresholds. Also handles periodic snapshot creation.
 
 ```rust
 // src/batch/accumulator.rs
 pub struct Batcher {
-    buffer: Vec<SqlOperation>,
+    db_path: PathBuf,
+    changesets: Vec<Changeset>,
     buffer_size: usize,
     last_flush: Instant,
+    last_snapshot: Instant,
+    batch_count: usize,
+    sequence: AtomicU64,
     config: BatchConfig,
 }
 
@@ -206,20 +305,38 @@ pub struct BatchConfig {
     snapshot_threshold: usize,   // 1000 batches default
 }
 
+#[derive(Debug, Clone)]
+pub enum BatchPayload {
+    /// Incremental changesets (deterministic replay)
+    ChangesetBatch {
+        changesets: Vec<Changeset>,
+        sequence: u64,
+        timestamp: SystemTime,
+    },
+    /// Full database snapshot (recovery point)
+    Snapshot {
+        data: Vec<u8>,
+        sequence: u64,
+        timestamp: SystemTime,
+    },
+}
+
 impl Batcher {
-    pub async fn run(mut self, rx: Receiver<SqlBatch>, tx: Sender<CompressedBatch>) {
+    pub async fn run(mut self, rx: Receiver<Changeset>, tx: Sender<BatchPayload>) {
         let mut flush_timer = tokio::time::interval(self.config.max_batch_age);
 
         loop {
             tokio::select! {
-                Some(batch) = rx.recv() => {
-                    self.add_batch(batch);
+                Some(changeset) = rx.recv() => {
+                    self.buffer_size += changeset.data.len();
+                    self.changesets.push(changeset);
+
                     if self.should_flush() {
                         self.flush(&tx).await?;
                     }
                 }
                 _ = flush_timer.tick() => {
-                    if !self.buffer.is_empty() {
+                    if !self.changesets.is_empty() {
                         self.flush(&tx).await?;
                     }
                 }
@@ -238,23 +355,26 @@ impl Batcher {
     }
 
     async fn flush(&mut self, tx: &Sender<BatchPayload>) -> Result<()> {
-        // IMPORTANT: No SQL optimization to preserve deterministic ordering.
-        // Validators must see exact SQL operation sequence.
-
+        // Decide whether to send changesets or create snapshot
         if self.should_snapshot() {
-            // Create full snapshot
+            // Create full snapshot (recovery point for validators)
             let snapshot = self.create_snapshot().await?;
-            tx.send(BatchPayload::Snapshot(snapshot)).await?;
+            tx.send(BatchPayload::Snapshot {
+                data: snapshot,
+                sequence: self.next_sequence(),
+                timestamp: SystemTime::now(),
+            }).await?;
+
             self.last_snapshot = Instant::now();
             self.batch_count = 0;
         } else {
-            // Send incremental batch
-            let batch = SqlBatch {
-                operations: self.buffer.drain(..).collect(),
-                timestamp: SystemTime::now(),
+            // Send incremental changesets (deterministic)
+            let payload = BatchPayload::ChangesetBatch {
+                changesets: self.changesets.drain(..).collect(),
                 sequence: self.next_sequence(),
+                timestamp: SystemTime::now(),
             };
-            tx.send(BatchPayload::Batch(batch)).await?;
+            tx.send(payload).await?;
             self.batch_count += 1;
         }
 
@@ -263,21 +383,29 @@ impl Batcher {
         Ok(())
     }
 
-    async fn create_snapshot(&self) -> Result<DatabaseSnapshot> {
+    async fn create_snapshot(&self) -> Result<Vec<u8>> {
         // Use rusqlite backup API for consistent snapshot
         let conn = Connection::open(&self.db_path)?;
-        let snapshot_path = format!("/tmp/snapshot-{}.db", self.next_sequence());
-        let backup = Backup::new(&conn, Path::new(&snapshot_path))?;
-        backup.run_to_completion(100, Duration::from_millis(100), None)?;
+        let snapshot_path = format!("/tmp/snapshot-{}.db", self.sequence.load(Ordering::SeqCst));
 
+        // Create backup
+        let mut backup = conn.backup(
+            rusqlite::DatabaseName::Main,
+            Path::new(&snapshot_path),
+            None
+        )?;
+        backup.step(-1)?; // Copy entire database
+
+        // Read snapshot file
         let snapshot_data = tokio::fs::read(&snapshot_path).await?;
         tokio::fs::remove_file(&snapshot_path).await?;
 
-        Ok(DatabaseSnapshot {
-            data: snapshot_data,
-            sequence: self.current_sequence(),
-            timestamp: SystemTime::now(),
-        })
+        info!("Created database snapshot: {} bytes", snapshot_data.len());
+        Ok(snapshot_data)
+    }
+
+    fn next_sequence(&self) -> u64 {
+        self.sequence.fetch_add(1, Ordering::SeqCst)
     }
 }
 ```
@@ -311,7 +439,7 @@ pub struct AttestedPayload {
 
 #[derive(Serialize, Deserialize)]
 pub enum PayloadType {
-    Batch,
+    ChangesetBatch,
     Snapshot,
 }
 
@@ -319,11 +447,11 @@ impl Attestor {
     pub async fn run(self, rx: Receiver<BatchPayload>, tx: Sender<AttestedPayload>) {
         while let Some(payload) = rx.recv().await {
             let attested = match payload {
-                BatchPayload::Batch(batch) => {
-                    self.attest_batch(batch).await?
+                BatchPayload::ChangesetBatch { changesets, sequence, .. } => {
+                    self.attest_changeset_batch(changesets, sequence).await?
                 }
-                BatchPayload::Snapshot(snapshot) => {
-                    self.attest_snapshot(snapshot).await?
+                BatchPayload::Snapshot { data, sequence, .. } => {
+                    self.attest_snapshot(data, sequence).await?
                 }
             };
 
@@ -331,9 +459,9 @@ impl Attestor {
         }
     }
 
-    async fn attest_batch(&self, batch: SqlBatch) -> Result<AttestedPayload> {
-        // 1. Serialize
-        let serialized = bincode::serialize(&batch)?;
+    async fn attest_changeset_batch(&self, changesets: Vec<Changeset>, sequence: u64) -> Result<AttestedPayload> {
+        // 1. Serialize changesets
+        let serialized = bincode::serialize(&changesets)?;
 
         // 2. Compress with Zstd level 3 (good balance of speed/ratio)
         //    Validators auto-detect this via magic bytes (0x28 0xB5 0x2F 0xFD)
@@ -346,30 +474,44 @@ impl Attestor {
         // 4. Get fresh attestation token from GCP metadata service
         let attestation_token = self.key_manager.get_attestation_token().await?;
 
+        info!(
+            "Attested changeset batch: {} changesets, {} ops, {} bytes compressed",
+            changesets.len(),
+            changesets.iter().map(|c| c.operation_count).sum::<usize>(),
+            compressed.len()
+        );
+
         Ok(AttestedPayload {
-            payload_type: PayloadType::Batch,
+            payload_type: PayloadType::ChangesetBatch,
             compressed_data: compressed,
             signature: signature.to_vec(),
             public_key: self.key_manager.public_key_bytes(),
-            sequence: batch.sequence,
+            sequence,
             checksum,
             attestation_token: Some(attestation_token),
         })
     }
 
-    async fn attest_snapshot(&self, snapshot: DatabaseSnapshot) -> Result<AttestedPayload> {
-        // Snapshots are already raw database bytes
-        let compressed = zstd::encode_all(&snapshot.data[..], self.compression_level)?;
+    async fn attest_snapshot(&self, data: Vec<u8>, sequence: u64) -> Result<AttestedPayload> {
+        // Snapshots are raw database bytes
+        let compressed = zstd::encode_all(&data[..], self.compression_level)?;
         let checksum = blake3::hash(&compressed);
         let signature = self.key_manager.sign(&compressed)?;
         let attestation_token = self.key_manager.get_attestation_token().await?;
+
+        info!(
+            "Attested snapshot: {} bytes raw, {} bytes compressed ({:.1}% ratio)",
+            data.len(),
+            compressed.len(),
+            (compressed.len() as f64 / data.len() as f64) * 100.0
+        );
 
         Ok(AttestedPayload {
             payload_type: PayloadType::Snapshot,
             compressed_data: compressed,
             signature: signature.to_vec(),
             public_key: self.key_manager.public_key_bytes(),
-            sequence: snapshot.sequence,
+            sequence,
             checksum,
             attestation_token: Some(attestation_token),
         })
