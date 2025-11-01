@@ -58,11 +58,13 @@ tokio = { version = "1.35", features = ["full"] }
 hyper = { version = "1.0", features = ["full"] }
 tower = "0.4"  # Middleware stack for retries/timeouts
 
+# CLAUDE: Is this needed for GCP Confidential Space TEEs?
 # TEE support (optional)
 sgx-isa = { version = "0.4", optional = true }
 dcap-ql = { version = "0.3", optional = true }
 teaclave-attestation = { version = "0.5", optional = true }
 
+# CLAUDE: Since this is running in GCP Confidential Space, can we use Cloud Logging?
 # Configuration and monitoring
 config = "0.14"  # YAML/TOML configuration
 tracing = "0.1"
@@ -92,6 +94,7 @@ synddb-sidecar/
 │   │   ├── wal_reader.rs          # Direct WAL file parsing
 │   │   ├── page_cache.rs          # Track modified pages
 │   │   └── sql_extractor.rs       # Extract SQL from WAL frames
+CLAUDE: What is the purpose of the optimizier? We want to reproduce the SQLite operations deterministically. Either cut this or elaborate on its purpose
 │   ├── batch/
 │   │   ├── mod.rs                 # Batching logic
 │   │   ├── accumulator.rs         # Accumulate operations
@@ -109,12 +112,16 @@ synddb-sidecar/
 │   │   ├── ipfs.rs                # IPFS publisher
 │   │   ├── arweave.rs             # Arweave publisher
 │   │   ├── retry.rs               # Retry logic
+CLAUDE: What are these manifests? Elaborate on this purpose slightly
 │   │   └── manifest.rs            # Publish manifest tracking
+CLAUDE: How much of this is necessary in GCP Confidential Space?
+CLAUDE: Don't we need key management for the sidecar to sign and submit to the DA layer? That seems to be missing
 │   ├── tee/
 │   │   ├── mod.rs                 # TEE integration
 │   │   ├── attestation.rs         # Generate attestations
 │   │   ├── sealing.rs             # Seal data to TEE
 │   │   └── remote_attestation.rs  # Remote attestation
+CLAUDE: Can we replace this with GCP Cloud Logging? Happy to keep it if it's still relevant though!
 │   ├── metrics/
 │   │   ├── mod.rs                 # Prometheus metrics
 │   │   └── collectors.rs          # Custom collectors
@@ -155,9 +162,10 @@ impl WalMonitor {
                 self.process_new_frames().await?;
             }
         })?;
-        
+
         watcher.watch(&self.wal_path, RecursiveMode::NonRecursive)?;
-        
+
+        // CLAUDE: Is this idiomatic or is a fallback in the case of watch failures more idiomatic? I'm open to either option
         // Also poll periodically as backup
         let poll_interval = Duration::from_millis(100);
         loop {
@@ -165,20 +173,21 @@ impl WalMonitor {
             self.process_new_frames(&tx).await?;
         }
     }
-    
+
     async fn process_new_frames(&self, tx: &Sender<SqlBatch>) -> Result<()> {
         // Read new WAL frames since last_frame
         let frames = self.read_wal_frames(self.last_frame)?;
-        
+
+        // CLAUDE: Is there any built-in SQLite utility that lets me get a diff?
         // Extract SQL operations from page changes
         let sql_ops = self.sql_extractor.extract(&frames)?;
-        
+
         // Send to batcher
         if !sql_ops.is_empty() {
             tx.send(SqlBatch::new(sql_ops)).await?;
             self.last_frame = frames.last().map(|f| f.frame_number).unwrap_or(self.last_frame);
         }
-        
+
         Ok(())
     }
 }
@@ -200,13 +209,14 @@ pub struct Batcher {
 pub struct BatchConfig {
     max_batch_size: usize,      // 1MB default
     max_batch_age: Duration,    // 1 second default
+    // CLAUDE: Will this break deterministic derivation?
     optimize_sql: bool,          // Combine similar ops
 }
 
 impl Batcher {
     pub async fn run(mut self, rx: Receiver<SqlBatch>, tx: Sender<CompressedBatch>) {
         let mut flush_timer = tokio::time::interval(self.config.max_batch_age);
-        
+
         loop {
             tokio::select! {
                 Some(batch) = rx.recv() => {
@@ -223,23 +233,24 @@ impl Batcher {
             }
         }
     }
-    
+
+    // CLAUDE: Is it idiomatic to flush baesed on size and time like this? Or should we wait for confirmation that we've posted to a DA layer? We want to ensure that batch posting is extremely reliable
     fn should_flush(&self) -> bool {
         self.buffer_size >= self.config.max_batch_size ||
         self.last_flush.elapsed() >= self.config.max_batch_age
     }
-    
+
     async fn flush(&mut self, tx: &Sender<CompressedBatch>) -> Result<()> {
         if self.config.optimize_sql {
             self.buffer = optimize_sql_sequence(self.buffer.drain(..).collect());
         }
-        
+
         let batch = SqlBatch {
             operations: self.buffer.drain(..).collect(),
             timestamp: SystemTime::now(),
             sequence: self.next_sequence(),
         };
-        
+
         tx.send(batch).await?;
         self.buffer_size = 0;
         self.last_flush = Instant::now();
@@ -261,6 +272,9 @@ pub struct Compressor {
     snapshot_threshold: usize,  // Force snapshot if diff chain too long
 }
 
+// CLAUDE: Let's not overcomplicate this. We should just choose compression defaults that are set for all instances of the application. That being said, whatever compression default we choose, we should ensure that it is easy to auto-detect for validators after downloading from the DA layer
+// CLAUDE: We do need to handle signing somewhere, and the batcher feels like the wrong place. Maybe the Compressor service is dedicated to signing and compressing? That makes the Compressor more useful and also ensures that all messages are signed, either before or after compression (I know that cryptographers have strong opinions here, cite best practices on whether we should sign -> compress or compress -> sign)
+// CLAUDE: If we merge signing and compression into the same service, we'll obviously need to rename it to something else. Give a proposal here
 pub enum CompressionStrategy {
     Zstd { level: i32 },
     Lz4 { acceleration: i32 },
@@ -270,7 +284,7 @@ pub enum CompressionStrategy {
 impl Compressor {
     pub async fn run(self, rx: Receiver<SqlBatch>, tx: Sender<PublishPayload>) {
         let mut diff_count = 0;
-        
+
         while let Some(batch) = rx.recv().await {
             if self.should_snapshot(diff_count) {
                 let snapshot = self.create_snapshot().await?;
@@ -283,12 +297,13 @@ impl Compressor {
             }
         }
     }
-    
+
+    // CLAUDE: Does this data flow make sense, or should the batcher tell the Compressor when to trigger a snapshot? It seems like if timing logic is in the batcher already, we should just stick with that (but I'm open to other ideas)
     fn should_snapshot(&self, diff_count: usize) -> bool {
         self.last_snapshot.elapsed() >= self.snapshot_interval ||
         diff_count >= self.snapshot_threshold
     }
-    
+
     async fn compress_diff(&self, batch: SqlBatch) -> Result<CompressedDiff> {
         let serialized = bincode::serialize(&batch)?;
         let compressed = match self.strategy {
@@ -300,7 +315,7 @@ impl Compressor {
             }
             CompressionStrategy::None => serialized,
         };
-        
+
         Ok(CompressedDiff {
             data: compressed,
             checksum: blake3::hash(&compressed),
@@ -308,17 +323,18 @@ impl Compressor {
             operation_count: batch.operations.len(),
         })
     }
-    
+
+    // CLAUDE: It feels a bit confusing to have the Snapshot service live in the Compressor. The Compressor feels like it should be dedicated to compression only. Should snapshotting itself live in the batcher? Give a recommendation on data flow and implement it
     async fn create_snapshot(&self) -> Result<CompressedSnapshot> {
         // Use rusqlite backup API to create consistent snapshot
         let conn = Connection::open(&self.db_path)?;
         let backup = Backup::new(&conn, Path::new("/tmp/snapshot.db"))?;
         backup.run_to_completion(100, Duration::from_millis(100), None)?;
-        
+
         // Compress the snapshot
         let snapshot_data = tokio::fs::read("/tmp/snapshot.db").await?;
         let compressed = zstd::encode_all(&snapshot_data[..], 3)?;
-        
+
         Ok(CompressedSnapshot {
             data: compressed,
             checksum: blake3::hash(&compressed),
@@ -354,22 +370,22 @@ impl Publisher {
             self.manifest_store.record(results).await?;
         }
     }
-    
+
     async fn publish_all(&self, payload: PublishPayload) -> Vec<PublishResult> {
         // Publish to all DA layers in parallel
         let futures = self.publishers.iter().map(|publisher| {
             self.publish_with_retry(publisher, &payload)
         });
-        
+
         futures::future::join_all(futures).await
     }
-    
+
     async fn publish_with_retry(&self, publisher: &dyn DaPublisher, payload: &PublishPayload) -> PublishResult {
         let backoff = ExponentialBackoff {
             max_elapsed_time: Some(Duration::from_secs(60)),
             ..Default::default()
         };
-        
+
         backoff::future::retry(backoff, || async {
             publisher.publish(payload).await
                 .map_err(|e| {
@@ -383,6 +399,8 @@ impl Publisher {
     }
 }
 ```
+
+// CLAUDE: We will also need to read from key management here, to ensure that we have the keys available to sign published messages
 
 ### 5. DA Layer Implementations
 
@@ -409,16 +427,16 @@ impl DaPublisher for CelestiaPublisher {
                 let blobs: Vec<Blob> = chunks.map(|chunk| {
                     Blob::new(self.namespace, chunk.to_vec())
                 }).collect();
-                
+
                 // Publish all chunks
                 for blob in blobs {
                     self.client.submit_blob(blob, self.gas_price).await?;
                 }
             }
         };
-        
+
         let tx_hash = self.client.submit_blob(blob, self.gas_price).await?;
-        
+
         Ok(PublishReceipt {
             da_layer: "celestia",
             tx_hash: tx_hash.to_string(),
@@ -439,17 +457,17 @@ pub struct IpfsPublisher {
 impl DaPublisher for IpfsPublisher {
     async fn publish(&self, payload: &PublishPayload) -> Result<PublishReceipt> {
         let data = payload.as_bytes();
-        
+
         // Add to local IPFS
         let cid = self.client.add(data).await?;
-        
+
         // Pin to remote service for persistence
         if self.pin_remote {
             if let Some(pin_service) = &self.pin_service {
                 pin_service.pin(cid.clone()).await?;
             }
         }
-        
+
         Ok(PublishReceipt {
             da_layer: "ipfs",
             tx_hash: cid.to_string(),
@@ -467,22 +485,22 @@ impl DaPublisher for IpfsPublisher {
 database:
   path: "/data/app.db"
   wal_mode: true
-  
+
 monitor:
   poll_interval_ms: 100
   page_cache_size: 1000
-  
+
 batch:
-  max_batch_size: 1048576  # 1MB
-  max_batch_age_ms: 1000   # 1 second
+  max_batch_size: 1048576 # 1MB
+  max_batch_age_ms: 1000 # 1 second
   optimize_sql: true
-  
+
 compression:
   strategy: "zstd"
   zstd_level: 3
   snapshot_interval_mins: 60
   snapshot_threshold_diffs: 1000
-  
+
 publishers:
   celestia:
     enabled: true
@@ -490,33 +508,33 @@ publishers:
     namespace: "0x00000000000000000000000000000000synddb"
     gas_price: "0.01"
     retry_attempts: 3
-    
+
   eigenda:
     enabled: false
     endpoint: "https://disperser.eigenda.xyz"
     quorum_threshold: 67
-    
+
   ipfs:
     enabled: true
     endpoint: "http://localhost:5001"
     pin_remote: true
     pinata_api_key: "${PINATA_API_KEY}"
-    
+
   arweave:
     enabled: false
     endpoint: "https://arweave.net"
     wallet_path: "/secrets/arweave-wallet.json"
-    
+
 tee:
   enabled: false
-  attestation_type: "dcap"  # or "epid"
+  attestation_type: "dcap" # or "epid"
   mrenclave: "0x..."
   mrsigner: "0x..."
-  
+
 metrics:
   enabled: true
   port: 9090
-  
+
 logging:
   level: "info"
   format: "json"
@@ -525,6 +543,8 @@ logging:
 ## TEE Integration with GCP Confidential Space
 
 The sidecar leverages GCP Confidential Space for hardware-protected key management and attestation, eliminating the need for complex SGX SDKs while providing strong security guarantees.
+
+CLAUDE: You seem to have misinterpreted the needs for key management. GCP Confidential Space handles TEE key management automatically. What we need is a key that can be used for signing in the crypto space, that matches Ethereum's cryptography for ecrecover within Solidity. That needs to be managed securely within the TEE, and we should ensure that it is NOT extractable by the application from the sidecar. This is obviously quite delicate. As a side note, is it even possible to make this secure, or should the sidecar be in a separate VM from the application and it simply reads from e.g. the same underlying file system? I'm not sure what is the best practice here
 
 ### Architecture Overview
 
@@ -817,12 +837,12 @@ kind: ComputeInstance
 metadata:
   name: synddb-sidecar-tee
 spec:
-  machineType: n2d-standard-4  # AMD SEV-SNP capable
+  machineType: n2d-standard-4 # AMD SEV-SNP capable
   zone: us-central1-a
 
   confidentialInstanceConfig:
     enableConfidentialCompute: true
-    confidentialComputeType: SEV_SNP  # or TDX for Intel
+    confidentialComputeType: SEV_SNP # or TDX for Intel
 
   shieldedInstanceConfig:
     enableSecureBoot: true
@@ -830,25 +850,25 @@ spec:
     enableIntegrityMonitoring: true
 
   scheduling:
-    onHostMaintenance: TERMINATE  # Required for Confidential VMs
+    onHostMaintenance: TERMINATE # Required for Confidential VMs
 
   serviceAccounts:
-  - email: synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com
-    scopes:
-    - https://www.googleapis.com/auth/cloud-platform
+    - email: synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com
+      scopes:
+        - https://www.googleapis.com/auth/cloud-platform
 
   metadata:
     items:
-    - key: tee-container-log-redirect
-      value: "true"
-    - key: tee-image-reference
-      value: "gcr.io/${PROJECT_ID}/synddb-sidecar:latest"
-    - key: tee-restart-policy
-      value: "Always"
-    - key: tee-env-ATTESTATION_AUDIENCE
-      value: "https://synddb.io/sidecar"
-    - key: tee-env-SECRET_PROJECT_ID
-      value: "${PROJECT_ID}"
+      - key: tee-container-log-redirect
+        value: "true"
+      - key: tee-image-reference
+        value: "gcr.io/${PROJECT_ID}/synddb-sidecar:latest"
+      - key: tee-restart-policy
+        value: "Always"
+      - key: tee-env-ATTESTATION_AUDIENCE
+        value: "https://synddb.io/sidecar"
+      - key: tee-env-SECRET_PROJECT_ID
+        value: "${PROJECT_ID}"
 
   bootDisk:
     initializeParams:
@@ -888,15 +908,15 @@ spec:
     name: synddb-sidecar-signing-key
   policy:
     bindings:
-    - role: roles/secretmanager.secretAccessor
-      members:
-      - serviceAccount:synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com
-      condition:
-        title: Only from Confidential Space
-        expression: |
-          assertion.sub == 'synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com' &&
-          'image_digest' in assertion &&
-          assertion.image_digest == '${EXPECTED_IMAGE_DIGEST}'
+      - role: roles/secretmanager.secretAccessor
+        members:
+          - serviceAccount:synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com
+        condition:
+          title: Only from Confidential Space
+          expression: |
+            assertion.sub == 'synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com' &&
+            'image_digest' in assertion &&
+            assertion.image_digest == '${EXPECTED_IMAGE_DIGEST}'
 ```
 
 ### Configuration File
@@ -947,6 +967,7 @@ monitoring:
 ## Performance Optimizations
 
 ### 1. Zero-Copy WAL Reading
+
 Read WAL frames directly without copying:
 
 ```rust
@@ -958,6 +979,7 @@ let mmap = unsafe { MmapOptions::new().map(&file)? };
 ```
 
 ### 2. Parallel Compression
+
 Use all CPU cores for compression:
 
 ```rust
@@ -970,6 +992,7 @@ let compressed_chunks: Vec<_> = chunks
 ```
 
 ### 3. Batched Publishing
+
 Combine multiple small payloads:
 
 ```rust
@@ -979,7 +1002,7 @@ let mut batch_size = 0;
 while let Ok(payload) = rx.try_recv() {
     batch.push(payload);
     batch_size += payload.size();
-    
+
     if batch_size > MAX_BATCH_SIZE {
         break;
     }
@@ -991,6 +1014,7 @@ publisher.publish_batch(batch).await?;
 ## Testing Strategy
 
 ### Unit Tests
+
 ```rust
 #[cfg(test)]
 mod tests {
@@ -1000,7 +1024,7 @@ mod tests {
         let frames = parse_wal_frames(wal_data).unwrap();
         assert_eq!(frames.len(), 42);
     }
-    
+
     #[tokio::test]
     async fn test_batch_trigger() {
         let batcher = Batcher::new(config);
@@ -1010,18 +1034,19 @@ mod tests {
 ```
 
 ### Integration Tests
+
 ```rust
 #[tokio::test]
 async fn test_end_to_end() {
     // Start test SQLite database
     let db = setup_test_db().await;
-    
+
     // Start sidecar
     let sidecar = Sidecar::new(config).start().await;
-    
+
     // Perform SQL operations
     db.execute("INSERT INTO test VALUES (1, 'data')").await;
-    
+
     // Verify published to mock DA layers
     let published = mock_da.get_published().await;
     assert_eq!(published.len(), 1);
@@ -1029,6 +1054,7 @@ async fn test_end_to_end() {
 ```
 
 ### Benchmarks
+
 ```rust
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -1043,6 +1069,7 @@ fn bench_compression(c: &mut Criterion) {
 ## Deployment
 
 ### Docker Image
+
 ```dockerfile
 FROM rust:1.75 as builder
 WORKDIR /app
@@ -1056,13 +1083,16 @@ ENTRYPOINT ["synddb-sidecar"]
 ```
 
 ### Resource Requirements
+
 - **CPU**: 2 cores minimum (4 recommended)
 - **Memory**: 512MB minimum (2GB recommended)
 - **Disk**: 10GB for caching
 - **Network**: 100Mbps for DA publishing
 
 ### Monitoring
+
 Prometheus metrics exposed on port 9090:
+
 - `synddb_wal_frames_processed`
 - `synddb_batches_published`
 - `synddb_da_publish_latency`
@@ -1071,7 +1101,9 @@ Prometheus metrics exposed on port 9090:
 ## Security Considerations
 
 ### 1. Read-Only Access
+
 Sidecar only reads from SQLite, never writes:
+
 ```rust
 let conn = Connection::open_with_flags(
     &db_path,
@@ -1080,7 +1112,9 @@ let conn = Connection::open_with_flags(
 ```
 
 ### 2. Data Integrity
+
 All published data includes checksums:
+
 ```rust
 pub struct PublishPayload {
     data: Vec<u8>,
@@ -1091,14 +1125,18 @@ pub struct PublishPayload {
 ```
 
 ### 3. TEE Isolation
+
 When running in TEE, keys never leave enclave:
+
 ```rust
 let sealed_key = enclave.seal_data(&signing_key)?;
 // Key is sealed to this specific enclave
 ```
 
 ### 4. Rate Limiting
+
 Prevent resource exhaustion:
+
 ```rust
 use governor::{Quota, RateLimiter};
 
@@ -1110,17 +1148,20 @@ limiter.until_ready().await;
 
 For existing applications:
 
-1. **Ensure WAL mode**: 
+1. **Ensure WAL mode**:
+
 ```sql
 PRAGMA journal_mode=WAL;
 ```
 
 2. **Deploy sidecar**:
+
 ```bash
 docker run -v /app/data:/data syndicate/synddb-sidecar
 ```
 
 3. **Verify publishing**:
+
 ```bash
 curl http://localhost:9090/metrics | grep synddb_
 ```
