@@ -30,9 +30,9 @@ enum Commands {
         #[arg(short, long, default_value = "orderbook.db")]
         db: PathBuf,
 
-        /// Clear all existing data before starting (default: resume with existing data)
-        #[arg(short, long, default_value = "false")]
-        clear: bool,
+        /// Clean all existing data before starting (default: resume with existing data)
+        #[arg(long, default_value = "false")]
+        clean: bool,
 
         /// Load pattern: continuous or burst
         #[arg(short, long, default_value = "continuous")]
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
         }
         Commands::Run {
             db,
-            clear,
+            clean,
             pattern,
             rate,
             duration,
@@ -141,11 +141,11 @@ async fn main() -> Result<()> {
             // Ensure schema exists
             schema::initialize_schema(&conn)?;
 
-            // Clear data if requested
-            if clear {
-                info!("Clearing existing data...");
+            // Clean data if requested
+            if clean {
+                info!("Cleaning existing data...");
                 schema::clear_data(&conn)?;
-                info!("Data cleared successfully");
+                info!("Data cleaned successfully");
             } else {
                 // Check if there's existing data
                 let user_count: i64 =

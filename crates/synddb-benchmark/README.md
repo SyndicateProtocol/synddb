@@ -42,14 +42,14 @@ cargo run --package synddb-benchmark -- init [--db <path>]
 
 ### `run` - Run Simulation
 
-Executes orderbook operations based on the selected load pattern. By default, resumes with existing data. Use `--clear` to start fresh.
+Executes orderbook operations based on the selected load pattern. By default, resumes with existing data. Use `--clean` to start fresh.
 
 ```bash
 cargo run --package synddb-benchmark -- run [OPTIONS]
 
 Options:
   -d, --db <PATH>              Database path [default: orderbook.db]
-  -c, --clear                  Clear all existing data before starting [default: resume]
+  --clean                      Clean all existing data before starting [default: resume]
   -p, --pattern <PATTERN>      Load pattern: continuous or burst [default: continuous]
   -r, --rate <RATE>            Operations per second (0 = auto-find max throughput) [default: 100]
   -t, --duration <SECONDS>     Duration in seconds (0 = run forever) [default: 0]
@@ -65,8 +65,8 @@ Options:
 # Run at 500 ops/sec for 60 seconds (resumes with existing data)
 cargo run --package synddb-benchmark -- run --rate 500 --duration 60
 
-# Start fresh, clearing existing data
-cargo run --package synddb-benchmark -- run --clear --rate 100
+# Start fresh, cleaning existing data
+cargo run --package synddb-benchmark -- run --clean --rate 100
 
 # Run burst mode with 5000 ops every 10 seconds
 cargo run --package synddb-benchmark -- run --pattern burst --burst-size 5000 --burst-interval 10
@@ -362,12 +362,12 @@ To find the maximum throughput for your hardware:
 
 ```bash
 # Run max throughput discovery on simple mode
-cargo run --release -- run --db test.db --clear --rate 0 --simple --duration 90
+cargo run --release -- run --db test.db --clean --rate 0 --simple --duration 90
 
 # Test different worker counts
 for workers in 1 2 4 8; do
   echo "Testing $workers workers..."
-  cargo run --release -- run --db test_$workers.db --clear --rate 0 --workers $workers --simple --duration 30
+  cargo run --release -- run --db test_$workers.db --clean --rate 0 --workers $workers --simple --duration 30
 done
 ```
 
