@@ -71,82 +71,70 @@ jobs:
             bench-main-full.log
           key: benchmark-baseline-${{ steps.main-sha.outputs.sha }}
 
-      - name: Run simple benchmark on current commit
+      - name: Run benchmarks on current commit (simple)
         id: current-bench-simple
         run: |
-          # Run benchmark for 30 seconds in simple mode to get quick results
-          cargo run --package synddb-benchmark --release -- init --db bench-current-simple.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-current-simple.log 2>&1; then
+          cargo run --package synddb-benchmark --release -- init --db bench-pr-simple.db
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-pr-simple.db --clean --rate 0 --simple --batch-size 5000 > bench-pr-simple.log 2>&1; then
             echo "❌ Simple benchmark failed! Output:"
-            cat bench-current-simple.log
-            exit 1
-          fi
-
-          # Extract peak achieved rate from output (portable sed approach)
-          CURRENT_RATE=$(grep "Peak achieved rate:" bench-current-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-          echo "rate=$CURRENT_RATE" >> $GITHUB_OUTPUT
-          echo "Current simple benchmark: $CURRENT_RATE ops/sec"
-          cat bench-current-simple.log
-
-      - name: Run full benchmark on current commit
-        id: current-bench-full
-        run: |
-          # Run full benchmark (non-simple mode) for 30 seconds
-          cargo run --package synddb-benchmark --release -- init --db bench-current-full.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-current-full.log 2>&1; then
-            echo "❌ Full benchmark failed! Output:"
-            cat bench-current-full.log
+            cat bench-pr-simple.log
             exit 1
           fi
 
           # Extract peak achieved rate from output
-          CURRENT_RATE=$(grep "Peak achieved rate:" bench-current-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          CURRENT_RATE=$(grep "Peak achieved rate:" bench-pr-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
           echo "rate=$CURRENT_RATE" >> $GITHUB_OUTPUT
-          echo "Current full benchmark: $CURRENT_RATE ops/sec"
-          cat bench-current-full.log
+          echo "PR simple benchmark: $CURRENT_RATE ops/sec"
 
-      - name: Run baseline benchmarks on main branch
+      - name: Run benchmarks on current commit (full)
+        id: current-bench-full
+        run: |
+          cargo run --package synddb-benchmark --release -- init --db bench-pr-full.db
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-pr-full.db --clean --rate 0 --batch-size 1000 > bench-pr-full.log 2>&1; then
+            echo "❌ Full benchmark failed! Output:"
+            cat bench-pr-full.log
+            exit 1
+          fi
+
+          # Extract peak achieved rate from output
+          CURRENT_RATE=$(grep "Peak achieved rate:" bench-pr-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          echo "rate=$CURRENT_RATE" >> $GITHUB_OUTPUT
+          echo "PR full benchmark: $CURRENT_RATE ops/sec"
+
+      - name: Run baseline benchmarks on main branch (simple)
         if: github.event_name == 'pull_request' && steps.cache-baseline.outputs.cache-hit != 'true'
         run: |
-          set +e  # Don't exit on error, we want to handle errors ourselves
-          echo "Cache miss - running baseline benchmarks on main branch"
-
-          # Checkout main branch
+          set +e
           git fetch origin main:main
           git checkout main
-
-          # Build benchmark on main
           cargo build --package synddb-benchmark --release
 
-          # Run simple benchmark
-          echo "Running simple mode benchmark..."
           cargo run --package synddb-benchmark --release -- init --db bench-main-simple.db
-          # Note: main branch uses --clear (old), current PR uses --clean (new)
-          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clear --rate 0 --simple --batch-size 5000 --duration 30 > bench-main-simple.log 2>&1
-          SIMPLE_EXIT=$?
-          if [ $SIMPLE_EXIT -ne 0 ]; then
-            echo "❌ Simple benchmark failed with exit code $SIMPLE_EXIT! Output:"
+          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clear --rate 0 --simple --batch-size 5000 > bench-main-simple.log 2>&1
+          if [ $? -ne 0 ]; then
+            echo "❌ Baseline simple benchmark failed! Output:"
             cat bench-main-simple.log
             exit 1
           fi
-          echo "✅ Simple benchmark completed successfully"
-          cat bench-main-simple.log
 
-          # Run full benchmark
-          echo "Running full mode benchmark..."
+          git checkout -
+
+      - name: Run baseline benchmarks on main branch (full)
+        if: github.event_name == 'pull_request' && steps.cache-baseline.outputs.cache-hit != 'true'
+        run: |
+          set +e
+          git fetch origin main:main
+          git checkout main
+          cargo build --package synddb-benchmark --release
+
           cargo run --package synddb-benchmark --release -- init --db bench-main-full.db
-          # Note: main branch uses --clear (old), current PR uses --clean (new)
-          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clear --rate 0 --batch-size 1000 --duration 30 > bench-main-full.log 2>&1
-          FULL_EXIT=$?
-          if [ $FULL_EXIT -ne 0 ]; then
-            echo "❌ Full benchmark failed with exit code $FULL_EXIT! Output:"
+          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clear --rate 0 --batch-size 1000 > bench-main-full.log 2>&1
+          if [ $? -ne 0 ]; then
+            echo "❌ Baseline full benchmark failed! Output:"
             cat bench-main-full.log
             exit 1
           fi
-          echo "✅ Full benchmark completed successfully"
-          cat bench-main-full.log
 
-          # Return to PR branch
           git checkout -
 
       - name: Extract baseline rates
@@ -254,7 +242,7 @@ jobs:
         with:
           name: benchmark-results
           path: |
-            bench-current-*.log
-            bench-current-*.db
+            bench-pr-*.log
+            bench-pr-*.db
             bench-main-*.log
             bench-main-*.db
