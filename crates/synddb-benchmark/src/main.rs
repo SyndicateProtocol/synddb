@@ -38,7 +38,7 @@ enum Commands {
         #[arg(short, long, default_value = "continuous")]
         pattern: String,
 
-        /// Operations per second (for continuous mode)
+        /// Operations per second (for continuous mode, 0 = auto-find max throughput)
         #[arg(short, long, default_value = "100")]
         rate: u64,
 

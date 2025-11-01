@@ -2,7 +2,7 @@ use anyhow::Result;
 use rand::Rng;
 use rusqlite::{params, Connection};
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::load_patterns::{LoadConfig, LoadPattern};
 
@@ -238,21 +238,6 @@ impl OrderbookSimulator {
         Ok(())
     }
 
-    fn execute_random_operation(&mut self) -> Result<()> {
-        let mut rng = rand::thread_rng();
-        let operation_type = rng.gen_range(0..100);
-
-        match operation_type {
-            0..=50 => self.place_order()?,     // 51% - place order
-            51..=65 => self.cancel_order()?,   // 15% - cancel order
-            66..=85 => self.execute_trade()?,  // 20% - execute trade
-            86..=99 => self.update_balance()?, // 14% - update balance
-            _ => unreachable!(),
-        }
-
-        Ok(())
-    }
-
     fn execute_random_operation_in_tx_static(
         user_ids: &[i64],
         tx: &rusqlite::Transaction,
@@ -290,140 +275,6 @@ impl OrderbookSimulator {
              VALUES (?1, ?2, ?3, 'limit', ?4, ?5, 'active')",
             params![user_id, symbol, side, price, quantity],
         )?;
-
-        Ok(())
-    }
-
-    fn place_order(&mut self) -> Result<()> {
-        let mut rng = rand::thread_rng();
-
-        let user_id = self.user_ids[rng.gen_range(0..self.user_ids.len())];
-        let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];
-        let side = if rng.gen_bool(0.5) { "buy" } else { "sell" };
-        let order_type = "limit";
-        let price = rng.gen_range(10_000..100_000);
-        let quantity = rng.gen_range(1..100);
-
-        self.conn.execute(
-            "INSERT INTO orders (user_id, symbol, side, order_type, price, quantity, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active')",
-            params![user_id, symbol, side, order_type, price, quantity],
-        )?;
-
-        debug!(
-            "Placed {} order for {} {} at {}",
-            side, quantity, symbol, price
-        );
-
-        Ok(())
-    }
-
-    fn cancel_order(&mut self) -> Result<()> {
-        // Find a random active order
-        let order_id: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT id FROM orders WHERE status = 'active' ORDER BY RANDOM() LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-
-        if let Some(id) = order_id {
-            self.conn.execute(
-                "UPDATE orders SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?1",
-                params![id],
-            )?;
-
-            debug!("Cancelled order {}", id);
-        }
-
-        Ok(())
-    }
-
-    fn execute_trade(&mut self) -> Result<()> {
-        let mut rng = rand::thread_rng();
-
-        // Find a random buy and sell order
-        let buy_order: Option<(i64, i64, String, i64)> = self
-            .conn
-            .query_row(
-                "SELECT id, user_id, symbol, quantity FROM orders
-             WHERE status = 'active' AND side = 'buy'
-             ORDER BY RANDOM() LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .ok();
-
-        let sell_order: Option<(i64, i64, String, i64)> = self
-            .conn
-            .query_row(
-                "SELECT id, user_id, symbol, quantity FROM orders
-             WHERE status = 'active' AND side = 'sell'
-             ORDER BY RANDOM() LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .ok();
-
-        if let (
-            Some((buy_id, buyer_id, buy_symbol, buy_qty)),
-            Some((sell_id, seller_id, sell_symbol, sell_qty)),
-        ) = (buy_order, sell_order)
-        {
-            if buy_symbol == sell_symbol {
-                let quantity = buy_qty.min(sell_qty);
-                let price = rng.gen_range(10_000..100_000);
-
-                // Create trade
-                self.conn.execute(
-                    "INSERT INTO trades (buy_order_id, sell_order_id, symbol, price, quantity, buyer_id, seller_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![buy_id, sell_id, buy_symbol, price, quantity, buyer_id, seller_id],
-                )?;
-
-                // Update orders
-                self.conn.execute(
-                    "UPDATE orders SET filled_quantity = filled_quantity + ?1,
-                     status = CASE WHEN filled_quantity + ?1 >= quantity THEN 'filled' ELSE 'partial' END,
-                     updated_at = unixepoch()
-                     WHERE id = ?2",
-                    params![quantity, buy_id],
-                )?;
-
-                self.conn.execute(
-                    "UPDATE orders SET filled_quantity = filled_quantity + ?1,
-                     status = CASE WHEN filled_quantity + ?1 >= quantity THEN 'filled' ELSE 'partial' END,
-                     updated_at = unixepoch()
-                     WHERE id = ?2",
-                    params![quantity, sell_id],
-                )?;
-
-                debug!("Executed trade: {} {} at {}", quantity, buy_symbol, price);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn update_balance(&mut self) -> Result<()> {
-        let mut rng = rand::thread_rng();
-
-        let user_id = self.user_ids[rng.gen_range(0..self.user_ids.len())];
-        let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];
-        let amount_change: i64 = rng.gen_range(-1000..1000);
-
-        self.conn.execute(
-            "UPDATE balances SET amount = MAX(0, amount + ?1), updated_at = unixepoch()
-             WHERE user_id = ?2 AND symbol = ?3",
-            params![amount_change, user_id, symbol],
-        )?;
-
-        debug!(
-            "Updated balance for user {} symbol {} by {}",
-            user_id, symbol, amount_change
-        );
 
         Ok(())
     }
