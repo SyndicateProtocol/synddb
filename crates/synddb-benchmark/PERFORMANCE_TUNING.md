@@ -321,8 +321,9 @@ And delivered:
 
 ### Pre-Optimization Benchmark
 
-**Commit**: `2e68eae65c0f60f7c00a4dfccd539a3c48b338b3`
+**Commit**: [`2e68eae65c0f60f7c00a4dfccd539a3c48b338b3`](https://github.com/SyndicateProtocol/SyndDB/tree/2e68eae65c0f60f7c00a4dfccd539a3c48b338b3/crates/synddb-benchmark)
 **Message**: "docs: Move majority of README to individual crates"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
 
 **Configuration**:
 - Single connection (no parallel workers)
@@ -347,8 +348,9 @@ Final database state:
 
 ### Post-Optimization Benchmark
 
-**Commit**: `8c436d6a1f5cdf6f32540c0d41afb9975eb3bbdf`
+**Commit**: [`8c436d6a1f5cdf6f32540c0d41afb9975eb3bbdf`](https://github.com/SyndicateProtocol/SyndDB/tree/8c436d6a1f5cdf6f32540c0d41afb9975eb3bbdf/crates/synddb-benchmark)
 **Message**: "chore: Remove indices to optimize performance"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
 
 **Configuration**:
 - 5 parallel workers (connection pooling with r2d2)
