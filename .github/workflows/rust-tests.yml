@@ -108,6 +108,7 @@ jobs:
       - name: Run baseline benchmarks on main branch
         if: github.event_name == 'pull_request' && steps.cache-baseline.outputs.cache-hit != 'true'
         run: |
+          set +e  # Don't exit on error, we want to handle errors ourselves
           echo "Cache miss - running baseline benchmarks on main branch"
 
           # Checkout main branch
@@ -120,21 +121,27 @@ jobs:
           # Run simple benchmark
           echo "Running simple mode benchmark..."
           cargo run --package synddb-benchmark --release -- init --db bench-main-simple.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-main-simple.log 2>&1; then
-            echo "❌ Simple benchmark failed! Output:"
+          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-main-simple.log 2>&1
+          SIMPLE_EXIT=$?
+          if [ $SIMPLE_EXIT -ne 0 ]; then
+            echo "❌ Simple benchmark failed with exit code $SIMPLE_EXIT! Output:"
             cat bench-main-simple.log
             exit 1
           fi
+          echo "✅ Simple benchmark completed successfully"
           cat bench-main-simple.log
 
           # Run full benchmark
           echo "Running full mode benchmark..."
           cargo run --package synddb-benchmark --release -- init --db bench-main-full.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-main-full.log 2>&1; then
-            echo "❌ Full benchmark failed! Output:"
+          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-main-full.log 2>&1
+          FULL_EXIT=$?
+          if [ $FULL_EXIT -ne 0 ]; then
+            echo "❌ Full benchmark failed with exit code $FULL_EXIT! Output:"
             cat bench-main-full.log
             exit 1
           fi
+          echo "✅ Full benchmark completed successfully"
           cat bench-main-full.log
 
           # Return to PR branch
