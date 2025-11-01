@@ -138,9 +138,9 @@ synddb-sidecar/
 
 ## Core Components
 
-### 1. Session Monitor
+### 1. Session Monitor (Data Changes + Schema Tracking)
 
-The Session Monitor uses SQLite's official Session Extension to capture deterministic changesets. This is far more robust than WAL parsing and provides logical changes that validators can reliably replay.
+The Session Monitor uses SQLite's official Session Extension to capture deterministic changesets for data changes. It also tracks schema changes (DDL statements) separately to ensure validators can replicate the complete database state including schema evolution.
 
 ```rust
 // src/monitor/session_tracker.rs
@@ -150,21 +150,34 @@ pub struct SessionMonitor {
     db_path: PathBuf,
     conn: Connection,
     session: rusqlite::Session<'static>,
-    tx: Sender<Changeset>,
+    changeset_tx: Sender<Changeset>,
+    schema_tx: Sender<SchemaChange>,
+    last_schema_version: i32,
 }
 
 impl SessionMonitor {
-    pub async fn new(db_path: PathBuf, tx: Sender<Changeset>) -> Result<Self> {
+    pub async fn new(
+        db_path: PathBuf,
+        changeset_tx: Sender<Changeset>,
+        schema_tx: Sender<SchemaChange>
+    ) -> Result<Self> {
         // Open database connection
         let mut conn = Connection::open(&db_path)?;
 
-        // Create session to track changes
+        // Get current schema version
+        let last_schema_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+
+        // Create session to track data changes
         // Session extension must be enabled at compile time:
         // RUSTFLAGS="-C link-arg=-lsqlite3" cargo build --features session
         let session = rusqlite::Session::new(&conn)?;
 
         // Attach to all tables (None = all tables)
         session.attach(None)?;
+
+        // Install update hook to detect schema changes
+        // This fires BEFORE commit hook, allowing us to capture DDL
+        conn.update_hook(Some(Self::on_update));
 
         // Install commit hook to capture changesets after each transaction
         conn.commit_hook(Some(Self::on_commit));
@@ -173,7 +186,49 @@ impl SessionMonitor {
             db_path,
             conn,
             session,
-            tx,
+            changeset_tx,
+            schema_tx,
+            last_schema_version,
+        })
+    }
+
+    /// Update hook called for every INSERT/UPDATE/DELETE
+    /// We use this to detect writes to sqlite_schema (DDL changes)
+    fn on_update(&mut self, action: Action, db: &str, table: &str, rowid: i64) {
+        if table == "sqlite_schema" || table == "sqlite_master" {
+            // Schema change detected! Capture it
+            match self.capture_schema_change() {
+                Ok(schema_change) => {
+                    if let Err(e) = self.schema_tx.blocking_send(schema_change) {
+                        error!("Failed to send schema change: {}", e);
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to capture schema change: {}", e);
+                }
+            }
+        }
+    }
+
+    fn capture_schema_change(&mut self) -> Result<SchemaChange> {
+        // Get new schema version (applications should increment this on ALTER)
+        let new_version: i32 = self.conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+
+        // Get full schema DDL
+        let schema_sql: Vec<String> = self.conn
+            .prepare("SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type, name")?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Get schema hash for quick comparison
+        let schema_hash = blake3::hash(&schema_sql.join("\n").as_bytes());
+
+        Ok(SchemaChange {
+            old_version: self.last_schema_version,
+            new_version,
+            ddl_statements: schema_sql,
+            schema_hash: schema_hash.to_hex().to_string(),
+            timestamp: SystemTime::now(),
         })
     }
 
@@ -270,6 +325,30 @@ pub enum OperationType {
     Update,
     Delete,
 }
+
+#[derive(Debug, Clone)]
+pub struct SchemaChange {
+    /// Previous schema version (from user_version pragma)
+    pub old_version: i32,
+    /// New schema version (applications should increment on ALTER)
+    pub new_version: i32,
+    /// Full DDL statements for all tables, indexes, triggers, views
+    pub ddl_statements: Vec<String>,
+    /// Hash of schema for quick comparison
+    pub schema_hash: String,
+    pub timestamp: SystemTime,
+}
+```
+
+**Important: Application Schema Change Pattern**
+```sql
+-- Applications MUST increment user_version when changing schema
+BEGIN TRANSACTION;
+  ALTER TABLE users ADD COLUMN age INTEGER;
+  PRAGMA user_version = 2;  -- Increment version
+COMMIT;
+
+-- This allows sidecar to detect and publish schema changes
 ```
 
 ### Why Session Extension (Changesets) is the Right Choice
@@ -308,6 +387,62 @@ for change in changeset.iter() {
 }
 ```
 
+### Schema Change Tracking
+
+**The Challenge:** SQLite Session Extension changesets only capture data changes (INSERT/UPDATE/DELETE), not schema changes (CREATE TABLE, ALTER TABLE, DROP INDEX, etc.). Validators need to know about schema changes to correctly apply data changesets.
+
+**Our Solution:** Separate DDL tracking via update hooks on `sqlite_schema` table combined with `user_version` pragma.
+
+**How It Works:**
+
+1. **Application Changes Schema**
+   ```sql
+   BEGIN TRANSACTION;
+     ALTER TABLE users ADD COLUMN email TEXT;
+     PRAGMA user_version = 2;  -- MUST increment version
+   COMMIT;
+   ```
+
+2. **Sidecar Detects Schema Change**
+   - Update hook fires when `sqlite_schema` table is modified
+   - Captures full DDL via `SELECT sql FROM sqlite_schema`
+   - Reads new `user_version` to track migration number
+   - Publishes `SchemaChange` message immediately (high priority)
+
+3. **Validators Apply Schema First**
+   ```rust
+   // Validator processing sequence from DA layer
+   match message.payload_type {
+       PayloadType::SchemaChange => {
+           // MUST apply schema before any subsequent data changesets
+           validator.verify_schema_version(schema.old_version)?;
+           validator.execute_ddl(&schema.ddl_statements)?;
+           validator.update_schema_version(schema.new_version)?;
+       }
+       PayloadType::ChangesetBatch => {
+           // Only apply if schema version matches
+           if validator.schema_version() == expected_version {
+               validator.apply_changesets(changesets)?;
+           } else {
+               return Err("Schema version mismatch - missing migration");
+           }
+       }
+       _ => {}
+   }
+   ```
+
+**Benefits:**
+- **Deterministic Migrations** - All validators see exact same DDL statements in order
+- **Version Tracking** - `user_version` provides clear migration ordering
+- **Schema Hash** - Quick validation that schema matches across all validators
+- **Atomic Application** - Schema changes published separately, applied before subsequent data
+- **Auditable** - Full DDL captured, not just schema diffs
+
+**Application Requirements:**
+- Applications MUST use `PRAGMA user_version` to track schema versions
+- Increment `user_version` in same transaction as schema changes
+- Use sequential version numbers (1, 2, 3, ...) for clear ordering
+
 ### 2. Batcher
 
 Accumulates changesets and triggers publishing based on time/size thresholds. Also handles periodic snapshot creation.
@@ -334,6 +469,13 @@ pub struct BatchConfig {
 
 #[derive(Debug, Clone)]
 pub enum BatchPayload {
+    /// Schema change (DDL statements)
+    /// MUST be applied by validators before subsequent data changesets
+    SchemaChange {
+        change: SchemaChange,
+        sequence: u64,
+        timestamp: SystemTime,
+    },
     /// Incremental changesets (deterministic replay)
     ChangesetBatch {
         changesets: Vec<Changeset>,
@@ -349,12 +491,36 @@ pub enum BatchPayload {
 }
 
 impl Batcher {
-    pub async fn run(mut self, rx: Receiver<Changeset>, tx: Sender<BatchPayload>) {
+    pub async fn run(
+        mut self,
+        changeset_rx: Receiver<Changeset>,
+        schema_rx: Receiver<SchemaChange>,
+        tx: Sender<BatchPayload>
+    ) {
         let mut flush_timer = tokio::time::interval(self.config.max_batch_age);
 
         loop {
             tokio::select! {
-                Some(changeset) = rx.recv() => {
+                Some(schema_change) = schema_rx.recv() => {
+                    // Schema changes are URGENT - flush pending changesets first,
+                    // then publish schema change immediately
+                    if !self.changesets.is_empty() {
+                        self.flush_changesets(&tx).await?;
+                    }
+
+                    // Publish schema change as separate high-priority message
+                    tx.send(BatchPayload::SchemaChange {
+                        change: schema_change,
+                        sequence: self.next_sequence(),
+                        timestamp: SystemTime::now(),
+                    }).await?;
+
+                    info!("Published schema change v{} -> v{}",
+                        schema_change.old_version,
+                        schema_change.new_version
+                    );
+                }
+                Some(changeset) = changeset_rx.recv() => {
                     self.buffer_size += changeset.data.len();
                     self.changesets.push(changeset);
 
@@ -466,6 +632,7 @@ pub struct AttestedPayload {
 
 #[derive(Serialize, Deserialize)]
 pub enum PayloadType {
+    SchemaChange,
     ChangesetBatch,
     Snapshot,
 }
@@ -474,6 +641,9 @@ impl Attestor {
     pub async fn run(self, rx: Receiver<BatchPayload>, tx: Sender<AttestedPayload>) {
         while let Some(payload) = rx.recv().await {
             let attested = match payload {
+                BatchPayload::SchemaChange { change, sequence, .. } => {
+                    self.attest_schema_change(change, sequence).await?
+                }
                 BatchPayload::ChangesetBatch { changesets, sequence, .. } => {
                     self.attest_changeset_batch(changesets, sequence).await?
                 }
@@ -484,6 +654,36 @@ impl Attestor {
 
             tx.send(attested).await?;
         }
+    }
+
+    async fn attest_schema_change(&self, change: SchemaChange, sequence: u64) -> Result<AttestedPayload> {
+        // Serialize schema change
+        let serialized = bincode::serialize(&change)?;
+
+        // Compress (DDL is typically very compressible)
+        let compressed = zstd::encode_all(&serialized[..], self.compression_level)?;
+        let checksum = blake3::hash(&compressed);
+
+        // Sign compressed data
+        let signature = self.key_manager.sign(&compressed)?;
+        let attestation_token = self.key_manager.get_attestation_token().await?;
+
+        warn!(
+            "Attested SCHEMA CHANGE v{} -> v{}: {} DDL statements",
+            change.old_version,
+            change.new_version,
+            change.ddl_statements.len()
+        );
+
+        Ok(AttestedPayload {
+            payload_type: PayloadType::SchemaChange,
+            compressed_data: compressed,
+            signature: signature.to_vec(),
+            public_key: self.key_manager.public_key_bytes(),
+            sequence,
+            checksum,
+            attestation_token: Some(attestation_token),
+        })
     }
 
     async fn attest_changeset_batch(&self, changesets: Vec<Changeset>, sequence: u64) -> Result<AttestedPayload> {
