@@ -15,8 +15,19 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  BENCHMARK_SIMPLE_BATCH_SIZE: 5000
-  BENCHMARK_FULL_BATCH_SIZE: 1000
+
+  # Benchmark batch sizes: Controls the tradeoff between throughput and latency
+  # - Larger batches (5000+): Higher throughput, higher latency per operation
+  #   Use case: Bulk data ingestion, ETL pipelines, batch processing systems
+  # - Smaller batches (100-1000): Lower latency, lower throughput
+  #   Use case: Real-time trading systems, interactive applications, low-latency requirements
+  # - Medium batches (1000-2000): Balanced approach
+  #   Use case: General-purpose applications, mixed workloads
+  BENCHMARK_SIMPLE_BATCH_SIZE: 5000  # Simple mode benefits from larger batches (insert-only workload)
+  BENCHMARK_FULL_BATCH_SIZE: 1000    # Full mode uses smaller batches (mixed operations have more contention)
+
+  # Regression threshold: Fail the build if sustained performance decreases by more than this percentage
+  # Set to -20 (meaning -20% or worse triggers a failure)
   REGRESSION_THRESHOLD: -20
 
 jobs:
@@ -55,6 +66,19 @@ jobs:
       - name: Build benchmark tool (release mode)
         run: cargo build --package synddb-benchmark --release
 
+      - name: Create helper functions
+        run: |
+          cat > /tmp/benchmark-helpers.sh << 'EOF'
+          # Extract peak and sustained rates from benchmark log file
+          extract_rates() {
+            local log_file=$1
+            local peak=$(grep "Peak achieved rate:" "$log_file" | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+            local sustained=$(grep "Sustained stable rate:" "$log_file" | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
+            echo "$peak $sustained"
+          }
+          EOF
+          chmod +x /tmp/benchmark-helpers.sh
+
       # Cache key based on the baseline commit SHA
       - name: Get baseline commit SHA
         id: baseline-sha
@@ -82,13 +106,7 @@ jobs:
       - name: Run benchmarks on current commit
         id: current-bench
         run: |
-          # Helper function to extract rates from log file
-          extract_rates() {
-            local log_file=$1
-            local peak=$(grep "Peak achieved rate:" "$log_file" | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-            local sustained=$(grep "Sustained stable rate:" "$log_file" | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
-            echo "$peak $sustained"
-          }
+          source /tmp/benchmark-helpers.sh
 
           # Run simple benchmark
           cargo run --package synddb-benchmark --release -- init --db bench-current-simple.db
@@ -148,13 +166,7 @@ jobs:
       - name: Extract baseline rates
         id: baseline-rates
         run: |
-          # Helper function to extract rates from log file
-          extract_rates() {
-            local log_file=$1
-            local peak=$(grep "Peak achieved rate:" "$log_file" | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-            local sustained=$(grep "Sustained stable rate:" "$log_file" | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
-            echo "$peak $sustained"
-          }
+          source /tmp/benchmark-helpers.sh
 
           # Extract from logs (either cached or freshly generated)
           if [ "${{ steps.cache-baseline.outputs.cache-hit }}" == "true" ]; then
