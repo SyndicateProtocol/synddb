@@ -30,6 +30,10 @@ enum Commands {
         #[arg(short, long, default_value = "orderbook.db")]
         db: PathBuf,
 
+        /// Clear all existing data before starting (default: resume with existing data)
+        #[arg(short, long, default_value = "false")]
+        clear: bool,
+
         /// Load pattern: continuous or burst
         #[arg(short, long, default_value = "continuous")]
         pattern: String,
@@ -85,6 +89,7 @@ async fn main() -> Result<()> {
         }
         Commands::Run {
             db,
+            clear,
             pattern,
             rate,
             duration,
@@ -118,6 +123,20 @@ async fn main() -> Result<()> {
 
             // Ensure schema exists
             schema::initialize_schema(&conn)?;
+
+            // Clear data if requested
+            if clear {
+                info!("Clearing existing data...");
+                schema::clear_data(&conn)?;
+                info!("Data cleared successfully");
+            } else {
+                // Check if there's existing data
+                let user_count: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+                if user_count > 0 {
+                    info!("Resuming with existing data ({} users found)", user_count);
+                }
+            }
 
             let mut simulator = OrderbookSimulator::new(conn);
             simulator.run(config).await?;
