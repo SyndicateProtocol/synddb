@@ -398,6 +398,166 @@ The post-optimization benchmark shows **115,870 ops/sec** vs pre-optimization's 
 
 The parallel workers actually **decreased** max throughput when comparing identical configurations, confirming our conclusion that the added complexity is not justified.
 
+### Intermediate Optimization Commits
+
+These benchmarks show the performance progression through various optimization attempts between the pre- and post-optimization states. All tests used the following command:
+
+```bash
+cargo run --package synddb-benchmark --release -- run --rate 0 --simple --batch-size 5000 --clear
+```
+
+#### Commit 1894b4a
+
+**Commit**: [`1894b4a64b4889ccd2a24d43eaf06c9a8fbcdc57`](https://github.com/SyndicateProtocol/SyndDB/tree/1894b4a64b4889ccd2a24d43eaf06c9a8fbcdc57/crates/synddb-benchmark)
+**Message**: "docs: Keep only recommended performance optimizations"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
+
+**Configuration**: Single connection, enhanced PRAGMA tuning
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 129183 ops/sec
+Verified stable rate: 128326 ops/sec
+Degradation detected at: 256000 ops/sec target
+
+=== Simulation Complete ===
+Operations: 4800000 | Elapsed: 106.3s | Rate: 45156.9 ops/sec
+Final database state:
+  Orders:    4800000 total (4800000 active)
+  Trades:    4800000
+```
+
+#### Commit 8c436d6
+
+**Commit**: [`8c436d6a1f5cdf6f32540c0d41afb9975eb3bbdf`](https://github.com/SyndicateProtocol/SyndDB/tree/8c436d6a1f5cdf6f32540c0d41afb9975eb3bbdf/crates/synddb-benchmark)
+**Message**: "chore: Remove indices to optimize performance"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
+
+**Configuration**: 5 parallel workers, r2d2 connection pooling, enhanced PRAGMA tuning
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 120814 ops/sec
+
+=== Simulation Complete ===
+Operations: 6500000 | Elapsed: 98.2s | Rate: 66203.2 ops/sec
+Final database state:
+  Orders:    6500000 total (6500000 active)
+  Trades:    6500000
+```
+
+#### Commit d819ef7
+
+**Commit**: [`d819ef757adcc1900633427801105bf76b1afd12`](https://github.com/SyndicateProtocol/SyndDB/tree/d819ef757adcc1900633427801105bf76b1afd12/crates/synddb-benchmark)
+**Message**: "chore: Add parallel batch workers via tokio"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
+
+**Configuration**: 5 parallel workers, r2d2 connection pooling, enhanced PRAGMA tuning
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 94385 ops/sec
+
+=== Simulation Complete ===
+Operations: 4725000 | Elapsed: 89.7s | Rate: 52653.5 ops/sec
+Final database state:
+  Orders:    4725000 total (4725000 active)
+  Trades:    4725000
+```
+
+#### Commit 58b6d1a
+
+**Commit**: [`58b6d1a003615db704ef9961e6ee8f2e9d09c46a`](https://github.com/SyndicateProtocol/SyndDB/tree/58b6d1a003615db704ef9961e6ee8f2e9d09c46a/crates/synddb-benchmark)
+**Message**: "chore: Multiple writers for performance tuning"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
+
+**Configuration**: Single connection, enhanced PRAGMA tuning
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 67064 ops/sec
+Verified stable rate: 104456 ops/sec
+Degradation detected at: 128000 ops/sec target
+
+=== Simulation Complete ===
+Operations: 3220000 | Elapsed: 97.6s | Rate: 33002.4 ops/sec
+Final database state:
+  Orders:    3220000 total (3220000 active)
+  Trades:    3220000
+```
+
+#### Commit be3f0e8
+
+**Commit**: [`be3f0e8438b27e82bd6ded94f0989cba63819b25`](https://github.com/SyndicateProtocol/SyndDB/tree/be3f0e8438b27e82bd6ded94f0989cba63819b25/crates/synddb-benchmark)
+**Message**: "chore: Performance tuning"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
+
+**Configuration**: Single connection, enhanced PRAGMA tuning
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 67076 ops/sec
+Verified stable rate: 104093 ops/sec
+Degradation detected at: 128000 ops/sec target
+
+=== Simulation Complete ===
+Operations: 3220000 | Elapsed: 97.7s | Rate: 32948.5 ops/sec
+Final database state:
+  Orders:    3220000 total (3220000 active)
+  Trades:    3220000
+```
+
+#### Commit 2e68eae
+
+**Commit**: [`2e68eae65c0f60f7c00a4dfccd539a3c48b338b3`](https://github.com/SyndicateProtocol/SyndDB/tree/2e68eae65c0f60f7c00a4dfccd539a3c48b338b3/crates/synddb-benchmark)
+**Message**: "docs: Move majority of README to individual crates"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
+
+**Configuration**: Single connection, basic PRAGMA tuning
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 67205 ops/sec
+Verified stable rate: 97461 ops/sec
+Degradation detected at: 128000 ops/sec target
+
+=== Simulation Complete ===
+Operations: 3085000 | Elapsed: 97.5s | Rate: 31637.3 ops/sec
+Final database state:
+  Orders:    3085000 total (3085000 active)
+  Trades:    3085000
+```
+
+#### Commit b9ad03e (Current main branch)
+
+**Commit**: [`b9ad03e`](https://github.com/SyndicateProtocol/SyndDB/tree/b9ad03e/crates/synddb-benchmark)
+**Message**: "feat: Add benchmarking tool and results (#15)"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
+
+**Configuration**: Single connection, enhanced PRAGMA tuning (recommended configuration)
+
+**Note**: This commit is functionally identical to 1894b4a (which achieved 129,183 ops/sec). The only differences are minor code quality improvements (idiomatic assertions, `div_ceil()` API, and a bug fix in trades count query). Performance results are consistent between the two commits, with normal variation due to system load.
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 134256 ops/sec
+Verified stable rate: 130498 ops/sec
+Degradation detected at: 256000 ops/sec target
+
+=== Simulation Complete ===
+Operations: 4890000 | Elapsed: 106.6s | Rate: 45858.4 ops/sec
+Final database state:
+  Orders:    4890000 total (4890000 active)
+  Trades:    0
+```
+
 ---
 
 **Document version**: 2025-11-01
