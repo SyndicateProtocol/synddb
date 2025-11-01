@@ -72,10 +72,10 @@ SQLite is the ideal foundation for verifiable blockchain applications:
 
 For this performance, applications must accept:
 
-1. **Centralized application instance** (equivalent to today's rollups, but with better performance and flexibility)
-   - Centralized architecture means potential liveness failures if the application goes down
-   - Fallback instances may need to restart from last published state, not the current state (potential data loss between publications)
-   - Validators remain decentralized and provide security guarantees
+1. **Centralized application instance** (same trust model as rollup sequencers, but with better performance)
+   - Liveness depends on the application instance staying online
+   - Fallback instances may restart from last published state (potential data loss between publications)
+   - Validators remain decentralized for security
 2. **Non-EVM execution framework** - Uses SQL instead of Solidity/EVM
 3. **Asset location flexibility** comes with different trade-offs:
    - Assets on settlement layer: Maximum security but requires message passing for actions
@@ -96,11 +96,11 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - All state changes must be persisted to SQLite
 
 2. **Sidecar Listener**
-   - Lightweight process that attaches to the SQLite database
-   - Monitors all SQL operations via WAL (Write-Ahead Logging) or triggers
-   - Batches SQL statements into diffs and creates periodic snapshots
-   - Publishes diffs and snapshots to DA layers (Celestia, EigenDA, etc.) or IPFS/Arweave
-   - No code changes required in the application (as long as SQLite is used)
+   - Attaches to the SQLite database via WAL (Write-Ahead Logging)
+   - Captures all SQL operations automatically
+   - Batches operations into diffs, creates periodic snapshots
+   - Publishes to DA layers (Celestia, EigenDA) and storage layers (IPFS, Arweave)
+   - Zero application code changes required
 
 3. **Read Replicas**
    - Anyone can run a read replica permissionlessly
@@ -109,14 +109,11 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - Serve queries with full SQL capabilities
 
 4. **Validators**
-   - Read replicas with additional validation logic executed before signing
-   - Default validation logic (extensible with custom business logic)
-   - Must operate in TEEs to ensure they run unmodified code
-   - Verify SQL operations and their results deterministically
-   - Can make best-effort attempts to re-derive external API data
-   - Process message passing operations from special tables
-   - Add custom business logic checks before signing for settlement
-   - Implementation: Rust-based for consistency across validator network
+   - Read replicas with validation logic that runs in TEEs
+   - Verify SQL operations before signing for settlement
+   - Default checks: SQL correctness, state consistency, balance invariants
+   - Optional checks: External API verification, custom business rules
+   - Process cross-chain messages from message tables
 
 5. **Bridge (Message Passing)**
    - Smart contract for processing cross-chain messages
@@ -134,29 +131,26 @@ Application (Any Language) → SQLite → Sidecar → DA Layers ← Validators (
                                                              Bridge.sol
 ```
 
-**Application Path**: Application writes to SQLite → Sidecar publishes diffs/snapshots to DA layers
+**Application Path**: App writes to SQLite → Sidecar publishes to DA layers
 
-**Validator Path**: Validators read from DA layers (or subscribe to sidecar with TEE attestation for lower latency) → Verify SQL operations → Post verified state to blockchain
+**Validator Path**: Validators read from DA → Verify SQL → Post to blockchain
 
-**Message Passing**: Validators monitor message tables → Process through Bridge.sol for cross-chain operations
+**Message Passing**: Validators detect messages in SQL → Process via Bridge.sol
 
-Validators can optionally subscribe directly to the sidecar for lower-latency updates by presenting valid TEE attestations for authentication. This separates the application/sidecar from blockchain interaction while still allowing fast validator synchronization.
-
-The architecture treats SQL as the universal language for state verification. Applications can be in any language, while validators run default validation logic (extensible with custom business rules) to ensure consistent verification across the network.
+Validators can subscribe to the sidecar (with TEE attestation) for lower latency instead of waiting for DA publication. The application never touches the blockchain directly.
 
 ### Application as Source of Truth
 
-The SQLite database managed by the application serves as the source of truth in SyndDB's model. The application runs inside a TEE, which significantly reduces trust assumptions through hardware-backed attestations proving it's running the correct code.
+The application runs in a TEE with hardware attestations proving it's running the correct code. This provides accountability while maintaining performance.
 
-The application operates as:
+Key properties:
 
-- **Source of Truth**: Runs in any language and publishes all SQL operations for verification
-- **TEE-Backed Accountability**: TEE attestations prove the application is running unmodified code, providing cryptographic guarantees about its behavior
-- **Validator Guardrails**: Validators enforce circuit breakers (e.g., caps on withdrawals, pool limits, throttling of asset movements) before signing for settlement
-- **Flexible Business Logic**: Can use any programming language, external APIs, complex computations - only the SQL results matter
-- **Application-Specific Logic**: Can prune historical data for performance while still providing snapshots for bootstrapping
+- **TEE Accountability**: Attestations prove the application is running unmodified code
+- **Validator Guardrails**: Validators enforce limits (withdrawal caps, rate limits) before settlement
+- **Flexible Implementation**: Use any language, external APIs, or libraries - only SQL output matters
+- **Performance Optimized**: Can prune historical data while providing snapshots for bootstrapping
 
-This model trades full decentralization for practical high-performance guarantees, making it suitable for applications where ultra-low latency and throughput matter more than trustless derivability of all history. The TEE + validator architecture provides security guarantees without requiring full re-execution of application logic.
+This trades full decentralization for extreme performance, suitable for applications where ultra-low latency matters more than fully decentralized execution.
 
 ## Verifiability Model: SQL as the Audit Trail
 
@@ -195,13 +189,7 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
 
 ### Why This Works
 
-The application runs in a TEE with attestations, providing accountability for:
-
-- Ordering transactions
-- Running the business logic
-- Deciding on state transitions
-
-Instead of trying to make everything deterministic and re-executable, we focus verification on what matters: **the SQL operations that change state**. This is similar to how traditional databases use write-ahead logs for replication - we're applying the same principle to blockchain verification, with the TEE ensuring the application can't equivocate and validators providing additional checks before settlement.
+TEE attestations ensure the application runs the correct code. Validators verify the SQL output, not the implementation. This is like database replication via write-ahead logs - apply the same principle to blockchain, with TEEs preventing equivocation and validators adding checks before settlement.
 
 ### Example: High-Performance Orderbook
 
@@ -251,13 +239,13 @@ def match_orders(buy_order, sell_order):
 
 ### Publishing Model: Application → DA → Validators → Blockchain
 
-The application never interacts with the blockchain directly, avoiding a single point of failure:
+The application never touches the blockchain - the sidecar publishes to DA layers:
 
-1. **Sidecar publishes to DA layers**: The sidecar publishes SQL diffs and snapshots to one or more DA layers (Celestia, EigenDA, IPFS, Arweave) with signatures from the application's TEE
-2. **Validators read from DA layers**: Validators sync from censorship-resistant DA layers to get SQL operations
-3. **Validators post to blockchain**: After verification, validators publish verified state to the settlement chain
+1. **Sidecar → DA**: Publishes SQL diffs/snapshots to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with TEE signatures
+2. **Validators ← DA**: Validators sync from censorship-resistant DA layers
+3. **Validators → Blockchain**: Post verified state roots to settlement chain
 
-This design allows the application to use multiple publishing sources for resilience while keeping it isolated from blockchain infrastructure.
+This keeps the application isolated from blockchain infrastructure while enabling multiple DA sources for resilience.
 
 ### Validator Settlement Contract
 
