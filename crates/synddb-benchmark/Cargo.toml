@@ -24,5 +24,3 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }
-r2d2 = "0.8"
-r2d2_sqlite = "0.25"

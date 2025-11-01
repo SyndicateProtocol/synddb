@@ -1,7 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -60,10 +58,6 @@ enum Commands {
         #[arg(long, default_value = "100")]
         batch_size: usize,
 
-        /// Number of parallel worker threads (0 = auto, based on CPU cores)
-        #[arg(short = 'w', long, default_value = "0")]
-        workers: usize,
-
         /// Simple mode: only insert orders (no queries, much faster)
         #[arg(long, default_value = "false")]
         simple: bool,
@@ -110,7 +104,6 @@ async fn main() -> Result<()> {
             burst_size,
             burst_interval,
             batch_size,
-            workers,
             simple,
         } => {
             info!("Starting orderbook simulation at {:?}", db);
@@ -136,60 +129,33 @@ async fn main() -> Result<()> {
                 }
             };
 
-            // Auto-detect workers if set to 0
-            let num_workers = if workers == 0 {
-                let cpu_count = std::thread::available_parallelism()
-                    .map(|n| n.get())
-                    .unwrap_or(4);
-                // Use half of available cores for workers (leave room for OS/other tasks)
-                (cpu_count / 2).max(2)
-            } else {
-                workers
-            };
-
-            info!(
-                "Using {} parallel workers (CPU cores: {})",
-                num_workers,
-                std::thread::available_parallelism()
-                    .map(|n| n.get())
-                    .unwrap_or(0)
-            );
-
             let config = LoadConfig {
                 pattern: load_pattern,
                 duration_seconds: if duration == 0 { None } else { Some(duration) },
                 batch_size,
                 simple_mode: simple,
-                num_workers,
             };
 
-            // Create connection pool matching number of workers for optimal parallelism
-            let manager = SqliteConnectionManager::file(&db);
-            let pool = Pool::builder()
-                .max_size(num_workers.max(4) as u32) // Match workers, minimum 4
-                .build(manager)?;
+            let conn = Connection::open(&db)?;
 
-            // Initialize schema on one connection
-            {
-                let conn = pool.get()?;
-                schema::initialize_schema(&*conn)?;
+            // Ensure schema exists
+            schema::initialize_schema(&conn)?;
 
-                // Clear data if requested
-                if clear {
-                    info!("Clearing existing data...");
-                    schema::clear_data(&*conn)?;
-                    info!("Data cleared successfully");
-                } else {
-                    // Check if there's existing data
-                    let user_count: i64 =
-                        conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
-                    if user_count > 0 {
-                        info!("Resuming with existing data ({} users found)", user_count);
-                    }
+            // Clear data if requested
+            if clear {
+                info!("Clearing existing data...");
+                schema::clear_data(&conn)?;
+                info!("Data cleared successfully");
+            } else {
+                // Check if there's existing data
+                let user_count: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+                if user_count > 0 {
+                    info!("Resuming with existing data ({} users found)", user_count);
                 }
             }
 
-            let mut simulator = OrderbookSimulator::new(pool);
+            let mut simulator = OrderbookSimulator::new(conn);
             simulator.run(config).await?;
         }
         Commands::Stats { db } => {

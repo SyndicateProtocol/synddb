@@ -1,12 +1,7 @@
 use anyhow::Result;
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rand::Rng;
-use rusqlite::params;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use rusqlite::{params, Connection};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
 use tracing::info;
 
 use crate::load_patterns::{LoadConfig, LoadPattern};
@@ -15,18 +10,18 @@ const SYMBOLS: &[&str] = &["BTC-USD", "ETH-USD", "SOL-USD", "ARB-USD"];
 const INITIAL_USERS: usize = 100;
 
 pub struct OrderbookSimulator {
-    pool: Pool<SqliteConnectionManager>,
+    conn: Connection,
     user_ids: Vec<i64>,
-    operation_count: Arc<AtomicU64>,
+    operation_count: u64,
     start_time: Option<Instant>,
 }
 
 impl OrderbookSimulator {
-    pub fn new(pool: Pool<SqliteConnectionManager>) -> Self {
+    pub fn new(conn: Connection) -> Self {
         Self {
-            pool,
+            conn,
             user_ids: Vec::new(),
-            operation_count: Arc::new(AtomicU64::new(0)),
+            operation_count: 0,
             start_time: None,
         }
     }
@@ -55,75 +50,32 @@ impl OrderbookSimulator {
             .duration_seconds
             .map(|d| Instant::now() + Duration::from_secs(d));
 
-        // Use parallel workers for better CPU utilization
-        if config.num_workers > 1 {
-            info!(
-                "Running with {} parallel workers for maximum throughput",
-                config.num_workers
-            );
-            match config.pattern {
-                LoadPattern::Continuous { ops_per_second } => {
-                    self.run_continuous_parallel(
-                        ops_per_second,
-                        end_time,
-                        config.batch_size,
-                        config.simple_mode,
-                        config.num_workers,
-                    )
-                    .await?;
-                }
-                LoadPattern::MaxThroughput => {
-                    self.run_max_throughput_parallel(
-                        end_time,
-                        config.batch_size,
-                        config.simple_mode,
-                        config.num_workers,
-                    )
-                    .await?;
-                }
-                LoadPattern::Burst {
-                    burst_size,
-                    pause_seconds,
-                } => {
-                    self.run_burst(
-                        burst_size,
-                        pause_seconds,
-                        end_time,
-                        config.batch_size,
-                        config.simple_mode,
-                    )
-                    .await?;
-                }
+        match config.pattern {
+            LoadPattern::Continuous { ops_per_second } => {
+                self.run_continuous(
+                    ops_per_second,
+                    end_time,
+                    config.batch_size,
+                    config.simple_mode,
+                )
+                .await?;
             }
-        } else {
-            // Single-threaded execution (legacy)
-            match config.pattern {
-                LoadPattern::Continuous { ops_per_second } => {
-                    self.run_continuous(
-                        ops_per_second,
-                        end_time,
-                        config.batch_size,
-                        config.simple_mode,
-                    )
-                    .await?;
-                }
-                LoadPattern::Burst {
+            LoadPattern::Burst {
+                burst_size,
+                pause_seconds,
+            } => {
+                self.run_burst(
                     burst_size,
                     pause_seconds,
-                } => {
-                    self.run_burst(
-                        burst_size,
-                        pause_seconds,
-                        end_time,
-                        config.batch_size,
-                        config.simple_mode,
-                    )
+                    end_time,
+                    config.batch_size,
+                    config.simple_mode,
+                )
+                .await?;
+            }
+            LoadPattern::MaxThroughput => {
+                self.run_max_throughput(end_time, config.batch_size, config.simple_mode)
                     .await?;
-                }
-                LoadPattern::MaxThroughput => {
-                    self.run_max_throughput(end_time, config.batch_size, config.simple_mode)
-                        .await?;
-                }
             }
         }
 
@@ -157,8 +109,7 @@ impl OrderbookSimulator {
 
             // Execute a batch of operations in a single transaction
             {
-                let mut conn = self.pool.get()?;
-                let tx = conn.transaction()?;
+                let tx = self.conn.transaction()?;
                 for _ in 0..batch_size {
                     if let Some(end) = end_time {
                         if Instant::now() >= end {
@@ -170,7 +121,7 @@ impl OrderbookSimulator {
                     } else {
                         Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
                     }
-                    self.operation_count.fetch_add(1, Ordering::Relaxed);
+                    self.operation_count += 1;
                 }
                 tx.commit()?;
             }
@@ -217,15 +168,14 @@ impl OrderbookSimulator {
                     batch_size
                 };
 
-                let mut conn = self.pool.get()?;
-                let tx = conn.transaction()?;
+                let tx = self.conn.transaction()?;
                 for _ in 0..batch_ops {
                     if simple_mode {
                         Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
                     } else {
                         Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
                     }
-                    self.operation_count.fetch_add(1, Ordering::Relaxed);
+                    self.operation_count += 1;
                 }
                 tx.commit()?;
             }
@@ -249,254 +199,6 @@ impl OrderbookSimulator {
         }
 
         Ok(())
-    }
-
-    /// Run continuous load with parallel workers for maximum CPU utilization
-    async fn run_continuous_parallel(
-        &mut self,
-        ops_per_second: u64,
-        end_time: Option<Instant>,
-        batch_size: usize,
-        simple_mode: bool,
-        num_workers: usize,
-    ) -> Result<()> {
-        let (tx, rx) = mpsc::channel::<()>(num_workers * 2);
-
-        // Spawn worker tasks - each gets work from broadcast channel
-        let mut handles = vec![];
-        let work_rx_arc = Arc::new(tokio::sync::Mutex::new(rx));
-
-        for _worker_id in 0..num_workers {
-            let pool = self.pool.clone();
-            let user_ids = self.user_ids.clone();
-            let worker_rx = work_rx_arc.clone();
-            let counter = self.operation_count.clone();
-
-            let handle = tokio::spawn(async move {
-                loop {
-                    let msg = {
-                        let mut rx = worker_rx.lock().await;
-                        rx.recv().await
-                    };
-
-                    if msg.is_none() {
-                        break;
-                    }
-
-                    let mut conn = pool.get().map_err(|e| anyhow::anyhow!("{}", e))?;
-                    let tx = conn.transaction()?;
-
-                    for _ in 0..batch_size {
-                        if simple_mode {
-                            Self::execute_simple_operation_in_tx_static(&user_ids, &tx)?;
-                        } else {
-                            Self::execute_random_operation_in_tx_static(&user_ids, &tx)?;
-                        }
-                        counter.fetch_add(1, Ordering::Relaxed);
-                    }
-                    tx.commit()?;
-                }
-                Ok::<_, anyhow::Error>(())
-            });
-
-            handles.push(handle);
-        }
-
-        // Main loop: dispatch work to workers
-        let interval_micros = (1_000_000 / ops_per_second) * batch_size as u64;
-        let mut interval = tokio::time::interval(Duration::from_micros(interval_micros));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        let mut last_log = Instant::now();
-        let log_interval = Duration::from_secs(5);
-
-        loop {
-            interval.tick().await;
-
-            if let Some(end) = end_time {
-                if Instant::now() >= end {
-                    break;
-                }
-            }
-
-            // Send work signal (workers process independently)
-            if tx.send(()).await.is_err() {
-                break;
-            }
-
-            // Log stats periodically
-            if last_log.elapsed() >= log_interval {
-                self.log_stats();
-                last_log = Instant::now();
-            }
-        }
-
-        // Shutdown workers
-        drop(tx);
-        for handle in handles {
-            handle.await??;
-        }
-
-        self.log_final_stats();
-        Ok(())
-    }
-
-    /// Run max throughput discovery with parallel workers
-    async fn run_max_throughput_parallel(
-        &mut self,
-        end_time: Option<Instant>,
-        batch_size: usize,
-        simple_mode: bool,
-        num_workers: usize,
-    ) -> Result<()> {
-        info!("=== Max Throughput Discovery Mode ===");
-        info!("Will automatically find maximum sustainable throughput");
-        info!("Using adaptive algorithm with stability detection");
-
-        // Spawn persistent worker pool
-        let (work_tx, work_rx) = mpsc::channel::<()>(num_workers * 4);
-        let mut handles = vec![];
-        let work_rx_arc = Arc::new(tokio::sync::Mutex::new(work_rx));
-
-        for _ in 0..num_workers {
-            let pool = self.pool.clone();
-            let user_ids = self.user_ids.clone();
-            let worker_rx = work_rx_arc.clone();
-            let counter = self.operation_count.clone();
-
-            let handle = tokio::spawn(async move {
-                loop {
-                    let msg = {
-                        let mut rx = worker_rx.lock().await;
-                        rx.recv().await
-                    };
-
-                    if msg.is_none() {
-                        break;
-                    }
-
-                    let mut conn = pool.get().map_err(|e| anyhow::anyhow!("{}", e))?;
-                    let tx = conn.transaction()?;
-
-                    for _ in 0..batch_size {
-                        if simple_mode {
-                            Self::execute_simple_operation_in_tx_static(&user_ids, &tx)?;
-                        } else {
-                            Self::execute_random_operation_in_tx_static(&user_ids, &tx)?;
-                        }
-                        counter.fetch_add(1, Ordering::Relaxed);
-                    }
-                    tx.commit()?;
-                }
-                Ok::<_, anyhow::Error>(())
-            });
-
-            handles.push(handle);
-        }
-
-        // Test increasing rates
-        let mut current_rate = 1000;
-        let mut best_stable_rate = 0.0;
-
-        loop {
-            if let Some(end) = end_time {
-                if Instant::now() >= end {
-                    break;
-                }
-            }
-
-            info!("\n--- Testing {} ops/sec ---", current_rate);
-
-            let sample_rate = self
-                .test_rate_parallel(current_rate, batch_size, &work_tx, num_workers)
-                .await?;
-
-            let achievement = (sample_rate / current_rate as f64) * 100.0;
-
-            // Check if we achieved target
-            if achievement >= 90.0 {
-                best_stable_rate = sample_rate;
-                current_rate *= 2; // Double the rate
-            } else {
-                info!("⚠ Throughput degraded (<90% of target) - backing off");
-                break;
-            }
-        }
-
-        info!(
-            "\n=== Maximum Throughput Found ===\nBest sustained rate: {:.0} ops/sec\n",
-            best_stable_rate
-        );
-
-        // Shutdown workers
-        drop(work_tx);
-        for handle in handles {
-            handle.await??;
-        }
-
-        self.log_final_stats();
-        Ok(())
-    }
-
-    /// Test a specific rate with parallel workers
-    async fn test_rate_parallel(
-        &mut self,
-        rate: u64,
-        batch_size: usize,
-        work_tx: &mpsc::Sender<()>,
-        num_workers: usize,
-    ) -> Result<f64> {
-        let num_samples = 3;
-        let sample_duration = Duration::from_secs(3);
-        let mut sample_rates = Vec::new();
-
-        for sample_num in 1..=num_samples {
-            let sample_start = Instant::now();
-            let ops_before = self.operation_count.load(Ordering::Relaxed);
-            let sample_end_time = sample_start + sample_duration;
-
-            let interval_micros = (1_000_000 / rate) * batch_size as u64;
-            let mut interval = tokio::time::interval(Duration::from_micros(interval_micros));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            while Instant::now() < sample_end_time {
-                interval.tick().await;
-                // Send work to all workers
-                for _ in 0..num_workers {
-                    if work_tx.send(()).await.is_err() {
-                        break;
-                    }
-                }
-            }
-
-            let sample_elapsed = sample_start.elapsed();
-            let ops_completed = self.operation_count.load(Ordering::Relaxed) - ops_before;
-            let sample_rate = ops_completed as f64 / sample_elapsed.as_secs_f64();
-            sample_rates.push(sample_rate);
-
-            info!(
-                "  Sample {}/{}: {:.0} ops/sec",
-                sample_num, num_samples, sample_rate
-            );
-        }
-
-        let mean_rate = sample_rates.iter().sum::<f64>() / sample_rates.len() as f64;
-        let std_dev = (sample_rates
-            .iter()
-            .map(|r| (r - mean_rate).powi(2))
-            .sum::<f64>()
-            / sample_rates.len() as f64)
-            .sqrt();
-        let cv = (std_dev / mean_rate) * 100.0;
-
-        info!(
-            "Mean: {:.0} ops/sec ({:.1}% of target) | Stability: {:.1}% CV",
-            mean_rate,
-            (mean_rate / rate as f64) * 100.0,
-            cv
-        );
-
-        Ok(mean_rate)
     }
 
     async fn run_max_throughput(
@@ -530,7 +232,7 @@ impl OrderbookSimulator {
 
             for sample_num in 1..=num_samples {
                 let sample_start = Instant::now();
-                let ops_before = self.operation_count.load(Ordering::Relaxed);
+                let ops_before = self.operation_count;
                 let sample_end_time = sample_start + sample_duration;
 
                 let interval_micros = 1_000_000 / current_rate;
@@ -542,21 +244,20 @@ impl OrderbookSimulator {
                 while Instant::now() < sample_end_time {
                     interval.tick().await;
 
-                    let mut conn = self.pool.get()?;
-                    let tx = conn.transaction()?;
+                    let tx = self.conn.transaction()?;
                     for _ in 0..batch_size {
                         if simple_mode {
                             Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
                         } else {
                             Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
                         }
-                        self.operation_count.fetch_add(1, Ordering::Relaxed);
+                        self.operation_count += 1;
                     }
                     tx.commit()?;
                 }
 
                 let sample_elapsed = sample_start.elapsed();
-                let ops_completed = self.operation_count.load(Ordering::Relaxed) - ops_before;
+                let ops_completed = self.operation_count - ops_before;
                 let sample_rate = ops_completed as f64 / sample_elapsed.as_secs_f64();
                 sample_rates.push(sample_rate);
 
@@ -681,7 +382,7 @@ impl OrderbookSimulator {
 
         for sample_num in 1..=num_samples {
             let sample_start = Instant::now();
-            let ops_before = self.operation_count.load(Ordering::Relaxed);
+            let ops_before = self.operation_count;
             let sample_end_time = sample_start + sample_duration;
 
             let interval_micros = 1_000_000 / rate;
@@ -692,21 +393,20 @@ impl OrderbookSimulator {
             while Instant::now() < sample_end_time {
                 interval.tick().await;
 
-                let mut conn = self.pool.get()?;
-                let tx = conn.transaction()?;
+                let tx = self.conn.transaction()?;
                 for _ in 0..batch_size {
                     if simple_mode {
                         Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
                     } else {
                         Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
                     }
-                    self.operation_count.fetch_add(1, Ordering::Relaxed);
+                    self.operation_count += 1;
                 }
                 tx.commit()?;
             }
 
             let sample_elapsed = sample_start.elapsed();
-            let ops_completed = self.operation_count.load(Ordering::Relaxed) - ops_before;
+            let ops_completed = self.operation_count - ops_before;
             let sample_rate = ops_completed as f64 / sample_elapsed.as_secs_f64();
             sample_rates.push(sample_rate);
 
@@ -720,15 +420,14 @@ impl OrderbookSimulator {
     }
 
     fn initialize_users(&mut self) -> Result<()> {
-        let conn = self.pool.get()?;
-        let existing_count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+        let existing_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
 
         if existing_count == 0 {
             info!("Creating {} initial users...", INITIAL_USERS);
 
-            let mut conn = self.pool.get()?;
-            let tx = conn.transaction()?;
+            let tx = self.conn.transaction()?;
             for i in 0..INITIAL_USERS {
                 tx.execute(
                     "INSERT INTO users (username) VALUES (?1)",
@@ -739,8 +438,7 @@ impl OrderbookSimulator {
         }
 
         // Load all user IDs
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare("SELECT id FROM users")?;
+        let mut stmt = self.conn.prepare("SELECT id FROM users")?;
         let user_ids: Vec<i64> = stmt
             .query_map([], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -750,7 +448,7 @@ impl OrderbookSimulator {
         // Initialize balances for all users
         for user_id in &self.user_ids {
             for symbol in SYMBOLS {
-                conn.execute(
+                self.conn.execute(
                     "INSERT OR IGNORE INTO balances (user_id, symbol, amount) VALUES (?1, ?2, ?3)",
                     params![user_id, symbol, 1_000_000_000],
                 )?;
@@ -806,12 +504,11 @@ impl OrderbookSimulator {
     fn log_stats(&self) {
         if let Some(start) = self.start_time {
             let elapsed = start.elapsed();
-            let total_ops = self.operation_count.load(Ordering::Relaxed);
-            let ops_per_sec = total_ops as f64 / elapsed.as_secs_f64();
+            let ops_per_sec = self.operation_count as f64 / elapsed.as_secs_f64();
 
             info!(
                 "Operations: {} | Elapsed: {:.1}s | Rate: {:.1} ops/sec",
-                total_ops,
+                self.operation_count,
                 elapsed.as_secs_f64(),
                 ops_per_sec
             );
@@ -833,16 +530,17 @@ impl OrderbookSimulator {
     }
 
     fn get_db_stats(&self) -> Result<DbStats> {
-        let conn = self.pool.get()?;
-        let total_orders: i64 =
-            conn.query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
-        let active_orders: i64 = conn.query_row(
+        let total_orders: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
+        let active_orders: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM orders WHERE status = 'active'",
             [],
             |row| row.get(0),
         )?;
-        let total_trades: i64 =
-            conn.query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
+        let total_trades: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
 
         Ok(DbStats {
             total_orders,
@@ -869,33 +567,19 @@ impl OrderbookSimulator {
     }
 
     fn cancel_order_in_tx(tx: &rusqlite::Transaction) -> Result<()> {
-        // Efficient random selection using OFFSET - much faster than ORDER BY RANDOM() and MIN/MAX
-        // This approach uses an index-only scan with OFFSET for O(log n) performance
-        let count: Result<i64, _> = tx.query_row(
-            "SELECT COUNT(*) FROM orders WHERE status = 'active'",
-            [],
-            |row| row.get(0),
-        );
+        let order_id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM orders WHERE status = 'active' ORDER BY RANDOM() LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
 
-        if let Ok(total) = count {
-            if total > 0 {
-                let random_offset = rand::thread_rng().gen_range(0..total);
-
-                let order_id: Option<i64> = tx
-                    .query_row(
-                        "SELECT id FROM orders WHERE status = 'active' LIMIT 1 OFFSET ?1",
-                        params![random_offset],
-                        |row| row.get(0),
-                    )
-                    .ok();
-
-                if let Some(id) = order_id {
-                    tx.execute(
-                        "UPDATE orders SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?1",
-                        params![id],
-                    )?;
-                }
-            }
+        if let Some(id) = order_id {
+            tx.execute(
+                "UPDATE orders SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?1",
+                params![id],
+            )?;
         }
         Ok(())
     }
@@ -903,57 +587,23 @@ impl OrderbookSimulator {
     fn execute_trade_in_tx(tx: &rusqlite::Transaction) -> Result<()> {
         let mut rng = rand::thread_rng();
 
-        // Efficient random selection for buy orders using OFFSET
-        let buy_order: Option<(i64, i64, String, i64)> = {
-            let count: Result<i64, _> = tx.query_row(
-                "SELECT COUNT(*) FROM orders WHERE status = 'active' AND side = 'buy'",
+        let buy_order: Option<(i64, i64, String, i64)> = tx
+            .query_row(
+                "SELECT id, user_id, symbol, quantity FROM orders
+                 WHERE status = 'active' AND side = 'buy' ORDER BY RANDOM() LIMIT 1",
                 [],
-                |row| row.get(0),
-            );
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .ok();
 
-            if let Ok(total) = count {
-                if total > 0 {
-                    let random_offset = rng.gen_range(0..total);
-                    tx.query_row(
-                        "SELECT id, user_id, symbol, quantity FROM orders
-                         WHERE status = 'active' AND side = 'buy' LIMIT 1 OFFSET ?1",
-                        params![random_offset],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                    )
-                    .ok()
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
-        // Efficient random selection for sell orders using OFFSET
-        let sell_order: Option<(i64, i64, String, i64)> = {
-            let count: Result<i64, _> = tx.query_row(
-                "SELECT COUNT(*) FROM orders WHERE status = 'active' AND side = 'sell'",
+        let sell_order: Option<(i64, i64, String, i64)> = tx
+            .query_row(
+                "SELECT id, user_id, symbol, quantity FROM orders
+                 WHERE status = 'active' AND side = 'sell' ORDER BY RANDOM() LIMIT 1",
                 [],
-                |row| row.get(0),
-            );
-
-            if let Ok(total) = count {
-                if total > 0 {
-                    let random_offset = rng.gen_range(0..total);
-                    tx.query_row(
-                        "SELECT id, user_id, symbol, quantity FROM orders
-                         WHERE status = 'active' AND side = 'sell' LIMIT 1 OFFSET ?1",
-                        params![random_offset],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                    )
-                    .ok()
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .ok();
 
         if let (
             Some((buy_id, buyer_id, buy_symbol, buy_qty)),
