@@ -472,7 +472,8 @@ Schema changes are rare (typically days/weeks apart), so the snapshot overhead i
 - **Problem:** `INSERT INTO events VALUES (random(), datetime('now'))` would produce different values on validators
 - **Solution:** Session Extension captures **actual written values**, not SQL functions
 - **Changeset contains:** `INSERT INTO events VALUES (123456, '2024-01-15 10:30:00')`
-- **Status:** ✅ Automatically handled by changesets
+- **Note:** `SQLITE_DETERMINISTIC` flag is for user-defined functions only and doesn't affect built-in functions
+- **Status:** ✅ Automatically handled by changesets (no configuration needed)
 
 **2. AUTOINCREMENT and ROWID**
 - **Problem:** Primary and validators might have different `sqlite_sequence` state
@@ -535,6 +536,21 @@ Schema changes are rare (typically days/weeks apart), so the snapshot overhead i
 - **Problem:** Primary and validators must use same text encoding
 - **Solution:** Enforce `PRAGMA encoding = 'UTF-8'` everywhere
 - **Status:** ⚠️ TODO - Add encoding check to snapshot validation
+
+**9. User-Defined Functions (UDFs)**
+- **Problem:** Applications may register custom functions that don't exist on validators
+- **Examples:**
+  ```python
+  # Python app registers custom function
+  conn.create_function("my_hash", 1, my_custom_hash)
+
+  # Then uses it
+  conn.execute("INSERT INTO data VALUES (my_hash('input'))")
+  ```
+- **Solution:** Values captured in changesets (function already executed on primary)
+- **Validator requirement:** Validators don't need the UDF definition
+- **Note:** `SQLITE_DETERMINISTIC` flag only matters if UDF is used in indexes/constraints
+- **Status:** ✅ Automatically handled (values captured, not function calls)
 
 ### Application Requirements for Determinism
 
