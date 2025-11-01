@@ -400,7 +400,11 @@ The parallel workers actually **decreased** max throughput when comparing identi
 
 ### Intermediate Optimization Commits
 
-These benchmarks show the performance progression through various optimization attempts between the pre- and post-optimization states. All tests used `--batch-size 5000 --simple` mode.
+These benchmarks show the performance progression through various optimization attempts between the pre- and post-optimization states. All tests used the following command:
+
+```bash
+cargo run --package synddb-benchmark --release -- run --rate 0 --simple --batch-size 5000 --clear
+```
 
 #### Commit 1894b4a - docs: Keep only recommended performance optimizations
 
