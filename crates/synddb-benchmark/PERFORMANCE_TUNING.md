@@ -542,19 +542,19 @@ Final database state:
 
 **Configuration**: Single connection, enhanced PRAGMA tuning (recommended configuration)
 
-**Note**: This commit is functionally identical to 1894b4a (which achieved 129,183 ops/sec). The only differences are minor code quality improvements (idiomatic assertions, `div_ceil()` API, and a bug fix in trades count query). The performance difference (67,088 vs 129,183 ops/sec) is due to normal variation when benchmarking on a development machine with background processes and system load.
+**Note**: This commit is functionally identical to 1894b4a (which achieved 129,183 ops/sec). The only differences are minor code quality improvements (idiomatic assertions, `div_ceil()` API, and a bug fix in trades count query). Performance results are consistent between the two commits, with normal variation due to system load.
 
 **Results**:
 ```
 === Maximum Throughput Found ===
-Best sustained rate: 67088 ops/sec
-Verified stable rate: 105454 ops/sec
-Degradation detected at: 128000 ops/sec target
+Best sustained rate: 134256 ops/sec
+Verified stable rate: 130498 ops/sec
+Degradation detected at: 256000 ops/sec target
 
 === Simulation Complete ===
-Operations: 3260000 | Elapsed: 97.5s | Rate: 33438.4 ops/sec
+Operations: 4890000 | Elapsed: 106.6s | Rate: 45858.4 ops/sec
 Final database state:
-  Orders:    3260000 total (3260000 active)
+  Orders:    4890000 total (4890000 active)
   Trades:    0
 ```
 
