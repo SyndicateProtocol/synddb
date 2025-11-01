@@ -10,16 +10,16 @@
 
 ### Node Types
 
-- **Sequencer** - Single node running inside a TEE, executing the application (any language) with SQLite and publishing SQL operations via sidecar to DA layers
+- **Application** - Your application (any language) running inside a TEE with SQLite, publishing SQL operations via sidecar to DA layers
 - **Read Replica** - Any node that syncs published SQL operations to serve queries (anyone can run permissionlessly)
-- **Validator** - Read replica with additional validation logic (default validation can be extended with custom business logic) that runs in a TEE and verifies SQL operations before signing for settlement
+- **Validator** - Read replica with additional validation logic that runs in a TEE and verifies SQL operations before signing for settlement
 
 ### State Management Terms
 
 - **SQL Operations** - Database statements executed by the application and captured for verification
 - **State Diff** - Batched SQL statements representing incremental database changes, published to DA layers
 - **State Snapshot** - Complete SQLite database file at a specific version, published to DA layers for bootstrapping
-- **Chain Submission** - Process where validators publish verified state to blockchain after reading from DA layers
+- **Settlement** - Process where validators publish verified state to blockchain after reading from DA layers
 
 ### Message Passing Components
 
@@ -45,7 +45,7 @@ Developers don't need to change how they build applications - just ensure all st
 
 ## Why SyndDB?
 
-**Use any language, get blockchain verifiability for free.** SyndDB lets you build high-performance applications in Python, JavaScript, Go, Rust, or any language with SQLite - no framework to learn, no code changes required. Get offchain performance (sub-millisecond latency, unlimited throughput) with onchain transparency (all state verifiable through SQL operations). The sequencer runs in a TEE for accountability, while validators provide additional guardrails before settlement. Perfect for applications where ultra-low latency matters more than full decentralization: orderbooks, gaming, social feeds, real-time analytics.
+**Use any language, get blockchain verifiability for free.** SyndDB lets you build high-performance applications in Python, JavaScript, Go, Rust, or any language with SQLite - no framework to learn, no code changes required. Get offchain performance (sub-millisecond latency, unlimited throughput) with onchain transparency (all state verifiable through SQL operations). Your application runs in a TEE for accountability, while validators provide additional guardrails before settlement. Perfect for applications where ultra-low latency matters more than full decentralization: orderbooks, gaming, social feeds, real-time analytics.
 
 ### Why SQLite?
 
@@ -72,14 +72,14 @@ SQLite is the ideal foundation for verifiable blockchain applications:
 
 For this performance, applications must accept:
 
-1. **Sequencer centralization** (equivalent to today's rollups, but with better performance and flexibility)
-   - Single sequencer architecture means liveness failures if the sequencer goes down
-   - Fallback sequencers must restart from last published state, not the sequencer's current state (potential data loss between publications)
+1. **Centralized application instance** (equivalent to today's rollups, but with better performance and flexibility)
+   - Centralized architecture means potential liveness failures if the application goes down
+   - Fallback instances may need to restart from last published state, not the current state (potential data loss between publications)
    - Validators remain decentralized and provide security guarantees
 2. **Non-EVM execution framework** - Uses SQL instead of Solidity/EVM
 3. **Asset location flexibility** comes with different trade-offs:
    - Assets on settlement layer: Maximum security but requires message passing for actions
-   - Assets native on SyndDB: Maximum performance but relies on sequencer and validator security model
+   - Assets native on SyndDB: Maximum performance but relies on application and validator security model
    - Hybrid approach: Bridge assets as needed for specific operations (adds operational complexity)
 
 ## Architecture Overview
@@ -88,8 +88,8 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
 
 ### Core Components
 
-1. **Application (Sequencer) - Any Language**
-   - Application written in any language (Python, Node.js, Go, Rust, Java, etc.)
+1. **Application - Any Language**
+   - Written in any language (Python, Node.js, Go, Rust, Java, etc.)
    - Uses SQLite for persistence (via language-specific SQLite bindings)
    - Runs inside a TEE for attestation and accountability
    - Can use any libraries, frameworks, or external APIs
@@ -126,37 +126,35 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
 
 ### Data Flow
 
-The application IS the sequencer - they run together inside a TEE:
-
 ```
-Sequencer/App (Any Language) → SQLite → Sidecar → DA Layers ← Validators (TEE) → Blockchain
-       in TEE                              ↓                        ↓
-                                    Message Tables           Settlement Verification
-                                                                     ↓
-                                                                Bridge.sol
+Application (Any Language) → SQLite → Sidecar → DA Layers ← Validators (TEE) → Blockchain
+       in TEE                           ↓                        ↓
+                                 Message Tables           Settlement Verification
+                                                                  ↓
+                                                             Bridge.sol
 ```
 
-**Sequencer Path**: Application writes to SQLite → Sidecar publishes diffs/snapshots to DA layers
+**Application Path**: Application writes to SQLite → Sidecar publishes diffs/snapshots to DA layers
 
 **Validator Path**: Validators read from DA layers (or subscribe to sidecar with TEE attestation for lower latency) → Verify SQL operations → Post verified state to blockchain
 
 **Message Passing**: Validators monitor message tables → Process through Bridge.sol for cross-chain operations
 
-Validators can optionally subscribe directly to the sidecar for lower-latency updates by presenting valid TEE attestations for authentication. This separates the sequencer/sidecar from blockchain interaction while still allowing fast validator synchronization.
+Validators can optionally subscribe directly to the sidecar for lower-latency updates by presenting valid TEE attestations for authentication. This separates the application/sidecar from blockchain interaction while still allowing fast validator synchronization.
 
 The architecture treats SQL as the universal language for state verification. Applications can be in any language, while validators run default validation logic (extensible with custom business rules) to ensure consistent verification across the network.
 
-### Sequencer as Source of Truth
+### Application as Source of Truth
 
-The SQLite database managed by the sequencer serves as the source of truth in SyndDB's model. The sequencer runs inside a TEE, which significantly reduces trust assumptions through hardware-backed attestations proving it's running the correct code.
+The SQLite database managed by the application serves as the source of truth in SyndDB's model. The application runs inside a TEE, which significantly reduces trust assumptions through hardware-backed attestations proving it's running the correct code.
 
-The sequencer operates as:
+The application operates as:
 
-- **Source of Truth**: The sequencer runs application code in any language and publishes all SQL operations for verification
-- **TEE-Backed Accountability**: TEE attestations prove the sequencer is running unmodified code, providing cryptographic guarantees about its behavior
+- **Source of Truth**: Runs in any language and publishes all SQL operations for verification
+- **TEE-Backed Accountability**: TEE attestations prove the application is running unmodified code, providing cryptographic guarantees about its behavior
 - **Validator Guardrails**: Validators enforce circuit breakers (e.g., caps on withdrawals, pool limits, throttling of asset movements) before signing for settlement
-- **Flexible Business Logic**: The sequencer can use any programming language, external APIs, complex computations - only the SQL results matter
-- **Application-Specific Logic**: The sequencer can prune historical data for performance while still providing snapshots for bootstrapping
+- **Flexible Business Logic**: Can use any programming language, external APIs, complex computations - only the SQL results matter
+- **Application-Specific Logic**: Can prune historical data for performance while still providing snapshots for bootstrapping
 
 This model trades full decentralization for practical high-performance guarantees, making it suitable for applications where ultra-low latency and throughput matter more than trustless derivability of all history. The TEE + validator architecture provides security guarantees without requiring full re-execution of application logic.
 
@@ -166,7 +164,7 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
 
 ### How It Works
 
-1. **Sequencer Writes Everything to SQL**: The sequencer must persist all data that could affect state transitions to SQLite, including:
+1. **Application Writes Everything to SQL**: The application must persist all data that could affect state transitions to SQLite, including:
    - Application state changes
    - Logs of external API calls and their results
    - User inputs and their effects
@@ -177,9 +175,9 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
    - Transaction boundaries (BEGIN/COMMIT)
    - The ordering of all operations
    - Periodic state snapshots for bootstrapping
-   - This ensures data is widely available and reduces sequencer equivocation risk
+   - This ensures data is widely available and reduces equivocation risk
 
-3. **Validators Verify SQL, Not Code**: Standardized Rust validators read from DA layers and check:
+3. **Validators Verify SQL, Not Code**: Validators read from DA layers and check:
    - SQL syntax and semantic correctness (default validation)
    - State transitions make sense (default validation)
    - Balances remain consistent (default validation)
@@ -197,13 +195,13 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
 
 ### Why This Works
 
-The sequencer runs in a TEE with attestations, providing accountability for:
+The application runs in a TEE with attestations, providing accountability for:
 
 - Ordering transactions
 - Running the business logic
 - Deciding on state transitions
 
-Instead of trying to make everything deterministic and re-executable, we focus verification on what matters: **the SQL operations that change state**. This is similar to how traditional databases use write-ahead logs for replication - we're applying the same principle to blockchain verification, with the TEE ensuring the sequencer can't equivocate and validators providing additional checks before settlement.
+Instead of trying to make everything deterministic and re-executable, we focus verification on what matters: **the SQL operations that change state**. This is similar to how traditional databases use write-ahead logs for replication - we're applying the same principle to blockchain verification, with the TEE ensuring the application can't equivocate and validators providing additional checks before settlement.
 
 ### Example: High-Performance Orderbook
 
@@ -251,19 +249,19 @@ def match_orders(buy_order, sell_order):
 
 ## Smart Contracts and Message Passing
 
-### Publishing Model: Sequencer → DA → Validators → Blockchain
+### Publishing Model: Application → DA → Validators → Blockchain
 
-The sequencer never interacts with the blockchain directly, avoiding a single point of failure:
+The application never interacts with the blockchain directly, avoiding a single point of failure:
 
-1. **Sidecar publishes to DA layers**: The sidecar publishes SQL diffs and snapshots to one or more DA layers (Celestia, EigenDA, IPFS, Arweave) with signatures from the sequencer's TEE
+1. **Sidecar publishes to DA layers**: The sidecar publishes SQL diffs and snapshots to one or more DA layers (Celestia, EigenDA, IPFS, Arweave) with signatures from the application's TEE
 2. **Validators read from DA layers**: Validators sync from censorship-resistant DA layers to get SQL operations
 3. **Validators post to blockchain**: After verification, validators publish verified state to the settlement chain
 
-This design allows the sequencer to use multiple publishing sources for resilience while keeping it isolated from blockchain infrastructure.
+This design allows the application to use multiple publishing sources for resilience while keeping it isolated from blockchain infrastructure.
 
 ### Validator Settlement Contract
 
-Validators (not the sequencer) interact with the blockchain:
+Validators (not the application) interact with the blockchain:
 
 ```solidity
 // Validators post verified state roots after checking SQL operations
@@ -342,11 +340,11 @@ CREATE TABLE outbound_messages (
 **Message Flow**:
 
 1. Application writes to message table (e.g., `outbound_withdrawals`)
-2. Sidecar publishes SQL operations to DA layers with sequencer signature
+2. Sidecar publishes SQL operations to DA layers with application signature
 3. Validators read from DA layers and detect message table changes
 4. Validators verify messages and submit to Bridge.sol
 5. Bridge.sol processes messages and emits events
-6. Validators detect inbound messages and write to sequencer's inbound tables
+6. Validators detect inbound messages and write to application's inbound tables
 
 No custom bridge code needed - just define tables that match your message schema.
 
@@ -425,7 +423,7 @@ synddb-validator \
 
 The default validator will sync from DA layers, replay SQL operations, and verify basic invariants before signing for settlement.
 
-Sequencer applications can be in any language, while validators share the same implementation to ensure consistent verification across the network.
+Applications can be in any language, while validators share the same implementation to ensure consistent verification across the network.
 
 ## Use Cases
 
