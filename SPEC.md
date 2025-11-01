@@ -10,8 +10,11 @@
 
 ### Node Types
 
+CLAUDE: Mention that the sequencer is inside a TEE. This is important for security and to ensure it's not able to act without any accountability.
+
 - **Sequencer** - Single trusted node running the application (any language) with SQLite, publishing SQL operations to blockchain
 - **Read Replica** - Any node that syncs published SQL operations to serve queries (anyone can run permissionlessly)
+  CLAUDE: Leading with standardized Rust-based read replica is a bit confusing. Mention that this is a read replica with additional validation logic that is executed prior to signing. There is default validation logic that can be extended with custom business logic.
 - **Validator** - Standardized Rust-based read replica that verifies SQL operations and can process bridge operations (subset of read replicas)
 
 ### State Management Terms
@@ -19,9 +22,13 @@
 - **SQL Operations** - Database statements executed by the application and captured for verification
 - **State Diff** - SQL statements representing incremental database changes between versions
 - **State Snapshot** - Complete SQLite database file at a specific version
+  CLAUDE: Specify that these SQL operations are batched and published to the blockchain as state diffs and snapshots.
 - **Chain Submission** - Process of publishing SQL operations to blockchain for replication and verification
 
 ### Bridge Components
+
+CLAUDE: We likely want to generalize this naming to account for the fact that it can pass arbitrary messages. Maybe not deposits and withdrawals, but something else? Like "bridge messages" for example?
+CLAUDE: We then need to figure out the Bridge spec and how it should relate to the special messages table. It shouldn't be completely standardized, instead it should tie together the smart contract ABI and the table schema in some way.
 
 - **Bridge Tables** - Special SQLite tables (e.g., `bridge_withdrawals`, `bridge_deposits`) automatically monitored for cross-chain operations
 - **Bridge.sol** - Smart contract that processes withdrawal/deposit requests from bridge tables
@@ -29,8 +36,10 @@
 
 ## Overview
 
+CLAUDE: We should add a line that as long as a language supports SQLite bindings, it can be used to build SyndDB applications.
 SyndDB enables developers to build high-performance blockchain applications using **any programming language** with SQLite. Instead of learning a new framework, developers write applications in their preferred language (Python, JavaScript, Go, Rust, etc.) that persist data to SQLite, while SyndDB infrastructure automatically captures and publishes the SQL operations for verification and replication.
 
+CLAUDE: Mention that the sequencer runs inside of a TEE here, so that it already has attestations that it's running the correct code.
 The key insight is that **SQL operations themselves become the verifiable audit trail**. Rather than requiring validators to re-execute complex business logic and external API calls, they verify the SQL statements and their effects. This practical approach recognizes that the sequencer is already trusted for execution, so validators focus on auditing database operations rather than re-deriving them.
 
 The architecture is simple:
@@ -41,9 +50,12 @@ The architecture is simple:
 4. **Enable permissionless read replicas** that sync the SQL operations to serve queries
 5. **Support bridge operations** through standardized tables that trigger cross-chain messages
 
+CLAUDE: Add an additional line that they don't need to change anything about the way they build their applications. They just need to ensure that all state changes are persisted to SQLite.
 This design delivers ultra-low latency (<1ms local writes) and high throughput while maintaining verifiability at the SQL level. Applications can use any programming language, frameworks, libraries, or external services - as long as the results are persisted to SQLite, the system captures everything needed for verification.
 
 ## Key Benefits
+
+CLAUDE: Lead with the fact that the key benefit is that developers can use any language and framework they want, with zero changes required to adopt SyndDB as long as they use SQLite.
 
 1. Incredibly fast and low latency system
 2. Flexible asset management - assets can either:
@@ -56,7 +68,9 @@ This design delivers ultra-low latency (<1ms local writes) and high throughput w
 
 For this performance, applications must accept:
 
-1. Significant decentralization trade-offs in block production (decentralization in validators is maintained)
+CLAUDE: We're probably selling ourselves short on the first item. We should mention somewhere that this is equivalent to today's rollups in terms of sequencer centralization, but with much better performance and flexibility.
+
+1. Decentralization trade-offs in sequencer centralization (decentralization in validators is maintained)
    - Single sequencer architecture means liveness failures if the sequencer goes down
    - Fallback sequencers must restart from last published state, not the sequencer's current state (potential data loss between publications)
 2. Non-EVM execution framework
@@ -67,13 +81,17 @@ For this performance, applications must accept:
 
 ## Architecture Overview
 
+CLAUDE: This is jargon-heavy. Can you make this line simpler?
 SyndDB transforms any standard Rust + SQLite application into a blockchain-verifiable system through automatic SQL operation capture and publication.
+
+CLAUDE: You're missing the Bridge in the Core Components section
 
 ### Core Components
 
 1. **Application (Sequencer) - Any Language**
    - Application written in any language (Python, Node.js, Go, Rust, Java, etc.)
    - Uses SQLite for persistence (via language-specific SQLite bindings)
+     CLAUDE: Mention the TEE here
    - Runs as a single trusted sequencer node
    - Can use any libraries, frameworks, or external APIs
    - All state changes must be persisted to SQLite
@@ -82,7 +100,9 @@ SyndDB transforms any standard Rust + SQLite application into a blockchain-verif
    - Lightweight process that attaches to the SQLite database
    - Monitors all SQL operations via WAL (Write-Ahead Logging) or triggers
    - Batches and compresses SQL statements
+     CLAUDE: Mention diffs and snapshots are what is published. Mention that DA layers can also be used as a publishing source.
    - Publishes to blockchain or IPFS/Arweave automatically
+     CLAUDE: As long as SQLite is used
    - No code changes required in the application
 
 3. **Read Replicas**
@@ -91,15 +111,20 @@ SyndDB transforms any standard Rust + SQLite application into a blockchain-verif
    - Replay operations to maintain consistent database state
    - Serve queries with full SQL capabilities
 
+CLAUDE: We had earlier notes on how to phrase the Rust standardization. Make sure to incorporate those points here.
+
 4. **Validators (Optional) - Standardized in Rust**
-   - Subset of read replicas running standardized Rust validation logic
-   - Verify SQL operations and their results deterministically
-   - Can make best-effort attempts to re-derive external API data
-   - Process bridge operations from special tables
-   - Add custom business logic checks before signing
-   - May operate in TEEs for additional security
+
+- Subset of read replicas running standardized Rust validation logic
+- Verify SQL operations and their results deterministically
+- Can make best-effort attempts to re-derive external API data
+- Process bridge operations from special tables
+- Add custom business logic checks before signing
+- May operate in TEEs for additional security
 
 ### Data Flow
+
+CLAUDE: This is confusing. Make it clear that the validators pick up data from the Sidecar Listener and post it to the blockchain. As a side note, should we make it explicit that the Validators can subscribe to the Sidecar for updates as long as they present a valid TEE attestation that they are a validator to serve as authentication? This would ensure that they can have lower latency when reading from the sequencer, while still separating the sequencer sidecar from the main application logic for best performance
 
 ```
 App (Any Language) → SQLite → Sidecar Listener → Blockchain → Read Replicas → Queries
@@ -109,13 +134,17 @@ App (Any Language) → SQLite → Sidecar Listener → Blockchain → Read Repli
                        Bridge.sol              Settlement Verification
 ```
 
+CLAUDE: Incorporate the same feedback about the Rust standardization here as well.
 This architecture treats SQL as the universal language for state verification, eliminating the need for custom frameworks or execution environments. The sequencer can be in any language, while validators use standardized Rust code for consistent verification.
+
+CLAUDE: Clarify the TEE role here that reduces trust assumptions on the sequencer.
 
 ### Sequencer as Source of Truth
 
 The SQLite database managed by the sequencer serves as the trusted source of truth in SyndDB's model. The sequencer operates as:
 
 - **Source of Truth**: The sequencer runs application code in any language and publishes all SQL operations for verification
+  CLAUDE: Circuit breakers provided by the validators
 - **Trusted Role with Guardrails**: While trust is placed in the sequencer, circuit breakers (e.g., caps on withdrawals, pool limits, or throttling of asset movements) enforce safety
 - **Flexible Business Logic**: The sequencer can use any programming language, external APIs, complex computations - only the SQL results matter
 - **Application-Specific Logic**: The sequencer can prune historical data for performance while still providing snapshots for bootstrapping
@@ -128,25 +157,37 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
 
 ### How It Works
 
+CLAUDE: Decision-relevant is weird language. Just say "all data that could affect state transitions".
+
 1. **Sequencer Writes Everything to SQL**: The sequencer must persist all decision-relevant data to SQLite, including:
    - Application state changes
+     CLAUDE: "Influenced decisions" is weird and vague. Just say that in a well-architected SyndDB application, the sequencer persists all data that could affect state transitions, including logs of external API calls.
    - External data that influenced decisions
    - User inputs and their effects
    - Bridge operations via special tables
 
+CLAUDE: The sidecar listener sends these to the validators, right? An alternative design is that the sidecar could publish to the DA layer, and then the validators read from DA.
+On second thought, we should use this model. The validators should read from DA layers that are censorship-resistant. It should be the responsibility of the sidecar to publish this data, generate diffs and snapshots, etc. That ensures that the data from the sequencer is always widely available, and reduces the chance of sequencer equivocation by giving different validators different sets of data to create a fork.
+
 2. **SQL Operations Get Published**: The sidecar listener captures and publishes:
-   - Every INSERT, UPDATE, DELETE operation
-   - Transaction boundaries (BEGIN/COMMIT)
-   - The ordering of all operations
-   - Optional: Periodic state snapshots
+
+- Every INSERT, UPDATE, DELETE operation
+- Transaction boundaries (BEGIN/COMMIT)
+- The ordering of all operations
+- Optional: Periodic state snapshots
+
+CLAUDE: Note that there is a default set of rules that simply re-execute the SQL operations to verify state transitions, but that this can be extended with custom business logic to ensure that the sequencer is following application-specific rules.
 
 3. **Validators Verify SQL, Not Code**: Standardized Rust validators check:
-   - SQL syntax and semantic correctness
-   - State transitions make sense
-   - Balances remain consistent
-   - Bridge operations follow rules
-   - Custom business logic checks as needed
-   - Optional: Best-effort re-derivation of external data for additional verification
+
+- SQL syntax and semantic correctness
+- State transitions make sense
+- Balances remain consistent
+- Bridge operations follow rules
+- Custom business logic checks as needed
+- Optional: Best-effort re-derivation of external data for additional verification
+
+CLAUDE: Make it clear that validators can still play a larger role in re-execution if they are extended, but that it is purely optional
 
 4. **No Full Re-execution Required**: Validators don't need to:
    - Re-run the original application (which could be in any language)
@@ -156,13 +197,19 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
 
 ### Why This Works
 
+CLAUDE: Stop referring to the sequencer as trusted without mentioning the TEE
+
 The sequencer is already trusted for:
 
 - Ordering transactions
 - Running the business logic
 - Deciding on state transitions
 
+CLAUDE: Is this true? Double check this
+
 So instead of trying to make everything deterministic and re-executable, we focus verification on what matters: **the SQL operations that change state**. This is similar to how traditional databases use write-ahead logs for replication - we're applying the same principle to blockchain verification.
+
+CLAUDE: This is a weird example since oracle price updates are not a high throughput operation. Use an orderbook being onchain (low throughput) vs offchain (high throughput) as an example instead. Explain that we get the best of both worlds with the validated, transparent nature of onchain code but the performance of offchain code.
 
 ### Example: Oracle Price Updates
 
@@ -189,11 +236,15 @@ cursor.execute(
 db.commit()
 ```
 
+CLAUDE: This is a good line. Give an example of custom business logic for the orderbook approach instead, but keep something like this example.
+
 Validators only verify the SQL operation, not how the price was derived. They can add business logic checks (e.g., "price shouldn't change by >10% in one update") without re-implementing the oracle logic.
 
 ## Smart Contracts and Bridge Operations
 
 ### State Publication Contract
+
+CLAUDE: The sidecar listener publishes to DA layers with a signature from the sequencer, not to the blockchain directly. The validators read from DA layers and post to the blockchain. Update accordingly. The sequencer is never required to interact with the blockchain directly to avoid giving it a single point of failure. Instead, it can interact with as many publishing sources via the sidecar as it would like, increasing resiliency.
 
 The sidecar listener automatically publishes SQL operations through a simple contract interface:
 
@@ -210,6 +261,8 @@ function publishSnapshot(string calldata ipfsCid, bytes32 snapshotHash, uint256 
 
 The sidecar listener handles all publication automatically - no application code changes needed.
 
+CLAUDE: Above, we talked about extending this for generic message passing, not just deposits and withdrawals. We should reflect that here.
+
 ### Bridge.sol for Asset Management
 
 Bridge operations are triggered automatically when the application writes to special tables:
@@ -221,6 +274,8 @@ function processWithdrawal(uint256 withdrawalId, address token, uint256 amount, 
 // Receives deposits and notifies sequencer to update bridge_deposits table
 function deposit(address token, uint256 amount, string calldata accountId)
 ```
+
+CLAUDE: Also update this to account for generic message passing, not just deposits and withdrawals.
 
 ### Standard Bridge Tables
 
@@ -252,7 +307,11 @@ CREATE TABLE bridge_deposits (
 );
 ```
 
+CLAUDE: We should be more precise here. The sidecar listener posts data signed by the sequencer to DA layers, and the validators read from DA layers to process these tables and coordinate with Bridge.sol.
+
 The sidecar listener monitors these tables and automatically coordinates with Bridge.sol - no custom bridge code needed.
+
+CLAUDE: This is now pretty outdated since it's just standard SQLite operations with no special framework. We should probably cut these examples entirely and rely on the use cases description later in the document.
 
 ### Example Database Transactions
 
@@ -429,6 +488,8 @@ Validators verify SQL operations rather than re-executing application logic:
 3. **Optional External Verification**: Can attempt to verify external data sources
 4. **Settlement Authority**: Approve bridge operations based on validation results
 
+CLAUDE: Validators _MUST_ run in TEEs to ensure that they are running unmodified code. This is critical to ensure that they cannot be subverted.
+
 ### TEE Deployment (Optional)
 
 For additional security, validators can run in Trusted Execution Environments:
@@ -458,6 +519,8 @@ The default validator will:
 - Verify bridge withdrawal/deposit amounts match
 - Check basic invariants (no negative balances, etc.)
 - Sign valid states for settlement
+
+CLAUDE: You have an example of extending the default validator above. Why do you repeat yourself here? Don't repeat yourself.
 
 #### Custom Validator Extensions
 
@@ -494,6 +557,7 @@ fn my_custom_validation(sql_ops: &[SqlOp]) -> Result<()> {
 }
 ```
 
+CLAUDE: Same note about Rust standardization phrasing here.
 While the sequencer can be in any language, all validators use the same Rust-based foundation to ensure consistent verification across the network.
 
 ## Use Cases
@@ -610,6 +674,7 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
 
 - **Language Agnostic**: Use any programming language, framework, or runtime
 - **SQL as Truth**: All state changes must go through SQLite for capture
+  CLAUDE: DA and blockchain interaction
 - **Automatic Publishing**: The sidecar handles all blockchain interaction
 - **Standardized Validation**: Validators use consistent Rust code for verification
 - **Permissionless Replication**: Anyone can sync and query the data
@@ -620,11 +685,14 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
 Converting any existing SQLite application to SyndDB is straightforward:
 
 1. Ensure all state changes go through SQLite (not just in-memory)
+   CLAUDE: Same note about message passing here.
 2. Add bridge tables if you need withdrawal/deposit functionality
 3. Deploy the sidecar listener alongside your application
 4. No code changes required to your business logic
 
 This approach makes SyndDB a drop-in solution for adding blockchain verifiability to applications written in any language.
+
+CLAUDE: This feels very repetitive from the prior content. Just lead with a "Why SyndDB?" section at the top with a very brief summary of the key benefits for developers. Don't worry about validators and the ecosystem, they're not the target audience of this spec.
 
 ## Summary: Why This Architecture Works
 
