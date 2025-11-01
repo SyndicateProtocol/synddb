@@ -540,7 +540,7 @@ impl OrderbookSimulator {
         )?;
         let total_trades: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
+            .query_row("SELECT COUNT(*) FROM trades", [], |row| row.get(0))?;
 
         Ok(DbStats {
             total_orders,
