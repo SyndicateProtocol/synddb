@@ -99,9 +99,10 @@ jobs:
           cat bench-current-full.log
 
       - name: Run baseline benchmarks on main branch
-        id: baseline-bench
         if: github.event_name == 'pull_request' && steps.cache-baseline.outputs.cache-hit != 'true'
         run: |
+          echo "Cache miss - running baseline benchmarks on main branch"
+
           # Checkout main branch
           git fetch origin main:main
           git checkout main
@@ -110,49 +111,45 @@ jobs:
           cargo build --package synddb-benchmark --release
 
           # Run simple benchmark
+          echo "Running simple mode benchmark..."
           cargo run --package synddb-benchmark --release -- init --db bench-main-simple.db
           cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-main-simple.log 2>&1
-          BASELINE_SIMPLE=$(grep "Peak achieved rate:" bench-main-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-          echo "simple_rate=$BASELINE_SIMPLE" >> $GITHUB_OUTPUT
-          echo "Baseline simple benchmark (main): $BASELINE_SIMPLE ops/sec"
           cat bench-main-simple.log
 
           # Run full benchmark
+          echo "Running full mode benchmark..."
           cargo run --package synddb-benchmark --release -- init --db bench-main-full.db
           cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-main-full.log 2>&1
-          BASELINE_FULL=$(grep "Peak achieved rate:" bench-main-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-          echo "full_rate=$BASELINE_FULL" >> $GITHUB_OUTPUT
-          echo "Baseline full benchmark (main): $BASELINE_FULL ops/sec"
           cat bench-main-full.log
 
           # Return to PR branch
           git checkout -
 
-      - name: Extract baseline from cache
-        id: baseline-from-cache
-        if: github.event_name == 'pull_request' && steps.cache-baseline.outputs.cache-hit == 'true'
+      - name: Extract baseline rates
+        id: baseline-rates
+        if: github.event_name == 'pull_request'
         run: |
-          echo "Using cached baseline benchmarks"
+          # Extract from logs (either cached or freshly generated)
+          if [ "${{ steps.cache-baseline.outputs.cache-hit }}" == "true" ]; then
+            echo "📦 Using cached baseline from main"
+          else
+            echo "🆕 Using fresh baseline from main"
+          fi
+
           BASELINE_SIMPLE=$(grep "Peak achieved rate:" bench-main-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
           BASELINE_FULL=$(grep "Peak achieved rate:" bench-main-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+
           echo "simple_rate=$BASELINE_SIMPLE" >> $GITHUB_OUTPUT
           echo "full_rate=$BASELINE_FULL" >> $GITHUB_OUTPUT
-          echo "Cached baseline simple: $BASELINE_SIMPLE ops/sec"
-          echo "Cached baseline full: $BASELINE_FULL ops/sec"
+          echo "Baseline simple: $BASELINE_SIMPLE ops/sec"
+          echo "Baseline full: $BASELINE_FULL ops/sec"
 
       - name: Compare performance and check for regressions
         if: github.event_name == 'pull_request'
         run: |
-          # Get baseline rates (either from cache or fresh run)
-          if [ "${{ steps.cache-baseline.outputs.cache-hit }}" == "true" ]; then
-            BASELINE_SIMPLE=${{ steps.baseline-from-cache.outputs.simple_rate }}
-            BASELINE_FULL=${{ steps.baseline-from-cache.outputs.full_rate }}
-            echo "📦 Using cached baseline from main"
-          else
-            BASELINE_SIMPLE=${{ steps.baseline-bench.outputs.simple_rate }}
-            BASELINE_FULL=${{ steps.baseline-bench.outputs.full_rate }}
-            echo "🆕 Using fresh baseline from main"
-          fi
+          # Get baseline rates
+          BASELINE_SIMPLE=${{ steps.baseline-rates.outputs.simple_rate }}
+          BASELINE_FULL=${{ steps.baseline-rates.outputs.full_rate }}
 
           # Get current rates
           CURRENT_SIMPLE=${{ steps.current-bench-simple.outputs.rate }}
