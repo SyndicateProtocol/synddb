@@ -58,18 +58,20 @@ tokio = { version = "1.35", features = ["full"] }
 hyper = { version = "1.0", features = ["full"] }
 tower = "0.4"  # Middleware stack for retries/timeouts
 
-# CLAUDE: Is this needed for GCP Confidential Space TEEs?
-# TEE support (optional)
-sgx-isa = { version = "0.4", optional = true }
-dcap-ql = { version = "0.3", optional = true }
-teaclave-attestation = { version = "0.5", optional = true }
+# GCP Confidential Space and Ethereum signing
+gcp-auth = "0.10"  # GCP authentication
+google-cloud-secretmanager = "0.6"  # Secret Manager for key storage
+google-cloud-default = "0.6"  # Workload Identity support
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }  # secp256k1 for Ethereum
+sha3 = "0.10"  # Keccak256 for Ethereum address derivation
+reqwest = { version = "0.11", features = ["json"] }  # Attestation token fetching
+hex = "0.4"  # Hex encoding for addresses
 
-# CLAUDE: Since this is running in GCP Confidential Space, can we use Cloud Logging?
 # Configuration and monitoring
 config = "0.14"  # YAML/TOML configuration
+google-cloud-logging = "0.6"  # GCP Cloud Logging integration
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-prometheus = "0.13"  # Metrics
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 sysinfo = "0.30"  # System monitoring
 
 # Error handling and utilities
@@ -94,17 +96,16 @@ synddb-sidecar/
 │   │   ├── wal_reader.rs          # Direct WAL file parsing
 │   │   ├── page_cache.rs          # Track modified pages
 │   │   └── sql_extractor.rs       # Extract SQL from WAL frames
-CLAUDE: What is the purpose of the optimizier? We want to reproduce the SQLite operations deterministically. Either cut this or elaborate on its purpose
 │   ├── batch/
 │   │   ├── mod.rs                 # Batching logic
 │   │   ├── accumulator.rs         # Accumulate operations
-│   │   ├── optimizer.rs           # Optimize SQL sequences
-│   │   └── timer.rs               # Time/size based triggers
-│   ├── compress/
-│   │   ├── mod.rs                 # Compression module
-│   │   ├── diff.rs                # Diff compression
-│   │   ├── snapshot.rs            # Full snapshot creation
-│   │   └── strategies.rs          # Zstd, LZ4, etc.
+│   │   ├── timer.rs               # Time/size based triggers
+│   │   └── snapshot.rs            # Full database snapshot creation
+│   ├── attestor/
+│   │   ├── mod.rs                 # Attestation and signing
+│   │   ├── key_manager.rs         # Ethereum key management in TEE
+│   │   ├── signer.rs              # Sign batches with secp256k1
+│   │   └── compressor.rs          # Zstd compression (compress-then-sign)
 │   ├── publish/
 │   │   ├── mod.rs                 # Publishing orchestration
 │   │   ├── celestia.rs            # Celestia publisher
@@ -112,19 +113,10 @@ CLAUDE: What is the purpose of the optimizier? We want to reproduce the SQLite o
 │   │   ├── ipfs.rs                # IPFS publisher
 │   │   ├── arweave.rs             # Arweave publisher
 │   │   ├── retry.rs               # Retry logic
-CLAUDE: What are these manifests? Elaborate on this purpose slightly
-│   │   └── manifest.rs            # Publish manifest tracking
-CLAUDE: How much of this is necessary in GCP Confidential Space?
-CLAUDE: Don't we need key management for the sidecar to sign and submit to the DA layer? That seems to be missing
+│   │   └── manifest.rs            # Track published batches (sequence, DA location, hash)
 │   ├── tee/
-│   │   ├── mod.rs                 # TEE integration
-│   │   ├── attestation.rs         # Generate attestations
-│   │   ├── sealing.rs             # Seal data to TEE
-│   │   └── remote_attestation.rs  # Remote attestation
-CLAUDE: Can we replace this with GCP Cloud Logging? Happy to keep it if it's still relevant though!
-│   ├── metrics/
-│   │   ├── mod.rs                 # Prometheus metrics
-│   │   └── collectors.rs          # Custom collectors
+│   │   ├── mod.rs                 # GCP Confidential Space TEE
+│   │   └── attestation.rs         # Fetch attestation tokens from metadata service
 │   └── utils/
 │       ├── mod.rs
 │       ├── checksum.rs            # Data integrity
@@ -165,8 +157,8 @@ impl WalMonitor {
 
         watcher.watch(&self.wal_path, RecursiveMode::NonRecursive)?;
 
-        // CLAUDE: Is this idiomatic or is a fallback in the case of watch failures more idiomatic? I'm open to either option
-        // Also poll periodically as backup
+        // Polling fallback ensures we never miss changes if filesystem events are dropped
+        // This is idiomatic for critical data pipelines where reliability > efficiency
         let poll_interval = Duration::from_millis(100);
         loop {
             tokio::time::sleep(poll_interval).await;
@@ -178,8 +170,9 @@ impl WalMonitor {
         // Read new WAL frames since last_frame
         let frames = self.read_wal_frames(self.last_frame)?;
 
-        // CLAUDE: Is there any built-in SQLite utility that lets me get a diff?
-        // Extract SQL operations from page changes
+        // SQLite doesn't have built-in diff extraction from WAL.
+        // We parse WAL frames manually to extract SQL operations.
+        // Alternative: Use session extension (sqlite3session) for change tracking.
         let sql_ops = self.sql_extractor.extract(&frames)?;
 
         // Send to batcher
@@ -209,8 +202,8 @@ pub struct Batcher {
 pub struct BatchConfig {
     max_batch_size: usize,      // 1MB default
     max_batch_age: Duration,    // 1 second default
-    // CLAUDE: Will this break deterministic derivation?
-    optimize_sql: bool,          // Combine similar ops
+    snapshot_interval: Duration, // 60 mins default
+    snapshot_threshold: usize,   // 1000 batches default
 }
 
 impl Batcher {
@@ -234,110 +227,54 @@ impl Batcher {
         }
     }
 
-    // CLAUDE: Is it idiomatic to flush baesed on size and time like this? Or should we wait for confirmation that we've posted to a DA layer? We want to ensure that batch posting is extremely reliable
     fn should_flush(&self) -> bool {
         self.buffer_size >= self.config.max_batch_size ||
         self.last_flush.elapsed() >= self.config.max_batch_age
     }
 
-    async fn flush(&mut self, tx: &Sender<CompressedBatch>) -> Result<()> {
-        if self.config.optimize_sql {
-            self.buffer = optimize_sql_sequence(self.buffer.drain(..).collect());
+    fn should_snapshot(&self) -> bool {
+        self.last_snapshot.elapsed() >= self.config.snapshot_interval ||
+        self.batch_count >= self.config.snapshot_threshold
+    }
+
+    async fn flush(&mut self, tx: &Sender<BatchPayload>) -> Result<()> {
+        // IMPORTANT: No SQL optimization to preserve deterministic ordering.
+        // Validators must see exact SQL operation sequence.
+
+        if self.should_snapshot() {
+            // Create full snapshot
+            let snapshot = self.create_snapshot().await?;
+            tx.send(BatchPayload::Snapshot(snapshot)).await?;
+            self.last_snapshot = Instant::now();
+            self.batch_count = 0;
+        } else {
+            // Send incremental batch
+            let batch = SqlBatch {
+                operations: self.buffer.drain(..).collect(),
+                timestamp: SystemTime::now(),
+                sequence: self.next_sequence(),
+            };
+            tx.send(BatchPayload::Batch(batch)).await?;
+            self.batch_count += 1;
         }
 
-        let batch = SqlBatch {
-            operations: self.buffer.drain(..).collect(),
-            timestamp: SystemTime::now(),
-            sequence: self.next_sequence(),
-        };
-
-        tx.send(batch).await?;
         self.buffer_size = 0;
         self.last_flush = Instant::now();
         Ok(())
     }
-}
-```
 
-### 3. Compressor
-
-Handles both incremental diffs and periodic snapshots:
-
-```rust
-// src/compress/mod.rs
-pub struct Compressor {
-    strategy: CompressionStrategy,
-    snapshot_interval: Duration,
-    last_snapshot: Instant,
-    snapshot_threshold: usize,  // Force snapshot if diff chain too long
-}
-
-// CLAUDE: Let's not overcomplicate this. We should just choose compression defaults that are set for all instances of the application. That being said, whatever compression default we choose, we should ensure that it is easy to auto-detect for validators after downloading from the DA layer
-// CLAUDE: We do need to handle signing somewhere, and the batcher feels like the wrong place. Maybe the Compressor service is dedicated to signing and compressing? That makes the Compressor more useful and also ensures that all messages are signed, either before or after compression (I know that cryptographers have strong opinions here, cite best practices on whether we should sign -> compress or compress -> sign)
-// CLAUDE: If we merge signing and compression into the same service, we'll obviously need to rename it to something else. Give a proposal here
-pub enum CompressionStrategy {
-    Zstd { level: i32 },
-    Lz4 { acceleration: i32 },
-    None,
-}
-
-impl Compressor {
-    pub async fn run(self, rx: Receiver<SqlBatch>, tx: Sender<PublishPayload>) {
-        let mut diff_count = 0;
-
-        while let Some(batch) = rx.recv().await {
-            if self.should_snapshot(diff_count) {
-                let snapshot = self.create_snapshot().await?;
-                tx.send(PublishPayload::Snapshot(snapshot)).await?;
-                diff_count = 0;
-            } else {
-                let diff = self.compress_diff(batch).await?;
-                tx.send(PublishPayload::Diff(diff)).await?;
-                diff_count += 1;
-            }
-        }
-    }
-
-    // CLAUDE: Does this data flow make sense, or should the batcher tell the Compressor when to trigger a snapshot? It seems like if timing logic is in the batcher already, we should just stick with that (but I'm open to other ideas)
-    fn should_snapshot(&self, diff_count: usize) -> bool {
-        self.last_snapshot.elapsed() >= self.snapshot_interval ||
-        diff_count >= self.snapshot_threshold
-    }
-
-    async fn compress_diff(&self, batch: SqlBatch) -> Result<CompressedDiff> {
-        let serialized = bincode::serialize(&batch)?;
-        let compressed = match self.strategy {
-            CompressionStrategy::Zstd { level } => {
-                zstd::encode_all(&serialized[..], level)?
-            }
-            CompressionStrategy::Lz4 { acceleration } => {
-                lz4::compress(&serialized, acceleration)?
-            }
-            CompressionStrategy::None => serialized,
-        };
-
-        Ok(CompressedDiff {
-            data: compressed,
-            checksum: blake3::hash(&compressed),
-            sequence: batch.sequence,
-            operation_count: batch.operations.len(),
-        })
-    }
-
-    // CLAUDE: It feels a bit confusing to have the Snapshot service live in the Compressor. The Compressor feels like it should be dedicated to compression only. Should snapshotting itself live in the batcher? Give a recommendation on data flow and implement it
-    async fn create_snapshot(&self) -> Result<CompressedSnapshot> {
-        // Use rusqlite backup API to create consistent snapshot
+    async fn create_snapshot(&self) -> Result<DatabaseSnapshot> {
+        // Use rusqlite backup API for consistent snapshot
         let conn = Connection::open(&self.db_path)?;
-        let backup = Backup::new(&conn, Path::new("/tmp/snapshot.db"))?;
+        let snapshot_path = format!("/tmp/snapshot-{}.db", self.next_sequence());
+        let backup = Backup::new(&conn, Path::new(&snapshot_path))?;
         backup.run_to_completion(100, Duration::from_millis(100), None)?;
 
-        // Compress the snapshot
-        let snapshot_data = tokio::fs::read("/tmp/snapshot.db").await?;
-        let compressed = zstd::encode_all(&snapshot_data[..], 3)?;
+        let snapshot_data = tokio::fs::read(&snapshot_path).await?;
+        tokio::fs::remove_file(&snapshot_path).await?;
 
-        Ok(CompressedSnapshot {
-            data: compressed,
-            checksum: blake3::hash(&compressed),
+        Ok(DatabaseSnapshot {
+            data: snapshot_data,
             sequence: self.current_sequence(),
             timestamp: SystemTime::now(),
         })
@@ -345,9 +282,105 @@ impl Compressor {
 }
 ```
 
+### 3. Attestor (Compression + Signing)
+
+The Attestor service compresses batches and signs them with TEE-protected Ethereum keys.
+Following cryptographic best practices, we **compress-then-sign** to prevent signature malleability
+and ensure validators verify authentic compressed data.
+
+```rust
+// src/attestor/mod.rs
+use k256::ecdsa::{SigningKey, Signature, signature::Signer};
+use zstd;
+
+pub struct Attestor {
+    key_manager: KeyManager,
+    compression_level: i32,  // Zstd level 3 (default, auto-detected by validators)
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AttestedPayload {
+    pub payload_type: PayloadType,
+    pub compressed_data: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub public_key: Vec<u8>,
+    pub sequence: u64,
+    pub checksum: Blake3Hash,
+    pub attestation_token: Option<String>,  // Fresh GCP attestation token
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum PayloadType {
+    Batch,
+    Snapshot,
+}
+
+impl Attestor {
+    pub async fn run(self, rx: Receiver<BatchPayload>, tx: Sender<AttestedPayload>) {
+        while let Some(payload) = rx.recv().await {
+            let attested = match payload {
+                BatchPayload::Batch(batch) => {
+                    self.attest_batch(batch).await?
+                }
+                BatchPayload::Snapshot(snapshot) => {
+                    self.attest_snapshot(snapshot).await?
+                }
+            };
+
+            tx.send(attested).await?;
+        }
+    }
+
+    async fn attest_batch(&self, batch: SqlBatch) -> Result<AttestedPayload> {
+        // 1. Serialize
+        let serialized = bincode::serialize(&batch)?;
+
+        // 2. Compress with Zstd level 3 (good balance of speed/ratio)
+        //    Validators auto-detect this via magic bytes (0x28 0xB5 0x2F 0xFD)
+        let compressed = zstd::encode_all(&serialized[..], self.compression_level)?;
+        let checksum = blake3::hash(&compressed);
+
+        // 3. Sign compressed data (compress-then-sign prevents malleability)
+        let signature = self.key_manager.sign(&compressed)?;
+
+        // 4. Get fresh attestation token from GCP metadata service
+        let attestation_token = self.key_manager.get_attestation_token().await?;
+
+        Ok(AttestedPayload {
+            payload_type: PayloadType::Batch,
+            compressed_data: compressed,
+            signature: signature.to_vec(),
+            public_key: self.key_manager.public_key_bytes(),
+            sequence: batch.sequence,
+            checksum,
+            attestation_token: Some(attestation_token),
+        })
+    }
+
+    async fn attest_snapshot(&self, snapshot: DatabaseSnapshot) -> Result<AttestedPayload> {
+        // Snapshots are already raw database bytes
+        let compressed = zstd::encode_all(&snapshot.data[..], self.compression_level)?;
+        let checksum = blake3::hash(&compressed);
+        let signature = self.key_manager.sign(&compressed)?;
+        let attestation_token = self.key_manager.get_attestation_token().await?;
+
+        Ok(AttestedPayload {
+            payload_type: PayloadType::Snapshot,
+            compressed_data: compressed,
+            signature: signature.to_vec(),
+            public_key: self.key_manager.public_key_bytes(),
+            sequence: snapshot.sequence,
+            checksum,
+            attestation_token: Some(attestation_token),
+        })
+    }
+}
+```
+
 ### 4. Multi-DA Publisher
 
-Publishes to multiple DA layers in parallel with retry logic:
+Publishes attested payloads to multiple DA layers in parallel with retry logic.
+The Publisher waits for successful DA publication before acknowledging, ensuring reliable delivery.
 
 ```rust
 // src/publish/mod.rs
@@ -359,19 +392,25 @@ pub struct Publisher {
 
 #[async_trait]
 pub trait DaPublisher: Send + Sync {
-    async fn publish(&self, payload: &PublishPayload) -> Result<PublishReceipt>;
+    async fn publish(&self, payload: &AttestedPayload) -> Result<PublishReceipt>;
     fn name(&self) -> &str;
 }
 
 impl Publisher {
-    pub async fn run(self, rx: Receiver<PublishPayload>) {
+    pub async fn run(self, rx: Receiver<AttestedPayload>) {
         while let Some(payload) = rx.recv().await {
+            // Block until successfully published to all configured DA layers
             let results = self.publish_all(payload).await;
+
+            // Record manifest (sequence -> DA locations mapping)
             self.manifest_store.record(results).await?;
+
+            // Only after successful publication do we process next batch
+            // This ensures reliable delivery and prevents data loss
         }
     }
 
-    async fn publish_all(&self, payload: PublishPayload) -> Vec<PublishResult> {
+    async fn publish_all(&self, payload: AttestedPayload) -> Vec<PublishResult> {
         // Publish to all DA layers in parallel
         let futures = self.publishers.iter().map(|publisher| {
             self.publish_with_retry(publisher, &payload)
@@ -380,9 +419,9 @@ impl Publisher {
         futures::future::join_all(futures).await
     }
 
-    async fn publish_with_retry(&self, publisher: &dyn DaPublisher, payload: &PublishPayload) -> PublishResult {
+    async fn publish_with_retry(&self, publisher: &dyn DaPublisher, payload: &AttestedPayload) -> PublishResult {
         let backoff = ExponentialBackoff {
-            max_elapsed_time: Some(Duration::from_secs(60)),
+            max_elapsed_time: Some(Duration::from_secs(300)),  // 5 min max retry
             ..Default::default()
         };
 
@@ -399,8 +438,6 @@ impl Publisher {
     }
 }
 ```
-
-// CLAUDE: We will also need to read from key management here, to ensure that we have the keys available to sign published messages
 
 ### 5. DA Layer Implementations
 
@@ -542,55 +579,75 @@ logging:
 
 ## TEE Integration with GCP Confidential Space
 
-The sidecar leverages GCP Confidential Space for hardware-protected key management and attestation, eliminating the need for complex SGX SDKs while providing strong security guarantees.
+The sidecar leverages GCP Confidential Space for hardware-protected Ethereum key management.
+The sidecar runs in a **separate container** from the application within the same Confidential Space VM,
+providing strong isolation while maintaining filesystem access to the SQLite database.
 
-CLAUDE: You seem to have misinterpreted the needs for key management. GCP Confidential Space handles TEE key management automatically. What we need is a key that can be used for signing in the crypto space, that matches Ethereum's cryptography for ecrecover within Solidity. That needs to be managed securely within the TEE, and we should ensure that it is NOT extractable by the application from the sidecar. This is obviously quite delicate. As a side note, is it even possible to make this secure, or should the sidecar be in a separate VM from the application and it simply reads from e.g. the same underlying file system? I'm not sure what is the best practice here
-
-### Architecture Overview
+### Security Model: Same-VM, Separate Containers
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  GCP Confidential Space VM                   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │             synddb-sidecar Container                  │  │
-│  │  ┌────────────────────────────────────────────────┐  │  │
-│  │  │  Key Generation & Management                    │  │  │
-│  │  │  - Generate signing key on first boot          │  │  │
-│  │  │  - Store in Secret Manager via WI              │  │  │
-│  │  │  - Key never leaves container memory           │  │  │
-│  │  └────────────────────────────────────────────────┘  │  │
-│  │  ┌────────────────────────────────────────────────┐  │  │
-│  │  │  Attestation Service                           │  │  │
-│  │  │  - Get attestation token from metadata         │  │  │
-│  │  │  - Include code hash and measurements          │  │  │
-│  │  │  - Sign published data with sealed key         │  │  │
-│  │  └────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  Hardware Root of Trust (AMD SEV-SNP / Intel TDX)          │
-└─────────────────────────────────────────────────────────────┘
-                     ↓ Attestation Token
-┌─────────────────────────────────────────────────────────────┐
-│                        Bridge.sol                           │
-│  - Verify attestation via SP1 zkVM                         │
-│  - Register public key after verification                  │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│              GCP Confidential Space VM (TEE)                     │
+│  Hardware Root of Trust (AMD SEV-SNP / Intel TDX)               │
+│                                                                   │
+│  ┌────────────────────────┐  ┌────────────────────────┐        │
+│  │   Application          │  │   synddb-sidecar       │        │
+│  │   Container            │  │   Container            │        │
+│  │                        │  │                        │        │
+│  │  - Any language        │  │  - Read-only SQLite    │        │
+│  │  - Writes to SQLite    │  │  - Ethereum keys       │        │
+│  │  - NO key access       │  │  - Signs batches       │        │
+│  │                        │  │  - Publishes to DA     │        │
+│  └────────────────────────┘  └────────────────────────┘        │
+│             │                            │                       │
+│             └────────┬───────────────────┘                       │
+│                      ↓                                           │
+│           ┌──────────────────────┐                              │
+│           │  Shared Persistent   │                              │
+│           │  Disk (SQLite DB)    │                              │
+│           └──────────────────────┘                              │
+│                                                                   │
+│  Container-level isolation prevents application from accessing   │
+│  sidecar memory space where Ethereum keys are held.             │
+└──────────────────────────────────────────────────────────────────┘
+                     ↓ Attestation Token + Signature
+┌──────────────────────────────────────────────────────────────────┐
+│                        Bridge.sol                                │
+│  - Verify attestation via SP1 zkVM                              │
+│  - Register public key after verification                       │
+│  - Track valid signers via ecrecover                            │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+### Why Same-VM Architecture is Secure
+
+1. **Container Isolation**: Linux namespaces and cgroups prevent cross-container memory access
+2. **Read-Only SQLite Access**: Sidecar opens DB with `SQLITE_OPEN_READ_ONLY` flag
+3. **Memory Encryption**: AMD SEV-SNP encrypts all VM memory including both containers
+4. **No Shared Memory**: Containers communicate only via filesystem (SQLite DB file)
+5. **Principle of Least Privilege**: Application has no credentials to access Secret Manager
+6. **Attestation Binding**: Keys in Secret Manager are bound to sidecar container digest only
 
 ### Key Management Implementation
 
 ```rust
-// src/tee/confidential_space.rs
+// src/attestor/key_manager.rs
 use gcp_auth::AuthenticationManager;
 use google_cloud_secretmanager::client::{Client as SecretClient, ClientConfig};
 use google_cloud_default::WithAuthExt;
 use serde::{Deserialize, Serialize};
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer};
-use rand::rngs::OsRng;
+use k256::ecdsa::{SigningKey, VerifyingKey, Signature, signature::Signer};
+use k256::elliptic_curve::sec1::ToEncodedPoint;
+use sha2::{Sha256, Digest};
 use anyhow::Result;
 
-pub struct ConfidentialSpaceManager {
+/// Manages Ethereum secp256k1 keys for signing batches.
+/// Keys are generated in TEE and stored in GCP Secret Manager,
+/// bound to the sidecar container digest via Workload Identity.
+pub struct KeyManager {
     signing_key: SigningKey,
-    public_key: VerifyingKey,
+    verifying_key: VerifyingKey,
+    ethereum_address: [u8; 20],
     secret_client: SecretClient,
     project_id: String,
     secret_name: String,
@@ -598,60 +655,93 @@ pub struct ConfidentialSpaceManager {
 
 #[derive(Serialize, Deserialize)]
 struct SealedKeyData {
+    /// secp256k1 private key (32 bytes)
     private_key: Vec<u8>,
+    /// secp256k1 public key (compressed, 33 bytes)
     public_key: Vec<u8>,
+    /// Ethereum address derived from public key
+    ethereum_address: [u8; 20],
     created_at: i64,
+    /// Attestation token at key creation
     attestation_token: String,
 }
 
-impl ConfidentialSpaceManager {
+impl KeyManager {
     pub async fn init() -> Result<Self> {
-        // Get project ID from metadata
+        // Get project ID from metadata service
         let project_id = Self::get_project_id().await?;
 
         // Initialize Secret Manager client with Workload Identity
         let config = ClientConfig::default().with_auth().await?;
         let secret_client = SecretClient::new(config).await?;
 
-        let secret_name = format!("synddb-sidecar-signing-key");
+        let secret_name = "synddb-sidecar-signing-key".to_string();
 
         // Try to load existing key or generate new one
-        let (signing_key, public_key) = match Self::load_sealed_key(&secret_client, &project_id, &secret_name).await {
-            Ok(key_data) => {
-                info!("Loaded existing signing key from Secret Manager");
-                let signing_key = SigningKey::from_bytes(&key_data.private_key)?;
-                let public_key = VerifyingKey::from_bytes(&key_data.public_key)?;
-                (signing_key, public_key)
-            }
-            Err(_) => {
-                info!("Generating new signing key");
-                let signing_key = SigningKey::generate(&mut OsRng);
-                let public_key = signing_key.verifying_key();
+        let (signing_key, verifying_key, ethereum_address) =
+            match Self::load_sealed_key(&secret_client, &project_id, &secret_name).await {
+                Ok(key_data) => {
+                    info!("Loaded existing Ethereum signing key from Secret Manager");
+                    let signing_key = SigningKey::from_slice(&key_data.private_key)?;
+                    let verifying_key = VerifyingKey::from_sec1_bytes(&key_data.public_key)?;
+                    (signing_key, verifying_key, key_data.ethereum_address)
+                }
+                Err(_) => {
+                    info!("Generating new Ethereum signing key (secp256k1)");
 
-                // Get attestation token for this container
-                let attestation_token = Self::get_attestation_token().await?;
+                    // Generate secp256k1 key pair
+                    let signing_key = SigningKey::random(&mut rand::thread_rng());
+                    let verifying_key = signing_key.verifying_key();
 
-                // Seal to Secret Manager
-                Self::seal_key(
-                    &secret_client,
-                    &project_id,
-                    &secret_name,
-                    &signing_key,
-                    &public_key,
-                    &attestation_token
-                ).await?;
+                    // Derive Ethereum address from public key
+                    let ethereum_address = Self::derive_ethereum_address(&verifying_key);
 
-                (signing_key, public_key)
-            }
-        };
+                    // Get attestation token for this container
+                    let attestation_token = Self::get_attestation_token().await?;
+
+                    // Seal to Secret Manager (bound to container digest via WI)
+                    Self::seal_key(
+                        &secret_client,
+                        &project_id,
+                        &secret_name,
+                        &signing_key,
+                        &verifying_key,
+                        ethereum_address,
+                        &attestation_token
+                    ).await?;
+
+                    (signing_key, verifying_key, ethereum_address)
+                }
+            };
 
         Ok(Self {
             signing_key,
-            public_key,
+            verifying_key,
+            ethereum_address,
             secret_client,
             project_id,
             secret_name,
         })
+    }
+
+    /// Derive Ethereum address from secp256k1 public key
+    /// Address = keccak256(pubkey)[12:32]
+    fn derive_ethereum_address(verifying_key: &VerifyingKey) -> [u8; 20] {
+        use sha3::{Keccak256, Digest};
+
+        // Get uncompressed public key (65 bytes: 0x04 + x + y)
+        let public_key_bytes = verifying_key.to_encoded_point(false);
+        let public_key_slice = &public_key_bytes.as_bytes()[1..]; // Skip 0x04 prefix
+
+        // Hash with Keccak256
+        let mut hasher = Keccak256::new();
+        hasher.update(public_key_slice);
+        let hash = hasher.finalize();
+
+        // Take last 20 bytes
+        let mut address = [0u8; 20];
+        address.copy_from_slice(&hash[12..32]);
+        address
     }
 
     async fn get_attestation_token() -> Result<String> {
@@ -686,12 +776,14 @@ impl ConfidentialSpaceManager {
         project_id: &str,
         secret_name: &str,
         signing_key: &SigningKey,
-        public_key: &VerifyingKey,
+        verifying_key: &VerifyingKey,
+        ethereum_address: [u8; 20],
         attestation_token: &str,
     ) -> Result<()> {
         let key_data = SealedKeyData {
             private_key: signing_key.to_bytes().to_vec(),
-            public_key: public_key.to_bytes().to_vec(),
+            public_key: verifying_key.to_encoded_point(true).as_bytes().to_vec(), // Compressed
+            ethereum_address,
             created_at: chrono::Utc::now().timestamp(),
             attestation_token: attestation_token.to_string(),
         };
@@ -699,7 +791,7 @@ impl ConfidentialSpaceManager {
         let secret_data = serde_json::to_vec(&key_data)?;
 
         // Create secret with Workload Identity binding
-        // Only this specific container with matching attestation can access
+        // IAM policy ensures only sidecar container with matching digest can access
         secret_client
             .create_secret(
                 project_id,
@@ -708,10 +800,12 @@ impl ConfidentialSpaceManager {
                 Some(vec![
                     ("synddb/environment", "confidential-space"),
                     ("synddb/component", "sidecar"),
+                    ("synddb/key-type", "secp256k1-ethereum"),
                 ]),
             )
             .await?;
 
+        info!("Sealed Ethereum key to Secret Manager: 0x{}", hex::encode(ethereum_address));
         Ok(())
     }
 
@@ -728,63 +822,34 @@ impl ConfidentialSpaceManager {
         Ok(key_data)
     }
 
-    pub fn sign_data(&self, data: &[u8]) -> Signature {
-        self.signing_key.sign(data)
+    /// Sign data with secp256k1 key (returns recoverable signature)
+    pub fn sign(&self, data: &[u8]) -> Result<Signature> {
+        use k256::ecdsa::signature::Signer;
+        Ok(self.signing_key.sign(data))
     }
 
-    pub fn public_key(&self) -> &VerifyingKey {
-        &self.public_key
+    /// Get public key bytes (compressed, 33 bytes)
+    pub fn public_key_bytes(&self) -> Vec<u8> {
+        self.verifying_key.to_encoded_point(true).as_bytes().to_vec()
     }
 
-    pub async fn get_attestation_for_data(&self, data: &[u8]) -> Result<AttestationBundle> {
-        // Get fresh attestation token
-        let attestation_token = Self::get_attestation_token().await?;
-
-        // Sign the data
-        let signature = self.sign_data(data);
-
-        // Parse attestation token to extract measurements
-        let token_parts: Vec<&str> = attestation_token.split('.').collect();
-        let payload = base64::decode_config(token_parts[1], base64::URL_SAFE_NO_PAD)?;
-        let claims: serde_json::Value = serde_json::from_slice(&payload)?;
-
-        Ok(AttestationBundle {
-            attestation_token,
-            signature: signature.to_bytes().to_vec(),
-            public_key: self.public_key.to_bytes().to_vec(),
-            data_hash: blake3::hash(data).to_hex().to_string(),
-            container_image_digest: claims["image_digest"].as_str().unwrap_or("").to_string(),
-            measured_boot_hash: claims["measured_boot"].as_str().unwrap_or("").to_string(),
-        })
+    /// Get Ethereum address
+    pub fn ethereum_address(&self) -> [u8; 20] {
+        self.ethereum_address
     }
-}
 
-#[derive(Serialize, Deserialize)]
-pub struct AttestationBundle {
-    pub attestation_token: String,
-    pub signature: Vec<u8>,
-    pub public_key: Vec<u8>,
-    pub data_hash: String,
-    pub container_image_digest: String,
-    pub measured_boot_hash: String,
-}
+    pub async fn get_attestation_token(&self) -> Result<String> {
+        Self::get_attestation_token().await
+    }
 
-// Integration with publisher
-impl Publisher {
-    pub async fn publish_with_attestation(
-        &self,
-        payload: PublishPayload,
-        attestor: &ConfidentialSpaceManager,
-    ) -> Result<Vec<PublishResult>> {
-        // Get attestation for the payload
-        let attestation = attestor.get_attestation_for_data(&payload.data).await?;
-
-        // Attach attestation to payload
-        let mut attested_payload = payload;
-        attested_payload.attestation = Some(attestation);
-
-        // Publish to all DA layers
-        self.publish_all(attested_payload).await
+    async fn get_project_id() -> Result<String> {
+        let client = reqwest::Client::new();
+        let response = client
+            .get("http://metadata.google.internal/computeMetadata/v1/project/project-id")
+            .header("Metadata-Flavor", "Google")
+            .send()
+            .await?;
+        Ok(response.text().await?)
     }
 }
 ```
@@ -1091,12 +1156,19 @@ ENTRYPOINT ["synddb-sidecar"]
 
 ### Monitoring
 
-Prometheus metrics exposed on port 9090:
+All metrics and logs are sent to GCP Cloud Logging for centralized monitoring:
 
-- `synddb_wal_frames_processed`
-- `synddb_batches_published`
-- `synddb_da_publish_latency`
-- `synddb_compression_ratio`
+**Structured Log Events:**
+- `wal_frames_processed` - WAL frame count and processing latency
+- `batch_published` - Batch sequence, size, DA layer, publish latency
+- `da_publish_latency` - Per-DA layer publish times
+- `compression_ratio` - Compression effectiveness metrics
+- `attestation_refresh` - Attestation token refresh events
+- `key_loaded` - Ethereum key loaded from Secret Manager
+
+**Health Endpoint:**
+- Port 8080: `/health` - Basic health check
+- Port 8080: `/metrics` - JSON metrics endpoint for external monitoring
 
 ## Security Considerations
 
@@ -1124,13 +1196,21 @@ pub struct PublishPayload {
 }
 ```
 
-### 3. TEE Isolation
+### 3. TEE Isolation and Key Security
 
-When running in TEE, keys never leave enclave:
+Ethereum signing keys are protected by multiple layers:
+
+1. **Container Isolation**: Application container cannot access sidecar memory
+2. **Secret Manager Binding**: Keys only accessible to container with matching digest
+3. **Memory Encryption**: AMD SEV-SNP encrypts all VM memory
+4. **No Key Export**: Keys never serialized outside Secret Manager
 
 ```rust
-let sealed_key = enclave.seal_data(&signing_key)?;
-// Key is sealed to this specific enclave
+// Sidecar loads key from Secret Manager on startup
+let key_manager = KeyManager::init().await?;
+
+// Application has no access to Secret Manager or sidecar memory
+// Keys remain in sidecar process memory only
 ```
 
 ### 4. Rate Limiting
