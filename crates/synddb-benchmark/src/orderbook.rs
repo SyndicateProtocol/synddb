@@ -160,7 +160,7 @@ impl OrderbookSimulator {
             let burst_start = Instant::now();
 
             // Execute burst in batches
-            let num_batches = (burst_size + batch_size - 1) / batch_size;
+            let num_batches = burst_size.div_ceil(batch_size);
             for batch_idx in 0..num_batches {
                 let batch_ops = if batch_idx == num_batches - 1 {
                     burst_size - (batch_idx * batch_size)
