@@ -76,7 +76,11 @@ jobs:
         run: |
           # Run benchmark for 30 seconds in simple mode to get quick results
           cargo run --package synddb-benchmark --release -- init --db bench-current-simple.db
-          cargo run --package synddb-benchmark --release -- run --db bench-current-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-current-simple.log 2>&1
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-current-simple.log 2>&1; then
+            echo "❌ Simple benchmark failed! Output:"
+            cat bench-current-simple.log
+            exit 1
+          fi
 
           # Extract peak achieved rate from output (portable sed approach)
           CURRENT_RATE=$(grep "Peak achieved rate:" bench-current-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
@@ -89,7 +93,11 @@ jobs:
         run: |
           # Run full benchmark (non-simple mode) for 30 seconds
           cargo run --package synddb-benchmark --release -- init --db bench-current-full.db
-          cargo run --package synddb-benchmark --release -- run --db bench-current-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-current-full.log 2>&1
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-current-full.log 2>&1; then
+            echo "❌ Full benchmark failed! Output:"
+            cat bench-current-full.log
+            exit 1
+          fi
 
           # Extract peak achieved rate from output
           CURRENT_RATE=$(grep "Peak achieved rate:" bench-current-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
@@ -112,13 +120,21 @@ jobs:
           # Run simple benchmark
           echo "Running simple mode benchmark..."
           cargo run --package synddb-benchmark --release -- init --db bench-main-simple.db
-          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-main-simple.log 2>&1
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-main-simple.log 2>&1; then
+            echo "❌ Simple benchmark failed! Output:"
+            cat bench-main-simple.log
+            exit 1
+          fi
           cat bench-main-simple.log
 
           # Run full benchmark
           echo "Running full mode benchmark..."
           cargo run --package synddb-benchmark --release -- init --db bench-main-full.db
-          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-main-full.log 2>&1
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-main-full.log 2>&1; then
+            echo "❌ Full benchmark failed! Output:"
+            cat bench-main-full.log
+            exit 1
+          fi
           cat bench-main-full.log
 
           # Return to PR branch
