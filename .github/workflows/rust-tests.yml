@@ -121,7 +121,8 @@ jobs:
           # Run simple benchmark
           echo "Running simple mode benchmark..."
           cargo run --package synddb-benchmark --release -- init --db bench-main-simple.db
-          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-main-simple.log 2>&1
+          # Note: main branch uses --clear (old), current PR uses --clean (new)
+          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clear --rate 0 --simple --batch-size 5000 --duration 30 > bench-main-simple.log 2>&1
           SIMPLE_EXIT=$?
           if [ $SIMPLE_EXIT -ne 0 ]; then
             echo "❌ Simple benchmark failed with exit code $SIMPLE_EXIT! Output:"
@@ -134,7 +135,8 @@ jobs:
           # Run full benchmark
           echo "Running full mode benchmark..."
           cargo run --package synddb-benchmark --release -- init --db bench-main-full.db
-          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-main-full.log 2>&1
+          # Note: main branch uses --clear (old), current PR uses --clean (new)
+          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clear --rate 0 --batch-size 1000 --duration 30 > bench-main-full.log 2>&1
           FULL_EXIT=$?
           if [ $FULL_EXIT -ne 0 ]; then
             echo "❌ Full benchmark failed with exit code $FULL_EXIT! Output:"
