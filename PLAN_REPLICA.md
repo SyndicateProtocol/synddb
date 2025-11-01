@@ -837,78 +837,561 @@ validator:
       message_hourly_limit: 100
 ```
 
-## TEE Integration
+## Validator TEE Integration with GCP Confidential Space
+
+Validators run in GCP Confidential Space to ensure secure key management and provide attestation for their signing operations. The hardware-protected environment guarantees that validator keys are generated securely and never leave the container.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│               GCP Confidential Space Validator              │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │           synddb-replica (Validator Mode)             │  │
+│  │  ┌────────────────────────────────────────────────┐  │  │
+│  │  │  Validator Key Management                       │  │  │
+│  │  │  - Generate validator keypair on init          │  │  │
+│  │  │  - Store in Secret Manager with WI binding     │  │  │
+│  │  │  - Keys bound to container measurements        │  │  │
+│  │  └────────────────────────────────────────────────┘  │  │
+│  │  ┌────────────────────────────────────────────────┐  │  │
+│  │  │  Attestation & Registration                     │  │  │
+│  │  │  - Generate attestation token                  │  │  │
+│  │  │  - Submit to Bridge.sol with zkProof          │  │  │
+│  │  │  - Register public key after verification      │  │  │
+│  │  └────────────────────────────────────────────────┘  │  │
+│  │  ┌────────────────────────────────────────────────┐  │  │
+│  │  │  Message Signing                                │  │  │
+│  │  │  - Sign withdrawal messages                    │  │  │
+│  │  │  - Sign state roots                           │  │  │
+│  │  │  - Include attestation proofs                  │  │  │
+│  │  └────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  Hardware Root of Trust (AMD SEV-SNP / Intel TDX)          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Validator Key Management
 
 ```rust
-// src/tee/enclave.rs
-pub struct Enclave {
-    id: EnclaveId,
-    signing_key: SealedKey,
-    attestation_key: AttestationKey,
+// src/validator/confidential_validator.rs
+use gcp_auth::AuthenticationManager;
+use google_cloud_secretmanager::client::{Client as SecretClient, ClientConfig};
+use google_cloud_default::WithAuthExt;
+use k256::{ecdsa::{SigningKey as K256SigningKey, VerifyingKey as K256VerifyingKey, Signature}, SecretKey};
+use alloy::signers::Signer;
+use sp1_sdk::{ProverClient, SP1Stdin, SP1Proof};
+use anyhow::Result;
+use serde::{Serialize, Deserialize};
+
+pub struct ConfidentialValidator {
+    signing_key: K256SigningKey,
+    public_key: K256VerifyingKey,
+    ethereum_address: Address,
+    secret_client: SecretClient,
+    bridge_contract: BridgeContract,
+    sp1_client: ProverClient,
+    attestation_cache: Arc<RwLock<Option<ValidatorAttestation>>>,
 }
 
-impl Enclave {
-    pub fn init() -> Result<Self> {
-        // Initialize SGX enclave
-        let enclave = sgx_create_enclave()?;
-        
-        // Generate or unseal signing key
-        let signing_key = if let Ok(sealed) = Self::load_sealed_key() {
-            unseal_data(sealed)?
-        } else {
-            let key = generate_key_pair()?;
-            seal_data(&key)?;
-            key
-        };
-        
+#[derive(Serialize, Deserialize)]
+struct ValidatorKeyData {
+    private_key: Vec<u8>,
+    public_key: Vec<u8>,
+    ethereum_address: String,
+    created_at: i64,
+    initial_attestation: String,
+    registered_tx_hash: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ValidatorAttestation {
+    pub token: String,
+    pub public_key: Vec<u8>,
+    pub ethereum_address: Address,
+    pub container_digest: String,
+    pub measured_boot: String,
+    pub timestamp: i64,
+}
+
+impl ConfidentialValidator {
+    pub async fn init(bridge_contract_address: Address, rpc_url: &str) -> Result<Self> {
+        let project_id = Self::get_project_id().await?;
+
+        // Initialize Secret Manager client
+        let config = ClientConfig::default().with_auth().await?;
+        let secret_client = SecretClient::new(config).await?;
+
+        // Validator-specific secret name
+        let validator_id = Self::get_instance_id().await?;
+        let secret_name = format!("synddb-validator-{}", validator_id);
+
+        // Load or generate validator key
+        let (signing_key, public_key, ethereum_address) =
+            match Self::load_validator_key(&secret_client, &project_id, &secret_name).await {
+                Ok(key_data) => {
+                    info!("Loaded existing validator key");
+                    let secret_key = SecretKey::from_slice(&key_data.private_key)?;
+                    let signing_key = K256SigningKey::from(secret_key);
+                    let public_key = signing_key.verifying_key();
+                    let address = Address::from_slice(&key_data.ethereum_address);
+                    (signing_key, public_key, address)
+                }
+                Err(_) => {
+                    info!("Generating new validator key");
+                    Self::generate_and_register_validator_key(
+                        &secret_client,
+                        &project_id,
+                        &secret_name,
+                        bridge_contract_address,
+                        rpc_url
+                    ).await?
+                }
+            };
+
+        // Initialize SP1 client for zkVM proofs
+        let sp1_client = ProverClient::new();
+
+        // Connect to bridge contract
+        let provider = Provider::new(Url::parse(rpc_url)?);
+        let bridge_contract = BridgeContract::new(bridge_contract_address, provider);
+
         Ok(Self {
-            id: enclave.id(),
             signing_key,
-            attestation_key: enclave.attestation_key(),
+            public_key,
+            ethereum_address,
+            secret_client,
+            bridge_contract,
+            sp1_client,
+            attestation_cache: Arc::new(RwLock::new(None)),
         })
     }
-    
-    pub fn generate_quote(&self, data: &[u8]) -> Result<Quote> {
-        let report_data = ReportData::from_slice(data)?;
-        let report = self.create_report(report_data)?;
-        let quote = self.get_quote(report)?;
-        Ok(quote)
-    }
-    
-    pub fn sign(&self, data: &[u8]) -> Result<Signature> {
-        self.signing_key.sign(data)
-    }
-}
 
-// src/tee/remote_attestation.rs
-pub struct RemoteAttestationClient {
-    endpoint: String,
-    enclave: Arc<Enclave>,
-}
+    async fn generate_and_register_validator_key(
+        secret_client: &SecretClient,
+        project_id: &str,
+        secret_name: &str,
+        bridge_address: Address,
+        rpc_url: &str,
+    ) -> Result<(K256SigningKey, K256VerifyingKey, Address)> {
+        // Generate new key
+        let signing_key = K256SigningKey::random(&mut rand::thread_rng());
+        let public_key = signing_key.verifying_key();
+        let ethereum_address = public_key_to_address(&public_key);
 
-impl RemoteAttestationClient {
-    pub async fn attest(&self, nonce: &[u8]) -> Result<AttestationReport> {
-        // Generate quote with nonce
-        let quote = self.enclave.generate_quote(nonce)?;
-        
-        // Send to Intel Attestation Service (IAS) or DCAP
-        let response = reqwest::Client::new()
-            .post(&format!("{}/attestation/v4/report", self.endpoint))
-            .json(&AttestationRequest {
-                quote: base64::encode(&quote),
-                nonce: base64::encode(nonce),
-            })
+        // Get attestation token
+        let attestation = Self::generate_attestation(&public_key).await?;
+
+        // Generate zkVM proof for attestation
+        let zk_proof = Self::generate_attestation_proof(&attestation).await?;
+
+        // Register with Bridge.sol
+        let provider = Provider::new(Url::parse(rpc_url)?);
+        let bridge = BridgeContract::new(bridge_address, provider);
+
+        let tx = bridge
+            .registerValidator(
+                attestation.token.clone(),
+                public_key.to_encoded_point(false).as_bytes().to_vec(),
+                zk_proof,
+            )
             .send()
             .await?;
-            
-        let report: AttestationReport = response.json().await?;
-        
-        // Verify report signature
-        self.verify_report(&report)?;
-        
-        Ok(report)
+
+        info!("Validator registered on-chain: {:?}", tx.tx_hash());
+
+        // Seal key to Secret Manager
+        let key_data = ValidatorKeyData {
+            private_key: signing_key.to_bytes().to_vec(),
+            public_key: public_key.to_encoded_point(false).as_bytes().to_vec(),
+            ethereum_address: format!("{:?}", ethereum_address),
+            created_at: chrono::Utc::now().timestamp(),
+            initial_attestation: attestation.token,
+            registered_tx_hash: Some(format!("{:?}", tx.tx_hash())),
+        };
+
+        secret_client
+            .create_secret(
+                project_id,
+                secret_name,
+                serde_json::to_vec(&key_data)?,
+                Some(vec![
+                    ("synddb/role", "validator"),
+                    ("synddb/validator-id", &Self::get_instance_id().await?),
+                ]),
+            )
+            .await?;
+
+        Ok((signing_key, public_key, ethereum_address))
+    }
+
+    async fn generate_attestation(public_key: &K256VerifyingKey) -> Result<ValidatorAttestation> {
+        // Get attestation token from metadata service
+        let client = reqwest::Client::new();
+        let audience = "https://synddb.io/validator";
+
+        let response = client
+            .get("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
+            .query(&[
+                ("audience", audience),
+                ("format", "full"),
+                ("licenses", "TRUE"),
+            ])
+            .header("Metadata-Flavor", "Google")
+            .send()
+            .await?;
+
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            token: String,
+        }
+
+        let token_resp: TokenResponse = response.json().await?;
+
+        // Parse token to extract measurements
+        let token_parts: Vec<&str> = token_resp.token.split('.').collect();
+        let payload = base64::decode_config(token_parts[1], base64::URL_SAFE_NO_PAD)?;
+        let claims: serde_json::Value = serde_json::from_slice(&payload)?;
+
+        Ok(ValidatorAttestation {
+            token: token_resp.token,
+            public_key: public_key.to_encoded_point(false).as_bytes().to_vec(),
+            ethereum_address: public_key_to_address(public_key),
+            container_digest: claims["image_digest"].as_str().unwrap_or("").to_string(),
+            measured_boot: claims["measured_boot"].as_str().unwrap_or("").to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+        })
+    }
+
+    async fn generate_attestation_proof(attestation: &ValidatorAttestation) -> Result<Vec<u8>> {
+        // Use SP1 zkVM to generate proof of valid attestation
+        let mut stdin = SP1Stdin::new();
+        stdin.write(&attestation.token);
+        stdin.write(&attestation.public_key);
+
+        // Attestation verification program (pre-compiled)
+        let elf = include_bytes!("../../programs/attestation-verifier/elf");
+
+        // Generate proof
+        let proof = self.sp1_client.prove(elf, stdin).await?;
+
+        // Serialize proof for on-chain verification
+        Ok(bincode::serialize(&proof)?)
+    }
+
+    pub async fn sign_message(&self, message: &Message) -> Result<ValidatorSignature> {
+        // Hash the message
+        let message_hash = keccak256(&abi::encode(&[
+            message.id.to_token(),
+            message.message_type.to_token(),
+            message.schema_hash.to_token(),
+            keccak256(&message.payload).to_token(),
+            message.nonce.to_token(),
+            message.timestamp.to_token(),
+        ]));
+
+        // Sign with Ethereum prefix
+        let signature = self.signing_key.sign_message(&message_hash)?;
+
+        // Refresh attestation if needed
+        let attestation = self.refresh_attestation_if_needed().await?;
+
+        Ok(ValidatorSignature {
+            signature: signature.as_bytes().to_vec(),
+            signer_address: self.ethereum_address,
+            attestation_token: attestation.token,
+            timestamp: chrono::Utc::now().timestamp(),
+        })
+    }
+
+    async fn refresh_attestation_if_needed(&self) -> Result<ValidatorAttestation> {
+        let mut cache = self.attestation_cache.write().await;
+
+        let needs_refresh = match &*cache {
+            None => true,
+            Some(att) => {
+                // Refresh every hour
+                chrono::Utc::now().timestamp() - att.timestamp > 3600
+            }
+        };
+
+        if needs_refresh {
+            let new_attestation = Self::generate_attestation(&self.public_key).await?;
+            *cache = Some(new_attestation.clone());
+            Ok(new_attestation)
+        } else {
+            Ok(cache.as_ref().unwrap().clone())
+        }
+    }
+
+    pub async fn sign_state_root(&self, state_root: H256, sequence: u64) -> Result<StateRootSignature> {
+        // Create state root message
+        let message = StateRootMessage {
+            state_root,
+            sequence,
+            timestamp: chrono::Utc::now().timestamp(),
+            validator: self.ethereum_address,
+        };
+
+        // Sign the message
+        let message_bytes = bincode::serialize(&message)?;
+        let signature = self.signing_key.sign_message(&message_bytes)?;
+
+        // Get current attestation
+        let attestation = self.refresh_attestation_if_needed().await?;
+
+        Ok(StateRootSignature {
+            state_root,
+            sequence,
+            signature: signature.as_bytes().to_vec(),
+            validator: self.ethereum_address,
+            attestation_token: attestation.token,
+        })
     }
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct ValidatorSignature {
+    pub signature: Vec<u8>,
+    pub signer_address: Address,
+    pub attestation_token: String,
+    pub timestamp: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StateRootMessage {
+    pub state_root: H256,
+    pub sequence: u64,
+    pub timestamp: i64,
+    pub validator: Address,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StateRootSignature {
+    pub state_root: H256,
+    pub sequence: u64,
+    pub signature: Vec<u8>,
+    pub validator: Address,
+    pub attestation_token: String,
+}
+
+fn public_key_to_address(public_key: &K256VerifyingKey) -> Address {
+    let public_key_bytes = public_key.to_encoded_point(false);
+    let hash = keccak256(&public_key_bytes.as_bytes()[1..]); // Skip the 0x04 prefix
+    Address::from_slice(&hash[12..])
+}
+```
+
+### Docker Configuration for Validators
+
+```dockerfile
+# Dockerfile.validator-confidential
+FROM rust:1.75 as builder
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY programs ./programs
+
+# Build with validator and TEE features
+RUN cargo build --release --features "validator,confidential-space"
+
+# Build SP1 attestation verifier program
+RUN cd programs/attestation-verifier && \
+    cargo prove build
+
+# Runtime image
+FROM gcr.io/confidential-space-images/base:latest
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/synddb-replica /usr/local/bin/
+COPY --from=builder /app/programs/attestation-verifier/elf /usr/local/share/synddb/
+
+# Non-root user
+RUN useradd -m -u 1000 validator && \
+    chown -R validator:validator /usr/local/bin/synddb-replica
+
+USER validator
+
+HEALTHCHECK --interval=30s --timeout=3s \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/synddb-replica"]
+CMD ["--mode", "validator", "--tee", "confidential-space", "--config", "/config/validator.yaml"]
+```
+
+### Deployment Configuration
+
+```yaml
+# validator-deployment.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: synddb-validators
+  namespace: synddb
+spec:
+  serviceName: synddb-validators
+  replicas: 3
+  selector:
+    matchLabels:
+      app: synddb-validator
+  template:
+    metadata:
+      labels:
+        app: synddb-validator
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-confidential-nodes: "true"
+
+      serviceAccountName: synddb-validator
+
+      containers:
+      - name: validator
+        image: gcr.io/${PROJECT_ID}/synddb-validator:latest
+
+        env:
+        - name: PROJECT_ID
+          value: "${PROJECT_ID}"
+        - name: VALIDATOR_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: BRIDGE_CONTRACT
+          value: "0x..."
+        - name: RPC_URL
+          valueFrom:
+            secretKeyRef:
+              name: synddb-config
+              key: rpc-url
+        - name: ATTESTATION_AUDIENCE
+          value: "https://synddb.io/validator"
+
+        ports:
+        - containerPort: 8545  # JSON-RPC
+        - containerPort: 8080  # REST
+        - containerPort: 9090  # Metrics
+
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+
+        resources:
+          requests:
+            memory: "8Gi"
+            cpu: "4"
+          limits:
+            memory: "16Gi"
+            cpu: "8"
+
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 500Gi
+```
+
+### Configuration
+
+```yaml
+# config/validator-confidential.yaml
+mode: validator
+
+# Standard replica configuration
+database:
+  path: "/data/validator.db"
+  max_connections: 100
+
+sync:
+  providers:
+    celestia:
+      enabled: true
+      endpoint: "https://rpc.celestia.org"
+
+# Validator-specific configuration
+validator:
+  enabled: true
+
+  # Confidential Space TEE settings
+  tee:
+    provider: "gcp-confidential-space"
+
+    gcp:
+      project_id: "${PROJECT_ID}"
+      validator_secret_prefix: "synddb-validator"
+      attestation_audience: "https://synddb.io/validator"
+
+      # Workload Identity configuration
+      service_account: "synddb-validator@${PROJECT_ID}.iam.gserviceaccount.com"
+
+      # Expected measurements
+      expected_measurements:
+        container_digest: "${EXPECTED_VALIDATOR_IMAGE_DIGEST}"
+
+    # Attestation refresh
+    attestation_refresh_mins: 60
+
+  # Bridge contract interaction
+  settlement:
+    chain_id: 1
+    rpc_endpoint: "${RPC_URL}"
+    contract_address: "${BRIDGE_CONTRACT}"
+    gas_price_multiplier: 1.2
+
+  # Message processing
+  messages:
+    monitored_tables:
+      - "outbound_withdrawals"
+      - "outbound_messages"
+    process_interval_secs: 10
+    batch_size: 50
+
+  # Coordination with other validators
+  consensus:
+    # Validators discover each other via k8s service
+    service_name: "synddb-validators"
+    namespace: "synddb"
+    port: 8545
+
+    # Minimum signatures required
+    signature_threshold: 2
+
+    # Timeout for gathering signatures
+    timeout_secs: 30
+
+  # zkVM proof generation
+  zk_proof:
+    enabled: true
+    program_path: "/usr/local/share/synddb/attestation-verifier.elf"
+    max_proof_generation_time_secs: 60
+
+monitoring:
+  metrics:
+    enabled: true
+    port: 9090
+
+  health:
+    enabled: true
+    port: 8080
+    checks:
+      - attestation_validity
+      - key_accessibility
+      - bridge_connectivity
 ```
 
 ## Testing Strategy

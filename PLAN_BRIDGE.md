@@ -772,6 +772,622 @@ const withdrawalSchema = calculateSchemaHash("outbound_withdrawals", [
 ]);
 ```
 
+## Attestation Verification with SP1 zkVM
+
+Bridge.sol verifies validator attestations using SP1 zkVM proofs, ensuring validators are running in genuine GCP Confidential Space environments with unmodified code.
+
+### Smart Contract Implementation
+
+```solidity
+// contracts/Bridge.sol - Attestation verification additions
+
+import "./interfaces/ISP1Verifier.sol";
+import "./interfaces/ILitProtocol.sol";
+
+contract Bridge is /* existing inheritance */ {
+
+    // ============ Attestation State ============
+
+    struct ValidatorRegistration {
+        address validatorAddress;
+        bytes publicKey;
+        string attestationToken;
+        bytes32 containerDigest;
+        uint256 registeredAt;
+        uint256 lastAttestationUpdate;
+        bool isActive;
+    }
+
+    // Validator registry with attestation data
+    mapping(address => ValidatorRegistration) public validatorRegistry;
+    mapping(bytes32 => address) public publicKeyToValidator;
+
+    // Attestation verification contracts
+    ISP1Verifier public sp1Verifier;
+    ILitProtocol public litProtocol;  // Optional secondary verification
+
+    // Expected measurements
+    bytes32 public expectedContainerDigest;
+    string public expectedImageReference;
+    uint256 public attestationValidityPeriod = 7 days;
+
+    // ============ Events ============
+
+    event ValidatorRegistered(
+        address indexed validator,
+        bytes publicKey,
+        bytes32 containerDigest,
+        uint256 timestamp
+    );
+
+    event ValidatorAttestationUpdated(
+        address indexed validator,
+        uint256 timestamp
+    );
+
+    event ValidatorDeactivated(
+        address indexed validator,
+        string reason
+    );
+
+    // ============ Errors ============
+
+    error InvalidAttestation();
+    error AttestationExpired();
+    error InvalidContainerDigest();
+    error ValidatorAlreadyRegistered();
+    error ValidatorNotRegistered();
+    error InvalidZKProof();
+
+    // ============ Initialization ============
+
+    function initializeAttestation(
+        address _sp1Verifier,
+        address _litProtocol,
+        bytes32 _expectedContainerDigest
+    ) external onlyRole(ADMIN_ROLE) {
+        sp1Verifier = ISP1Verifier(_sp1Verifier);
+        litProtocol = ILitProtocol(_litProtocol);
+        expectedContainerDigest = _expectedContainerDigest;
+    }
+
+    // ============ Validator Registration with Attestation ============
+
+    /**
+     * @notice Register a new validator with TEE attestation
+     * @param attestationToken GCP Confidential Space attestation JWT
+     * @param publicKey Validator's public key
+     * @param zkProof SP1 proof of valid attestation
+     */
+    function registerValidator(
+        string calldata attestationToken,
+        bytes calldata publicKey,
+        bytes calldata zkProof
+    ) external {
+        // Verify the validator isn't already registered
+        address validatorAddress = _recoverAddressFromPublicKey(publicKey);
+        if (validatorRegistry[validatorAddress].isActive) {
+            revert ValidatorAlreadyRegistered();
+        }
+
+        // Verify attestation via SP1 zkVM
+        bytes32 containerDigest = _verifyAttestationWithZK(
+            attestationToken,
+            publicKey,
+            zkProof
+        );
+
+        // Verify container digest matches expected
+        if (containerDigest != expectedContainerDigest) {
+            revert InvalidContainerDigest();
+        }
+
+        // Optional: Secondary verification via Lit Protocol
+        if (address(litProtocol) != address(0)) {
+            _verifyWithLitProtocol(attestationToken, publicKey);
+        }
+
+        // Register the validator
+        validatorRegistry[validatorAddress] = ValidatorRegistration({
+            validatorAddress: validatorAddress,
+            publicKey: publicKey,
+            attestationToken: attestationToken,
+            containerDigest: containerDigest,
+            registeredAt: block.timestamp,
+            lastAttestationUpdate: block.timestamp,
+            isActive: true
+        });
+
+        // Add to validator list (existing logic)
+        _addValidator(validatorAddress);
+
+        // Track public key mapping
+        bytes32 pubKeyHash = keccak256(publicKey);
+        publicKeyToValidator[pubKeyHash] = validatorAddress;
+
+        emit ValidatorRegistered(
+            validatorAddress,
+            publicKey,
+            containerDigest,
+            block.timestamp
+        );
+    }
+
+    /**
+     * @notice Update validator attestation to maintain freshness
+     * @param newAttestationToken Fresh attestation token
+     * @param zkProof SP1 proof of valid attestation
+     */
+    function updateValidatorAttestation(
+        string calldata newAttestationToken,
+        bytes calldata zkProof
+    ) external {
+        ValidatorRegistration storage reg = validatorRegistry[msg.sender];
+        if (!reg.isActive) {
+            revert ValidatorNotRegistered();
+        }
+
+        // Verify new attestation
+        bytes32 containerDigest = _verifyAttestationWithZK(
+            newAttestationToken,
+            reg.publicKey,
+            zkProof
+        );
+
+        // Ensure container hasn't changed
+        if (containerDigest != reg.containerDigest) {
+            revert InvalidContainerDigest();
+        }
+
+        // Update attestation
+        reg.attestationToken = newAttestationToken;
+        reg.lastAttestationUpdate = block.timestamp;
+
+        emit ValidatorAttestationUpdated(msg.sender, block.timestamp);
+    }
+
+    // ============ Attestation Verification ============
+
+    /**
+     * @notice Verify attestation using SP1 zkVM
+     * @return containerDigest The verified container digest
+     */
+    function _verifyAttestationWithZK(
+        string calldata attestationToken,
+        bytes calldata publicKey,
+        bytes calldata zkProof
+    ) private view returns (bytes32) {
+        // Prepare public inputs for SP1 verification
+        bytes memory publicInputs = abi.encode(
+            keccak256(bytes(attestationToken)),
+            keccak256(publicKey),
+            expectedContainerDigest
+        );
+
+        // Verify the ZK proof
+        bool valid = sp1Verifier.verifyProof(
+            zkProof,
+            publicInputs
+        );
+
+        if (!valid) {
+            revert InvalidZKProof();
+        }
+
+        // Extract container digest from attestation
+        // In practice, this would parse the JWT, but for simplicity:
+        bytes32 containerDigest = _extractContainerDigest(attestationToken);
+
+        return containerDigest;
+    }
+
+    /**
+     * @notice Optional secondary verification via Lit Protocol
+     */
+    function _verifyWithLitProtocol(
+        string calldata attestationToken,
+        bytes calldata publicKey
+    ) private {
+        // Lit Protocol can provide additional verification
+        // of the attestation token and measurements
+        bool valid = litProtocol.verifyAttestation(
+            attestationToken,
+            publicKey,
+            expectedContainerDigest
+        );
+
+        if (!valid) {
+            revert InvalidAttestation();
+        }
+    }
+
+    /**
+     * @notice Extract container digest from attestation token
+     * @dev In production, this would properly parse the JWT
+     */
+    function _extractContainerDigest(
+        string calldata attestationToken
+    ) private pure returns (bytes32) {
+        // Simplified - would actually parse JWT claims
+        return keccak256(bytes(attestationToken));
+    }
+
+    /**
+     * @notice Recover Ethereum address from public key
+     */
+    function _recoverAddressFromPublicKey(
+        bytes calldata publicKey
+    ) private pure returns (address) {
+        require(publicKey.length == 64, "Invalid public key length");
+        bytes32 hash = keccak256(publicKey);
+        return address(uint160(uint256(hash)));
+    }
+
+    // ============ Enhanced Message Processing ============
+
+    /**
+     * @notice Override processMessage to check attestation validity
+     */
+    function processMessage(
+        Message calldata message,
+        bytes[] calldata signatures
+    ) external override nonReentrant whenNotPaused {
+        // Verify signatures and check attestation validity
+        _verifySignaturesWithAttestation(message, signatures);
+
+        // Continue with existing message processing
+        // ... (existing processMessage logic)
+    }
+
+    function _verifySignaturesWithAttestation(
+        Message calldata message,
+        bytes[] calldata signatures
+    ) private view {
+        if (signatures.length < validatorThreshold) {
+            revert InsufficientSignatures();
+        }
+
+        bytes32 messageHash = _hashMessage(message);
+        bytes32 ethSignedHash = _toEthSignedMessageHash(messageHash);
+
+        address[] memory signers = new address[](signatures.length);
+
+        for (uint i = 0; i < signatures.length; i++) {
+            address signer = _recoverSigner(ethSignedHash, signatures[i]);
+
+            // Check validator is registered and attestation is fresh
+            ValidatorRegistration storage reg = validatorRegistry[signer];
+            if (!reg.isActive) {
+                revert InvalidValidator();
+            }
+
+            // Check attestation isn't expired
+            if (block.timestamp > reg.lastAttestationUpdate + attestationValidityPeriod) {
+                revert AttestationExpired();
+            }
+
+            // Check for duplicates
+            for (uint j = 0; j < i; j++) {
+                if (signers[j] == signer) revert DuplicateSignature();
+            }
+
+            signers[i] = signer;
+        }
+    }
+
+    // ============ Validator Key Rotation ============
+
+    /**
+     * @notice Rotate validator key with fresh attestation
+     */
+    function rotateValidatorKey(
+        bytes calldata newPublicKey,
+        string calldata attestationToken,
+        bytes calldata zkProof
+    ) external {
+        ValidatorRegistration storage reg = validatorRegistry[msg.sender];
+        if (!reg.isActive) {
+            revert ValidatorNotRegistered();
+        }
+
+        // Verify new key with attestation
+        bytes32 containerDigest = _verifyAttestationWithZK(
+            attestationToken,
+            newPublicKey,
+            zkProof
+        );
+
+        if (containerDigest != reg.containerDigest) {
+            revert InvalidContainerDigest();
+        }
+
+        // Update key
+        bytes32 oldPubKeyHash = keccak256(reg.publicKey);
+        delete publicKeyToValidator[oldPubKeyHash];
+
+        reg.publicKey = newPublicKey;
+        reg.attestationToken = attestationToken;
+        reg.lastAttestationUpdate = block.timestamp;
+
+        bytes32 newPubKeyHash = keccak256(newPublicKey);
+        publicKeyToValidator[newPubKeyHash] = msg.sender;
+
+        emit ValidatorAttestationUpdated(msg.sender, block.timestamp);
+    }
+
+    // ============ Admin Functions ============
+
+    /**
+     * @notice Update expected container digest for validators
+     */
+    function updateExpectedContainerDigest(
+        bytes32 newDigest
+    ) external onlyRole(ADMIN_ROLE) {
+        expectedContainerDigest = newDigest;
+    }
+
+    /**
+     * @notice Update attestation validity period
+     */
+    function updateAttestationValidityPeriod(
+        uint256 newPeriod
+    ) external onlyRole(ADMIN_ROLE) {
+        attestationValidityPeriod = newPeriod;
+    }
+
+    /**
+     * @notice Deactivate validator if attestation is invalid
+     */
+    function deactivateValidator(
+        address validator,
+        string calldata reason
+    ) external onlyRole(ADMIN_ROLE) {
+        ValidatorRegistration storage reg = validatorRegistry[validator];
+        require(reg.isActive, "Validator not active");
+
+        reg.isActive = false;
+        _removeValidator(validator);
+
+        emit ValidatorDeactivated(validator, reason);
+    }
+
+    // ============ View Functions ============
+
+    function getValidatorRegistration(
+        address validator
+    ) external view returns (ValidatorRegistration memory) {
+        return validatorRegistry[validator];
+    }
+
+    function isValidatorAttestationValid(
+        address validator
+    ) external view returns (bool) {
+        ValidatorRegistration storage reg = validatorRegistry[validator];
+        return reg.isActive &&
+               block.timestamp <= reg.lastAttestationUpdate + attestationValidityPeriod;
+    }
+
+    function getValidatorByPublicKey(
+        bytes calldata publicKey
+    ) external view returns (address) {
+        return publicKeyToValidator[keccak256(publicKey)];
+    }
+}
+```
+
+### SP1 Verifier Contract Interface
+
+```solidity
+// contracts/interfaces/ISP1Verifier.sol
+pragma solidity ^0.8.20;
+
+interface ISP1Verifier {
+    /**
+     * @notice Verify a proof generated by SP1 zkVM
+     * @param proof The serialized SP1 proof
+     * @param publicInputs The public inputs to the program
+     * @return valid Whether the proof is valid
+     */
+    function verifyProof(
+        bytes calldata proof,
+        bytes calldata publicInputs
+    ) external view returns (bool valid);
+}
+```
+
+### SP1 Attestation Verifier Program
+
+```rust
+// programs/attestation-verifier/src/main.rs
+#![no_main]
+sp1_zkvm::entrypoint!(main);
+
+use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Digest};
+
+#[derive(Serialize, Deserialize)]
+struct AttestationClaims {
+    pub sub: String,
+    pub aud: String,
+    pub exp: i64,
+    pub iat: i64,
+    pub image_digest: String,
+    pub measured_boot: String,
+    pub instance_id: String,
+}
+
+pub fn main() {
+    // Read attestation token from stdin
+    let attestation_token = sp1_zkvm::io::read::<String>();
+    let public_key = sp1_zkvm::io::read::<Vec<u8>>();
+
+    // Parse and verify JWT (simplified for example)
+    let parts: Vec<&str> = attestation_token.split('.').collect();
+    assert_eq!(parts.len(), 3, "Invalid JWT format");
+
+    // Decode claims
+    let payload = base64::decode(parts[1]).expect("Invalid base64");
+    let claims: AttestationClaims = serde_json::from_slice(&payload)
+        .expect("Invalid claims");
+
+    // Verify audience
+    assert_eq!(claims.aud, "https://synddb.io/validator", "Invalid audience");
+
+    // Verify not expired (simplified)
+    let current_time = 1700000000i64; // Would get from oracle
+    assert!(claims.exp > current_time, "Token expired");
+
+    // Extract container digest
+    let container_digest = hex::decode(&claims.image_digest)
+        .expect("Invalid hex digest");
+
+    // Hash public key for verification
+    let mut hasher = Sha256::new();
+    hasher.update(&public_key);
+    let pubkey_hash = hasher.finalize();
+
+    // Write outputs that will be verified on-chain
+    sp1_zkvm::io::write(&container_digest);
+    sp1_zkvm::io::write(&pubkey_hash.to_vec());
+    sp1_zkvm::io::write(&true); // Attestation valid
+}
+```
+
+### Lit Protocol Integration (Optional)
+
+```solidity
+// contracts/interfaces/ILitProtocol.sol
+pragma solidity ^0.8.20;
+
+interface ILitProtocol {
+    function verifyAttestation(
+        string calldata attestationToken,
+        bytes calldata publicKey,
+        bytes32 expectedDigest
+    ) external view returns (bool);
+
+    function executeWithDecryption(
+        bytes calldata encryptedData,
+        bytes calldata accessControlConditions
+    ) external returns (bytes memory);
+}
+
+// contracts/LitProtocolAdapter.sol
+contract LitProtocolAdapter is ILitProtocol {
+    address public litNodeRegistry;
+
+    function verifyAttestation(
+        string calldata attestationToken,
+        bytes calldata publicKey,
+        bytes32 expectedDigest
+    ) external view override returns (bool) {
+        // Lit Protocol can verify the attestation token
+        // by checking signatures from Lit nodes that have
+        // validated the TEE measurements
+
+        // This would interact with Lit Protocol's
+        // decentralized key management network
+        return true; // Simplified
+    }
+}
+```
+
+### Deployment Script
+
+```solidity
+// script/DeployWithAttestation.s.sol
+pragma solidity ^0.8.20;
+
+import "forge-std/Script.sol";
+import "../src/Bridge.sol";
+import "../src/SP1Verifier.sol";
+import "../src/LitProtocolAdapter.sol";
+
+contract DeployWithAttestation is Script {
+    function run() external {
+        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        bytes32 expectedDigest = vm.envBytes32("EXPECTED_CONTAINER_DIGEST");
+
+        vm.startBroadcast(deployerKey);
+
+        // Deploy SP1 Verifier
+        SP1Verifier sp1Verifier = new SP1Verifier();
+
+        // Deploy Lit Protocol Adapter (optional)
+        LitProtocolAdapter litAdapter = new LitProtocolAdapter();
+
+        // Deploy Bridge
+        Bridge bridge = new Bridge();
+
+        // Initialize bridge with validators (empty initially)
+        address[] memory validators = new address[](0);
+        bridge.initialize(validators, 2, 1000 ether);
+
+        // Initialize attestation verification
+        bridge.initializeAttestation(
+            address(sp1Verifier),
+            address(litAdapter),
+            expectedDigest
+        );
+
+        vm.stopBroadcast();
+
+        console.log("Bridge deployed at:", address(bridge));
+        console.log("SP1 Verifier at:", address(sp1Verifier));
+        console.log("Lit Adapter at:", address(litAdapter));
+    }
+}
+```
+
+### Testing
+
+```solidity
+// test/BridgeAttestation.t.sol
+pragma solidity ^0.8.20;
+
+import "forge-std/Test.sol";
+import "../src/Bridge.sol";
+
+contract BridgeAttestationTest is Test {
+    Bridge public bridge;
+
+    function setUp() public {
+        // Deploy contracts
+        // ...
+    }
+
+    function testValidatorRegistration() public {
+        // Mock attestation token
+        string memory attestationToken = "eyJ..."; // Valid JWT
+        bytes memory publicKey = hex"04..."; // 64 bytes
+        bytes memory zkProof = hex"..."; // SP1 proof
+
+        // Register validator
+        bridge.registerValidator(
+            attestationToken,
+            publicKey,
+            zkProof
+        );
+
+        // Verify registration
+        address validator = bridge.getValidatorByPublicKey(publicKey);
+        assertTrue(bridge.isValidatorAttestationValid(validator));
+    }
+
+    function testAttestationExpiry() public {
+        // Register validator
+        // ...
+
+        // Fast forward time
+        vm.warp(block.timestamp + 8 days);
+
+        // Should fail due to expired attestation
+        vm.expectRevert(Bridge.AttestationExpired.selector);
+        bridge.processMessage(message, signatures);
+    }
+}
+```
+
 ## Minimal Validator Integration (Rust)
 
 Validators are read replicas (see PLAN_REPLICA.md) with additional bridge message processing. The Rust code is minimal - just monitoring tables and calling Bridge.sol:

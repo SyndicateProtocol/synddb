@@ -522,39 +522,426 @@ logging:
   format: "json"
 ```
 
-## TEE Integration
+## TEE Integration with GCP Confidential Space
 
-When running in a TEE, the sidecar generates attestations:
+The sidecar leverages GCP Confidential Space for hardware-protected key management and attestation, eliminating the need for complex SGX SDKs while providing strong security guarantees.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  GCP Confidential Space VM                   │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │             synddb-sidecar Container                  │  │
+│  │  ┌────────────────────────────────────────────────┐  │  │
+│  │  │  Key Generation & Management                    │  │  │
+│  │  │  - Generate signing key on first boot          │  │  │
+│  │  │  - Store in Secret Manager via WI              │  │  │
+│  │  │  - Key never leaves container memory           │  │  │
+│  │  └────────────────────────────────────────────────┘  │  │
+│  │  ┌────────────────────────────────────────────────┐  │  │
+│  │  │  Attestation Service                           │  │  │
+│  │  │  - Get attestation token from metadata         │  │  │
+│  │  │  - Include code hash and measurements          │  │  │
+│  │  │  - Sign published data with sealed key         │  │  │
+│  │  └────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  Hardware Root of Trust (AMD SEV-SNP / Intel TDX)          │
+└─────────────────────────────────────────────────────────────┘
+                     ↓ Attestation Token
+┌─────────────────────────────────────────────────────────────┐
+│                        Bridge.sol                           │
+│  - Verify attestation via SP1 zkVM                         │
+│  - Register public key after verification                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Management Implementation
 
 ```rust
-// src/tee/attestation.rs
-pub struct TeeAttestor {
-    enclave: Enclave,
+// src/tee/confidential_space.rs
+use gcp_auth::AuthenticationManager;
+use google_cloud_secretmanager::client::{Client as SecretClient, ClientConfig};
+use google_cloud_default::WithAuthExt;
+use serde::{Deserialize, Serialize};
+use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer};
+use rand::rngs::OsRng;
+use anyhow::Result;
+
+pub struct ConfidentialSpaceManager {
     signing_key: SigningKey,
+    public_key: VerifyingKey,
+    secret_client: SecretClient,
+    project_id: String,
+    secret_name: String,
 }
 
-impl TeeAttestor {
-    pub fn generate_attestation(&self, data: &[u8]) -> Result<Attestation> {
-        // Get quote from TEE
-        let quote = self.enclave.get_quote(data)?;
-        
-        // Sign with enclave key
-        let signature = self.signing_key.sign(data)?;
-        
-        Ok(Attestation {
-            quote,
-            signature,
-            mrenclave: self.enclave.mrenclave(),
-            timestamp: SystemTime::now(),
+#[derive(Serialize, Deserialize)]
+struct SealedKeyData {
+    private_key: Vec<u8>,
+    public_key: Vec<u8>,
+    created_at: i64,
+    attestation_token: String,
+}
+
+impl ConfidentialSpaceManager {
+    pub async fn init() -> Result<Self> {
+        // Get project ID from metadata
+        let project_id = Self::get_project_id().await?;
+
+        // Initialize Secret Manager client with Workload Identity
+        let config = ClientConfig::default().with_auth().await?;
+        let secret_client = SecretClient::new(config).await?;
+
+        let secret_name = format!("synddb-sidecar-signing-key");
+
+        // Try to load existing key or generate new one
+        let (signing_key, public_key) = match Self::load_sealed_key(&secret_client, &project_id, &secret_name).await {
+            Ok(key_data) => {
+                info!("Loaded existing signing key from Secret Manager");
+                let signing_key = SigningKey::from_bytes(&key_data.private_key)?;
+                let public_key = VerifyingKey::from_bytes(&key_data.public_key)?;
+                (signing_key, public_key)
+            }
+            Err(_) => {
+                info!("Generating new signing key");
+                let signing_key = SigningKey::generate(&mut OsRng);
+                let public_key = signing_key.verifying_key();
+
+                // Get attestation token for this container
+                let attestation_token = Self::get_attestation_token().await?;
+
+                // Seal to Secret Manager
+                Self::seal_key(
+                    &secret_client,
+                    &project_id,
+                    &secret_name,
+                    &signing_key,
+                    &public_key,
+                    &attestation_token
+                ).await?;
+
+                (signing_key, public_key)
+            }
+        };
+
+        Ok(Self {
+            signing_key,
+            public_key,
+            secret_client,
+            project_id,
+            secret_name,
         })
     }
-    
-    pub fn attach_to_publish(&self, payload: &mut PublishPayload) -> Result<()> {
-        let attestation = self.generate_attestation(payload.hash().as_bytes())?;
-        payload.set_attestation(attestation);
+
+    async fn get_attestation_token() -> Result<String> {
+        // Get attestation token from Confidential Space metadata service
+        let client = reqwest::Client::new();
+
+        // Custom audience for our application
+        let audience = "https://synddb.io/sidecar";
+
+        let response = client
+            .get("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
+            .query(&[
+                ("audience", audience),
+                ("format", "full"),
+                ("licenses", "TRUE"),  // Include container image measurements
+            ])
+            .header("Metadata-Flavor", "Google")
+            .send()
+            .await?;
+
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            token: String,
+        }
+
+        let token_resp: TokenResponse = response.json().await?;
+        Ok(token_resp.token)
+    }
+
+    async fn seal_key(
+        secret_client: &SecretClient,
+        project_id: &str,
+        secret_name: &str,
+        signing_key: &SigningKey,
+        public_key: &VerifyingKey,
+        attestation_token: &str,
+    ) -> Result<()> {
+        let key_data = SealedKeyData {
+            private_key: signing_key.to_bytes().to_vec(),
+            public_key: public_key.to_bytes().to_vec(),
+            created_at: chrono::Utc::now().timestamp(),
+            attestation_token: attestation_token.to_string(),
+        };
+
+        let secret_data = serde_json::to_vec(&key_data)?;
+
+        // Create secret with Workload Identity binding
+        // Only this specific container with matching attestation can access
+        secret_client
+            .create_secret(
+                project_id,
+                secret_name,
+                secret_data,
+                Some(vec![
+                    ("synddb/environment", "confidential-space"),
+                    ("synddb/component", "sidecar"),
+                ]),
+            )
+            .await?;
+
         Ok(())
     }
+
+    async fn load_sealed_key(
+        secret_client: &SecretClient,
+        project_id: &str,
+        secret_name: &str,
+    ) -> Result<SealedKeyData> {
+        let secret_data = secret_client
+            .access_secret_version(project_id, secret_name, "latest")
+            .await?;
+
+        let key_data: SealedKeyData = serde_json::from_slice(&secret_data)?;
+        Ok(key_data)
+    }
+
+    pub fn sign_data(&self, data: &[u8]) -> Signature {
+        self.signing_key.sign(data)
+    }
+
+    pub fn public_key(&self) -> &VerifyingKey {
+        &self.public_key
+    }
+
+    pub async fn get_attestation_for_data(&self, data: &[u8]) -> Result<AttestationBundle> {
+        // Get fresh attestation token
+        let attestation_token = Self::get_attestation_token().await?;
+
+        // Sign the data
+        let signature = self.sign_data(data);
+
+        // Parse attestation token to extract measurements
+        let token_parts: Vec<&str> = attestation_token.split('.').collect();
+        let payload = base64::decode_config(token_parts[1], base64::URL_SAFE_NO_PAD)?;
+        let claims: serde_json::Value = serde_json::from_slice(&payload)?;
+
+        Ok(AttestationBundle {
+            attestation_token,
+            signature: signature.to_bytes().to_vec(),
+            public_key: self.public_key.to_bytes().to_vec(),
+            data_hash: blake3::hash(data).to_hex().to_string(),
+            container_image_digest: claims["image_digest"].as_str().unwrap_or("").to_string(),
+            measured_boot_hash: claims["measured_boot"].as_str().unwrap_or("").to_string(),
+        })
+    }
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct AttestationBundle {
+    pub attestation_token: String,
+    pub signature: Vec<u8>,
+    pub public_key: Vec<u8>,
+    pub data_hash: String,
+    pub container_image_digest: String,
+    pub measured_boot_hash: String,
+}
+
+// Integration with publisher
+impl Publisher {
+    pub async fn publish_with_attestation(
+        &self,
+        payload: PublishPayload,
+        attestor: &ConfidentialSpaceManager,
+    ) -> Result<Vec<PublishResult>> {
+        // Get attestation for the payload
+        let attestation = attestor.get_attestation_for_data(&payload.data).await?;
+
+        // Attach attestation to payload
+        let mut attested_payload = payload;
+        attested_payload.attestation = Some(attestation);
+
+        // Publish to all DA layers
+        self.publish_all(attested_payload).await
+    }
+}
+```
+
+### Docker Configuration
+
+```dockerfile
+# Dockerfile.confidential
+FROM rust:1.75 as builder
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+
+# Build with Confidential Space features
+RUN cargo build --release --features confidential-space
+
+# Runtime image for Confidential Space
+FROM gcr.io/confidential-space-images/base:latest
+
+# Install required dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binary
+COPY --from=builder /app/target/release/synddb-sidecar /usr/local/bin/
+
+# Create non-root user
+RUN useradd -m -u 1000 synddb && \
+    chown -R synddb:synddb /usr/local/bin/synddb-sidecar
+
+USER synddb
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s \
+    CMD curl -f http://localhost:9090/health || exit 1
+
+# Entry point with attestation initialization
+ENTRYPOINT ["/usr/local/bin/synddb-sidecar"]
+CMD ["--attestation", "confidential-space", "--config", "/config/sidecar.yaml"]
+```
+
+### Deployment Configuration
+
+```yaml
+# confidential-space-deployment.yaml
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeInstance
+metadata:
+  name: synddb-sidecar-tee
+spec:
+  machineType: n2d-standard-4  # AMD SEV-SNP capable
+  zone: us-central1-a
+
+  confidentialInstanceConfig:
+    enableConfidentialCompute: true
+    confidentialComputeType: SEV_SNP  # or TDX for Intel
+
+  shieldedInstanceConfig:
+    enableSecureBoot: true
+    enableVtpm: true
+    enableIntegrityMonitoring: true
+
+  scheduling:
+    onHostMaintenance: TERMINATE  # Required for Confidential VMs
+
+  serviceAccounts:
+  - email: synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com
+    scopes:
+    - https://www.googleapis.com/auth/cloud-platform
+
+  metadata:
+    items:
+    - key: tee-container-log-redirect
+      value: "true"
+    - key: tee-image-reference
+      value: "gcr.io/${PROJECT_ID}/synddb-sidecar:latest"
+    - key: tee-restart-policy
+      value: "Always"
+    - key: tee-env-ATTESTATION_AUDIENCE
+      value: "https://synddb.io/sidecar"
+    - key: tee-env-SECRET_PROJECT_ID
+      value: "${PROJECT_ID}"
+
+  bootDisk:
+    initializeParams:
+      image: projects/confidential-space-images/global/images/confidential-space-release
+```
+
+### Workload Identity Configuration
+
+```yaml
+# workload-identity.yaml
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMServiceAccount
+metadata:
+  name: synddb-sidecar
+spec:
+  displayName: SyndDB Sidecar Service Account
+---
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: synddb-sidecar-secretmanager
+spec:
+  memberFrom:
+    serviceAccountRef:
+      name: synddb-sidecar
+  role: roles/secretmanager.secretAccessor
+  resourceRef:
+    kind: Project
+---
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicy
+metadata:
+  name: synddb-sidecar-secret-policy
+spec:
+  resourceRef:
+    kind: Secret
+    name: synddb-sidecar-signing-key
+  policy:
+    bindings:
+    - role: roles/secretmanager.secretAccessor
+      members:
+      - serviceAccount:synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com
+      condition:
+        title: Only from Confidential Space
+        expression: |
+          assertion.sub == 'synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com' &&
+          'image_digest' in assertion &&
+          assertion.image_digest == '${EXPECTED_IMAGE_DIGEST}'
+```
+
+### Configuration File
+
+```yaml
+# config/sidecar-confidential.yaml
+database:
+  path: "/data/app.db"
+  wal_mode: true
+
+attestation:
+  enabled: true
+  provider: "gcp-confidential-space"
+
+  # GCP Confidential Space settings
+  gcp:
+    project_id: "${PROJECT_ID}"
+    secret_name: "synddb-sidecar-signing-key"
+    attestation_audience: "https://synddb.io/sidecar"
+
+    # Expected measurements for verification
+    expected_measurements:
+      container_image_digest: "${EXPECTED_IMAGE_DIGEST}"
+
+  # How often to refresh attestation
+  refresh_interval_mins: 60
+
+  # Bridge contract for key registration
+  bridge_contract: "0x..."
+  bridge_rpc: "https://eth-mainnet.g.alchemy.com/v2/..."
+
+publishers:
+  celestia:
+    enabled: true
+    endpoint: "https://rpc.celestia.org"
+    # Include attestation with all published data
+    include_attestation: true
+
+monitoring:
+  metrics:
+    enabled: true
+    port: 9090
+  health:
+    enabled: true
+    port: 8080
 ```
 
 ## Performance Optimizations
