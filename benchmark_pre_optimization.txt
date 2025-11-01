@@ -1,0 +1,82 @@
+cargo run --package synddb-benchmark --release -- run --rate 0 --simple --batch-size 10000
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running `target/release/orderbook-bench run --rate 0 --simple --batch-size 10000`
+2025-11-01T19:08:21.866867Z  INFO Starting orderbook simulation at "orderbook.db"
+2025-11-01T19:08:21.866899Z  INFO Rate set to 0, enabling max throughput discovery mode
+2025-11-01T19:08:21.879127Z  INFO Resuming with existing data (100 users found)
+2025-11-01T19:08:21.883012Z  INFO Initialized 100 users with balances
+2025-11-01T19:08:21.883019Z  INFO Starting simulation with 100 users and pattern MaxThroughput in SIMPLE (inserts only) mode
+2025-11-01T19:08:21.883023Z  INFO === Max Throughput Discovery Mode ===
+2025-11-01T19:08:21.883024Z  INFO Will automatically find maximum sustainable throughput
+2025-11-01T19:08:21.883025Z  INFO Using adaptive algorithm with stability detection
+2025-11-01T19:08:21.883027Z  INFO 
+--- Testing 1000 ops/sec ---
+2025-11-01T19:08:31.962706Z  INFO   Sample 1/3: 1984 ops/sec
+2025-11-01T19:08:42.041089Z  INFO   Sample 2/3: 1984 ops/sec
+2025-11-01T19:08:52.116145Z  INFO   Sample 3/3: 1985 ops/sec
+2025-11-01T19:08:52.116163Z  INFO Mean: 1985 ops/sec (198.5% of target) | Stability: 0.0% CV
+2025-11-01T19:08:52.116165Z  INFO 
+--- Testing 2000 ops/sec ---
+2025-11-01T19:08:57.195633Z  INFO   Sample 1/3: 3937 ops/sec
+2025-11-01T19:09:02.278418Z  INFO   Sample 2/3: 3935 ops/sec
+2025-11-01T19:09:07.369974Z  INFO   Sample 3/3: 3928 ops/sec
+2025-11-01T19:09:07.369993Z  INFO Mean: 3933 ops/sec (196.7% of target) | Stability: 0.1% CV
+2025-11-01T19:09:07.369996Z  INFO 
+--- Testing 4000 ops/sec ---
+2025-11-01T19:09:12.489771Z  INFO   Sample 1/3: 5859 ops/sec
+2025-11-01T19:09:17.568397Z  INFO   Sample 2/3: 5907 ops/sec
+2025-11-01T19:09:22.678140Z  INFO   Sample 3/3: 5871 ops/sec
+2025-11-01T19:09:22.678159Z  INFO Mean: 5879 ops/sec (147.0% of target) | Stability: 0.3% CV
+2025-11-01T19:09:22.678162Z  INFO 
+--- Testing 8000 ops/sec ---
+2025-11-01T19:09:26.514184Z  INFO   Sample 1/3: 10427 ops/sec
+2025-11-01T19:09:30.359234Z  INFO   Sample 2/3: 10403 ops/sec
+2025-11-01T19:09:34.209916Z  INFO   Sample 3/3: 10388 ops/sec
+2025-11-01T19:09:34.209929Z  INFO Mean: 10406 ops/sec (130.1% of target) | Stability: 0.2% CV
+2025-11-01T19:09:34.209932Z  INFO 
+--- Testing 16000 ops/sec ---
+2025-11-01T19:09:37.403865Z  INFO   Sample 1/3: 18785 ops/sec
+2025-11-01T19:09:40.604952Z  INFO   Sample 2/3: 18743 ops/sec
+2025-11-01T19:09:43.795304Z  INFO   Sample 3/3: 18806 ops/sec
+2025-11-01T19:09:43.795322Z  INFO Mean: 18778 ops/sec (117.4% of target) | Stability: 0.1% CV
+2025-11-01T19:09:43.795324Z  INFO 
+--- Testing 32000 ops/sec ---
+2025-11-01T19:09:46.978237Z  INFO   Sample 1/3: 34559 ops/sec
+2025-11-01T19:09:50.170488Z  INFO   Sample 2/3: 34458 ops/sec
+2025-11-01T19:09:53.356405Z  INFO   Sample 3/3: 34526 ops/sec
+2025-11-01T19:09:53.356424Z  INFO Mean: 34514 ops/sec (107.9% of target) | Stability: 0.1% CV
+2025-11-01T19:09:53.356426Z  INFO 
+--- Testing 64000 ops/sec ---
+2025-11-01T19:09:56.443401Z  INFO   Sample 1/3: 68026 ops/sec
+2025-11-01T19:09:59.521002Z  INFO   Sample 2/3: 68233 ops/sec
+2025-11-01T19:10:02.609869Z  INFO   Sample 3/3: 67985 ops/sec
+2025-11-01T19:10:02.609887Z  INFO Mean: 68081 ops/sec (106.4% of target) | Stability: 0.2% CV
+2025-11-01T19:10:02.609890Z  INFO 
+--- Testing 128000 ops/sec ---
+2025-11-01T19:10:05.641354Z  INFO   Sample 1/3: 125349 ops/sec
+2025-11-01T19:10:08.706711Z  INFO   Sample 2/3: 123963 ops/sec
+2025-11-01T19:10:11.764089Z  INFO   Sample 3/3: 124287 ops/sec
+2025-11-01T19:10:11.764104Z  INFO Mean: 124533 ops/sec (97.3% of target) | Stability: 0.5% CV
+2025-11-01T19:10:11.764108Z  INFO 
+--- Testing 256000 ops/sec ---
+2025-11-01T19:10:14.804490Z  INFO   Sample 1/3: 124981 ops/sec
+2025-11-01T19:10:17.846906Z  INFO   Sample 2/3: 124898 ops/sec
+2025-11-01T19:10:20.893450Z  INFO   Sample 3/3: 121446 ops/sec
+2025-11-01T19:10:20.893473Z  INFO Mean: 123775 ops/sec (48.3% of target) | Stability: 1.3% CV
+2025-11-01T19:10:20.893475Z  INFO ⚠ Throughput degraded (<90% of target) - backing off
+2025-11-01T19:10:20.893477Z  INFO 
+--- Verifying stability at 230400 ops/sec ---
+2025-11-01T19:10:23.909327Z  INFO   Verification 1/3: 122682 ops/sec
+2025-11-01T19:10:26.925877Z  INFO   Verification 2/3: 122654 ops/sec
+2025-11-01T19:10:29.976826Z  INFO   Verification 3/3: 121271 ops/sec
+2025-11-01T19:10:29.976843Z  INFO 
+=== Maximum Throughput Found ===
+Best sustained rate: 124533 ops/sec
+Verified stable rate: 122202 ops/sec
+Degradation detected at: 256000 ops/sec target
+
+2025-11-01T19:10:29.976847Z  INFO === Simulation Complete ===
+2025-11-01T19:10:29.976848Z  INFO Operations: 4850000 | Elapsed: 128.1s | Rate: 37860.6 ops/sec
+2025-11-01T19:10:30.580983Z  INFO Final database state:
+2025-11-01T19:10:30.580999Z  INFO   Orders:    12369570 total (12357699 active)
+2025-11-01T19:10:30.581001Z  INFO   Trades:    12369570
