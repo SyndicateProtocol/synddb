@@ -110,7 +110,7 @@ jobs:
           cargo build --package synddb-benchmark --release
 
           cargo run --package synddb-benchmark --release -- init --db bench-main-simple.db
-          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clear --rate 0 --simple --batch-size 5000 > bench-main-simple.log 2>&1
+          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clean --rate 0 --simple --batch-size 5000 > bench-main-simple.log 2>&1
           if [ $? -ne 0 ]; then
             echo "❌ Baseline simple benchmark failed! Output:"
             cat bench-main-simple.log
@@ -128,7 +128,7 @@ jobs:
           cargo build --package synddb-benchmark --release
 
           cargo run --package synddb-benchmark --release -- init --db bench-main-full.db
-          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clear --rate 0 --batch-size 1000 > bench-main-full.log 2>&1
+          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clean --rate 0 --batch-size 1000 > bench-main-full.log 2>&1
           if [ $? -ne 0 ]; then
             echo "❌ Baseline full benchmark failed! Output:"
             cat bench-main-full.log
