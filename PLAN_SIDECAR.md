@@ -464,6 +464,96 @@ Schema changes are rare (typically days/weeks apart), so the snapshot overhead i
 - Increment `user_version` in same transaction as schema changes (helps with debugging/audit)
 - No other requirements - snapshot captures everything
 
+## SQLite Replication Edge Cases
+
+### Edge Cases Handled Automatically ✅
+
+**1. Non-Deterministic Functions (random(), datetime('now'), etc.)**
+- **Problem:** `INSERT INTO events VALUES (random(), datetime('now'))` would produce different values on validators
+- **Solution:** Session Extension captures **actual written values**, not SQL functions
+- **Changeset contains:** `INSERT INTO events VALUES (123456, '2024-01-15 10:30:00')`
+- **Status:** ✅ Automatically handled by changesets
+
+**2. AUTOINCREMENT and ROWID**
+- **Problem:** Primary and validators might have different `sqlite_sequence` state
+- **Solution:** Changesets include explicit rowid values for all operations
+- **Changeset contains:** `INSERT INTO users (rowid=5, name='Alice')`
+- **Status:** ✅ Automatically handled by changesets
+
+**3. Transaction Rollbacks**
+- **Problem:** Failed transactions shouldn't be replicated
+- **Solution:** Session Extension only captures committed transactions
+- **Commit hook fires after COMMIT succeeds**
+- **Status:** ✅ Automatically handled by commit hook timing
+
+**4. Write Concurrency**
+- **Problem:** N/A - SQLite has single-writer model
+- **Status:** ✅ Not applicable
+
+### Edge Cases Requiring Configuration ⚠️
+
+**5. PRAGMA Settings**
+- **Problem:** Mismatched PRAGMA settings between primary and validators
+- **Solution:** Validators MUST use same settings as primary
+- **Critical PRAGMAs:**
+  ```sql
+  PRAGMA foreign_keys = ON;        -- Must match primary
+  PRAGMA recursive_triggers = OFF; -- Must match primary
+  PRAGMA secure_delete = OFF;      -- Must match primary
+  ```
+- **Implementation:** Include PRAGMA settings in snapshots
+- **Status:** ⚠️ TODO - Add PRAGMA capture to snapshots
+
+**6. Triggers**
+- **Problem:** Triggers fire on primary, generating additional writes captured in changesets
+- **Example:**
+  ```sql
+  -- Primary has trigger:
+  CREATE TRIGGER log_updates AFTER UPDATE ON users
+  BEGIN
+    INSERT INTO audit_log VALUES (NEW.id, datetime('now'));
+  END;
+
+  -- Application: UPDATE users SET name='Bob' WHERE id=1
+  -- Changeset captures BOTH:
+  --   1. UPDATE users SET name='Bob' WHERE id=1
+  --   2. INSERT INTO audit_log VALUES (1, '2024-01-15 10:30:00')
+  ```
+- **Solution:** Triggers captured in schema (DDL), effects captured in changesets
+- **Validator behavior:** Applies changeset WITHOUT re-firing triggers (they already fired on primary)
+- **Status:** ✅ Session Extension includes trigger-generated changes in changesets
+
+**7. Virtual Tables (FTS5, R*Tree, etc.)**
+- **Problem:** Virtual tables may not support Session Extension
+- **Solution:** Test each virtual table type for compatibility
+- **Known issues:**
+  - FTS5 (Full-Text Search) - May need special handling
+  - R*Tree (Spatial index) - May need special handling
+- **Status:** ⚠️ TODO - Test virtual table support
+
+**8. Database Encoding (UTF-8 vs UTF-16)**
+- **Problem:** Primary and validators must use same text encoding
+- **Solution:** Enforce `PRAGMA encoding = 'UTF-8'` everywhere
+- **Status:** ⚠️ TODO - Add encoding check to snapshot validation
+
+### Application Requirements for Determinism
+
+**Applications MUST:**
+1. Use `PRAGMA journal_mode = WAL` (required for Session Extension)
+2. NOT rely on `PRAGMA user_version` for application logic (only use for schema tracking)
+3. Avoid `PRAGMA foreign_keys` changes mid-operation
+
+**Applications SHOULD:**
+1. Use explicit transactions for multi-statement operations
+2. Use AUTOINCREMENT for tables that need stable IDs across replicas
+3. Avoid time-dependent DEFAULT values like `DEFAULT (datetime('now'))`
+
+**Applications CAN safely use:**
+1. Non-deterministic functions (values captured in changesets) ✅
+2. Triggers (effects captured in changesets) ✅
+3. Foreign keys (constraints checked on primary) ✅
+4. CHECK constraints (validated on primary) ✅
+
 ### 2. Batcher
 
 Accumulates changesets and triggers publishing based on time/size thresholds. Also handles periodic snapshot creation.
