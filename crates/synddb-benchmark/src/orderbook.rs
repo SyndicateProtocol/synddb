@@ -1,6 +1,10 @@
 use anyhow::Result;
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use rand::Rng;
-use rusqlite::{params, Connection};
+use rusqlite::params;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::info;
 
@@ -10,18 +14,18 @@ const SYMBOLS: &[&str] = &["BTC-USD", "ETH-USD", "SOL-USD", "ARB-USD"];
 const INITIAL_USERS: usize = 100;
 
 pub struct OrderbookSimulator {
-    conn: Connection,
+    pool: Pool<SqliteConnectionManager>,
     user_ids: Vec<i64>,
-    operation_count: u64,
+    operation_count: Arc<AtomicU64>,
     start_time: Option<Instant>,
 }
 
 impl OrderbookSimulator {
-    pub fn new(conn: Connection) -> Self {
+    pub fn new(pool: Pool<SqliteConnectionManager>) -> Self {
         Self {
-            conn,
+            pool,
             user_ids: Vec::new(),
-            operation_count: 0,
+            operation_count: Arc::new(AtomicU64::new(0)),
             start_time: None,
         }
     }
@@ -109,7 +113,8 @@ impl OrderbookSimulator {
 
             // Execute a batch of operations in a single transaction
             {
-                let tx = self.conn.transaction()?;
+                let mut conn = self.pool.get()?;
+                let tx = conn.transaction()?;
                 for _ in 0..batch_size {
                     if let Some(end) = end_time {
                         if Instant::now() >= end {
@@ -121,7 +126,7 @@ impl OrderbookSimulator {
                     } else {
                         Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
                     }
-                    self.operation_count += 1;
+                    self.operation_count.fetch_add(1, Ordering::Relaxed);
                 }
                 tx.commit()?;
             }
@@ -168,14 +173,15 @@ impl OrderbookSimulator {
                     batch_size
                 };
 
-                let tx = self.conn.transaction()?;
+                let mut conn = self.pool.get()?;
+                let tx = conn.transaction()?;
                 for _ in 0..batch_ops {
                     if simple_mode {
                         Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
                     } else {
                         Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
                     }
-                    self.operation_count += 1;
+                    self.operation_count.fetch_add(1, Ordering::Relaxed);
                 }
                 tx.commit()?;
             }
@@ -232,7 +238,7 @@ impl OrderbookSimulator {
 
             for sample_num in 1..=num_samples {
                 let sample_start = Instant::now();
-                let ops_before = self.operation_count;
+                let ops_before = self.operation_count.load(Ordering::Relaxed);
                 let sample_end_time = sample_start + sample_duration;
 
                 let interval_micros = 1_000_000 / current_rate;
@@ -244,20 +250,21 @@ impl OrderbookSimulator {
                 while Instant::now() < sample_end_time {
                     interval.tick().await;
 
-                    let tx = self.conn.transaction()?;
+                    let mut conn = self.pool.get()?;
+                    let tx = conn.transaction()?;
                     for _ in 0..batch_size {
                         if simple_mode {
                             Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
                         } else {
                             Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
                         }
-                        self.operation_count += 1;
+                        self.operation_count.fetch_add(1, Ordering::Relaxed);
                     }
                     tx.commit()?;
                 }
 
                 let sample_elapsed = sample_start.elapsed();
-                let ops_completed = self.operation_count - ops_before;
+                let ops_completed = self.operation_count.load(Ordering::Relaxed) - ops_before;
                 let sample_rate = ops_completed as f64 / sample_elapsed.as_secs_f64();
                 sample_rates.push(sample_rate);
 
@@ -382,7 +389,7 @@ impl OrderbookSimulator {
 
         for sample_num in 1..=num_samples {
             let sample_start = Instant::now();
-            let ops_before = self.operation_count;
+            let ops_before = self.operation_count.load(Ordering::Relaxed);
             let sample_end_time = sample_start + sample_duration;
 
             let interval_micros = 1_000_000 / rate;
@@ -393,20 +400,21 @@ impl OrderbookSimulator {
             while Instant::now() < sample_end_time {
                 interval.tick().await;
 
-                let tx = self.conn.transaction()?;
+                let mut conn = self.pool.get()?;
+                let tx = conn.transaction()?;
                 for _ in 0..batch_size {
                     if simple_mode {
                         Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
                     } else {
                         Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
                     }
-                    self.operation_count += 1;
+                    self.operation_count.fetch_add(1, Ordering::Relaxed);
                 }
                 tx.commit()?;
             }
 
             let sample_elapsed = sample_start.elapsed();
-            let ops_completed = self.operation_count - ops_before;
+            let ops_completed = self.operation_count.load(Ordering::Relaxed) - ops_before;
             let sample_rate = ops_completed as f64 / sample_elapsed.as_secs_f64();
             sample_rates.push(sample_rate);
 
@@ -420,14 +428,15 @@ impl OrderbookSimulator {
     }
 
     fn initialize_users(&mut self) -> Result<()> {
-        let existing_count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+        let conn = self.pool.get()?;
+        let existing_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
 
         if existing_count == 0 {
             info!("Creating {} initial users...", INITIAL_USERS);
 
-            let tx = self.conn.transaction()?;
+            let mut conn = self.pool.get()?;
+            let tx = conn.transaction()?;
             for i in 0..INITIAL_USERS {
                 tx.execute(
                     "INSERT INTO users (username) VALUES (?1)",
@@ -438,7 +447,8 @@ impl OrderbookSimulator {
         }
 
         // Load all user IDs
-        let mut stmt = self.conn.prepare("SELECT id FROM users")?;
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare("SELECT id FROM users")?;
         let user_ids: Vec<i64> = stmt
             .query_map([], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -448,7 +458,7 @@ impl OrderbookSimulator {
         // Initialize balances for all users
         for user_id in &self.user_ids {
             for symbol in SYMBOLS {
-                self.conn.execute(
+                conn.execute(
                     "INSERT OR IGNORE INTO balances (user_id, symbol, amount) VALUES (?1, ?2, ?3)",
                     params![user_id, symbol, 1_000_000_000],
                 )?;
@@ -504,11 +514,12 @@ impl OrderbookSimulator {
     fn log_stats(&self) {
         if let Some(start) = self.start_time {
             let elapsed = start.elapsed();
-            let ops_per_sec = self.operation_count as f64 / elapsed.as_secs_f64();
+            let total_ops = self.operation_count.load(Ordering::Relaxed);
+            let ops_per_sec = total_ops as f64 / elapsed.as_secs_f64();
 
             info!(
                 "Operations: {} | Elapsed: {:.1}s | Rate: {:.1} ops/sec",
-                self.operation_count,
+                total_ops,
                 elapsed.as_secs_f64(),
                 ops_per_sec
             );
@@ -530,17 +541,16 @@ impl OrderbookSimulator {
     }
 
     fn get_db_stats(&self) -> Result<DbStats> {
-        let total_orders: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
-        let active_orders: i64 = self.conn.query_row(
+        let conn = self.pool.get()?;
+        let total_orders: i64 =
+            conn.query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
+        let active_orders: i64 = conn.query_row(
             "SELECT COUNT(*) FROM orders WHERE status = 'active'",
             [],
             |row| row.get(0),
         )?;
-        let total_trades: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
+        let total_trades: i64 =
+            conn.query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
 
         Ok(DbStats {
             total_orders,

@@ -1,5 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -136,26 +138,33 @@ async fn main() -> Result<()> {
                 simple_mode: simple,
             };
 
-            let conn = Connection::open(&db)?;
+            // Create connection pool with 4 connections for parallel writes
+            let manager = SqliteConnectionManager::file(&db);
+            let pool = Pool::builder()
+                .max_size(4) // 4 connections for better parallelism
+                .build(manager)?;
 
-            // Ensure schema exists
-            schema::initialize_schema(&conn)?;
+            // Initialize schema on one connection
+            {
+                let conn = pool.get()?;
+                schema::initialize_schema(&*conn)?;
 
-            // Clear data if requested
-            if clear {
-                info!("Clearing existing data...");
-                schema::clear_data(&conn)?;
-                info!("Data cleared successfully");
-            } else {
-                // Check if there's existing data
-                let user_count: i64 =
-                    conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
-                if user_count > 0 {
-                    info!("Resuming with existing data ({} users found)", user_count);
+                // Clear data if requested
+                if clear {
+                    info!("Clearing existing data...");
+                    schema::clear_data(&*conn)?;
+                    info!("Data cleared successfully");
+                } else {
+                    // Check if there's existing data
+                    let user_count: i64 =
+                        conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+                    if user_count > 0 {
+                        info!("Resuming with existing data ({} users found)", user_count);
+                    }
                 }
             }
 
-            let mut simulator = OrderbookSimulator::new(conn);
+            let mut simulator = OrderbookSimulator::new(pool);
             simulator.run(config).await?;
         }
         Commands::Stats { db } => {
