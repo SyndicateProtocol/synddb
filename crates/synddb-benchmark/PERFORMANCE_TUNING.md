@@ -406,9 +406,10 @@ These benchmarks show the performance progression through various optimization a
 cargo run --package synddb-benchmark --release -- run --rate 0 --simple --batch-size 5000 --clear
 ```
 
-#### Commit 1894b4a - docs: Keep only recommended performance optimizations
+#### Commit 1894b4a
 
 **Commit**: [`1894b4a64b4889ccd2a24d43eaf06c9a8fbcdc57`](https://github.com/SyndicateProtocol/SyndDB/tree/1894b4a64b4889ccd2a24d43eaf06c9a8fbcdc57/crates/synddb-benchmark)
+**Message**: "docs: Keep only recommended performance optimizations"
 **Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
 
 **Configuration**: Single connection, enhanced PRAGMA tuning
@@ -427,9 +428,10 @@ Final database state:
   Trades:    4800000
 ```
 
-#### Commit 8c436d6 - chore: Remove indices to optimize performance
+#### Commit 8c436d6
 
 **Commit**: [`8c436d6a1f5cdf6f32540c0d41afb9975eb3bbdf`](https://github.com/SyndicateProtocol/SyndDB/tree/8c436d6a1f5cdf6f32540c0d41afb9975eb3bbdf/crates/synddb-benchmark)
+**Message**: "chore: Remove indices to optimize performance"
 **Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
 
 **Configuration**: 5 parallel workers, r2d2 connection pooling, enhanced PRAGMA tuning
@@ -446,9 +448,10 @@ Final database state:
   Trades:    6500000
 ```
 
-#### Commit d819ef7 - chore: Add parallel batch workers via tokio
+#### Commit d819ef7
 
 **Commit**: [`d819ef757adcc1900633427801105bf76b1afd12`](https://github.com/SyndicateProtocol/SyndDB/tree/d819ef757adcc1900633427801105bf76b1afd12/crates/synddb-benchmark)
+**Message**: "chore: Add parallel batch workers via tokio"
 **Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
 
 **Configuration**: 5 parallel workers, r2d2 connection pooling, enhanced PRAGMA tuning
@@ -465,9 +468,10 @@ Final database state:
   Trades:    4725000
 ```
 
-#### Commit 58b6d1a - chore: Multiple writers for performance tuning
+#### Commit 58b6d1a
 
 **Commit**: [`58b6d1a003615db704ef9961e6ee8f2e9d09c46a`](https://github.com/SyndicateProtocol/SyndDB/tree/58b6d1a003615db704ef9961e6ee8f2e9d09c46a/crates/synddb-benchmark)
+**Message**: "chore: Multiple writers for performance tuning"
 **Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
 
 **Configuration**: Single connection, enhanced PRAGMA tuning
@@ -486,9 +490,10 @@ Final database state:
   Trades:    3220000
 ```
 
-#### Commit be3f0e8 - chore: Performance tuning
+#### Commit be3f0e8
 
 **Commit**: [`be3f0e8438b27e82bd6ded94f0989cba63819b25`](https://github.com/SyndicateProtocol/SyndDB/tree/be3f0e8438b27e82bd6ded94f0989cba63819b25/crates/synddb-benchmark)
+**Message**: "chore: Performance tuning"
 **Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
 
 **Configuration**: Single connection, enhanced PRAGMA tuning
@@ -507,9 +512,10 @@ Final database state:
   Trades:    3220000
 ```
 
-#### Commit 2e68eae - docs: Move majority of README to individual crates
+#### Commit 2e68eae
 
 **Commit**: [`2e68eae65c0f60f7c00a4dfccd539a3c48b338b3`](https://github.com/SyndicateProtocol/SyndDB/tree/2e68eae65c0f60f7c00a4dfccd539a3c48b338b3/crates/synddb-benchmark)
+**Message**: "docs: Move majority of README to individual crates"
 **Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
 
 **Configuration**: Single connection, basic PRAGMA tuning
