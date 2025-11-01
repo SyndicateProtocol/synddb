@@ -23,6 +23,9 @@ target
 # macOS system files
 .DS_Store
 
+# Ulysses (Markdown editor) settings
+.Ulysses-Settings.plist
+
 # SQLite databases
 *.db
 *.db-shm
