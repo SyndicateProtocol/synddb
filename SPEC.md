@@ -51,7 +51,7 @@ Developers don't need to change how they build applications - just ensure all st
 
 SQLite is the ideal foundation for verifiable blockchain applications:
 
-- **Trival TEE Colocation**: Runs in-process with your application - no separate database server, simple to deploy together inside a single TEE
+- **Trivial TEE Colocation**: Runs in-process with your application - no separate database server, simple to deploy together inside a single TEE
 - **Deterministic Execution**: Same SQL operations always produce the same results, making verification straightforward
 - **High Performance**: Zero-copy reads, sub-millisecond writes, millions of operations per second
 - **Extensible**: Add custom business logic via user-defined functions and triggers without changing application code
