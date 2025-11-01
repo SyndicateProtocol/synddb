@@ -53,88 +53,178 @@ jobs:
       - name: Build benchmark tool (release mode)
         run: cargo build --package synddb-benchmark --release
 
-      - name: Run benchmark on current commit
-        id: current-bench
+      # Cache key based on the main branch commit SHA
+      - name: Get main branch commit SHA
+        id: main-sha
+        if: github.event_name == 'pull_request'
+        run: |
+          MAIN_SHA=$(git rev-parse origin/main)
+          echo "sha=$MAIN_SHA" >> $GITHUB_OUTPUT
+          echo "Main branch SHA: $MAIN_SHA"
+
+      - name: Restore cached baseline benchmarks
+        id: cache-baseline
+        if: github.event_name == 'pull_request'
+        uses: actions/cache@v4
+        with:
+          path: |
+            bench-main-simple.log
+            bench-main-full.log
+          key: benchmark-baseline-${{ steps.main-sha.outputs.sha }}
+
+      - name: Run simple benchmark on current commit
+        id: current-bench-simple
         run: |
           # Run benchmark for 30 seconds in simple mode to get quick results
-          cargo run --package synddb-benchmark --release -- init --db bench-current.db
-          cargo run --package synddb-benchmark --release -- run --db bench-current.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-current.log 2>&1
+          cargo run --package synddb-benchmark --release -- init --db bench-current-simple.db
+          cargo run --package synddb-benchmark --release -- run --db bench-current-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-current-simple.log 2>&1
 
           # Extract peak achieved rate from output (portable sed approach)
-          CURRENT_RATE=$(grep "Peak achieved rate:" bench-current.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          CURRENT_RATE=$(grep "Peak achieved rate:" bench-current-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
           echo "rate=$CURRENT_RATE" >> $GITHUB_OUTPUT
-          echo "Current benchmark: $CURRENT_RATE ops/sec"
-          cat bench-current.log
+          echo "Current simple benchmark: $CURRENT_RATE ops/sec"
+          cat bench-current-simple.log
 
-      - name: Get baseline from main branch
+      - name: Run full benchmark on current commit
+        id: current-bench-full
+        run: |
+          # Run full benchmark (non-simple mode) for 30 seconds
+          cargo run --package synddb-benchmark --release -- init --db bench-current-full.db
+          cargo run --package synddb-benchmark --release -- run --db bench-current-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-current-full.log 2>&1
+
+          # Extract peak achieved rate from output
+          CURRENT_RATE=$(grep "Peak achieved rate:" bench-current-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          echo "rate=$CURRENT_RATE" >> $GITHUB_OUTPUT
+          echo "Current full benchmark: $CURRENT_RATE ops/sec"
+          cat bench-current-full.log
+
+      - name: Run baseline benchmarks on main branch
         id: baseline-bench
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.cache-baseline.outputs.cache-hit != 'true'
         run: |
           # Checkout main branch
           git fetch origin main:main
           git checkout main
 
-          # Build and run benchmark on main
+          # Build benchmark on main
           cargo build --package synddb-benchmark --release
-          cargo run --package synddb-benchmark --release -- init --db bench-main.db
-          cargo run --package synddb-benchmark --release -- run --db bench-main.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-main.log 2>&1
 
-          # Extract peak achieved rate from output (portable sed approach)
-          BASELINE_RATE=$(grep "Peak achieved rate:" bench-main.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-          echo "rate=$BASELINE_RATE" >> $GITHUB_OUTPUT
-          echo "Baseline benchmark (main): $BASELINE_RATE ops/sec"
-          cat bench-main.log
+          # Run simple benchmark
+          cargo run --package synddb-benchmark --release -- init --db bench-main-simple.db
+          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clean --rate 0 --simple --batch-size 5000 --duration 30 > bench-main-simple.log 2>&1
+          BASELINE_SIMPLE=$(grep "Peak achieved rate:" bench-main-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          echo "simple_rate=$BASELINE_SIMPLE" >> $GITHUB_OUTPUT
+          echo "Baseline simple benchmark (main): $BASELINE_SIMPLE ops/sec"
+          cat bench-main-simple.log
+
+          # Run full benchmark
+          cargo run --package synddb-benchmark --release -- init --db bench-main-full.db
+          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clean --rate 0 --batch-size 1000 --duration 30 > bench-main-full.log 2>&1
+          BASELINE_FULL=$(grep "Peak achieved rate:" bench-main-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          echo "full_rate=$BASELINE_FULL" >> $GITHUB_OUTPUT
+          echo "Baseline full benchmark (main): $BASELINE_FULL ops/sec"
+          cat bench-main-full.log
 
           # Return to PR branch
           git checkout -
 
+      - name: Extract baseline from cache
+        id: baseline-from-cache
+        if: github.event_name == 'pull_request' && steps.cache-baseline.outputs.cache-hit == 'true'
+        run: |
+          echo "Using cached baseline benchmarks"
+          BASELINE_SIMPLE=$(grep "Peak achieved rate:" bench-main-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          BASELINE_FULL=$(grep "Peak achieved rate:" bench-main-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          echo "simple_rate=$BASELINE_SIMPLE" >> $GITHUB_OUTPUT
+          echo "full_rate=$BASELINE_FULL" >> $GITHUB_OUTPUT
+          echo "Cached baseline simple: $BASELINE_SIMPLE ops/sec"
+          echo "Cached baseline full: $BASELINE_FULL ops/sec"
+
       - name: Compare performance and check for regressions
         if: github.event_name == 'pull_request'
         run: |
-          CURRENT_RATE=${{ steps.current-bench.outputs.rate }}
-          BASELINE_RATE=${{ steps.baseline-bench.outputs.rate }}
+          # Get baseline rates (either from cache or fresh run)
+          if [ "${{ steps.cache-baseline.outputs.cache-hit }}" == "true" ]; then
+            BASELINE_SIMPLE=${{ steps.baseline-from-cache.outputs.simple_rate }}
+            BASELINE_FULL=${{ steps.baseline-from-cache.outputs.full_rate }}
+            echo "📦 Using cached baseline from main"
+          else
+            BASELINE_SIMPLE=${{ steps.baseline-bench.outputs.simple_rate }}
+            BASELINE_FULL=${{ steps.baseline-bench.outputs.full_rate }}
+            echo "🆕 Using fresh baseline from main"
+          fi
+
+          # Get current rates
+          CURRENT_SIMPLE=${{ steps.current-bench-simple.outputs.rate }}
+          CURRENT_FULL=${{ steps.current-bench-full.outputs.rate }}
 
           echo "=== Performance Comparison ==="
-          echo "Baseline (main): $BASELINE_RATE ops/sec"
-          echo "Current (PR):    $CURRENT_RATE ops/sec"
+          echo "Simple mode:"
+          echo "  Baseline (main): $BASELINE_SIMPLE ops/sec"
+          echo "  Current (PR):    $CURRENT_SIMPLE ops/sec"
+          echo "Full mode:"
+          echo "  Baseline (main): $BASELINE_FULL ops/sec"
+          echo "  Current (PR):    $CURRENT_FULL ops/sec"
 
-          # Calculate percentage change
-          CHANGE=$(echo "scale=2; (($CURRENT_RATE - $BASELINE_RATE) / $BASELINE_RATE) * 100" | bc)
-          echo "Change: $CHANGE%"
+          # Calculate percentage changes
+          CHANGE_SIMPLE=$(echo "scale=2; (($CURRENT_SIMPLE - $BASELINE_SIMPLE) / $BASELINE_SIMPLE) * 100" | bc)
+          CHANGE_FULL=$(echo "scale=2; (($CURRENT_FULL - $BASELINE_FULL) / $BASELINE_FULL) * 100" | bc)
+          echo "Simple mode change: $CHANGE_SIMPLE%"
+          echo "Full mode change: $CHANGE_FULL%"
 
           # Write summary for GitHub Actions
           echo "## 📊 Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Simple Mode (Insert-Only)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Baseline (main) | $BASELINE_RATE ops/sec |" >> $GITHUB_STEP_SUMMARY
-          echo "| Current (PR) | $CURRENT_RATE ops/sec |" >> $GITHUB_STEP_SUMMARY
-          echo "| Change | $CHANGE% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Baseline (main) | $BASELINE_SIMPLE ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Current (PR) | $CURRENT_SIMPLE ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Change | $CHANGE_SIMPLE% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full Mode (Mixed Operations)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Baseline (main) | $BASELINE_FULL ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Current (PR) | $CURRENT_FULL ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Change | $CHANGE_FULL% |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Check for regression > 20%
+          # Check for regression > 20% in either mode
           REGRESSION_THRESHOLD=-20
-          IS_REGRESSION=$(echo "$CHANGE < $REGRESSION_THRESHOLD" | bc)
+          IS_REGRESSION_SIMPLE=$(echo "$CHANGE_SIMPLE < $REGRESSION_THRESHOLD" | bc)
+          IS_REGRESSION_FULL=$(echo "$CHANGE_FULL < $REGRESSION_THRESHOLD" | bc)
 
-          if [ "$IS_REGRESSION" -eq 1 ]; then
+          if [ "$IS_REGRESSION_SIMPLE" -eq 1 ] || [ "$IS_REGRESSION_FULL" -eq 1 ]; then
             echo "❌ PERFORMANCE REGRESSION DETECTED!"
-            echo "Current performance is ${CHANGE}% compared to main branch."
-            echo "This exceeds the acceptable regression threshold of ${REGRESSION_THRESHOLD}%."
+            if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
+              echo "Simple mode: ${CHANGE_SIMPLE}% (exceeds ${REGRESSION_THRESHOLD}% threshold)"
+            fi
+            if [ "$IS_REGRESSION_FULL" -eq 1 ]; then
+              echo "Full mode: ${CHANGE_FULL}% (exceeds ${REGRESSION_THRESHOLD}% threshold)"
+            fi
             echo "### ❌ Performance Regression Detected" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Performance decreased by **${CHANGE}%**, exceeding the acceptable threshold of ${REGRESSION_THRESHOLD}%." >> $GITHUB_STEP_SUMMARY
+            if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
+              echo "**Simple mode** decreased by **${CHANGE_SIMPLE}%** (threshold: ${REGRESSION_THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+            fi
+            if [ "$IS_REGRESSION_FULL" -eq 1 ]; then
+              echo "**Full mode** decreased by **${CHANGE_FULL}%** (threshold: ${REGRESSION_THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+            fi
             exit 1
-          elif [ $(echo "$CHANGE < 0" | bc) -eq 1 ]; then
-            echo "⚠️  Minor performance decrease of ${CHANGE}%"
+          elif [ $(echo "$CHANGE_SIMPLE < 0" | bc) -eq 1 ] || [ $(echo "$CHANGE_FULL < 0" | bc) -eq 1 ]; then
+            echo "⚠️  Minor performance decrease detected"
             echo "This is within acceptable range (< ${REGRESSION_THRESHOLD}%)."
             echo "### ⚠️ Minor Performance Decrease" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Performance decreased by **${CHANGE}%**, which is within acceptable range." >> $GITHUB_STEP_SUMMARY
+            echo "Changes are within acceptable range." >> $GITHUB_STEP_SUMMARY
           else
-            echo "✅ Performance improved by ${CHANGE}%"
+            echo "✅ Performance improved!"
             echo "### ✅ Performance Improvement" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Performance improved by **${CHANGE}%**!" >> $GITHUB_STEP_SUMMARY
+            echo "Both benchmarks show improvement or neutral performance!" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Upload benchmark results
@@ -143,5 +233,7 @@ jobs:
         with:
           name: benchmark-results
           path: |
-            bench-*.log
-            bench-*.db
+            bench-current-*.log
+            bench-current-*.db
+            bench-main-*.log
+            bench-main-*.db
