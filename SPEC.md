@@ -5,8 +5,7 @@
 ### Core Architecture Terms
 
 - **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes database operations to blockchain
-- **Sidecar Listener** - Lightweight process that attaches to SQLite databases and automatically captures/publishes state changes
-  CLAUDE: Add a mention of the fact that SQLite is run deterministically, making it fully verifiable.
+- **Sidecar Listener** - Lightweight process that attaches to SQLite databases and automatically captures/publishes state changes. SQLite executes deterministically, making all operations fully verifiable.
 - **SQL Audit Trail** - The sequence of SQL operations that serves as the verifiable record of application state changes
 
 ### Node Types
@@ -48,7 +47,16 @@ Developers don't need to change how they build applications - just ensure all st
 
 **Use any language, get blockchain verifiability for free.** SyndDB lets you build high-performance applications in Python, JavaScript, Go, Rust, or any language with SQLite - no framework to learn, no code changes required. Get offchain performance (sub-millisecond latency, unlimited throughput) with onchain transparency (all state verifiable through SQL operations). The sequencer runs in a TEE for accountability, while validators provide additional guardrails before settlement. Perfect for applications where ultra-low latency matters more than full decentralization: orderbooks, gaming, social feeds, real-time analytics.
 
-CLAUDE: We should add a why SQLite section here. Make it clear that it's trivial to colocate with the app inside of a single TEE, it's deterministic, it's high performance, easy to extend via functions and triggers (I'm not sure of the phrasing on functions/triggers, get the phrasing right for me here) and it's widely supported across languages.
+### Why SQLite?
+
+SQLite is the ideal foundation for verifiable blockchain applications:
+
+- **Trivial TEE Colocation**: Runs in-process with your application - no separate database server, trivial to deploy together inside a single TEE
+- **Deterministic Execution**: Same SQL operations always produce the same results, making verification straightforward
+- **High Performance**: Zero-copy reads, sub-millisecond writes, millions of operations per second
+- **Extensible**: Add custom business logic via user-defined functions and triggers without changing application code
+- **Universal Support**: Available in virtually every programming language (Python, JavaScript, Go, Rust, Java, C++, etc.)
+- **Proven Stability**: Battle-tested database engine powering billions of devices worldwide
 
 ## Key Benefits
 
@@ -100,15 +108,15 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - Replay operations to maintain consistent database state
    - Serve queries with full SQL capabilities
 
-CLAUDE: Stop using the framing standardized. Just don't emphasize the Rust part, it doesn't really matter. Add it as a bullet or a brief mention but stop leading with this Rust standardization all over the place. Check the rest of the document for this as well 4. **Validators - Standardized in Rust**
-
-- Read replicas with additional validation logic executed before signing
-- Run standardized Rust code with default validation (extensible with custom business logic)
-- Must operate in TEEs to ensure they run unmodified code
-- Verify SQL operations and their results deterministically
-- Can make best-effort attempts to re-derive external API data
-- Process message passing operations from special tables
-- Add custom business logic checks before signing for settlement
+4. **Validators**
+   - Read replicas with additional validation logic executed before signing
+   - Default validation logic (extensible with custom business logic)
+   - Must operate in TEEs to ensure they run unmodified code
+   - Verify SQL operations and their results deterministically
+   - Can make best-effort attempts to re-derive external API data
+   - Process message passing operations from special tables
+   - Add custom business logic checks before signing for settlement
+   - Implementation: Rust-based for consistency across validator network
 
 5. **Bridge (Message Passing)**
    - Smart contract for processing cross-chain messages
@@ -118,14 +126,14 @@ CLAUDE: Stop using the framing standardized. Just don't emphasize the Rust part,
 
 ### Data Flow
 
-CLAUDE: We should make it clear that the app and sequencer is the same thing.
+The application IS the sequencer - they run together inside a TEE:
 
 ```
-App (Any Language) → SQLite → Sidecar → DA Layers ← Validators (Rust in TEE) → Blockchain
-     in TEE                      ↓                        ↓
-                          Message Tables           Settlement Verification
-                                                           ↓
-                                                      Bridge.sol
+Sequencer/App (Any Language) → SQLite → Sidecar → DA Layers ← Validators (TEE) → Blockchain
+       in TEE                              ↓                        ↓
+                                    Message Tables           Settlement Verification
+                                                                     ↓
+                                                                Bridge.sol
 ```
 
 **Sequencer Path**: Application writes to SQLite → Sidecar publishes diffs/snapshots to DA layers
@@ -136,7 +144,7 @@ App (Any Language) → SQLite → Sidecar → DA Layers ← Validators (Rust in 
 
 Validators can optionally subscribe directly to the sidecar for lower-latency updates by presenting valid TEE attestations for authentication. This separates the sequencer/sidecar from blockchain interaction while still allowing fast validator synchronization.
 
-The architecture treats SQL as the universal language for state verification. Applications can be in any language, while validators use standardized Rust code with default validation logic (extensible with custom business rules) to ensure consistent verification across the network.
+The architecture treats SQL as the universal language for state verification. Applications can be in any language, while validators run default validation logic (extensible with custom business rules) to ensure consistent verification across the network.
 
 ### Sequencer as Source of Truth
 
@@ -417,7 +425,7 @@ synddb-validator \
 
 The default validator will sync from DA layers, replay SQL operations, and verify basic invariants before signing for settlement.
 
-While sequencer applications can be in any language, all validators use the same standardized Rust foundation to ensure consistent verification across the network.
+Sequencer applications can be in any language, while validators share the same implementation to ensure consistent verification across the network.
 
 ## Use Cases
 
@@ -534,7 +542,7 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
 - **Language Agnostic**: Use any programming language, framework, or runtime
 - **SQL as Truth**: All state changes must go through SQLite for capture
 - **Automatic Publishing**: The sidecar handles all DA layer and blockchain interaction
-- **Standardized Validation**: Validators use consistent Rust code for verification
+- **Consistent Validation**: Validators use the same implementation for verification
 - **Permissionless Replication**: Anyone can sync and query the data
 - **Optional Message Passing**: Add message tables only if you need cross-chain operations
 
