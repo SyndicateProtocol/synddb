@@ -16,6 +16,7 @@ pub struct LoadConfig {
     pub pattern: LoadPattern,
     pub duration_seconds: Option<u64>,
     pub batch_size: usize,
+    pub simple_mode: bool,
 }
 
 #[cfg(test)]
@@ -61,10 +62,12 @@ mod tests {
             pattern: LoadPattern::Continuous { ops_per_second: 50 },
             duration_seconds: Some(60),
             batch_size: 100,
+            simple_mode: false,
         };
 
         assert_eq!(config.duration_seconds, Some(60));
         assert_eq!(config.batch_size, 100);
+        assert_eq!(config.simple_mode, false);
     }
 
     #[test]
@@ -73,10 +76,12 @@ mod tests {
             pattern: LoadPattern::Continuous { ops_per_second: 50 },
             duration_seconds: None,
             batch_size: 50,
+            simple_mode: false,
         };
 
         assert_eq!(config.duration_seconds, None);
         assert_eq!(config.batch_size, 50);
+        assert_eq!(config.simple_mode, false);
     }
 
     #[test]

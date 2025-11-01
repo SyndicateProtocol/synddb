@@ -33,10 +33,17 @@ impl OrderbookSimulator {
         // Initialize users if needed
         self.initialize_users()?;
 
+        let mode = if config.simple_mode {
+            "SIMPLE (inserts only)"
+        } else {
+            "FULL (all operations)"
+        };
+
         info!(
-            "Starting simulation with {} users and pattern {:?}",
+            "Starting simulation with {} users and pattern {:?} in {} mode",
             self.user_ids.len(),
-            config.pattern
+            config.pattern,
+            mode
         );
 
         let end_time = config
@@ -45,15 +52,26 @@ impl OrderbookSimulator {
 
         match config.pattern {
             LoadPattern::Continuous { ops_per_second } => {
-                self.run_continuous(ops_per_second, end_time, config.batch_size)
-                    .await?;
+                self.run_continuous(
+                    ops_per_second,
+                    end_time,
+                    config.batch_size,
+                    config.simple_mode,
+                )
+                .await?;
             }
             LoadPattern::Burst {
                 burst_size,
                 pause_seconds,
             } => {
-                self.run_burst(burst_size, pause_seconds, end_time, config.batch_size)
-                    .await?;
+                self.run_burst(
+                    burst_size,
+                    pause_seconds,
+                    end_time,
+                    config.batch_size,
+                    config.simple_mode,
+                )
+                .await?;
             }
         }
 
@@ -65,6 +83,7 @@ impl OrderbookSimulator {
         ops_per_second: u64,
         end_time: Option<Instant>,
         batch_size: usize,
+        simple_mode: bool,
     ) -> Result<()> {
         let interval_micros = 1_000_000 / ops_per_second;
         let mut interval =
@@ -93,7 +112,11 @@ impl OrderbookSimulator {
                             break;
                         }
                     }
-                    Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
+                    if simple_mode {
+                        Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
+                    } else {
+                        Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
+                    }
                     self.operation_count += 1;
                 }
                 tx.commit()?;
@@ -115,6 +138,7 @@ impl OrderbookSimulator {
         pause_seconds: u64,
         end_time: Option<Instant>,
         batch_size: usize,
+        simple_mode: bool,
     ) -> Result<()> {
         let mut burst_num = 0;
 
@@ -142,7 +166,11 @@ impl OrderbookSimulator {
 
                 let tx = self.conn.transaction()?;
                 for _ in 0..batch_ops {
-                    Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
+                    if simple_mode {
+                        Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
+                    } else {
+                        Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
+                    }
                     self.operation_count += 1;
                 }
                 tx.commit()?;
@@ -239,6 +267,29 @@ impl OrderbookSimulator {
             86..=99 => Self::update_balance_in_tx(user_ids, tx)?, // 14% - update balance
             _ => unreachable!(),
         }
+
+        Ok(())
+    }
+
+    /// Execute a simple operation (just insert an order) - for maximum throughput testing
+    /// This bypasses all the complex queries (ORDER BY RANDOM(), joins, etc.)
+    fn execute_simple_operation_in_tx_static(
+        user_ids: &[i64],
+        tx: &rusqlite::Transaction,
+    ) -> Result<()> {
+        let mut rng = rand::thread_rng();
+
+        let user_id = user_ids[rng.gen_range(0..user_ids.len())];
+        let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];
+        let side = if rng.gen_bool(0.5) { "buy" } else { "sell" };
+        let price = rng.gen_range(10_000..100_000);
+        let quantity = rng.gen_range(1..100);
+
+        tx.execute(
+            "INSERT INTO orders (user_id, symbol, side, order_type, price, quantity, status)
+             VALUES (?1, ?2, ?3, 'limit', ?4, ?5, 'active')",
+            params![user_id, symbol, side, price, quantity],
+        )?;
 
         Ok(())
     }

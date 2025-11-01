@@ -57,6 +57,10 @@ enum Commands {
         /// Batch size for transaction grouping (higher = faster writes)
         #[arg(long, default_value = "100")]
         batch_size: usize,
+
+        /// Simple mode: only insert orders (no queries, much faster)
+        #[arg(long, default_value = "false")]
+        simple: bool,
     },
     /// Show statistics about the database
     Stats {
@@ -100,6 +104,7 @@ async fn main() -> Result<()> {
             burst_size,
             burst_interval,
             batch_size,
+            simple,
         } => {
             info!("Starting orderbook simulation at {:?}", db);
 
@@ -123,6 +128,7 @@ async fn main() -> Result<()> {
                 pattern: load_pattern,
                 duration_seconds: if duration == 0 { None } else { Some(duration) },
                 batch_size,
+                simple_mode: simple,
             };
 
             let conn = Connection::open(&db)?;

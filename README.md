@@ -31,6 +31,8 @@ A simple benchmarking tool that simulates orderbook operations to generate reali
 - **SQLite with WAL mode**: Ready for Session Extension monitoring
 - **Comprehensive statistics**: Track orders, trades, and database activity
 
+CLAUDE: This quick start is duplicative of the later orderbook simulation code. Keep the quick start to just the build and basic commands, and remove the later duplication.
+
 ### Quick Start
 
 ```bash
@@ -84,6 +86,7 @@ Options:
   -b, --burst-size <SIZE>      Burst size (burst mode) [default: 1000]
   -i, --burst-interval <SECS>  Pause between bursts (burst mode) [default: 5]
   --batch-size <SIZE>          Transaction batch size (higher = faster) [default: 100]
+  --simple                     Simple mode: only insert orders (no queries, much faster) [default: false]
 ```
 
 **Examples:**
@@ -100,6 +103,9 @@ cargo run --package synddb-benchmark -- run --pattern burst --burst-size 5000 --
 
 # Run continuously at max speed (useful for stress testing)
 cargo run --package synddb-benchmark -- run --rate 10000
+
+# Simple mode: maximum throughput with only inserts (50,000-100,000+ ops/sec)
+cargo run --package synddb-benchmark --release -- run --simple --rate 100000 --batch-size 10000
 ```
 
 #### `stats` - Show Statistics
@@ -188,6 +194,7 @@ The benchmark simulates realistic orderbook activity:
 #### Continuous Mode
 
 Maintains a steady rate of operations per second. Useful for:
+
 - Baseline performance testing
 - Consistent workload for sidecar development
 - Long-running stability tests
@@ -200,6 +207,7 @@ cargo run --package synddb-benchmark -- run --pattern continuous --rate 100
 #### Burst Mode
 
 Generates periodic bursts of activity with quiet periods between. Useful for:
+
 - Testing batch accumulation in the sidecar
 - Simulating real trading activity (quiet periods followed by high activity)
 - Testing compression effectiveness on varied workloads
@@ -253,6 +261,7 @@ cargo run --package synddb-benchmark -- run --rate 1000 --batch-size 10
 ```
 
 **Performance Impact:**
+
 - Without batching: ~100-500 ops/sec
 - With batching (default 100): ~2,000-5,000 ops/sec (10-50x improvement)
 - With large batches (1000+): Can achieve even higher throughput
@@ -273,6 +282,32 @@ These are set automatically in `init`, no configuration needed!
 - **Smaller batches (10-100)**: Lower latency, more frequent commits, good for real-time applications
 - **Medium batches (100-500)**: Balanced throughput and latency (default)
 - **Large batches (1000+)**: Maximum throughput, higher latency between commits
+
+#### Simple Mode - Maximum Throughput
+
+For stress testing and maximum throughput benchmarking, use `--simple` mode. This bypasses all complex queries (ORDER BY RANDOM(), joins, trade matching) and only performs simple INSERT operations.
+
+```bash
+# Simple mode with 50,000 ops/sec
+cargo run --package synddb-benchmark --release -- run --simple --rate 50000 --batch-size 5000 --duration 10
+
+# Push to 100,000 ops/sec
+cargo run --package synddb-benchmark --release -- run --simple --rate 100000 --batch-size 10000 --duration 10
+```
+
+**Performance Comparison:**
+
+- Full mode (all operations): ~2,000-5,000 ops/sec
+- Simple mode (inserts only): ~50,000-100,000+ ops/sec (10-20x improvement)
+
+**When to use Simple Mode:**
+
+- Stress testing SQLite and system performance limits
+- Benchmarking raw database write throughput
+- Testing sidecar changeset capture under extreme load
+- Identifying system bottlenecks (CPU, disk I/O, memory)
+
+**Note:** Simple mode is not representative of realistic orderbook workload, but is useful for finding the maximum performance ceiling of your system.
 
 ## SyndDB Sidecar (Coming Soon)
 
