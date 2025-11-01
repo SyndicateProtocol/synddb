@@ -6,6 +6,7 @@ use rusqlite::params;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 use tracing::info;
 
 use crate::load_patterns::{LoadConfig, LoadPattern};
@@ -54,32 +55,75 @@ impl OrderbookSimulator {
             .duration_seconds
             .map(|d| Instant::now() + Duration::from_secs(d));
 
-        match config.pattern {
-            LoadPattern::Continuous { ops_per_second } => {
-                self.run_continuous(
-                    ops_per_second,
-                    end_time,
-                    config.batch_size,
-                    config.simple_mode,
-                )
-                .await?;
-            }
-            LoadPattern::Burst {
-                burst_size,
-                pause_seconds,
-            } => {
-                self.run_burst(
+        // Use parallel workers for better CPU utilization
+        if config.num_workers > 1 {
+            info!(
+                "Running with {} parallel workers for maximum throughput",
+                config.num_workers
+            );
+            match config.pattern {
+                LoadPattern::Continuous { ops_per_second } => {
+                    self.run_continuous_parallel(
+                        ops_per_second,
+                        end_time,
+                        config.batch_size,
+                        config.simple_mode,
+                        config.num_workers,
+                    )
+                    .await?;
+                }
+                LoadPattern::MaxThroughput => {
+                    self.run_max_throughput_parallel(
+                        end_time,
+                        config.batch_size,
+                        config.simple_mode,
+                        config.num_workers,
+                    )
+                    .await?;
+                }
+                LoadPattern::Burst {
                     burst_size,
                     pause_seconds,
-                    end_time,
-                    config.batch_size,
-                    config.simple_mode,
-                )
-                .await?;
-            }
-            LoadPattern::MaxThroughput => {
-                self.run_max_throughput(end_time, config.batch_size, config.simple_mode)
+                } => {
+                    self.run_burst(
+                        burst_size,
+                        pause_seconds,
+                        end_time,
+                        config.batch_size,
+                        config.simple_mode,
+                    )
                     .await?;
+                }
+            }
+        } else {
+            // Single-threaded execution (legacy)
+            match config.pattern {
+                LoadPattern::Continuous { ops_per_second } => {
+                    self.run_continuous(
+                        ops_per_second,
+                        end_time,
+                        config.batch_size,
+                        config.simple_mode,
+                    )
+                    .await?;
+                }
+                LoadPattern::Burst {
+                    burst_size,
+                    pause_seconds,
+                } => {
+                    self.run_burst(
+                        burst_size,
+                        pause_seconds,
+                        end_time,
+                        config.batch_size,
+                        config.simple_mode,
+                    )
+                    .await?;
+                }
+                LoadPattern::MaxThroughput => {
+                    self.run_max_throughput(end_time, config.batch_size, config.simple_mode)
+                        .await?;
+                }
             }
         }
 
@@ -205,6 +249,254 @@ impl OrderbookSimulator {
         }
 
         Ok(())
+    }
+
+    /// Run continuous load with parallel workers for maximum CPU utilization
+    async fn run_continuous_parallel(
+        &mut self,
+        ops_per_second: u64,
+        end_time: Option<Instant>,
+        batch_size: usize,
+        simple_mode: bool,
+        num_workers: usize,
+    ) -> Result<()> {
+        let (tx, rx) = mpsc::channel::<()>(num_workers * 2);
+
+        // Spawn worker tasks - each gets work from broadcast channel
+        let mut handles = vec![];
+        let work_rx_arc = Arc::new(tokio::sync::Mutex::new(rx));
+
+        for _worker_id in 0..num_workers {
+            let pool = self.pool.clone();
+            let user_ids = self.user_ids.clone();
+            let worker_rx = work_rx_arc.clone();
+            let counter = self.operation_count.clone();
+
+            let handle = tokio::spawn(async move {
+                loop {
+                    let msg = {
+                        let mut rx = worker_rx.lock().await;
+                        rx.recv().await
+                    };
+
+                    if msg.is_none() {
+                        break;
+                    }
+
+                    let mut conn = pool.get().map_err(|e| anyhow::anyhow!("{}", e))?;
+                    let tx = conn.transaction()?;
+
+                    for _ in 0..batch_size {
+                        if simple_mode {
+                            Self::execute_simple_operation_in_tx_static(&user_ids, &tx)?;
+                        } else {
+                            Self::execute_random_operation_in_tx_static(&user_ids, &tx)?;
+                        }
+                        counter.fetch_add(1, Ordering::Relaxed);
+                    }
+                    tx.commit()?;
+                }
+                Ok::<_, anyhow::Error>(())
+            });
+
+            handles.push(handle);
+        }
+
+        // Main loop: dispatch work to workers
+        let interval_micros = (1_000_000 / ops_per_second) * batch_size as u64;
+        let mut interval = tokio::time::interval(Duration::from_micros(interval_micros));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let mut last_log = Instant::now();
+        let log_interval = Duration::from_secs(5);
+
+        loop {
+            interval.tick().await;
+
+            if let Some(end) = end_time {
+                if Instant::now() >= end {
+                    break;
+                }
+            }
+
+            // Send work signal (workers process independently)
+            if tx.send(()).await.is_err() {
+                break;
+            }
+
+            // Log stats periodically
+            if last_log.elapsed() >= log_interval {
+                self.log_stats();
+                last_log = Instant::now();
+            }
+        }
+
+        // Shutdown workers
+        drop(tx);
+        for handle in handles {
+            handle.await??;
+        }
+
+        self.log_final_stats();
+        Ok(())
+    }
+
+    /// Run max throughput discovery with parallel workers
+    async fn run_max_throughput_parallel(
+        &mut self,
+        end_time: Option<Instant>,
+        batch_size: usize,
+        simple_mode: bool,
+        num_workers: usize,
+    ) -> Result<()> {
+        info!("=== Max Throughput Discovery Mode ===");
+        info!("Will automatically find maximum sustainable throughput");
+        info!("Using adaptive algorithm with stability detection");
+
+        // Spawn persistent worker pool
+        let (work_tx, work_rx) = mpsc::channel::<()>(num_workers * 4);
+        let mut handles = vec![];
+        let work_rx_arc = Arc::new(tokio::sync::Mutex::new(work_rx));
+
+        for _ in 0..num_workers {
+            let pool = self.pool.clone();
+            let user_ids = self.user_ids.clone();
+            let worker_rx = work_rx_arc.clone();
+            let counter = self.operation_count.clone();
+
+            let handle = tokio::spawn(async move {
+                loop {
+                    let msg = {
+                        let mut rx = worker_rx.lock().await;
+                        rx.recv().await
+                    };
+
+                    if msg.is_none() {
+                        break;
+                    }
+
+                    let mut conn = pool.get().map_err(|e| anyhow::anyhow!("{}", e))?;
+                    let tx = conn.transaction()?;
+
+                    for _ in 0..batch_size {
+                        if simple_mode {
+                            Self::execute_simple_operation_in_tx_static(&user_ids, &tx)?;
+                        } else {
+                            Self::execute_random_operation_in_tx_static(&user_ids, &tx)?;
+                        }
+                        counter.fetch_add(1, Ordering::Relaxed);
+                    }
+                    tx.commit()?;
+                }
+                Ok::<_, anyhow::Error>(())
+            });
+
+            handles.push(handle);
+        }
+
+        // Test increasing rates
+        let mut current_rate = 1000;
+        let mut best_stable_rate = 0.0;
+
+        loop {
+            if let Some(end) = end_time {
+                if Instant::now() >= end {
+                    break;
+                }
+            }
+
+            info!("\n--- Testing {} ops/sec ---", current_rate);
+
+            let sample_rate = self
+                .test_rate_parallel(current_rate, batch_size, &work_tx, num_workers)
+                .await?;
+
+            let achievement = (sample_rate / current_rate as f64) * 100.0;
+
+            // Check if we achieved target
+            if achievement >= 90.0 {
+                best_stable_rate = sample_rate;
+                current_rate *= 2; // Double the rate
+            } else {
+                info!("⚠ Throughput degraded (<90% of target) - backing off");
+                break;
+            }
+        }
+
+        info!(
+            "\n=== Maximum Throughput Found ===\nBest sustained rate: {:.0} ops/sec\n",
+            best_stable_rate
+        );
+
+        // Shutdown workers
+        drop(work_tx);
+        for handle in handles {
+            handle.await??;
+        }
+
+        self.log_final_stats();
+        Ok(())
+    }
+
+    /// Test a specific rate with parallel workers
+    async fn test_rate_parallel(
+        &mut self,
+        rate: u64,
+        batch_size: usize,
+        work_tx: &mpsc::Sender<()>,
+        num_workers: usize,
+    ) -> Result<f64> {
+        let num_samples = 3;
+        let sample_duration = Duration::from_secs(3);
+        let mut sample_rates = Vec::new();
+
+        for sample_num in 1..=num_samples {
+            let sample_start = Instant::now();
+            let ops_before = self.operation_count.load(Ordering::Relaxed);
+            let sample_end_time = sample_start + sample_duration;
+
+            let interval_micros = (1_000_000 / rate) * batch_size as u64;
+            let mut interval = tokio::time::interval(Duration::from_micros(interval_micros));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            while Instant::now() < sample_end_time {
+                interval.tick().await;
+                // Send work to all workers
+                for _ in 0..num_workers {
+                    if work_tx.send(()).await.is_err() {
+                        break;
+                    }
+                }
+            }
+
+            let sample_elapsed = sample_start.elapsed();
+            let ops_completed = self.operation_count.load(Ordering::Relaxed) - ops_before;
+            let sample_rate = ops_completed as f64 / sample_elapsed.as_secs_f64();
+            sample_rates.push(sample_rate);
+
+            info!(
+                "  Sample {}/{}: {:.0} ops/sec",
+                sample_num, num_samples, sample_rate
+            );
+        }
+
+        let mean_rate = sample_rates.iter().sum::<f64>() / sample_rates.len() as f64;
+        let std_dev = (sample_rates
+            .iter()
+            .map(|r| (r - mean_rate).powi(2))
+            .sum::<f64>()
+            / sample_rates.len() as f64)
+            .sqrt();
+        let cv = (std_dev / mean_rate) * 100.0;
+
+        info!(
+            "Mean: {:.0} ops/sec ({:.1}% of target) | Stability: {:.1}% CV",
+            mean_rate,
+            (mean_rate / rate as f64) * 100.0,
+            cv
+        );
+
+        Ok(mean_rate)
     }
 
     async fn run_max_throughput(

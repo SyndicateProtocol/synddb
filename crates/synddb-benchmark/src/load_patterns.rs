@@ -19,6 +19,7 @@ pub struct LoadConfig {
     pub duration_seconds: Option<u64>,
     pub batch_size: usize,
     pub simple_mode: bool,
+    pub num_workers: usize,
 }
 
 #[cfg(test)]
@@ -65,11 +66,13 @@ mod tests {
             duration_seconds: Some(60),
             batch_size: 100,
             simple_mode: false,
+            num_workers: 4,
         };
 
         assert_eq!(config.duration_seconds, Some(60));
         assert_eq!(config.batch_size, 100);
         assert_eq!(config.simple_mode, false);
+        assert_eq!(config.num_workers, 4);
     }
 
     #[test]
@@ -79,11 +82,13 @@ mod tests {
             duration_seconds: None,
             batch_size: 50,
             simple_mode: false,
+            num_workers: 2,
         };
 
         assert_eq!(config.duration_seconds, None);
         assert_eq!(config.batch_size, 50);
         assert_eq!(config.simple_mode, false);
+        assert_eq!(config.num_workers, 2);
     }
 
     #[test]
