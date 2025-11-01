@@ -8,9 +8,20 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
 
     // Performance optimizations
     conn.pragma_update(None, "synchronous", "NORMAL")?; // Balance safety and speed
-    conn.pragma_update(None, "cache_size", -64000)?; // 64MB cache
+    conn.pragma_update(None, "cache_size", -262144)?; // 256MB cache (increased from 64MB)
     conn.pragma_update(None, "temp_store", "MEMORY")?; // Temp tables in memory
-    conn.pragma_update(None, "mmap_size", 268435456)?; // 256MB mmap
+    conn.pragma_update(None, "mmap_size", 30_000_000_000_i64)?; // 30GB mmap (increased for better I/O)
+
+    // Lock and concurrency optimizations
+    conn.pragma_update(None, "busy_timeout", 5000)?; // Wait up to 5s for locks instead of immediate fail
+    conn.pragma_update(None, "wal_autocheckpoint", 10000)?; // Checkpoint every 10000 pages (reduced frequency)
+    conn.pragma_update(None, "journal_size_limit", 67_108_864)?; // 64MB WAL limit
+
+    // Multi-threaded operations (sorting, indexing)
+    conn.pragma_update(None, "threads", 4)?;
+
+    // Increase prepared statement cache capacity
+    conn.set_prepared_statement_cache_capacity(128);
 
     // Users table
     conn.execute(
@@ -83,6 +94,14 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
     )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_orders_symbol_status ON orders(symbol, status)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders(status, id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_orders_status_side_id ON orders(status, side, id)",
         [],
     )?;
     conn.execute(

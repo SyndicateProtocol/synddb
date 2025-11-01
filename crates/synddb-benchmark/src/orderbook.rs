@@ -567,19 +567,33 @@ impl OrderbookSimulator {
     }
 
     fn cancel_order_in_tx(tx: &rusqlite::Transaction) -> Result<()> {
-        let order_id: Option<i64> = tx
-            .query_row(
-                "SELECT id FROM orders WHERE status = 'active' ORDER BY RANDOM() LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
+        // Efficient random selection using OFFSET - much faster than ORDER BY RANDOM() and MIN/MAX
+        // This approach uses an index-only scan with OFFSET for O(log n) performance
+        let count: Result<i64, _> = tx.query_row(
+            "SELECT COUNT(*) FROM orders WHERE status = 'active'",
+            [],
+            |row| row.get(0),
+        );
 
-        if let Some(id) = order_id {
-            tx.execute(
-                "UPDATE orders SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?1",
-                params![id],
-            )?;
+        if let Ok(total) = count {
+            if total > 0 {
+                let random_offset = rand::thread_rng().gen_range(0..total);
+
+                let order_id: Option<i64> = tx
+                    .query_row(
+                        "SELECT id FROM orders WHERE status = 'active' LIMIT 1 OFFSET ?1",
+                        params![random_offset],
+                        |row| row.get(0),
+                    )
+                    .ok();
+
+                if let Some(id) = order_id {
+                    tx.execute(
+                        "UPDATE orders SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?1",
+                        params![id],
+                    )?;
+                }
+            }
         }
         Ok(())
     }
@@ -587,23 +601,57 @@ impl OrderbookSimulator {
     fn execute_trade_in_tx(tx: &rusqlite::Transaction) -> Result<()> {
         let mut rng = rand::thread_rng();
 
-        let buy_order: Option<(i64, i64, String, i64)> = tx
-            .query_row(
-                "SELECT id, user_id, symbol, quantity FROM orders
-                 WHERE status = 'active' AND side = 'buy' ORDER BY RANDOM() LIMIT 1",
+        // Efficient random selection for buy orders using OFFSET
+        let buy_order: Option<(i64, i64, String, i64)> = {
+            let count: Result<i64, _> = tx.query_row(
+                "SELECT COUNT(*) FROM orders WHERE status = 'active' AND side = 'buy'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .ok();
+                |row| row.get(0),
+            );
 
-        let sell_order: Option<(i64, i64, String, i64)> = tx
-            .query_row(
-                "SELECT id, user_id, symbol, quantity FROM orders
-                 WHERE status = 'active' AND side = 'sell' ORDER BY RANDOM() LIMIT 1",
+            if let Ok(total) = count {
+                if total > 0 {
+                    let random_offset = rng.gen_range(0..total);
+                    tx.query_row(
+                        "SELECT id, user_id, symbol, quantity FROM orders
+                         WHERE status = 'active' AND side = 'buy' LIMIT 1 OFFSET ?1",
+                        params![random_offset],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )
+                    .ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        // Efficient random selection for sell orders using OFFSET
+        let sell_order: Option<(i64, i64, String, i64)> = {
+            let count: Result<i64, _> = tx.query_row(
+                "SELECT COUNT(*) FROM orders WHERE status = 'active' AND side = 'sell'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .ok();
+                |row| row.get(0),
+            );
+
+            if let Ok(total) = count {
+                if total > 0 {
+                    let random_offset = rng.gen_range(0..total);
+                    tx.query_row(
+                        "SELECT id, user_id, symbol, quantity FROM orders
+                         WHERE status = 'active' AND side = 'sell' LIMIT 1 OFFSET ?1",
+                        params![random_offset],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )
+                    .ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
 
         if let (
             Some((buy_id, buyer_id, buy_symbol, buy_qty)),
