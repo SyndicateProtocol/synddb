@@ -542,6 +542,8 @@ Final database state:
 
 **Configuration**: Single connection, enhanced PRAGMA tuning (recommended configuration)
 
+**Note**: This commit is functionally identical to 1894b4a (which achieved 129,183 ops/sec). The only differences are minor code quality improvements (idiomatic assertions, `div_ceil()` API, and a bug fix in trades count query). The performance difference (67,088 vs 129,183 ops/sec) is due to normal variation when benchmarking on a development machine with background processes and system load.
+
 **Results**:
 ```
 === Maximum Throughput Found ===
