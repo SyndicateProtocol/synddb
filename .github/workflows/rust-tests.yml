@@ -1,4 +1,4 @@
-name: Rust Tests
+name: Rust Tests & Benchmarks
 
 on:
   # Run workflow on every push to main (always run to ensure cross-service compatibility)
@@ -17,8 +17,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust-tests:
-    name: SyndDB
+  tests:
+    name: Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -34,3 +34,215 @@ jobs:
 
       - name: Run tests
         run: cargo test --all
+
+  benchmarks:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to compare with main
+
+      - run: rustup toolchain install stable --profile minimal
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build benchmark tool (release mode)
+        run: cargo build --package synddb-benchmark --release
+
+      # Cache key based on the main branch commit SHA
+      - name: Get main branch commit SHA
+        id: main-sha
+        if: github.event_name == 'pull_request'
+        run: |
+          MAIN_SHA=$(git rev-parse origin/main)
+          echo "sha=$MAIN_SHA" >> $GITHUB_OUTPUT
+          echo "Main branch SHA: $MAIN_SHA"
+
+      - name: Restore cached baseline benchmarks
+        id: cache-baseline
+        if: github.event_name == 'pull_request'
+        uses: actions/cache@v4
+        with:
+          path: |
+            bench-main-simple.log
+            bench-main-full.log
+          key: benchmark-baseline-${{ steps.main-sha.outputs.sha }}
+
+      - name: Run benchmarks on current commit (simple)
+        id: current-bench-simple
+        run: |
+          cargo run --package synddb-benchmark --release -- init --db bench-pr-simple.db
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-pr-simple.db --clean --rate 0 --simple --batch-size 5000 > bench-pr-simple.log 2>&1; then
+            echo "❌ Simple benchmark failed! Output:"
+            cat bench-pr-simple.log
+            exit 1
+          fi
+
+          # Extract peak achieved rate from output
+          CURRENT_RATE=$(grep "Peak achieved rate:" bench-pr-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          echo "rate=$CURRENT_RATE" >> $GITHUB_OUTPUT
+          echo "PR simple benchmark: $CURRENT_RATE ops/sec"
+
+      - name: Run benchmarks on current commit (full)
+        id: current-bench-full
+        run: |
+          cargo run --package synddb-benchmark --release -- init --db bench-pr-full.db
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-pr-full.db --clean --rate 0 --batch-size 1000 > bench-pr-full.log 2>&1; then
+            echo "❌ Full benchmark failed! Output:"
+            cat bench-pr-full.log
+            exit 1
+          fi
+
+          # Extract peak achieved rate from output
+          CURRENT_RATE=$(grep "Peak achieved rate:" bench-pr-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          echo "rate=$CURRENT_RATE" >> $GITHUB_OUTPUT
+          echo "PR full benchmark: $CURRENT_RATE ops/sec"
+
+      - name: Run baseline benchmarks on main branch (simple)
+        if: github.event_name == 'pull_request' && steps.cache-baseline.outputs.cache-hit != 'true'
+        run: |
+          set +e
+          git fetch origin main:main
+          git checkout main
+          cargo build --package synddb-benchmark --release
+
+          cargo run --package synddb-benchmark --release -- init --db bench-main-simple.db
+          cargo run --package synddb-benchmark --release -- run --db bench-main-simple.db --clear --rate 0 --simple --batch-size 5000 > bench-main-simple.log 2>&1
+          if [ $? -ne 0 ]; then
+            echo "❌ Baseline simple benchmark failed! Output:"
+            cat bench-main-simple.log
+            exit 1
+          fi
+
+          git checkout -
+
+      - name: Run baseline benchmarks on main branch (full)
+        if: github.event_name == 'pull_request' && steps.cache-baseline.outputs.cache-hit != 'true'
+        run: |
+          set +e
+          git fetch origin main:main
+          git checkout main
+          cargo build --package synddb-benchmark --release
+
+          cargo run --package synddb-benchmark --release -- init --db bench-main-full.db
+          cargo run --package synddb-benchmark --release -- run --db bench-main-full.db --clear --rate 0 --batch-size 1000 > bench-main-full.log 2>&1
+          if [ $? -ne 0 ]; then
+            echo "❌ Baseline full benchmark failed! Output:"
+            cat bench-main-full.log
+            exit 1
+          fi
+
+          git checkout -
+
+      - name: Extract baseline rates
+        id: baseline-rates
+        if: github.event_name == 'pull_request'
+        run: |
+          # Extract from logs (either cached or freshly generated)
+          if [ "${{ steps.cache-baseline.outputs.cache-hit }}" == "true" ]; then
+            echo "📦 Using cached baseline from main"
+          else
+            echo "🆕 Using fresh baseline from main"
+          fi
+
+          BASELINE_SIMPLE=$(grep "Peak achieved rate:" bench-main-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+          BASELINE_FULL=$(grep "Peak achieved rate:" bench-main-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+
+          echo "simple_rate=$BASELINE_SIMPLE" >> $GITHUB_OUTPUT
+          echo "full_rate=$BASELINE_FULL" >> $GITHUB_OUTPUT
+          echo "Baseline simple: $BASELINE_SIMPLE ops/sec"
+          echo "Baseline full: $BASELINE_FULL ops/sec"
+
+      - name: Compare performance and check for regressions
+        if: github.event_name == 'pull_request'
+        run: |
+          # Get baseline rates
+          BASELINE_SIMPLE=${{ steps.baseline-rates.outputs.simple_rate }}
+          BASELINE_FULL=${{ steps.baseline-rates.outputs.full_rate }}
+
+          # Get current rates
+          CURRENT_SIMPLE=${{ steps.current-bench-simple.outputs.rate }}
+          CURRENT_FULL=${{ steps.current-bench-full.outputs.rate }}
+
+          echo "=== Performance Comparison ==="
+          echo "Simple mode:"
+          echo "  Baseline (main): $BASELINE_SIMPLE ops/sec"
+          echo "  Current (PR):    $CURRENT_SIMPLE ops/sec"
+          echo "Full mode:"
+          echo "  Baseline (main): $BASELINE_FULL ops/sec"
+          echo "  Current (PR):    $CURRENT_FULL ops/sec"
+
+          # Calculate percentage changes
+          CHANGE_SIMPLE=$(echo "scale=2; (($CURRENT_SIMPLE - $BASELINE_SIMPLE) / $BASELINE_SIMPLE) * 100" | bc)
+          CHANGE_FULL=$(echo "scale=2; (($CURRENT_FULL - $BASELINE_FULL) / $BASELINE_FULL) * 100" | bc)
+          echo "Simple mode change: $CHANGE_SIMPLE%"
+          echo "Full mode change: $CHANGE_FULL%"
+
+          # Write summary for GitHub Actions
+          echo "## 📊 Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Simple Mode (Insert-Only)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Baseline (main) | $BASELINE_SIMPLE ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Current (PR) | $CURRENT_SIMPLE ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Change | $CHANGE_SIMPLE% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full Mode (Mixed Operations)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Baseline (main) | $BASELINE_FULL ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Current (PR) | $CURRENT_FULL ops/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "| Change | $CHANGE_FULL% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Check for regression > 20% in either mode
+          REGRESSION_THRESHOLD=-20
+          IS_REGRESSION_SIMPLE=$(echo "$CHANGE_SIMPLE < $REGRESSION_THRESHOLD" | bc)
+          IS_REGRESSION_FULL=$(echo "$CHANGE_FULL < $REGRESSION_THRESHOLD" | bc)
+
+          if [ "$IS_REGRESSION_SIMPLE" -eq 1 ] || [ "$IS_REGRESSION_FULL" -eq 1 ]; then
+            echo "❌ PERFORMANCE REGRESSION DETECTED!"
+            if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
+              echo "Simple mode: ${CHANGE_SIMPLE}% (exceeds ${REGRESSION_THRESHOLD}% threshold)"
+            fi
+            if [ "$IS_REGRESSION_FULL" -eq 1 ]; then
+              echo "Full mode: ${CHANGE_FULL}% (exceeds ${REGRESSION_THRESHOLD}% threshold)"
+            fi
+            echo "### ❌ Performance Regression Detected" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
+              echo "**Simple mode** decreased by **${CHANGE_SIMPLE}%** (threshold: ${REGRESSION_THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+            fi
+            if [ "$IS_REGRESSION_FULL" -eq 1 ]; then
+              echo "**Full mode** decreased by **${CHANGE_FULL}%** (threshold: ${REGRESSION_THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+            fi
+            exit 1
+          elif [ $(echo "$CHANGE_SIMPLE < 0" | bc) -eq 1 ] || [ $(echo "$CHANGE_FULL < 0" | bc) -eq 1 ]; then
+            echo "⚠️  Minor performance decrease detected"
+            echo "This is within acceptable range (< ${REGRESSION_THRESHOLD}%)."
+            echo "### ⚠️ Minor Performance Decrease" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Changes are within acceptable range." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ Performance improved!"
+            echo "### ✅ Performance Improvement" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Both benchmarks show improvement or neutral performance!" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            bench-pr-*.log
+            bench-pr-*.db
+            bench-main-*.log
+            bench-main-*.db
