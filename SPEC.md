@@ -5,8 +5,8 @@
 ### Core Architecture Terms
 
 - **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes database operations to blockchain
-- **Sidecar Listener** - Lightweight process that attaches to SQLite databases and automatically captures/publishes state changes. SQLite executes deterministically, making all operations fully verifiable.
-- **SQL Audit Trail** - The sequence of SQL operations that serves as the verifiable record of application state changes
+- **Sidecar Listener** - Lightweight process that attaches to SQLite databases and automatically captures/publishes state changes.
+- **SQL Audit Trail** - The sequence of SQL operations that serves as the verifiable record of application state changes. SQLite executes deterministically, making all operations fully verifiable.
 
 ### Node Types
 
