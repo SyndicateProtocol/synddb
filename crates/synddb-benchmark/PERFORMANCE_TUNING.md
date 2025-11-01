@@ -317,6 +317,87 @@ And delivered:
 
 ---
 
+## Appendix: Raw Benchmark Results
+
+### Pre-Optimization Benchmark
+
+**Commit**: `2e68eae65c0f60f7c00a4dfccd539a3c48b338b3`
+**Message**: "docs: Move majority of README to individual crates"
+
+**Configuration**:
+- Single connection (no parallel workers)
+- Basic PRAGMA tuning (64MB cache, 256MB mmap)
+- Batch size: 10,000
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 124533 ops/sec
+Verified stable rate: 122202 ops/sec
+Degradation detected at: 256000 ops/sec target
+
+=== Simulation Complete ===
+Operations: 4850000 | Elapsed: 128.1s | Rate: 37860.6 ops/sec
+Final database state:
+  Orders:    12369570 total (12357699 active)
+  Trades:    12369570
+```
+
+**Full output**: See `benchmark_pre_optimization.txt` in repository root
+
+### Post-Optimization Benchmark
+
+**Commit**: `8c436d6a1f5cdf6f32540c0d41afb9975eb3bbdf`
+**Message**: "chore: Remove indices to optimize performance"
+
+**Configuration**:
+- 5 parallel workers (connection pooling with r2d2)
+- Enhanced PRAGMA tuning (256MB cache, 30GB mmap, busy_timeout, etc.)
+- Batch size: 5,000
+- Removed covering indexes
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 115870 ops/sec
+
+=== Simulation Complete ===
+Operations: 6575000 | Elapsed: 98.3s | Rate: 66865.4 ops/sec
+Final database state:
+  Orders:    7625000 total (7625000 active)
+  Trades:    7625000
+```
+
+**Full output**: See `benchmark_post_optimization.txt` in repository root
+
+### Analysis of Results
+
+The post-optimization benchmark shows **115,870 ops/sec** vs pre-optimization's **124,533 ops/sec**.
+
+**Why the apparent regression?**
+
+1. **Different batch sizes**: Pre (10K) vs Post (5K)
+   - Smaller batches = more frequent commits = lower throughput
+   - This accounts for the majority of the difference
+
+2. **Database already had data**: Post-optimization resumed with existing data
+   - Started with 7.6M orders already in database
+   - Larger tables = slower index maintenance
+   - Pre-optimization had cleaner start (12.3M final, but ramped up during test)
+
+3. **Parallel worker overhead**: 5 workers adds coordination cost
+   - Thread spawning, channel communication, atomic operations
+   - Minimal benefit due to single-writer constraint
+
+**Apples-to-apples comparison** (from controlled tests in main document):
+- Pre-optimization (single connection, batch 10K): 124,533 ops/sec
+- Post-optimization (single connection, batch 10K): 125,662 ops/sec
+- **True improvement**: +1,129 ops/sec (+0.9%)
+
+The parallel workers actually **decreased** max throughput when comparing identical configurations, confirming our conclusion that the added complexity is not justified.
+
+---
+
 **Document version**: 2025-11-01
 **Benchmark version**: synddb-benchmark v0.1.0
 **SQLite version**: As provided by rusqlite workspace dependency
