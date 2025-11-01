@@ -534,6 +534,28 @@ Final database state:
   Trades:    3085000
 ```
 
+#### Commit b9ad03e (Current main branch)
+
+**Commit**: [`b9ad03e`](https://github.com/SyndicateProtocol/SyndDB/tree/b9ad03e/crates/synddb-benchmark)
+**Message**: "feat: Add benchmarking tool and results (#15)"
+**Pull Request**: [#15 - Performance tuning and optimization](https://github.com/SyndicateProtocol/SyndDB/pull/15)
+
+**Configuration**: Single connection, enhanced PRAGMA tuning (recommended configuration)
+
+**Results**:
+```
+=== Maximum Throughput Found ===
+Best sustained rate: 67088 ops/sec
+Verified stable rate: 105454 ops/sec
+Degradation detected at: 128000 ops/sec target
+
+=== Simulation Complete ===
+Operations: 3260000 | Elapsed: 97.5s | Rate: 33438.4 ops/sec
+Final database state:
+  Orders:    3260000 total (3260000 active)
+  Trades:    0
+```
+
 ---
 
 **Document version**: 2025-11-01
