@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum LoadPattern {
     /// Run continuously at a specified rate
     Continuous { ops_per_second: u64 },
@@ -15,4 +15,85 @@ pub enum LoadPattern {
 pub struct LoadConfig {
     pub pattern: LoadPattern,
     pub duration_seconds: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_pattern_continuous() {
+        let pattern = LoadPattern::Continuous {
+            ops_per_second: 100,
+        };
+
+        match pattern {
+            LoadPattern::Continuous { ops_per_second } => {
+                assert_eq!(ops_per_second, 100);
+            }
+            _ => panic!("Expected Continuous pattern"),
+        }
+    }
+
+    #[test]
+    fn test_load_pattern_burst() {
+        let pattern = LoadPattern::Burst {
+            burst_size: 1000,
+            pause_seconds: 5,
+        };
+
+        match pattern {
+            LoadPattern::Burst {
+                burst_size,
+                pause_seconds,
+            } => {
+                assert_eq!(burst_size, 1000);
+                assert_eq!(pause_seconds, 5);
+            }
+            _ => panic!("Expected Burst pattern"),
+        }
+    }
+
+    #[test]
+    fn test_load_config_with_duration() {
+        let config = LoadConfig {
+            pattern: LoadPattern::Continuous { ops_per_second: 50 },
+            duration_seconds: Some(60),
+        };
+
+        assert_eq!(config.duration_seconds, Some(60));
+    }
+
+    #[test]
+    fn test_load_config_without_duration() {
+        let config = LoadConfig {
+            pattern: LoadPattern::Continuous { ops_per_second: 50 },
+            duration_seconds: None,
+        };
+
+        assert_eq!(config.duration_seconds, None);
+    }
+
+    #[test]
+    fn test_load_pattern_serialization() {
+        let pattern = LoadPattern::Continuous {
+            ops_per_second: 200,
+        };
+        let json = serde_json::to_string(&pattern).unwrap();
+        let deserialized: LoadPattern = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(pattern, deserialized);
+    }
+
+    #[test]
+    fn test_burst_pattern_serialization() {
+        let pattern = LoadPattern::Burst {
+            burst_size: 500,
+            pause_seconds: 10,
+        };
+        let json = serde_json::to_string(&pattern).unwrap();
+        let deserialized: LoadPattern = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(pattern, deserialized);
+    }
 }

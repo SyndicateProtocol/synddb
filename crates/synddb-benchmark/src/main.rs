@@ -4,12 +4,9 @@ use rusqlite::Connection;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-mod load_patterns;
-mod orderbook;
-mod schema;
-
 use load_patterns::{LoadConfig, LoadPattern};
 use orderbook::OrderbookSimulator;
+use synddb_benchmark::{load_patterns, orderbook, schema};
 
 #[derive(Parser)]
 #[command(name = "orderbook-bench")]

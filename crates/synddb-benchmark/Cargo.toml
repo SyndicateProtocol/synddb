@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "synddb_benchmark"
+path = "src/lib.rs"
+
 [[bin]]
 name = "orderbook-bench"
 path = "src/main.rs"
