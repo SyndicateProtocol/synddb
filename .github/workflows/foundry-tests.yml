@@ -1,0 +1,60 @@
+# This workflow runs our Foundry tests and contract checks on the smart contracts in `contracts/`.
+# Whenever a change is made in the contracts directory, this workflow makes sure everything still builds, passes tests, and follows formatting standards.
+# https://github.com/foundry-rs/foundry
+
+name: Foundry Tests
+
+on:
+  # Run workflow on every push to main (always run to ensure cross-service compatibility)
+  push:
+    branches:
+      - main
+      - staging
+  # Only run on pull requests when contracts are modified
+  pull_request:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/foundry-tests.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  contracts-check:
+    name: Contracts Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: "contracts"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Show Forge version
+        run: |
+          forge --version
+
+      - name: Run Forge fmt
+        run: |
+          forge fmt --check
+        id: fmt
+
+      - name: Run Forge build
+        run: |
+          forge build --sizes
+        id: build
+
+      - name: Run Forge tests
+        run: |
+          forge test -vvv
+        id: test
