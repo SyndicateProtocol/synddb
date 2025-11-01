@@ -1548,6 +1548,223 @@ monitoring:
     port: 8080
 ```
 
+## Additional Operational Considerations
+
+### 1. Disaster Recovery & Persistence ⚠️ TODO
+
+**Problem:** If sidecar crashes, in-memory changesets are lost
+**Solution:** Persistent queue before DA publish
+```rust
+// src/publish/persistent_queue.rs
+pub struct PersistentQueue {
+    disk_buffer: sled::Db,  // Fast embedded key-value store
+    sequence_tracker: AtomicU64,
+}
+
+impl PersistentQueue {
+    // Write changeset to disk before publishing
+    pub fn enqueue(&self, payload: AttestedPayload) -> Result<()> {
+        self.disk_buffer.insert(
+            &payload.sequence.to_be_bytes(),
+            bincode::serialize(&payload)?
+        )?;
+        Ok(())
+    }
+
+    // Mark as published after DA confirmation
+    pub fn dequeue(&self, sequence: u64) -> Result<()> {
+        self.disk_buffer.remove(&sequence.to_be_bytes())?;
+        Ok(())
+    }
+
+    // On restart, republish any unconfirmed payloads
+    pub fn recover(&self) -> Result<Vec<AttestedPayload>> {
+        let mut pending = Vec::new();
+        for item in self.disk_buffer.iter() {
+            let (_, payload_bytes) = item?;
+            pending.push(bincode::deserialize(&payload_bytes)?);
+        }
+        Ok(pending)
+    }
+}
+```
+
+**Status:** ⚠️ TODO - Add persistent queue between Attestor and Publisher
+
+### 2. Backpressure & Memory Management ⚠️ TODO
+
+**Problem:** Application writes faster than sidecar can publish
+**Solution:** Bounded channels with monitoring
+```rust
+// Bounded channels prevent memory exhaustion
+let (changeset_tx, changeset_rx) = mpsc::channel::<Changeset>(1000);
+let (batch_tx, batch_rx) = mpsc::channel::<BatchPayload>(100);
+
+// Monitor queue depth
+if changeset_tx.capacity() < 100 {
+    warn!("Sidecar falling behind: {} changesets queued",
+          1000 - changeset_tx.capacity());
+}
+```
+
+**Status:** ⚠️ TODO - Add queue depth monitoring and alerts
+
+### 3. Graceful Shutdown ⚠️ TODO
+
+**Problem:** Sidecar shutdown could lose in-flight changesets
+**Solution:** Flush all pending work before exit
+```rust
+impl Sidecar {
+    pub async fn shutdown(&mut self) -> Result<()> {
+        info!("Graceful shutdown initiated");
+
+        // 1. Stop accepting new changesets
+        self.session_monitor.stop().await?;
+
+        // 2. Flush all pending batches
+        self.batcher.flush_all(&self.attestor_tx).await?;
+
+        // 3. Wait for attestor to finish
+        self.attestor.wait_idle().await?;
+
+        // 4. Wait for all DA publishes to confirm
+        self.publisher.wait_for_pending().await?;
+
+        // 5. Persist state checkpoint
+        self.save_checkpoint().await?;
+
+        info!("Graceful shutdown complete");
+        Ok(())
+    }
+
+    async fn save_checkpoint(&self) -> Result<()> {
+        let state = SidecarState {
+            last_published_sequence: self.sequence.load(Ordering::SeqCst),
+            last_schema_version: self.schema_version,
+        };
+        fs::write("/data/sidecar.checkpoint", serde_json::to_vec(&state)?)?;
+        Ok(())
+    }
+}
+```
+
+**Status:** ⚠️ TODO - Implement graceful shutdown
+
+### 4. Large Transaction Handling ⚠️ TODO
+
+**Problem:** Single transaction with millions of rows creates huge changeset
+**Solution:** Detect large changesets and force snapshot instead
+```rust
+impl Batcher {
+    const MAX_CHANGESET_SIZE: usize = 100_000_000; // 100MB
+
+    async fn flush(&mut self, tx: &Sender<BatchPayload>) -> Result<()> {
+        let batch_size: usize = self.changesets.iter()
+            .map(|c| c.data.len())
+            .sum();
+
+        if batch_size > Self::MAX_CHANGESET_SIZE {
+            warn!("Large transaction detected ({} bytes), forcing snapshot", batch_size);
+
+            // Discard changesets, create snapshot instead
+            self.changesets.clear();
+            let snapshot_data = self.create_snapshot().await?;
+
+            tx.send(BatchPayload::Snapshot {
+                data: snapshot_data,
+                sequence: self.next_sequence(),
+                timestamp: SystemTime::now(),
+            }).await?;
+        } else {
+            // Normal changeset batch
+            // ...
+        }
+    }
+}
+```
+
+**Status:** ⚠️ TODO - Add large transaction detection
+
+### 5. Key Rotation ⚠️ TODO
+
+**Problem:** Ethereum signing keys may need rotation for security
+**Solution:** Publish key rotation messages to validators
+```rust
+pub struct KeyRotation {
+    old_public_key: Vec<u8>,
+    new_public_key: Vec<u8>,
+    rotation_sequence: u64,
+    attestation_token: String,  // Proves new key is from same TEE
+}
+
+impl KeyManager {
+    pub async fn rotate_key(&mut self) -> Result<KeyRotation> {
+        let old_key = self.verifying_key.clone();
+
+        // Generate new key
+        let new_signing_key = SigningKey::random(&mut rand::thread_rng());
+        let new_verifying_key = new_signing_key.verifying_key();
+
+        // Get attestation for new key
+        let attestation = self.get_attestation_token().await?;
+
+        // Seal new key to Secret Manager
+        self.seal_key(&new_signing_key, &new_verifying_key, &attestation).await?;
+
+        // Keep both keys active during transition
+        self.old_signing_key = Some(self.signing_key);
+        self.signing_key = new_signing_key;
+
+        Ok(KeyRotation {
+            old_public_key: old_key.to_encoded_point(true).as_bytes().to_vec(),
+            new_public_key: new_verifying_key.to_encoded_point(true).as_bytes().to_vec(),
+            rotation_sequence: self.current_sequence(),
+            attestation_token: attestation,
+        })
+    }
+}
+```
+
+**Status:** ⚠️ TODO - Implement key rotation protocol
+
+### 6. Observability & Monitoring ⚠️ TODO
+
+**Critical Metrics:**
+```rust
+// GCP Cloud Logging structured events
+pub struct SidecarMetrics {
+    // Lag metrics
+    pub changeset_lag_seconds: f64,        // Time from commit to publish
+    pub queue_depth: usize,                 // Unpublished changesets
+
+    // Throughput metrics
+    pub changesets_per_second: f64,
+    pub bytes_published_per_second: f64,
+
+    // Error metrics
+    pub da_publish_failures: u64,
+    pub schema_detection_errors: u64,
+
+    // Health metrics
+    pub session_extension_healthy: bool,
+    pub db_connection_healthy: bool,
+    pub da_layers_reachable: HashMap<String, bool>,
+}
+```
+
+**Status:** ⚠️ TODO - Add comprehensive metrics
+
+### 7. Supported SQLite Features
+
+**Known Limitations:**
+- ❌ Memory databases (`:memory:`) - Cannot persist
+- ❌ Temporary tables - Not replicated by Session Extension
+- ⚠️ ATTACH DATABASE - Each database needs separate sidecar
+- ⚠️ Encrypted databases (SQLCipher) - Need special handling
+- ⚠️ Custom collations - Must match on validators
+
+**Status:** ⚠️ TODO - Document and test feature compatibility
+
 ## Performance Optimizations
 
 ### 1. Zero-Copy WAL Reading
