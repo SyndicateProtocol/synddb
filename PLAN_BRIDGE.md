@@ -1,136 +1,195 @@
-# PLAN_BRIDGE.md - Generic Message Passing System
+# PLAN_BRIDGE.md - Generic Message Passing via Smart Contracts
 
 ## Overview
 
-The SyndDB bridge is a generalized message passing system that enables cross-chain communication through SQLite tables. Unlike traditional bridges that hardcode specific operations, this system allows applications to define their own message schemas in SQL tables, which automatically map to smart contract ABIs. Validators monitor these tables and process messages according to the defined schemas.
+The SyndDB bridge is primarily a **Solidity smart contract** that mirrors the offchain message tables maintained by validators. Unlike traditional bridges that hardcode specific operations, this contract allows applications to define their own message schemas in SQL tables, which automatically map to smart contract ABIs. Validators monitor these tables in the replicated SQLite database and submit messages to the Bridge.sol contract with their signatures.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Application (Any Language)                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Writes to Message Tables (outbound_*, inbound_*)       │   │
-│  │  - outbound_withdrawals                                  │   │
-│  │  - outbound_messages                                     │   │
-│  │  - inbound_deposits                                      │   │
-│  │  - custom_message_tables                                 │   │
-│  └─────────────────────────────────────────────────────────┘   │
+│  Writes to Message Tables:                                      │
+│  - outbound_withdrawals                                          │
+│  - outbound_messages                                             │
+│  - outbound_calls                                                │
+│  Application code just writes SQL, nothing blockchain-specific   │
 └─────────────────────────────────────────────────────────────────┘
-                              ↓
+                              ↓ (via Sidecar → DA)
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Validator Network (TEEs)                     │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  1. Monitor message tables for new entries               │   │
-│  │  2. Validate message according to schema                 │   │
-│  │  3. Gather multi-sig from validator set                  │   │
-│  │  4. Submit to Bridge.sol on settlement chain             │   │
-│  └─────────────────────────────────────────────────────────┘   │
+│  Validators are just read replicas in validator mode:           │
+│  1. Sync message tables from DA layers (normal replication)     │
+│  2. Detect new pending messages via SQL queries                 │
+│  3. Sign messages and coordinate with other validators          │
+│  4. Submit to Bridge.sol with multi-sig                         │
+│  5. Listen for inbound events from Bridge.sol                   │
+│  6. Write inbound messages to inbound_* tables                  │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Settlement Chain (Ethereum)                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                      Bridge.sol                          │   │
-│  │  - Processes messages with validator signatures          │   │
-│  │  - Executes withdrawals, deposits, calls                 │   │
-│  │  - Emits events for inbound message processing           │   │
-│  └─────────────────────────────────────────────────────────┘   │
+│              Settlement Chain (Ethereum/L2)                     │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │                    Bridge.sol                              │ │
+│  │  Core Logic (all in Solidity):                            │ │
+│  │  - Verify validator signatures on messages                │ │
+│  │  - Execute withdrawals (transfer tokens/ETH)              │ │
+│  │  - Execute arbitrary calls to other contracts             │ │
+│  │  - Process oracle requests                                │ │
+│  │  - Enforce circuit breakers and limits                    │ │
+│  │  - Emit events for inbound messages                       │ │
+│  │                                                            │ │
+│  │  All signature verification, multi-sig, message           │ │
+│  │  processing happens ON-CHAIN in Solidity                  │ │
+│  └───────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
-                              ↓
+                              ↓ (Events)
 ┌─────────────────────────────────────────────────────────────────┐
 │                 Validator Inbound Processing                    │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  1. Monitor Bridge.sol events                            │   │
-│  │  2. Parse inbound messages                               │   │
-│  │  3. Write to application's inbound_* tables              │   │
-│  │  4. Application processes inbound messages               │   │
-│  └─────────────────────────────────────────────────────────┘   │
+│  Validators listen for Bridge.sol events:                       │
+│  - Parse InboundMessage events                                  │
+│  - Write to application's inbound_* tables (SQL INSERT)         │
+│  - Application processes via normal SQL queries                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Smart Contract Architecture
+**Key Principle**: Bridge logic lives in **Solidity**. Validators just:
+- Query SQLite for pending messages
+- Sign messages
+- Submit transactions to Bridge.sol
+- Listen for events and write to inbound tables
+
+No complex Rust signature aggregation or consensus logic - that's all on-chain.
+
+## Smart Contract Implementation
 
 ### Core Bridge Contract
 
 ```solidity
-// contracts/Bridge.sol
-pragma solidity ^0.8.19;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract Bridge is 
+/**
+ * @title Bridge
+ * @notice Generic message passing bridge that mirrors SQLite message tables
+ * @dev All message processing logic lives in this contract
+ */
+contract Bridge is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
-    ReentrancyGuardUpgradeable 
+    ReentrancyGuardUpgradeable
 {
+    using SafeERC20 for IERC20;
+
+    // ============ Roles ============
+
     bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    
-    // Message types
+
+    // ============ Types ============
+
     enum MessageType {
-        WITHDRAWAL,
-        DEPOSIT,
-        CALL,
-        ORACLE_REQUEST,
-        ORACLE_RESPONSE,
-        GOVERNANCE,
-        CUSTOM
+        WITHDRAWAL,      // Withdraw tokens/ETH to external address
+        DEPOSIT,         // Handled via direct contract calls, not messages
+        CALL,            // Arbitrary contract call
+        ORACLE_REQUEST,  // Request data from oracle
+        ORACLE_RESPONSE, // Oracle response
+        GOVERNANCE,      // Governance action
+        CUSTOM           // Custom handler
     }
-    
+
     struct Message {
-        uint256 id;
-        MessageType messageType;
-        bytes32 schemaHash;  // Hash of table schema for verification
-        bytes payload;        // ABI-encoded data from table row
-        uint256 nonce;
-        uint256 timestamp;
+        uint256 id;              // Message ID from SQL table
+        MessageType messageType; // Type of message
+        bytes32 schemaHash;      // Hash of SQL table schema
+        bytes payload;           // ABI-encoded data from table row
+        uint256 nonce;           // Sequence number for replay protection
+        uint256 timestamp;       // When message was created
     }
-    
-    struct ValidatorSignature {
-        address validator;
-        bytes signature;
-        bytes attestation;  // TEE attestation
-    }
-    
-    // State
-    mapping(uint256 => bool) public processedMessages;
+
+    // ============ State Variables ============
+
+    // Validator management
     mapping(address => bool) public validators;
-    mapping(bytes32 => address) public schemaToHandler;  // Custom handlers
-    
-    uint256 public validatorThreshold;
-    uint256 public currentNonce;
-    
-    // Circuit breakers
+    address[] public validatorList;
+    uint256 public validatorThreshold;  // Min signatures required
+
+    // Message tracking
+    mapping(uint256 => bool) public processedMessages;
+    mapping(bytes32 => uint256) public schemaNonces;  // Per-schema nonce
+    uint256 public currentNonce;  // Global nonce for inbound messages
+
+    // Custom message handlers
+    mapping(bytes32 => address) public schemaToHandler;
+
+    // Circuit breakers and limits
     uint256 public dailyWithdrawalLimit;
     uint256 public dailyWithdrawn;
     uint256 public lastWithdrawalReset;
     uint256 public maxMessageSize;
-    
-    // Events
+    uint256 public minValidators;
+
+    // ============ Events ============
+
     event MessageProcessed(
         uint256 indexed messageId,
-        MessageType messageType,
+        MessageType indexed messageType,
         bytes32 schemaHash,
-        bytes payload,
-        address indexed processor
+        address indexed submitter
     );
-    
+
+    event WithdrawalExecuted(
+        uint256 indexed messageId,
+        address indexed recipient,
+        address indexed token,
+        uint256 amount
+    );
+
+    event CallExecuted(
+        uint256 indexed messageId,
+        address indexed target,
+        bool success,
+        bytes returnData
+    );
+
     event InboundMessage(
         uint256 indexed nonce,
         address indexed sender,
-        bytes32 targetSchema,
+        bytes32 indexed targetSchema,
         bytes payload
     );
-    
-    event ValidatorAdded(address indexed validator, bytes attestation);
+
+    event ValidatorAdded(address indexed validator);
     event ValidatorRemoved(address indexed validator);
+    event ThresholdUpdated(uint256 newThreshold);
     event WithdrawalLimitUpdated(uint256 newLimit);
-    
+    event HandlerRegistered(bytes32 indexed schemaHash, address handler);
+
+    // ============ Errors ============
+
+    error MessageAlreadyProcessed();
+    error InvalidNonce();
+    error InsufficientSignatures();
+    error InvalidSignature();
+    error DuplicateSignature();
+    error MessageTooLarge();
+    error DailyLimitExceeded();
+    error WithdrawalFailed();
+    error CallFailed();
+    error NoHandlerForSchema();
+    error InvalidValidator();
+    error BelowMinimumValidators();
+
+    // ============ Initialization ============
+
     function initialize(
         address[] memory _validators,
         uint256 _threshold,
@@ -139,76 +198,83 @@ contract Bridge is
         __AccessControl_init();
         __Pausable_init();
         __ReentrancyGuard_init();
-        
-        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _setupRole(ADMIN_ROLE, msg.sender);
-        
+
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(ADMIN_ROLE, msg.sender);
+
         for (uint i = 0; i < _validators.length; i++) {
-            validators[_validators[i]] = true;
-            _setupRole(VALIDATOR_ROLE, _validators[i]);
+            _addValidator(_validators[i]);
         }
-        
+
         validatorThreshold = _threshold;
         dailyWithdrawalLimit = _withdrawalLimit;
-        maxMessageSize = 10000; // 10KB default
+        maxMessageSize = 100_000; // 100KB
+        minValidators = 3;
         lastWithdrawalReset = block.timestamp;
     }
-    
-    /// @notice Process a message from the application's message tables
-    /// @param message The message data from SQL table
-    /// @param signatures Validator signatures approving this message
+
+    // ============ Core Message Processing ============
+
+    /**
+     * @notice Process a message from the application's SQL message tables
+     * @dev All validation and execution logic is in this contract
+     * @param message Message data from validators' replicated SQLite
+     * @param signatures Array of validator signatures (v, r, s packed)
+     */
     function processMessage(
         Message calldata message,
-        ValidatorSignature[] calldata signatures
+        bytes[] calldata signatures
     ) external nonReentrant whenNotPaused {
-        // Check message not already processed
-        require(!processedMessages[message.id], "Message already processed");
-        require(message.payload.length <= maxMessageSize, "Message too large");
-        
-        // Verify signatures
-        require(signatures.length >= validatorThreshold, "Insufficient signatures");
+        // Basic validation
+        if (processedMessages[message.id]) revert MessageAlreadyProcessed();
+        if (message.payload.length > maxMessageSize) revert MessageTooLarge();
+        if (message.nonce != schemaNonces[message.schemaHash]) revert InvalidNonce();
+
+        // Verify validator signatures (all logic on-chain)
         _verifySignatures(message, signatures);
-        
+
         // Mark as processed
         processedMessages[message.id] = true;
-        
+        schemaNonces[message.schemaHash]++;
+
         // Reset daily limit if needed
-        if (block.timestamp >= lastWithdrawalReset + 1 days) {
-            dailyWithdrawn = 0;
-            lastWithdrawalReset = block.timestamp;
-        }
-        
-        // Process based on message type
+        _resetDailyLimitIfNeeded();
+
+        // Route to appropriate handler based on message type
         if (message.messageType == MessageType.WITHDRAWAL) {
             _processWithdrawal(message);
         } else if (message.messageType == MessageType.CALL) {
             _processCall(message);
         } else if (message.messageType == MessageType.ORACLE_REQUEST) {
             _processOracleRequest(message);
+        } else if (message.messageType == MessageType.ORACLE_RESPONSE) {
+            _processOracleResponse(message);
         } else if (message.messageType == MessageType.GOVERNANCE) {
             _processGovernance(message);
         } else if (message.messageType == MessageType.CUSTOM) {
             _processCustom(message);
         }
-        
+
         emit MessageProcessed(
             message.id,
             message.messageType,
             message.schemaHash,
-            message.payload,
             msg.sender
         );
     }
-    
-    /// @notice Send a message to the SyndDB application
-    /// @param targetSchema The schema hash of the target inbound table
-    /// @param payload The message data to send
+
+    /**
+     * @notice Send a message to the SyndDB application (inbound)
+     * @dev Emits event that validators listen for and write to inbound_* tables
+     * @param targetSchema Hash of the target SQL table schema
+     * @param payload ABI-encoded message data
+     */
     function sendMessage(
         bytes32 targetSchema,
         bytes calldata payload
-    ) external payable nonReentrant {
+    ) external payable nonReentrant whenNotPaused {
         uint256 nonce = currentNonce++;
-        
+
         emit InboundMessage(
             nonce,
             msg.sender,
@@ -216,1308 +282,901 @@ contract Bridge is
             payload
         );
     }
-    
-    function _processWithdrawal(Message memory message) private {
-        // Decode withdrawal data based on table schema
+
+    /**
+     * @notice Deposit tokens/ETH to the SyndDB application
+     * @dev Emits InboundMessage that validators parse and credit in SQL
+     */
+    function deposit(
+        string calldata accountId,
+        address token,
+        uint256 amount
+    ) external payable nonReentrant whenNotPaused {
+        if (token == address(0)) {
+            // ETH deposit
+            require(msg.value == amount, "Invalid ETH amount");
+        } else {
+            // Token deposit
+            IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        }
+
+        // Schema hash for inbound_deposits table
+        bytes32 depositSchema = keccak256("inbound_deposits");
+
+        // Encode deposit data matching SQL table schema
+        bytes memory payload = abi.encode(
+            accountId,           // account_id
+            msg.sender,          // sender_address
+            token,               // token_address
+            amount,              // amount
+            block.number         // block_number
+        );
+
+        emit InboundMessage(
+            currentNonce++,
+            msg.sender,
+            depositSchema,
+            payload
+        );
+    }
+
+    // ============ Message Handlers ============
+
+    function _processWithdrawal(Message calldata message) private {
+        // Decode according to outbound_withdrawals table schema
         (
             address recipient,
             address token,
             uint256 amount
         ) = abi.decode(message.payload, (address, address, uint256));
-        
+
         // Check daily limit
-        require(dailyWithdrawn + amount <= dailyWithdrawalLimit, "Daily limit exceeded");
+        if (dailyWithdrawn + amount > dailyWithdrawalLimit) {
+            revert DailyLimitExceeded();
+        }
         dailyWithdrawn += amount;
-        
+
         // Execute withdrawal
+        bool success;
         if (token == address(0)) {
             // ETH withdrawal
-            (bool success, ) = recipient.call{value: amount}("");
-            require(success, "ETH transfer failed");
+            (success, ) = recipient.call{value: amount}("");
         } else {
             // Token withdrawal
-            IERC20(token).safeTransfer(recipient, amount);
+            try IERC20(token).transfer(recipient, amount) {
+                success = true;
+            } catch {
+                success = false;
+            }
         }
+
+        if (!success) revert WithdrawalFailed();
+
+        emit WithdrawalExecuted(message.id, recipient, token, amount);
     }
-    
-    function _processCall(Message memory message) private {
+
+    function _processCall(Message calldata message) private {
+        // Decode according to outbound_calls table schema
         (
             address target,
             bytes memory callData,
             uint256 value
         ) = abi.decode(message.payload, (address, bytes, uint256));
-        
-        // Execute external call
-        (bool success, bytes memory result) = target.call{value: value}(callData);
-        require(success, "External call failed");
+
+        // Execute call
+        (bool success, bytes memory returnData) = target.call{value: value}(callData);
+
+        if (!success) revert CallFailed();
+
+        emit CallExecuted(message.id, target, success, returnData);
     }
-    
-    function _processOracleRequest(Message memory message) private {
-        // Forward to oracle contract
-        IOracleReceiver oracle = IOracleReceiver(schemaToHandler[message.schemaHash]);
-        oracle.fulfillOracleRequest(message.payload);
+
+    function _processOracleRequest(Message calldata message) private {
+        // Forward to registered oracle handler
+        address handler = schemaToHandler[message.schemaHash];
+        if (handler == address(0)) revert NoHandlerForSchema();
+
+        IOracleReceiver(handler).fulfillOracleRequest(message.payload);
     }
-    
-    function _processGovernance(Message memory message) private {
-        (
-            bytes4 selector,
-            bytes memory params
-        ) = abi.decode(message.payload, (bytes4, bytes));
-        
-        // Execute governance action
+
+    function _processOracleResponse(Message calldata message) private {
+        // Oracle responses are handled by custom logic
+        address handler = schemaToHandler[message.schemaHash];
+        if (handler == address(0)) revert NoHandlerForSchema();
+
+        IOracleReceiver(handler).receiveOracleResponse(message.payload);
+    }
+
+    function _processGovernance(Message calldata message) private {
+        // Decode governance action
+        (bytes4 selector, bytes memory params) = abi.decode(
+            message.payload,
+            (bytes4, bytes)
+        );
+
+        // Execute governance action (restricted set)
         if (selector == this.updateWithdrawalLimit.selector) {
             uint256 newLimit = abi.decode(params, (uint256));
             _updateWithdrawalLimit(newLimit);
-        } else if (selector == this.addValidator.selector) {
-            (address validator, bytes memory attestation) = abi.decode(params, (address, bytes));
-            _addValidator(validator, attestation);
+        } else if (selector == this.updateThreshold.selector) {
+            uint256 newThreshold = abi.decode(params, (uint256));
+            _updateThreshold(newThreshold);
+        } else {
+            revert("Unknown governance action");
         }
     }
-    
-    function _processCustom(Message memory message) private {
-        // Route to custom handler based on schema
+
+    function _processCustom(Message calldata message) private {
+        // Route to custom handler based on schema hash
         address handler = schemaToHandler[message.schemaHash];
-        require(handler != address(0), "No handler for schema");
-        
+        if (handler == address(0)) revert NoHandlerForSchema();
+
         IMessageHandler(handler).handleMessage(message.payload);
     }
-    
+
+    // ============ Signature Verification (On-Chain) ============
+
+    /**
+     * @notice Verify validator signatures on a message
+     * @dev All signature verification logic is on-chain in Solidity
+     */
     function _verifySignatures(
-        Message memory message,
-        ValidatorSignature[] memory signatures
+        Message calldata message,
+        bytes[] calldata signatures
     ) private view {
-        bytes32 messageHash = keccak256(abi.encode(message));
-        
+        if (signatures.length < validatorThreshold) {
+            revert InsufficientSignatures();
+        }
+
+        // Hash the message for signature verification
+        bytes32 messageHash = _hashMessage(message);
+        bytes32 ethSignedHash = _toEthSignedMessageHash(messageHash);
+
+        // Track unique signers
         address[] memory signers = new address[](signatures.length);
-        
+
         for (uint i = 0; i < signatures.length; i++) {
-            // Recover signer
-            address signer = ECDSA.recover(messageHash, signatures[i].signature);
-            
-            // Check validator status
-            require(validators[signer], "Invalid validator");
-            
-            // Check for duplicates
+            // Recover signer from signature
+            address signer = _recoverSigner(ethSignedHash, signatures[i]);
+
+            // Verify signer is a validator
+            if (!validators[signer]) revert InvalidValidator();
+
+            // Check for duplicate signatures
             for (uint j = 0; j < i; j++) {
-                require(signers[j] != signer, "Duplicate signature");
+                if (signers[j] == signer) revert DuplicateSignature();
             }
-            
+
             signers[i] = signer;
-            
-            // Verify TEE attestation if provided
-            if (signatures[i].attestation.length > 0) {
-                _verifyAttestation(signer, signatures[i].attestation);
-            }
         }
     }
-    
-    function _verifyAttestation(address validator, bytes memory attestation) private view {
-        // Verify TEE attestation (simplified - real implementation would verify quote)
-        IAttestationVerifier verifier = IAttestationVerifier(schemaToHandler[keccak256("attestation")]);
-        require(verifier.verifyAttestation(validator, attestation), "Invalid attestation");
+
+    function _hashMessage(Message calldata message) private pure returns (bytes32) {
+        return keccak256(abi.encode(
+            message.id,
+            message.messageType,
+            message.schemaHash,
+            keccak256(message.payload),
+            message.nonce,
+            message.timestamp
+        ));
     }
-    
-    // Admin functions
+
+    function _toEthSignedMessageHash(bytes32 hash) private pure returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+    }
+
+    function _recoverSigner(
+        bytes32 ethSignedHash,
+        bytes calldata signature
+    ) private pure returns (address) {
+        require(signature.length == 65, "Invalid signature length");
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+
+        assembly {
+            r := calldataload(signature.offset)
+            s := calldataload(add(signature.offset, 32))
+            v := byte(0, calldataload(add(signature.offset, 64)))
+        }
+
+        if (v < 27) {
+            v += 27;
+        }
+
+        require(v == 27 || v == 28, "Invalid signature v value");
+
+        return ecrecover(ethSignedHash, v, r, s);
+    }
+
+    // ============ Circuit Breakers ============
+
+    function _resetDailyLimitIfNeeded() private {
+        if (block.timestamp >= lastWithdrawalReset + 1 days) {
+            dailyWithdrawn = 0;
+            lastWithdrawalReset = block.timestamp;
+        }
+    }
+
+    function pause() external onlyRole(ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(ADMIN_ROLE) {
+        _unpause();
+    }
+
+    // ============ Admin Functions ============
+
+    function addValidator(address validator) external onlyRole(ADMIN_ROLE) {
+        _addValidator(validator);
+    }
+
+    function _addValidator(address validator) private {
+        require(!validators[validator], "Already validator");
+        validators[validator] = true;
+        validatorList.push(validator);
+        _grantRole(VALIDATOR_ROLE, validator);
+        emit ValidatorAdded(validator);
+    }
+
+    function removeValidator(address validator) external onlyRole(ADMIN_ROLE) {
+        require(validatorList.length > minValidators, "Below minimum validators");
+        require(validators[validator], "Not a validator");
+
+        validators[validator] = false;
+        _revokeRole(VALIDATOR_ROLE, validator);
+
+        // Remove from list
+        for (uint i = 0; i < validatorList.length; i++) {
+            if (validatorList[i] == validator) {
+                validatorList[i] = validatorList[validatorList.length - 1];
+                validatorList.pop();
+                break;
+            }
+        }
+
+        emit ValidatorRemoved(validator);
+    }
+
+    function updateThreshold(uint256 newThreshold) external onlyRole(ADMIN_ROLE) {
+        _updateThreshold(newThreshold);
+    }
+
+    function _updateThreshold(uint256 newThreshold) private {
+        require(newThreshold > 0, "Threshold must be positive");
+        require(newThreshold <= validatorList.length, "Threshold too high");
+        validatorThreshold = newThreshold;
+        emit ThresholdUpdated(newThreshold);
+    }
+
     function updateWithdrawalLimit(uint256 newLimit) external onlyRole(ADMIN_ROLE) {
         _updateWithdrawalLimit(newLimit);
     }
-    
+
     function _updateWithdrawalLimit(uint256 newLimit) private {
         dailyWithdrawalLimit = newLimit;
         emit WithdrawalLimitUpdated(newLimit);
     }
-    
-    function addValidator(address validator, bytes calldata attestation) external onlyRole(ADMIN_ROLE) {
-        _addValidator(validator, attestation);
-    }
-    
-    function _addValidator(address validator, bytes memory attestation) private {
-        validators[validator] = true;
-        _setupRole(VALIDATOR_ROLE, validator);
-        emit ValidatorAdded(validator, attestation);
-    }
-    
-    function removeValidator(address validator) external onlyRole(ADMIN_ROLE) {
-        validators[validator] = false;
-        _revokeRole(VALIDATOR_ROLE, validator);
-        emit ValidatorRemoved(validator);
-    }
-    
-    function registerHandler(bytes32 schemaHash, address handler) external onlyRole(ADMIN_ROLE) {
+
+    function registerHandler(
+        bytes32 schemaHash,
+        address handler
+    ) external onlyRole(ADMIN_ROLE) {
         schemaToHandler[schemaHash] = handler;
+        emit HandlerRegistered(schemaHash, handler);
     }
-    
-    function pause() external onlyRole(ADMIN_ROLE) {
-        _pause();
+
+    function setMaxMessageSize(uint256 newSize) external onlyRole(ADMIN_ROLE) {
+        maxMessageSize = newSize;
     }
-    
-    function unpause() external onlyRole(ADMIN_ROLE) {
-        _unpause();
-    }
-    
-    // Emergency functions
+
+    // ============ Emergency Functions ============
+
     function emergencyWithdraw(
         address token,
         address recipient,
         uint256 amount
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) whenPaused {
         if (token == address(0)) {
             payable(recipient).transfer(amount);
         } else {
             IERC20(token).safeTransfer(recipient, amount);
         }
     }
-    
+
+    // ============ View Functions ============
+
+    function getValidators() external view returns (address[] memory) {
+        return validatorList;
+    }
+
+    function getValidatorCount() external view returns (uint256) {
+        return validatorList.length;
+    }
+
+    function isMessageProcessed(uint256 messageId) external view returns (bool) {
+        return processedMessages[messageId];
+    }
+
+    function getCurrentNonce(bytes32 schemaHash) external view returns (uint256) {
+        return schemaNonces[schemaHash];
+    }
+
+    // ============ Receive ETH ============
+
     receive() external payable {}
 }
 ```
 
-### Message Handler Interface
+### Message Handler Interfaces
 
 ```solidity
-// contracts/interfaces/IMessageHandler.sol
-pragma solidity ^0.8.19;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
 interface IMessageHandler {
     function handleMessage(bytes calldata payload) external;
 }
 
 interface IOracleReceiver {
-    function fulfillOracleRequest(bytes calldata response) external;
-}
-
-interface IAttestationVerifier {
-    function verifyAttestation(
-        address validator,
-        bytes calldata attestation
-    ) external view returns (bool);
+    function fulfillOracleRequest(bytes calldata requestData) external;
+    function receiveOracleResponse(bytes calldata responseData) external;
 }
 ```
 
-### Example Custom Handler
+### Example: Custom Swap Handler
 
 ```solidity
-// contracts/handlers/CrossChainSwapHandler.sol
-pragma solidity ^0.8.19;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
-contract CrossChainSwapHandler is IMessageHandler {
-    struct SwapMessage {
-        address tokenIn;
-        address tokenOut;
-        uint256 amountIn;
-        uint256 minAmountOut;
-        address recipient;
-        bytes swapData;
+import "./interfaces/IMessageHandler.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
+
+contract SwapHandler is IMessageHandler {
+    ISwapRouter public immutable swapRouter;
+    address public immutable bridge;
+
+    modifier onlyBridge() {
+        require(msg.sender == bridge, "Only bridge");
+        _;
     }
-    
-    function handleMessage(bytes calldata payload) external override {
-        SwapMessage memory swap = abi.decode(payload, (SwapMessage));
-        
-        // Execute swap logic
-        _executeSwap(swap);
+
+    constructor(address _swapRouter, address _bridge) {
+        swapRouter = ISwapRouter(_swapRouter);
+        bridge = _bridge;
     }
-    
-    function _executeSwap(SwapMessage memory swap) private {
-        // Integration with DEX aggregator
-        // ...
+
+    function handleMessage(bytes calldata payload) external override onlyBridge {
+        // Decode swap data from SQL table
+        (
+            address tokenIn,
+            address tokenOut,
+            uint256 amountIn,
+            uint256 minAmountOut,
+            address recipient
+        ) = abi.decode(payload, (address, address, uint256, uint256, address));
+
+        // Approve router
+        IERC20(tokenIn).approve(address(swapRouter), amountIn);
+
+        // Execute swap
+        ISwapRouter.ExactInputSingleParams memory params = ISwapRouter
+            .ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: 3000,
+                recipient: recipient,
+                deadline: block.timestamp,
+                amountIn: amountIn,
+                amountOutMinimum: minAmountOut,
+                sqrtPriceLimitX96: 0
+            });
+
+        swapRouter.exactInputSingle(params);
     }
 }
 ```
 
 ## Message Table Schemas
 
-Applications define message tables that map to contract ABIs:
+Applications define message tables in SQL that map to contract ABIs:
 
-### Standard Message Tables
+### Standard Withdrawal Table
 
 ```sql
--- Outbound withdrawal messages
+-- Table schema defines the ABI encoding
 CREATE TABLE outbound_withdrawals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_id TEXT NOT NULL,              -- Internal account identifier
-    recipient_address TEXT NOT NULL,       -- Ethereum address (0x...)
-    token_address TEXT NOT NULL,           -- Token contract or 'ETH'
-    amount TEXT NOT NULL,                  -- Wei amount as string
-    status TEXT DEFAULT 'pending',         -- pending, submitted, confirmed, failed
-    validator_signatures TEXT,              -- JSON array of signatures
-    tx_hash TEXT,                          -- Settlement transaction hash
+    account_id TEXT NOT NULL,              -- Internal account
+    recipient_address TEXT NOT NULL,       -- External address (0x...)
+    token_address TEXT NOT NULL,           -- Token or 0x0 for ETH
+    amount TEXT NOT NULL,                  -- Wei as string
+    status TEXT DEFAULT 'pending',         -- pending|submitted|confirmed|failed
+    validator_signatures TEXT,              -- Reserved for coordinator
+    tx_hash TEXT,                          -- Settlement tx hash
     created_at INTEGER DEFAULT (unixepoch()),
     processed_at INTEGER,
     INDEX idx_status (status),
-    INDEX idx_created (created_at)
+    CHECK (status IN ('pending', 'submitted', 'confirmed', 'failed'))
 );
 
--- Inbound deposit messages
-CREATE TABLE inbound_deposits (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_tx_hash TEXT UNIQUE NOT NULL,   -- Ethereum transaction hash
-    sender_address TEXT NOT NULL,          -- Source Ethereum address
-    account_id TEXT NOT NULL,              -- Target account in system
-    token_address TEXT NOT NULL,           -- Token contract or 'ETH'
-    amount TEXT NOT NULL,                  -- Wei amount as string
-    block_number INTEGER NOT NULL,         -- Ethereum block number
-    status TEXT DEFAULT 'pending',         -- pending, credited, failed
-    created_at INTEGER DEFAULT (unixepoch()),
-    credited_at INTEGER,
-    INDEX idx_account (account_id),
-    INDEX idx_status (status)
-);
+-- Application just does:
+INSERT INTO outbound_withdrawals (account_id, recipient_address, token_address, amount)
+VALUES ('alice', '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb', '0x0', '1000000000000000000');
 
--- Generic outbound messages
-CREATE TABLE outbound_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_type TEXT NOT NULL,            -- CALL, ORACLE_REQUEST, GOVERNANCE, CUSTOM
-    target_address TEXT NOT NULL,          -- Target contract address
-    function_signature TEXT NOT NULL,      -- Function selector (0x...)
-    parameters BLOB NOT NULL,              -- ABI-encoded parameters
-    value TEXT DEFAULT '0',                -- ETH value to send
-    gas_limit INTEGER DEFAULT 500000,      -- Gas limit for call
-    status TEXT DEFAULT 'pending',
-    validator_signatures TEXT,
-    tx_hash TEXT,
-    created_at INTEGER DEFAULT (unixepoch()),
-    processed_at INTEGER,
-    INDEX idx_type_status (message_type, status)
-);
-
--- Cross-chain call messages
-CREATE TABLE outbound_calls (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    target_chain TEXT NOT NULL,            -- ethereum, polygon, arbitrum, etc.
-    target_contract TEXT NOT NULL,         -- Contract address on target chain
-    method_name TEXT NOT NULL,             -- Human-readable method name
-    method_signature TEXT NOT NULL,        -- Method signature bytes4
-    parameters JSON NOT NULL,              -- JSON parameters (converted to ABI)
-    value TEXT DEFAULT '0',                -- Native token value
-    status TEXT DEFAULT 'pending',
-    response JSON,                         -- Response from target chain
-    created_at INTEGER DEFAULT (unixepoch()),
-    executed_at INTEGER,
-    INDEX idx_chain_status (target_chain, status)
-);
-
--- Oracle request/response tables
-CREATE TABLE oracle_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_type TEXT NOT NULL,            -- PRICE, RANDOM, WEATHER, CUSTOM
-    request_params JSON NOT NULL,          -- Request parameters
-    callback_table TEXT,                   -- Table to write response to
-    callback_id TEXT,                      -- ID in callback table
-    status TEXT DEFAULT 'pending',
-    response JSON,
-    created_at INTEGER DEFAULT (unixepoch()),
-    fulfilled_at INTEGER
-);
-
-CREATE TABLE oracle_responses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id INTEGER NOT NULL,
-    response_data JSON NOT NULL,
-    attestation TEXT,                      -- Oracle attestation/signature
-    created_at INTEGER DEFAULT (unixepoch()),
-    FOREIGN KEY (request_id) REFERENCES oracle_requests(id)
-);
+-- Validators detect this, sign it, submit to Bridge.sol
+-- Bridge.sol calls: _processWithdrawal() which does the transfer
 ```
 
-### Custom Application Tables
-
-Applications can define custom message tables:
+### Inbound Deposits
 
 ```sql
--- Example: NFT bridging
-CREATE TABLE outbound_nft_transfers (
+CREATE TABLE inbound_deposits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nft_contract TEXT NOT NULL,
-    token_id TEXT NOT NULL,
-    from_account TEXT NOT NULL,
-    to_address TEXT NOT NULL,
-    metadata JSON,
+    source_tx_hash TEXT UNIQUE NOT NULL,   -- Ethereum tx hash
+    sender_address TEXT NOT NULL,          -- Sender on Ethereum
+    account_id TEXT NOT NULL,              -- Target account in app
+    token_address TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    block_number INTEGER NOT NULL,
     status TEXT DEFAULT 'pending',
-    created_at INTEGER DEFAULT (unixepoch())
+    created_at INTEGER DEFAULT (unixepoch()),
+    credited_at INTEGER,
+    INDEX idx_account_status (account_id, status)
 );
 
--- Example: Governance proposals
-CREATE TABLE governance_proposals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    proposal_type TEXT NOT NULL,           -- PARAMETER, UPGRADE, CUSTOM
-    title TEXT NOT NULL,
-    description TEXT,
-    actions JSON NOT NULL,                 -- Array of actions to execute
-    voting_start INTEGER,
-    voting_end INTEGER,
-    for_votes INTEGER DEFAULT 0,
-    against_votes INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'pending',
-    execution_tx TEXT,
-    created_at INTEGER DEFAULT (unixepoch())
-);
+-- Validators listen for Bridge.deposit() events
+-- Parse event data and INSERT into this table
+-- Application queries this table to credit accounts
 ```
 
-## Validator Message Processing
+### Generic Message Calls
 
-### Message Detection and Processing
+```sql
+CREATE TABLE outbound_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_contract TEXT NOT NULL,         -- Contract to call
+    function_selector TEXT NOT NULL,       -- bytes4 selector
+    call_data BLOB NOT NULL,               -- ABI-encoded params
+    value TEXT DEFAULT '0',                -- ETH to send
+    status TEXT DEFAULT 'pending',
+    tx_hash TEXT,
+    created_at INTEGER DEFAULT (unixepoch())
+);
+
+-- Application can trigger arbitrary contract calls
+-- Bridge.sol executes via _processCall()
+```
+
+### Schema Hash Calculation
+
+```javascript
+// Schema hash ties SQL table to contract ABI
+function calculateSchemaHash(tableName, columns) {
+  const schemaString = JSON.stringify({
+    table: tableName,
+    columns: columns.map(c => ({ name: c.name, type: c.abiType }))
+  });
+  return ethers.utils.keccak256(ethers.utils.toUtf8Bytes(schemaString));
+}
+
+// Example:
+const withdrawalSchema = calculateSchemaHash("outbound_withdrawals", [
+  { name: "recipient_address", abiType: "address" },
+  { name: "token_address", abiType: "address" },
+  { name: "amount", abiType: "uint256" }
+]);
+```
+
+## Minimal Validator Integration (Rust)
+
+Validators are read replicas (see PLAN_REPLICA.md) with additional bridge message processing. The Rust code is minimal - just monitoring tables and calling Bridge.sol:
+
+### Message Processor Module (Part of Replica)
 
 ```rust
-// validator/src/message_processor.rs
+// This lives in synddb-replica/src/bridge.rs
 use alloy::prelude::*;
 use rusqlite::Connection;
 
-pub struct MessageProcessor {
+pub struct BridgeProcessor {
     db: Arc<Connection>,
-    bridge_contract: BridgeContract,
-    validator_key: SigningKey,
-    tee_attestor: Option<TeeAttestor>,
-    monitored_tables: Vec<TableSchema>,
+    bridge: BridgeContract,
+    signer: PrivateKeySigner,
+    monitored_tables: Vec<TableConfig>,
 }
 
-#[derive(Clone)]
-pub struct TableSchema {
+pub struct TableConfig {
     pub name: String,
-    pub message_type: MessageType,
-    pub columns: Vec<Column>,
-    pub abi_encoder: Box<dyn AbiEncoder>,
+    pub schema_hash: B256,
+    pub message_type: u8,  // Maps to MessageType enum
+    pub columns: Vec<String>,
 }
 
-pub struct Column {
-    pub name: String,
-    pub sql_type: String,
-    pub abi_type: String,
-    pub required: bool,
-}
+impl BridgeProcessor {
+    pub async fn process_outbound_messages(&self) -> Result<()> {
+        for table in &self.monitored_tables {
+            // Simple SQL query for pending messages
+            let sql = format!(
+                "SELECT * FROM {} WHERE status = 'pending' ORDER BY id LIMIT 10",
+                table.name
+            );
 
-impl MessageProcessor {
-    pub async fn start(mut self) -> Result<()> {
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
-        
-        loop {
-            interval.tick().await;
-            self.process_pending_messages().await?;
-            self.process_inbound_messages().await?;
-        }
-    }
-    
-    async fn process_pending_messages(&mut self) -> Result<()> {
-        for schema in &self.monitored_tables {
-            let messages = self.fetch_pending_messages(&schema).await?;
-            
-            for message in messages {
-                // Validate message
-                if !self.validate_message(&message, &schema)? {
-                    self.mark_failed(message.id, &schema.name).await?;
-                    continue;
-                }
-                
-                // Convert to contract message
-                let contract_message = self.encode_message(&message, &schema)?;
-                
-                // Sign message
-                let signature = self.sign_message(&contract_message)?;
-                
-                // Generate TEE attestation if available
-                let attestation = if let Some(attestor) = &self.tee_attestor {
-                    Some(attestor.attest(&contract_message)?)
-                } else {
-                    None
-                };
-                
-                // Broadcast to other validators
-                let signatures = self.gather_signatures(
-                    &contract_message,
-                    signature,
-                    attestation
-                ).await?;
-                
-                // Submit to bridge if threshold met
-                if signatures.len() >= self.threshold() {
-                    let tx_hash = self.submit_to_bridge(
-                        contract_message,
-                        signatures
-                    ).await?;
-                    
-                    self.mark_processed(
-                        message.id,
-                        &schema.name,
-                        &tx_hash
-                    ).await?;
+            let mut stmt = self.db.prepare(&sql)?;
+            let rows = stmt.query_map([], |row| {
+                // Extract row data into Message struct
+                Ok(self.build_message(row, table)?)
+            })?;
+
+            for message in rows {
+                let msg = message?;
+
+                // Sign the message
+                let signature = self.sign_message(&msg)?;
+
+                // Coordinate with other validators (simple HTTP)
+                let all_signatures = self.gather_signatures(&msg, signature).await?;
+
+                // Submit to Bridge.sol
+                if all_signatures.len() >= self.threshold() {
+                    let tx = self.bridge
+                        .processMessage(msg.clone(), all_signatures)
+                        .send()
+                        .await?;
+
+                    // Update status in SQL
+                    self.db.execute(
+                        &format!("UPDATE {} SET status = 'submitted', tx_hash = ?1 WHERE id = ?2", table.name),
+                        params![tx.tx_hash().to_string(), msg.id]
+                    )?;
                 }
             }
         }
-        
         Ok(())
     }
-    
-    async fn fetch_pending_messages(&self, schema: &TableSchema) -> Result<Vec<Message>> {
-        let sql = format!(
-            "SELECT * FROM {} WHERE status = 'pending' ORDER BY id LIMIT 100",
-            schema.name
-        );
-        
-        let mut stmt = self.db.prepare(&sql)?;
-        let message_iter = stmt.query_map([], |row| {
-            Ok(Message {
-                id: row.get("id")?,
-                data: self.extract_row_data(row, &schema.columns)?,
-            })
-        })?;
-        
-        let mut messages = Vec::new();
-        for message in message_iter {
-            messages.push(message?);
-        }
-        
-        Ok(messages)
+
+    fn sign_message(&self, message: &Message) -> Result<Bytes> {
+        // Hash the message (same as Solidity _hashMessage)
+        let message_hash = keccak256(&abi::encode(&[
+            message.id.to_token(),
+            message.message_type.to_token(),
+            message.schema_hash.to_token(),
+            keccak256(&message.payload).to_token(),
+            message.nonce.to_token(),
+            message.timestamp.to_token(),
+        ]));
+
+        // Sign with Ethereum signed message prefix
+        let signature = self.signer.sign_message(&message_hash).await?;
+        Ok(signature.as_bytes().into())
     }
-    
-    fn encode_message(&self, message: &Message, schema: &TableSchema) -> Result<ContractMessage> {
-        let payload = schema.abi_encoder.encode(&message.data)?;
-        let schema_hash = keccak256(schema.name.as_bytes());
-        
-        Ok(ContractMessage {
-            id: message.id as u256,
-            message_type: schema.message_type,
-            schema_hash,
-            payload,
-            nonce: self.next_nonce(),
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-        })
-    }
-    
-    async fn submit_to_bridge(
+
+    async fn gather_signatures(
         &self,
-        message: ContractMessage,
-        signatures: Vec<ValidatorSignature>
-    ) -> Result<TxHash> {
-        let tx = self.bridge_contract
-            .process_message(message, signatures)
-            .from(self.validator_key.address())
-            .gas_price(self.get_gas_price().await?)
-            .send()
-            .await?;
-            
-        info!("Message submitted to bridge: {:?}", tx.hash());
-        Ok(tx.hash())
-    }
-    
-    async fn process_inbound_messages(&mut self) -> Result<()> {
-        // Query bridge contract for new InboundMessage events
-        let filter = self.bridge_contract
-            .inbound_message_filter()
-            .from_block(self.last_processed_block);
-            
-        let logs = filter.query().await?;
-        
-        for log in logs {
-            let schema_hash = log.target_schema;
-            let payload = log.payload;
-            
-            // Find matching inbound table
-            if let Some(table) = self.find_inbound_table(schema_hash) {
-                // Decode payload according to table schema
-                let data = table.abi_encoder.decode(&payload)?;
-                
-                // Insert into inbound table
-                self.insert_inbound_message(&table.name, data).await?;
+        message: &Message,
+        own_sig: Bytes
+    ) -> Result<Vec<Bytes>> {
+        // Simple HTTP-based coordination (can be enhanced)
+        let mut signatures = vec![own_sig];
+
+        for validator in &self.other_validators {
+            let client = reqwest::Client::new();
+            let resp: SignatureResponse = client
+                .post(&format!("{}/sign", validator.url))
+                .json(&message)
+                .send()
+                .await?
+                .json()
+                .await?;
+
+            signatures.push(resp.signature);
+
+            if signatures.len() >= self.threshold() {
+                break;
             }
         }
-        
-        self.last_processed_block = logs.last()
-            .map(|l| l.block_number)
-            .unwrap_or(self.last_processed_block);
-            
-        Ok(())
-    }
-}
-```
 
-### Message Validation
-
-```rust
-// validator/src/validation.rs
-pub struct MessageValidator {
-    rules: Vec<Box<dyn ValidationRule>>,
-    limits: MessageLimits,
-}
-
-pub struct MessageLimits {
-    max_withdrawal_amount: U256,
-    daily_withdrawal_limit: U256,
-    hourly_message_limit: usize,
-    max_gas_per_call: u64,
-}
-
-#[async_trait]
-pub trait ValidationRule: Send + Sync {
-    async fn validate(&self, message: &Message, context: &ValidationContext) -> Result<()>;
-}
-
-pub struct WithdrawalLimitRule {
-    daily_limit: U256,
-    window: Duration,
-}
-
-#[async_trait]
-impl ValidationRule for WithdrawalLimitRule {
-    async fn validate(&self, message: &Message, context: &ValidationContext) -> Result<()> {
-        if let Some(amount) = message.get_field("amount") {
-            let amount: U256 = amount.parse()?;
-            let account = message.get_field("account_id").unwrap();
-            
-            let daily_total = context.get_daily_total(account).await?;
-            
-            if daily_total + amount > self.daily_limit {
-                return Err(ValidationError::DailyLimitExceeded);
-            }
-        }
-        Ok(())
-    }
-}
-
-pub struct SignatureVerificationRule;
-
-#[async_trait]
-impl ValidationRule for SignatureVerificationRule {
-    async fn validate(&self, message: &Message, context: &ValidationContext) -> Result<()> {
-        // Verify any application-level signatures
-        if let Some(sig) = message.get_field("user_signature") {
-            let signer = recover_signer(&message.hash(), &sig)?;
-            let expected = message.get_field("account_id").unwrap();
-            
-            if !context.is_authorized(signer, expected).await? {
-                return Err(ValidationError::UnauthorizedSigner);
-            }
-        }
-        Ok(())
-    }
-}
-
-pub struct AnomalyDetectionRule {
-    ml_model: AnomalyDetector,
-}
-
-#[async_trait]
-impl ValidationRule for AnomalyDetectionRule {
-    async fn validate(&self, message: &Message, context: &ValidationContext) -> Result<()> {
-        let features = self.extract_features(message, context).await?;
-        let anomaly_score = self.ml_model.predict(&features)?;
-        
-        if anomaly_score > 0.95 {
-            warn!("Anomalous message detected: {:?}", message);
-            return Err(ValidationError::AnomalousPattern);
-        }
-        
-        Ok(())
-    }
-}
-```
-
-### Multi-Validator Consensus
-
-```rust
-// validator/src/consensus.rs
-pub struct ConsensusManager {
-    validators: Vec<ValidatorEndpoint>,
-    threshold: usize,
-    timeout: Duration,
-}
-
-pub struct ValidatorEndpoint {
-    url: String,
-    public_key: PublicKey,
-    tee_mrenclave: Option<[u8; 32]>,
-}
-
-impl ConsensusManager {
-    pub async fn gather_signatures(
-        &self,
-        message: &ContractMessage,
-        own_signature: Signature,
-        own_attestation: Option<Attestation>
-    ) -> Result<Vec<ValidatorSignature>> {
-        let mut signatures = vec![ValidatorSignature {
-            validator: self.own_address(),
-            signature: own_signature.to_bytes(),
-            attestation: own_attestation.map(|a| a.to_bytes()).unwrap_or_default(),
-        }];
-        
-        // Request signatures from other validators
-        let futures: Vec<_> = self.validators.iter().map(|validator| {
-            self.request_signature(validator, message)
-        }).collect();
-        
-        let results = futures::future::join_all(futures).await;
-        
-        for result in results {
-            if let Ok(sig) = result {
-                signatures.push(sig);
-                
-                if signatures.len() >= self.threshold {
-                    break;  // We have enough signatures
-                }
-            }
-        }
-        
-        if signatures.len() < self.threshold {
-            return Err(ConsensusError::InsufficientSignatures);
-        }
-        
         Ok(signatures)
     }
-    
-    async fn request_signature(
-        &self,
-        validator: &ValidatorEndpoint,
-        message: &ContractMessage
-    ) -> Result<ValidatorSignature> {
-        let client = reqwest::Client::new();
-        
-        let response = client
-            .post(&format!("{}/sign", validator.url))
-            .json(&SignatureRequest {
-                message: message.clone(),
-                requester: self.own_address(),
-            })
-            .timeout(self.timeout)
-            .send()
-            .await?;
-            
-        let sig_response: SignatureResponse = response.json().await?;
-        
-        // Verify the signature
-        let signer = recover_signer(&message.hash(), &sig_response.signature)?;
-        if signer != validator.public_key.to_address() {
-            return Err(ConsensusError::InvalidSignature);
+
+    pub async fn process_inbound_messages(&self) -> Result<()> {
+        // Listen for Bridge.InboundMessage events
+        let filter = self.bridge
+            .InboundMessage_filter()
+            .from_block(self.last_block);
+
+        let logs = filter.query().await?;
+
+        for log in logs {
+            // Decode event data
+            let (nonce, sender, schema_hash, payload) = (
+                log.nonce,
+                log.sender,
+                log.targetSchema,
+                log.payload,
+            );
+
+            // Find matching table
+            let table = self.find_inbound_table(schema_hash)?;
+
+            // Decode payload and insert into SQL
+            self.insert_inbound(&table, payload).await?;
         }
-        
-        // Verify TEE attestation if provided
-        if let Some(attestation) = &sig_response.attestation {
-            self.verify_attestation(attestation, validator)?;
-        }
-        
-        Ok(ValidatorSignature {
-            validator: signer,
-            signature: sig_response.signature,
-            attestation: sig_response.attestation.unwrap_or_default(),
-        })
-    }
-}
-```
 
-## Circuit Breakers and Safety
-
-### Rate Limiting
-
-```rust
-// bridge/src/safety.rs
-pub struct RateLimiter {
-    limits: HashMap<String, Limit>,
-    windows: HashMap<String, Window>,
-}
-
-pub struct Limit {
-    max_count: usize,
-    window_duration: Duration,
-    max_amount: Option<U256>,
-}
-
-impl RateLimiter {
-    pub fn check_withdrawal(&mut self, amount: U256, account: &str) -> Result<()> {
-        // Check global daily limit
-        self.check_limit("global_daily", amount)?;
-        
-        // Check per-account hourly limit
-        self.check_limit(&format!("account_hourly_{}", account), amount)?;
-        
-        // Check velocity (sudden spike detection)
-        self.check_velocity(amount, account)?;
-        
         Ok(())
     }
-    
-    fn check_velocity(&self, amount: U256, account: &str) -> Result<()> {
-        let history = self.get_history(account);
-        let average = history.average();
-        
-        if amount > average * 10 {
-            return Err(SafetyError::VelocityCheckFailed);
-        }
-        
-        Ok(())
-    }
-}
-```
 
-### Pause Mechanisms
+    fn insert_inbound(&self, table: &str, payload: Bytes) -> Result<()> {
+        // Decode based on table schema and insert
+        // This is simple SQL INSERT - no complex logic
+        match table {
+            "inbound_deposits" => {
+                let (account_id, sender, token, amount, block) =
+                    abi::decode(&["string", "address", "address", "uint256", "uint256"], &payload)?;
 
-```rust
-pub struct CircuitBreaker {
-    paused: Arc<AtomicBool>,
-    pause_reasons: Arc<Mutex<Vec<PauseReason>>>,
-    auto_resume: Option<Duration>,
-}
-
-pub enum PauseReason {
-    ManualPause,
-    AnomalyDetected { details: String },
-    ThresholdExceeded { metric: String, value: f64 },
-    ExternalThreat { source: String },
-}
-
-impl CircuitBreaker {
-    pub fn trip(&self, reason: PauseReason) {
-        self.paused.store(true, Ordering::SeqCst);
-        self.pause_reasons.lock().unwrap().push(reason);
-        
-        if let Some(duration) = self.auto_resume {
-            tokio::spawn(async move {
-                tokio::time::sleep(duration).await;
-                self.reset();
-            });
-        }
-    }
-    
-    pub fn check(&self) -> Result<()> {
-        if self.paused.load(Ordering::SeqCst) {
-            return Err(SafetyError::SystemPaused);
+                self.db.execute(
+                    "INSERT INTO inbound_deposits (account_id, sender_address, token_address, amount, block_number, status)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'pending')",
+                    params![account_id, sender, token, amount.to_string(), block]
+                )?;
+            }
+            _ => {
+                // Custom table handling
+            }
         }
         Ok(())
     }
 }
 ```
 
-## Testing Infrastructure
+**Key Point**: The Rust code is simple - just:
+1. Query SQL for pending messages
+2. Sign messages locally
+3. Coordinate via HTTP to gather signatures
+4. Submit to Bridge.sol
+5. Listen for events and write to SQL
 
-### Contract Tests
+All complex logic (signature verification, multi-sig, execution) is in Solidity.
 
-```javascript
-// test/Bridge.test.js
-const { expect } = require("chai");
-const { ethers } = require("hardhat");
+## Testing
 
-describe("Bridge", function () {
-  let bridge;
-  let validators;
-  
-  beforeEach(async function () {
-    validators = await ethers.getSigners().slice(0, 3);
-    const Bridge = await ethers.getContractFactory("Bridge");
-    bridge = await Bridge.deploy();
-    await bridge.initialize(
-      validators.map(v => v.address),
-      2,  // threshold
-      ethers.utils.parseEther("1000")  // daily limit
-    );
-  });
-  
-  it("Should process withdrawal with valid signatures", async function () {
-    const message = {
-      id: 1,
-      messageType: 0,  // WITHDRAWAL
-      schemaHash: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("outbound_withdrawals")),
-      payload: ethers.utils.defaultAbiCoder.encode(
-        ["address", "address", "uint256"],
-        [user.address, ethers.constants.AddressZero, ethers.utils.parseEther("10")]
-      ),
-      nonce: 0,
-      timestamp: Math.floor(Date.now() / 1000)
-    };
-    
-    // Get signatures from validators
-    const messageHash = ethers.utils.keccak256(ethers.utils.defaultAbiCoder.encode(
-      ["uint256", "uint8", "bytes32", "bytes", "uint256", "uint256"],
-      [message.id, message.messageType, message.schemaHash, message.payload, message.nonce, message.timestamp]
-    ));
-    
-    const signatures = await Promise.all(
-      validators.slice(0, 2).map(async (validator) => ({
-        validator: validator.address,
-        signature: await validator.signMessage(messageHash),
-        attestation: "0x"
-      }))
-    );
-    
-    await bridge.processMessage(message, signatures);
-    
-    expect(await bridge.processedMessages(1)).to.be.true;
-  });
-  
-  it("Should enforce daily withdrawal limit", async function () {
-    // Process withdrawal up to limit
-    // ...
-    
-    // Next withdrawal should fail
-    await expect(
-      bridge.processMessage(largeWithdrawal, signatures)
-    ).to.be.revertedWith("Daily limit exceeded");
-  });
-  
-  it("Should handle circuit breaker", async function () {
-    await bridge.pause();
-    
-    await expect(
-      bridge.processMessage(message, signatures)
-    ).to.be.revertedWith("Pausable: paused");
-    
-    await bridge.unpause();
-    
-    // Should work after unpause
-    await bridge.processMessage(message, signatures);
-  });
-});
+### Solidity Tests (Foundry)
+
+```solidity
+// test/Bridge.t.sol
+pragma solidity ^0.8.20;
+
+import "forge-std/Test.sol";
+import "../src/Bridge.sol";
+
+contract BridgeTest is Test {
+    Bridge public bridge;
+    address[] public validators;
+    uint256[] public validatorKeys;
+
+    function setUp() public {
+        // Setup validators
+        for (uint i = 0; i < 3; i++) {
+            uint256 key = uint256(keccak256(abi.encode(i)));
+            validators.push(vm.addr(key));
+            validatorKeys.push(key);
+        }
+
+        // Deploy bridge
+        bridge = new Bridge();
+        bridge.initialize(
+            validators,
+            2,  // 2-of-3 multisig
+            1000 ether
+        );
+
+        // Fund bridge
+        vm.deal(address(bridge), 100 ether);
+    }
+
+    function testWithdrawal() public {
+        // Create message
+        Bridge.Message memory msg = Bridge.Message({
+            id: 1,
+            messageType: Bridge.MessageType.WITHDRAWAL,
+            schemaHash: keccak256("outbound_withdrawals"),
+            payload: abi.encode(address(this), address(0), 1 ether),
+            nonce: 0,
+            timestamp: block.timestamp
+        });
+
+        // Get signatures from validators
+        bytes[] memory sigs = new bytes[](2);
+        sigs[0] = _signMessage(msg, validatorKeys[0]);
+        sigs[1] = _signMessage(msg, validatorKeys[1]);
+
+        // Process message
+        uint256 balanceBefore = address(this).balance;
+        bridge.processMessage(msg, sigs);
+
+        assertEq(address(this).balance - balanceBefore, 1 ether);
+        assertTrue(bridge.processedMessages(1));
+    }
+
+    function testInsufficientSignatures() public {
+        Bridge.Message memory msg = _createTestMessage();
+        bytes[] memory sigs = new bytes[](1);  // Only 1 signature
+        sigs[0] = _signMessage(msg, validatorKeys[0]);
+
+        vm.expectRevert(Bridge.InsufficientSignatures.selector);
+        bridge.processMessage(msg, sigs);
+    }
+
+    function testDailyLimit() public {
+        // Process withdrawals up to limit
+        // ...
+
+        // Next withdrawal should fail
+        vm.expectRevert(Bridge.DailyLimitExceeded.selector);
+        bridge.processMessage(largeWithdrawal, sigs);
+    }
+
+    function _signMessage(
+        Bridge.Message memory msg,
+        uint256 privateKey
+    ) internal pure returns (bytes memory) {
+        bytes32 hash = _hashMessage(msg);
+        bytes32 ethHash = keccak256(abi.encodePacked(
+            "\x19Ethereum Signed Message:\n32",
+            hash
+        ));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethHash);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _hashMessage(Bridge.Message memory msg) internal pure returns (bytes32) {
+        return keccak256(abi.encode(
+            msg.id,
+            msg.messageType,
+            msg.schemaHash,
+            keccak256(msg.payload),
+            msg.nonce,
+            msg.timestamp
+        ));
+    }
+
+    receive() external payable {}
+}
 ```
 
-### Integration Tests
+### Integration Test (Rust + Solidity)
 
 ```rust
 #[tokio::test]
 async fn test_end_to_end_withdrawal() {
-    // Setup test environment
+    // Deploy bridge contract
+    let bridge = deploy_bridge_contract().await;
+
+    // Setup test database with message table
     let db = setup_test_db().await;
-    let bridge = deploy_test_bridge().await;
-    let processor = MessageProcessor::new(db, bridge);
-    
-    // Insert withdrawal message
     db.execute(
-        "INSERT INTO outbound_withdrawals (account_id, recipient_address, token_address, amount) 
-         VALUES ('alice', '0x...', '0x...', '1000000000000000000')",
+        "CREATE TABLE outbound_withdrawals (
+            id INTEGER PRIMARY KEY,
+            account_id TEXT,
+            recipient_address TEXT,
+            token_address TEXT,
+            amount TEXT,
+            status TEXT DEFAULT 'pending'
+        )",
         []
     ).unwrap();
-    
-    // Process messages
-    processor.process_pending_messages().await.unwrap();
-    
-    // Verify on-chain
-    let processed = bridge.processed_messages(1).await.unwrap();
-    assert!(processed);
-    
-    // Verify database updated
-    let status: String = db.query_row(
-        "SELECT status FROM outbound_withdrawals WHERE id = 1",
-        [],
-        |row| row.get(0)
+
+    // Insert withdrawal message
+    db.execute(
+        "INSERT INTO outbound_withdrawals (account_id, recipient_address, token_address, amount)
+         VALUES ('alice', '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', '0x0', '1000000000000000000')",
+        []
     ).unwrap();
-    assert_eq!(status, "confirmed");
+
+    // Create processor
+    let processor = BridgeProcessor::new(db, bridge);
+
+    // Process messages
+    processor.process_outbound_messages().await.unwrap();
+
+    // Verify on-chain
+    let processed = bridge.processedMessages(U256::from(1)).call().await.unwrap();
+    assert!(processed._0);
 }
 ```
 
-## Deployment Configuration
+## Deployment
 
-### Bridge Deployment Script
+### Deploy Script (Foundry)
 
-```javascript
-// scripts/deploy-bridge.js
-const hre = require("hardhat");
+```solidity
+// script/DeployBridge.s.sol
+pragma solidity ^0.8.20;
 
-async function main() {
-  const validators = [
-    "0x...",  // Validator 1 (TEE)
-    "0x...",  // Validator 2 (TEE)
-    "0x...",  // Validator 3 (TEE)
-  ];
-  
-  const threshold = 2;
-  const dailyLimit = ethers.utils.parseEther("10000");
-  
-  // Deploy implementation
-  const Bridge = await hre.ethers.getContractFactory("Bridge");
-  const implementation = await Bridge.deploy();
-  await implementation.deployed();
-  
-  // Deploy proxy
-  const Proxy = await hre.ethers.getContractFactory("TransparentUpgradeableProxy");
-  const proxy = await Proxy.deploy(
-    implementation.address,
-    proxyAdmin.address,
-    Bridge.interface.encodeFunctionData("initialize", [validators, threshold, dailyLimit])
-  );
-  await proxy.deployed();
-  
-  console.log("Bridge deployed to:", proxy.address);
-  
-  // Verify on Etherscan
-  await hre.run("verify:verify", {
-    address: implementation.address,
-    constructorArguments: [],
-  });
+import "forge-std/Script.sol";
+import "../src/Bridge.sol";
+
+contract DeployBridge is Script {
+    function run() external {
+        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+
+        address[] memory validators = new address[](3);
+        validators[0] = vm.envAddress("VALIDATOR_1");
+        validators[1] = vm.envAddress("VALIDATOR_2");
+        validators[2] = vm.envAddress("VALIDATOR_3");
+
+        vm.startBroadcast(deployerKey);
+
+        Bridge bridge = new Bridge();
+        bridge.initialize(
+            validators,
+            2,  // threshold
+            1000 ether  // daily limit
+        );
+
+        vm.stopBroadcast();
+
+        console.log("Bridge deployed at:", address(bridge));
+    }
 }
-
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
 ```
 
-### Validator Configuration
+### Validator Config
 
 ```yaml
 # validator-config.yaml
 bridge:
   contract_address: "0x..."
   chain_id: 1
-  rpc_url: "https://eth-mainnet.g.alchemy.com/v2/..."
-  
-message_tables:
-  - name: "outbound_withdrawals"
-    type: "WITHDRAWAL"
-    columns:
-      - name: "recipient_address"
-        sql_type: "TEXT"
-        abi_type: "address"
-      - name: "token_address"
-        sql_type: "TEXT"  
-        abi_type: "address"
-      - name: "amount"
-        sql_type: "TEXT"
-        abi_type: "uint256"
-        
-  - name: "outbound_messages"
-    type: "CALL"
-    columns:
-      - name: "target_address"
-        sql_type: "TEXT"
-        abi_type: "address"
-      - name: "function_signature"
-        sql_type: "TEXT"
-        abi_type: "bytes4"
-      - name: "parameters"
-        sql_type: "BLOB"
-        abi_type: "bytes"
-        
-validation_rules:
-  - type: "withdrawal_limit"
-    daily_limit: "1000000000000000000000"  # 1000 ETH
-    
-  - type: "signature_verification"
-    required_signatures: 2
-    
-  - type: "anomaly_detection"
-    model_path: "/models/anomaly_detector.pkl"
-    threshold: 0.95
-    
-consensus:
-  validators:
-    - url: "https://validator1.synddb.io"
-      public_key: "0x..."
-      
-    - url: "https://validator2.synddb.io"  
-      public_key: "0x..."
-      
+  rpc_url: "https://eth-mainnet.alchemyapi.io/v2/..."
+
+  # Message tables to monitor
+  outbound_tables:
+    - name: "outbound_withdrawals"
+      schema_hash: "0x1234..."
+      message_type: 0  # WITHDRAWAL
+      poll_interval_secs: 5
+
+    - name: "outbound_calls"
+      schema_hash: "0x5678..."
+      message_type: 2  # CALL
+      poll_interval_secs: 10
+
+  # Inbound tables to populate
+  inbound_tables:
+    - name: "inbound_deposits"
+      schema_hash: "0xabcd..."
+      event: "InboundMessage"
+
+  # Validator coordination
+  other_validators:
+    - url: "https://validator2.example.com"
+    - url: "https://validator3.example.com"
+
   threshold: 2
-  timeout_secs: 30
+
+  # Signer
+  private_key: "${VALIDATOR_PRIVATE_KEY}"
 ```
 
-## Security Considerations
+## Summary
 
-### 1. Message Authentication
+The Bridge is **primarily a Solidity smart contract**. All complex logic lives on-chain:
+- ✅ Multi-sig verification
+- ✅ Message processing and routing
+- ✅ Withdrawal execution
+- ✅ Circuit breakers
+- ✅ Nonce management
 
-All messages must be authenticated:
+Validators are simple:
+- ✅ Monitor SQL tables for pending messages
+- ✅ Sign messages locally
+- ✅ Coordinate signatures via HTTP
+- ✅ Submit to Bridge.sol
+- ✅ Listen for events and write to inbound tables
 
-```rust
-pub fn verify_message_origin(message: &Message, db: &Connection) -> Result<()> {
-    // Verify message exists in database
-    let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM ? WHERE id = ?)",
-        params![message.table_name, message.id],
-        |row| row.get(0)
-    )?;
-    
-    if !exists {
-        return Err(SecurityError::MessageNotFound);
-    }
-    
-    // Verify message hasn't been tampered with
-    let hash = compute_message_hash(message);
-    let stored_hash: Vec<u8> = db.query_row(
-        "SELECT hash FROM ? WHERE id = ?",
-        params![message.table_name, message.id],
-        |row| row.get(0)
-    )?;
-    
-    if hash != stored_hash {
-        return Err(SecurityError::MessageTampered);
-    }
-    
-    Ok(())
-}
-```
-
-### 2. Replay Protection
-
-Prevent message replay attacks:
-
-```solidity
-mapping(uint256 => bool) public processedMessages;
-mapping(uint256 => uint256) public messageNonces;
-
-function processMessage(Message calldata message, ...) external {
-    require(!processedMessages[message.id], "Already processed");
-    require(message.nonce == messageNonces[message.schemaHash]++, "Invalid nonce");
-    processedMessages[message.id] = true;
-}
-```
-
-### 3. Schema Validation
-
-Validate message schemas:
-
-```rust
-pub fn validate_schema(message: &Message, expected: &TableSchema) -> Result<()> {
-    let actual_schema = extract_schema(message)?;
-    
-    if actual_schema.hash() != expected.hash() {
-        return Err(ValidationError::SchemaMismatch);
-    }
-    
-    // Validate each field
-    for field in expected.columns {
-        if field.required && !message.has_field(&field.name) {
-            return Err(ValidationError::MissingRequiredField(field.name));
-        }
-        
-        if let Some(value) = message.get_field(&field.name) {
-            validate_field_type(value, &field.abi_type)?;
-        }
-    }
-    
-    Ok(())
-}
-```
-
-### 4. TEE Attestation Verification
-
-Verify validator TEE attestations:
-
-```rust
-pub fn verify_validator_attestation(
-    validator: &Address,
-    attestation: &Attestation,
-    expected_mrenclave: &[u8; 32]
-) -> Result<()> {
-    // Verify quote signature
-    let quote = parse_quote(&attestation.quote)?;
-    verify_quote_signature(&quote)?;
-    
-    // Check MRENCLAVE matches
-    if quote.mrenclave != expected_mrenclave {
-        return Err(SecurityError::InvalidMrenclave);
-    }
-    
-    // Verify validator key is in quote
-    let report_data = quote.report_data;
-    let key_hash = keccak256(&validator.to_bytes());
-    
-    if report_data[..32] != key_hash {
-        return Err(SecurityError::KeyNotInQuote);
-    }
-    
-    // Check quote is recent
-    if quote.timestamp < SystemTime::now() - Duration::from_secs(3600) {
-        return Err(SecurityError::StaleQuote);
-    }
-    
-    Ok(())
-}
-```
-
-## Performance Optimizations
-
-### 1. Batch Message Processing
-
-```rust
-pub async fn process_message_batch(messages: Vec<Message>) -> Result<Vec<TxHash>> {
-    // Group messages by type for batch processing
-    let mut grouped: HashMap<MessageType, Vec<Message>> = HashMap::new();
-    for msg in messages {
-        grouped.entry(msg.message_type).or_default().push(msg);
-    }
-    
-    // Process each group in parallel
-    let futures: Vec<_> = grouped.into_iter().map(|(msg_type, msgs)| {
-        tokio::spawn(async move {
-            process_typed_batch(msg_type, msgs).await
-        })
-    }).collect();
-    
-    let results = futures::future::join_all(futures).await;
-    
-    Ok(results.into_iter().flatten().collect())
-}
-```
-
-### 2. Signature Aggregation
-
-Use BLS signatures for aggregation:
-
-```rust
-pub struct AggregatedSignature {
-    signature: BlsSignature,
-    public_keys: Vec<BlsPublicKey>,
-}
-
-impl AggregatedSignature {
-    pub fn aggregate(signatures: Vec<BlsSignature>) -> Self {
-        let aggregated = bls::aggregate(&signatures);
-        Self {
-            signature: aggregated,
-            public_keys: extract_public_keys(signatures),
-        }
-    }
-    
-    pub fn verify(&self, message: &[u8]) -> bool {
-        bls::verify_aggregated(
-            &self.signature,
-            message,
-            &self.public_keys
-        )
-    }
-}
-```
-
-### 3. Optimistic Processing
-
-Process messages optimistically:
-
-```rust
-pub async fn optimistic_process(message: Message) -> Result<()> {
-    // Submit to bridge optimistically
-    let tx = submit_to_bridge(message.clone()).await?;
-    
-    // Validate in parallel
-    tokio::spawn(async move {
-        if let Err(e) = validate_message(message).await {
-            // Revert if validation fails
-            revert_message(tx).await?;
-        }
-    });
-    
-    Ok(())
-}
-```
-
-## Monitoring and Observability
-
-### Metrics
-
-```rust
-lazy_static! {
-    static ref MESSAGE_COUNTER: IntCounterVec = register_int_counter_vec!(
-        "synddb_messages_total",
-        "Total messages processed",
-        &["type", "status"]
-    ).unwrap();
-    
-    static ref MESSAGE_LATENCY: HistogramVec = register_histogram_vec!(
-        "synddb_message_latency_seconds",
-        "Message processing latency",
-        &["type"]
-    ).unwrap();
-    
-    static ref BRIDGE_BALANCE: GaugeVec = register_gauge_vec!(
-        "synddb_bridge_balance",
-        "Bridge contract balance",
-        &["token"]
-    ).unwrap();
-}
-```
-
-### Alerts
-
-```yaml
-# prometheus-alerts.yaml
-groups:
-  - name: bridge_alerts
-    rules:
-      - alert: HighMessageLatency
-        expr: synddb_message_latency_seconds{quantile="0.99"} > 60
-        annotations:
-          summary: "Message processing taking too long"
-          
-      - alert: LowBridgeBalance
-        expr: synddb_bridge_balance{token="ETH"} < 10
-        annotations:
-          summary: "Bridge ETH balance below 10"
-          
-      - alert: ValidatorConsensusFailure
-        expr: rate(synddb_consensus_failures[5m]) > 0.1
-        annotations:
-          summary: "Validator consensus failing"
-```
-
-## Migration Guide
-
-### Adding Custom Message Types
-
-1. **Define SQL Table**:
-```sql
-CREATE TABLE my_custom_messages (
-    id INTEGER PRIMARY KEY,
-    custom_field TEXT NOT NULL,
-    status TEXT DEFAULT 'pending'
-);
-```
-
-2. **Register with Validator**:
-```yaml
-message_tables:
-  - name: "my_custom_messages"
-    type: "CUSTOM"
-    schema_hash: "0x..."
-    columns:
-      - name: "custom_field"
-        abi_type: "string"
-```
-
-3. **Deploy Handler Contract**:
-```solidity
-contract MyCustomHandler is IMessageHandler {
-    function handleMessage(bytes calldata payload) external override {
-        string memory customField = abi.decode(payload, (string));
-        // Handle custom logic
-    }
-}
-```
-
-4. **Register Handler**:
-```javascript
-await bridge.registerHandler(schemaHash, handler.address);
-```
-
-### Upgrading Bridge Contract
-
-1. **Deploy New Implementation**:
-```javascript
-const BridgeV2 = await ethers.getContractFactory("BridgeV2");
-const newImpl = await BridgeV2.deploy();
-```
-
-2. **Upgrade Proxy**:
-```javascript
-await proxyAdmin.upgrade(proxyAddress, newImpl.address);
-```
-
-3. **Run Migration**:
-```javascript
-const bridge = BridgeV2.attach(proxyAddress);
-await bridge.migrate();
-```
-
-## Future Enhancements
-
-### 1. Cross-Chain Message Routing
-- Support for IBC, LayerZero, Axelar
-- Automatic route optimization
-- Multi-hop message passing
-
-### 2. Advanced Oracle Integration
-- Multiple oracle providers
-- Consensus-based oracle responses
-- Custom oracle networks
-
-### 3. Programmable Message Handlers
-- WASM-based custom handlers
-- Hot-swappable message processors
-- Dynamic schema evolution
-
-### 4. Enhanced Security
-- Multi-party computation for signatures
-- Homomorphic encryption for private messages
-- Zero-knowledge proofs for message validity
+This keeps the architecture clean and makes the bridge behavior fully transparent and verifiable on-chain.
