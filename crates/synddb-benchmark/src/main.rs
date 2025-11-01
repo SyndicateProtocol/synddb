@@ -108,18 +108,23 @@ async fn main() -> Result<()> {
         } => {
             info!("Starting orderbook simulation at {:?}", db);
 
-            let load_pattern = match pattern.as_str() {
-                "continuous" => LoadPattern::Continuous {
-                    ops_per_second: rate,
-                },
-                "burst" => LoadPattern::Burst {
-                    burst_size,
-                    pause_seconds: burst_interval,
-                },
-                _ => {
-                    warn!("Unknown pattern '{}', defaulting to continuous", pattern);
-                    LoadPattern::Continuous {
+            let load_pattern = if rate == 0 {
+                info!("Rate set to 0, enabling max throughput discovery mode");
+                LoadPattern::MaxThroughput
+            } else {
+                match pattern.as_str() {
+                    "continuous" => LoadPattern::Continuous {
                         ops_per_second: rate,
+                    },
+                    "burst" => LoadPattern::Burst {
+                        burst_size,
+                        pause_seconds: burst_interval,
+                    },
+                    _ => {
+                        warn!("Unknown pattern '{}', defaulting to continuous", pattern);
+                        LoadPattern::Continuous {
+                            ops_per_second: rate,
+                        }
                     }
                 }
             };

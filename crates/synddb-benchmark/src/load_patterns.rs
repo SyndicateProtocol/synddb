@@ -9,6 +9,8 @@ pub enum LoadPattern {
         burst_size: usize,
         pause_seconds: u64,
     },
+    /// Auto-discover maximum throughput by gradually increasing load
+    MaxThroughput,
 }
 
 #[derive(Debug, Clone)]

@@ -73,6 +73,10 @@ impl OrderbookSimulator {
                 )
                 .await?;
             }
+            LoadPattern::MaxThroughput => {
+                self.run_max_throughput(end_time, config.batch_size, config.simple_mode)
+                    .await?;
+            }
         }
 
         Ok(())
@@ -194,6 +198,104 @@ impl OrderbookSimulator {
             }
         }
 
+        Ok(())
+    }
+
+    async fn run_max_throughput(
+        &mut self,
+        end_time: Option<Instant>,
+        batch_size: usize,
+        simple_mode: bool,
+    ) -> Result<()> {
+        info!("=== Max Throughput Discovery Mode ===");
+        info!("Will automatically find maximum sustainable throughput");
+        info!("Starting with 1,000 ops/sec and doubling until performance degrades");
+
+        let mut current_rate = 1_000u64;
+        let mut best_rate = 0u64;
+        let mut best_actual_rate = 0f64;
+        let test_duration = Duration::from_secs(5);
+
+        loop {
+            if let Some(end) = end_time {
+                if Instant::now() >= end {
+                    break;
+                }
+            }
+
+            info!("\n--- Testing {} ops/sec ---", current_rate);
+
+            // Run test at current rate
+            let test_start = Instant::now();
+            let ops_before = self.operation_count;
+            let test_end_time = test_start + test_duration;
+
+            let interval_micros = 1_000_000 / current_rate;
+            let mut interval =
+                tokio::time::interval(Duration::from_micros(interval_micros * batch_size as u64));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            while Instant::now() < test_end_time {
+                interval.tick().await;
+
+                let tx = self.conn.transaction()?;
+                for _ in 0..batch_size {
+                    if simple_mode {
+                        Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
+                    } else {
+                        Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
+                    }
+                    self.operation_count += 1;
+                }
+                tx.commit()?;
+            }
+
+            let test_elapsed = test_start.elapsed();
+            let ops_completed = self.operation_count - ops_before;
+            let actual_rate = ops_completed as f64 / test_elapsed.as_secs_f64();
+            let achievement_pct = (actual_rate / current_rate as f64) * 100.0;
+
+            info!(
+                "Completed {} ops in {:.2}s = {:.0} ops/sec ({:.1}% of target)",
+                ops_completed,
+                test_elapsed.as_secs_f64(),
+                actual_rate,
+                achievement_pct
+            );
+
+            // If we achieved less than 90% of target, we've found the limit
+            if achievement_pct < 90.0 {
+                info!(
+                    "\n=== Maximum Throughput Found ===\n\
+                     Best sustained rate: {:.0} ops/sec (target: {} ops/sec)\n\
+                     System unable to sustain higher throughput\n",
+                    best_actual_rate, best_rate
+                );
+                break;
+            }
+
+            // Update best rate
+            best_rate = current_rate;
+            best_actual_rate = actual_rate;
+
+            // Double the rate for next test
+            let next_rate = current_rate * 2;
+
+            // Cap at reasonable maximum to avoid overflow
+            if next_rate > 10_000_000 {
+                info!(
+                    "\n=== Reached Testing Limit ===\n\
+                     Maximum tested rate: {:.0} ops/sec (target: {} ops/sec)\n\
+                     System can sustain even higher throughput\n",
+                    best_actual_rate, best_rate
+                );
+                break;
+            }
+
+            current_rate = next_rate;
+        }
+
+        self.log_final_stats();
         Ok(())
     }
 

@@ -71,7 +71,7 @@ Options:
   -d, --db <PATH>              Database path [default: orderbook.db]
   -c, --clear                  Clear all existing data before starting [default: resume]
   -p, --pattern <PATTERN>      Load pattern: continuous or burst [default: continuous]
-  -r, --rate <RATE>            Operations per second (continuous mode) [default: 100]
+  -r, --rate <RATE>            Operations per second (0 = auto-find max throughput) [default: 100]
   -t, --duration <SECONDS>     Duration in seconds (0 = run forever) [default: 0]
   -b, --burst-size <SIZE>      Burst size (burst mode) [default: 1000]
   -i, --burst-interval <SECS>  Pause between bursts (burst mode) [default: 5]
@@ -96,6 +96,9 @@ cargo run --package synddb-benchmark -- run --rate 10000
 
 # Simple mode: maximum throughput with only inserts (50,000-100,000+ ops/sec)
 cargo run --package synddb-benchmark --release -- run --simple --rate 100000 --batch-size 10000
+
+# Auto-discover maximum throughput (rate=0 enables max mode)
+cargo run --package synddb-benchmark --release -- run --rate 0 --simple --batch-size 5000
 ```
 
 #### `stats` - Show Statistics
@@ -298,6 +301,42 @@ cargo run --package synddb-benchmark --release -- run --simple --rate 100000 --b
 - Identifying system bottlenecks (CPU, disk I/O, memory)
 
 **Note:** Simple mode is not representative of realistic orderbook workload, but is useful for finding the maximum performance ceiling of your system.
+
+#### Max Throughput Discovery Mode
+
+Set `--rate 0` to automatically discover your system's maximum sustainable throughput. The tool will start at 1,000 ops/sec and double the rate every 5 seconds until performance degrades below 90% of the target.
+
+```bash
+# Auto-discover max throughput in simple mode
+cargo run --package synddb-benchmark --release -- run --rate 0 --simple --batch-size 5000
+
+# Auto-discover max throughput in full mode
+cargo run --package synddb-benchmark --release -- run --rate 0 --batch-size 1000
+```
+
+**How it works:**
+1. Starts at 1,000 ops/sec
+2. Runs for 5 seconds at each rate
+3. Doubles the rate if achieving >90% of target
+4. Stops when performance drops below 90%
+5. Reports the maximum sustained rate
+
+**Example output:**
+```
+Testing 1000 ops/sec → 1983 ops/sec (198.3% of target) ✓
+Testing 2000 ops/sec → 2975 ops/sec (148.8% of target) ✓
+Testing 64000 ops/sec → 67028 ops/sec (104.7% of target) ✓
+Testing 128000 ops/sec → 125976 ops/sec (98.4% of target) ✓
+Testing 256000 ops/sec → 125132 ops/sec (48.9% of target) ✗
+
+Maximum Throughput Found: 125,976 ops/sec
+```
+
+This is ideal for:
+- Finding your system's performance limits
+- Comparing performance across different hardware
+- Validating optimizations
+- Benchmarking before/after system changes
 
 ## SyndDB Sidecar (Coming Soon)
 
