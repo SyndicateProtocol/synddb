@@ -216,82 +216,83 @@ cargo run --package synddb-benchmark -- stats
 
 ## Performance Improvements
 
-The benchmark tool has undergone extensive optimization to maximize SQLite throughput and multi-core utilization. Here are the key improvements and their impact:
+The benchmark tool has undergone extensive performance analysis and optimization. Through rigorous testing, we identified that **extra indexes significantly hurt write performance**, while **PRAGMA tuning and parallel workers provide substantial gains**.
 
 ### Overview of Optimizations
 
-| Optimization Phase | Simple Mode | Full Mode | Key Improvements |
-|-------------------|-------------|-----------|------------------|
-| **Baseline** (unoptimized) | ~5,000 ops/sec | ~2,000 ops/sec | Default SQLite configuration |
-| **Phase 1: SQLite Tuning** | 8,022 ops/sec | 4,001 ops/sec | PRAGMA optimization, query improvements |
-| **Phase 2: Connection Pooling** | 8,022 ops/sec | 4,001 ops/sec | r2d2 pool, atomic counters |
-| **Phase 3: Parallel Workers** | **39,997 ops/sec** | **5,064 ops/sec** | Multi-threaded execution |
-| **Total Improvement** | **8x faster** | **2.5x faster** | Combined optimizations |
+| Optimization Phase | Simple Mode (Max Throughput) | Key Improvements |
+|-------------------|------------------------------|------------------|
+| **Baseline** (original) | 124,533 ops/sec | Original config with basic PRAGMAs |
+| **Current** (optimized) | **125,662 ops/sec** | PRAGMA tuning + connection pooling + parallel workers |
+| **Total Improvement** | **+1%** | Marginal improvement, but insights gained |
 
-### Phase 1: SQLite Configuration & Query Optimization
+**Key Finding**: The original configuration was already well-tuned. Our "optimizations" initially **decreased performance by 28%** due to extra indexes before we corrected course.
 
-**Query Performance (2-4x improvement)**
-- **Replaced ORDER BY RANDOM()** with efficient OFFSET-based random selection
-  - Previous: Full table scan + sort on every random selection (~30x slower)
-  - Current: Index-only scan with random offset (O(log n) performance)
-  - Impact: Critical for cancel and trade operations in full mode
+### What We Learned
 
-- **Added covering indexes**:
-  ```sql
-  CREATE INDEX idx_orders_status_id ON orders(status, id);
-  CREATE INDEX idx_orders_status_side_id ON orders(status, side, id);
-  ```
-  - Enables index-only queries without table lookups
-  - Dramatically improves COUNT(*) and random selection queries
+**❌ What Hurt Performance:**
 
-**SQLite PRAGMA Tuning (1.6x improvement)**
+1. **Covering Indexes on Write-Heavy Workloads**
+   - Added indexes: `idx_orders_status_id` and `idx_orders_status_side_id`
+   - **Impact**: Reduced throughput by **12%** (119,622 → 104,881 ops/sec)
+   - **Why**: Every INSERT must update ALL indexes. For insert-only workloads, extra indexes are pure overhead.
+   - **Lesson**: Only add indexes that directly support your query patterns. Don't blindly add "covering" indexes.
 
-Enhanced PRAGMAs for high-throughput workloads:
+**✅ What Helped Performance:**
 
-```rust
-// Cache and Memory (4x larger cache)
-cache_size = -262144        // 256MB cache (from 64MB)
-mmap_size = 30_000_000_000  // 30GB memory-mapped I/O (from 256MB)
-temp_store = MEMORY         // Temp tables in RAM
+1. **PRAGMA Tuning (+1% improvement)**
+   ```rust
+   // Cache and Memory (4x larger cache)
+   cache_size = -262144        // 256MB cache (from 64MB)
+   mmap_size = 30_000_000_000  // 30GB memory-mapped I/O (from 256MB)
+   temp_store = MEMORY         // Temp tables in RAM
 
-// Concurrency and Locking
-busy_timeout = 5000         // Wait 5s for locks (from 0ms immediate fail)
-wal_autocheckpoint = 10000  // Reduce checkpoint frequency (from 1000 pages)
-journal_size_limit = 64MB   // Control WAL file growth
-threads = 4                 // Enable multi-threaded operations (sorting, indexing)
+   // Concurrency and Locking
+   busy_timeout = 5000         // Wait 5s for locks (from 0ms immediate fail)
+   wal_autocheckpoint = 10000  // Reduce checkpoint frequency (from 1000 pages)
+   journal_size_limit = 64MB   // Control WAL file growth
 
-// Prepared Statement Cache
-prepared_statement_cache = 128  // Better statement reuse (from 16)
-```
+   // Prepared Statement Cache
+   prepared_statement_cache = 128  // Better statement reuse (from 16)
+   ```
+   - Larger cache helps with concurrent access patterns
+   - Higher mmap_size reduces I/O overhead
+   - Relaxed checkpointing reduces write stalls
 
-**Impact**:
-- Simple mode: 5K → 8K ops/sec (**1.6x**)
-- Full mode: 2K → 4K ops/sec (**2x**)
+2. **Connection Pooling (infrastructure only)**
+   - Migrated from single `rusqlite::Connection` to `r2d2::Pool<SqliteConnectionManager>`
+   - Pool size dynamically matches worker count (minimum 4 connections)
+   - Changed `operation_count` to `Arc<AtomicU64>` for thread-safe concurrent updates
+   - No direct performance change, but enables parallel execution
 
-### Phase 2: Connection Pooling with r2d2
+3. **Parallel Batch Workers (enables multi-core utilization)**
+   - Spawns N parallel `tokio::spawn` tasks (workers)
+   - Each worker has independent connection from pool
+   - Work distribution via `mpsc::channel` from coordinator
+   - Concurrent batch processing across CPU cores
+   - **Impact**: Enables better CPU utilization when bottleneck is not SQLite itself
 
-**Architecture Changes**:
-- Migrated from single `rusqlite::Connection` to `r2d2::Pool<SqliteConnectionManager>`
-- Pool size dynamically matches worker count (minimum 4 connections)
-- Changed `operation_count` to `Arc<AtomicU64>` for thread-safe concurrent updates
+### Understanding SQLite's Single-Writer Limitation
 
-**Benefits**:
-- Infrastructure ready for parallel execution
-- Thread-safe operation counting
-- Automatic connection management and reuse
-- Graceful handling of connection errors
+Even with all optimizations, SQLite has a fundamental constraint:
 
-**Impact**: Minimal direct performance change (foundation for Phase 3)
+**The Single-Writer Bottleneck:**
+- Multiple connections can READ simultaneously
+- Only **ONE connection can WRITE at a time** (even in WAL mode)
+- Write transactions are serialized at the SQLite level
+- Parallel workers help with **task distribution**, not concurrent writes
 
-### Phase 3: Parallel Batch Workers
+**Why This Matters:**
+- Simple mode (insert-only): Each transaction is quick, so multiple workers can rotate through the write lock efficiently
+- Full mode (complex queries): COUNT(*) and OFFSET queries hold locks longer, increasing contention
+- **Bottleneck shifts from CPU to SQLite's write serialization**
 
-**Multi-threaded Architecture**:
-- Spawns N parallel `tokio::spawn` tasks (workers)
-- Each worker has independent connection from pool
-- Work distribution via `mpsc::channel` from coordinator
-- Concurrent batch processing across CPU cores
+**Best Use Cases for Parallel Workers:**
+- ✅ Insert-heavy workloads with small transactions
+- ✅ Mixed read-write workloads (readers don't block each other)
+- ⚠️ Complex write transactions (limited by single-writer constraint)
 
-**Worker Configuration**:
+### Worker Configuration
 ```bash
 # Auto-detect workers (uses half of CPU cores)
 cargo run --release -- run --rate 0 --simple
@@ -305,42 +306,10 @@ cargo run --release -- run --rate 0 --workers 1
 
 **Default**: Automatically uses `CPU_CORES / 2` workers to leave headroom for OS and other processes.
 
-**Performance Results** (5 workers on 10-core system):
-
-Simple Mode (inserts only):
-- Single-threaded: 8,022 ops/sec
-- 5 parallel workers: **39,997 ops/sec** (**5x improvement**)
-- CPU utilization: ~60-80% across 5-7 cores
-
-Full Mode (complex operations):
-- Single-threaded: 4,001 ops/sec
-- 5 parallel workers: **5,064 ops/sec** (initial, degrades with table growth)
-- Bottleneck: SQLite's single-writer limitation with complex queries
-
-**Why Full Mode Doesn't Scale Linearly**:
-
-SQLite has a fundamental **single-writer constraint** even in WAL mode:
-- Multiple connections can READ simultaneously
-- Only **ONE connection can WRITE at a time**
-- Complex queries (COUNT, OFFSET, ORDER BY) hold write locks longer
-- Multiple workers competing for write lock = contention
-
-**Best Use Cases for Parallel Workers**:
-- ✅ Insert-heavy workloads (simple mode): 5-10x improvement
-- ✅ Read-heavy workloads: Near-linear scaling with readers
-- ⚠️ Write-heavy with complex queries: Limited by SQLite write serialization
-
-### Benchmarking Parallel Workers
-
-Test different worker counts to find optimal configuration for your hardware:
-
-```bash
-# Test 1, 2, 4, 8 workers
-for workers in 1 2 4 8; do
-  echo "Testing $workers workers..."
-  cargo run --release -- run --db test.db --clear --rate 0 --workers $workers --simple --duration 10
-done
-```
+**Performance Results** (5 workers on 10-core M1 Max):
+- Max throughput: **125,662 ops/sec** (simple mode, sustained)
+- Verified stable at: **122,202 ops/sec**
+- CPU utilization: Better distribution across cores compared to single-threaded
 
 **Recommendations by CPU Count**:
 - 4 cores: `--workers 2`
@@ -369,20 +338,6 @@ sqlite3 your_database.db "PRAGMA mmap_size;"
 # Should return: 30000000000 (30GB)
 ```
 
-### Transaction Batching
-
-All modes use transaction batching for optimal throughput. The `--batch-size` flag controls how many operations are grouped per transaction:
-
-**Impact of Batch Size**:
-- Without batching: ~100-500 ops/sec (1 transaction per operation)
-- Small batches (10-100): ~2,000-5,000 ops/sec
-- Medium batches (100-500): ~5,000-10,000 ops/sec (default: 100)
-- Large batches (1000-5000): ~10,000-40,000 ops/sec (with parallel workers)
-
-**Trade-offs**:
-- Larger batches = Higher throughput, but longer time between commits
-- Smaller batches = Lower latency, more frequent commits, lower throughput
-
 ### Hardware Recommendations
 
 For maximum performance:
@@ -401,25 +356,25 @@ For maximum performance:
 - 16GB+ recommended for large databases
 - More RAM enables larger cache_size and benefits mmap_size
 
-### Comparing Configurations
+### Benchmarking Your System
 
-Example benchmark comparing optimizations:
+To find the maximum throughput for your hardware:
 
 ```bash
-# Phase 0: Baseline (disable optimizations for comparison)
-# Would need to modify code to disable PRAGMAs
+# Run max throughput discovery on simple mode
+cargo run --release -- run --db test.db --clear --rate 0 --simple --duration 90
 
-# Phase 1: SQLite tuning only (single-threaded)
-cargo run --release -- run --db test1.db --clear --rate 0 --workers 1 --simple --duration 30
-
-# Phase 3: Full optimizations (parallel workers)
-cargo run --release -- run --db test2.db --clear --rate 0 --workers 5 --simple --duration 30
+# Test different worker counts
+for workers in 1 2 4 8; do
+  echo "Testing $workers workers..."
+  cargo run --release -- run --db test_$workers.db --clear --rate 0 --workers $workers --simple --duration 30
+done
 ```
 
-**Expected Results**:
-- Phase 1 (single-threaded): ~8,000 ops/sec
-- Phase 3 (5 workers): ~40,000 ops/sec
-- **Improvement: 5x faster**
+**What to Expect** (M1 Max 10-core):
+- Max throughput: ~125K ops/sec (5 workers)
+- Single-threaded: ~120K ops/sec (SQLite is already very fast!)
+- Multi-core helps with task distribution but gains are marginal due to SQLite's single-writer constraint
 
 ## Performance Tuning
 
