@@ -3,244 +3,542 @@
 ## Terminology Glossary
 
 ### Core Architecture Terms
-* **SyndDB Core** - The foundational infrastructure providing SQLite execution, state replication, and blockchain integration
-* **SyndDB Extensions** - Developer-created modules that add specific business logic, schemas, and functionality on top of the Core
-* **Extension Interface** - The set of traits (SchemaExtension, LocalWriteExtension, etc.) that extensions implement to integrate with the Core
+
+- **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes database operations to blockchain
+- **Sidecar Listener** - Lightweight process that attaches to SQLite databases and automatically captures/publishes state changes.
+- **SQL Audit Trail** - The sequence of SQL operations that serves as the verifiable record of application state changes. SQLite executes deterministically, making all operations fully verifiable.
 
 ### Node Types
-* **Sequencer** - Single trusted node that sequences database transactions and publishes state to blockchain
-* **Read Replica** - Any node that syncs published state to serve queries (anyone can run permissionlessly)
-* **Validator** - Specialized read replica running in TEE with settlement authority (subset of read replicas)
+
+- **Application** - Your application (any language) running inside a TEE with SQLite, publishing SQL operations via sidecar to DA layers
+- **Read Replica** - Any node that syncs published SQL operations to serve queries (anyone can run permissionlessly)
+- **Validator** - Read replica with additional validation logic that runs in a TEE and verifies SQL operations before signing for settlement
 
 ### State Management Terms
-* **LocalWrite** - SQL operations executed immediately in sequencer's local database (<1ms latency)
-* **State Diff** - Incremental database changes between versions
-* **State Snapshot** - Complete database state at a specific version
-* **Chain Submission** - Process of publishing batched local writes to blockchain for replication
 
-### Extension Components
-* **SchemaExtension** - Defines database tables and indexes
-* **LocalWriteExtension** - Defines custom write operations
-* **TriggerExtension** - Implements automated business logic via SQLite triggers
-* **BridgeExtension** - Handles deposits/withdrawals with external blockchains
-* **QueryExtension** - Defines custom query patterns and caching
+- **SQL Operations** - Database statements executed by the application and captured for verification
+- **State Diff** - Batched SQL statements representing incremental database changes, published to DA layers
+- **State Snapshot** - Complete SQLite database file at a specific version, published to DA layers for bootstrapping
+- **Settlement** - Process where validators publish verified state to blockchain after reading from DA layers
+
+### Message Passing Components
+
+- **Message Tables** - Special SQLite tables for cross-chain operations (e.g., `outbound_messages`, `inbound_messages`) monitored by validators
+- **Bridge.sol** - Smart contract that processes messages from message tables, with ABI tied to table schema
+- **Message Passing** - Automatic detection and processing of cross-chain messages via application-defined table schemas that map to smart contract ABIs
 
 ## Overview
-SyndDB is Syndicate's proposed high-performance blockchain database product. The goal is to extend the utility of blockchain infrastructure beyond traditional sequencing into database-scale workloads.
 
-The core concept is to leverage blockchain infrastructure for SQLite-backed transaction indexing and high-throughput ingestion pipelines. By encoding database statements (e.g., SQL operations), compressing them, and storing them either onchain or referenced through IPFS/Arweave, SyndDB provides a trust-minimized yet practical model for scalable data persistence and replication.
+SyndDB enables developers to build high-performance blockchain applications using **any programming language** with SQLite bindings. Instead of learning a new framework, developers write applications in their preferred language (Python, JavaScript, Go, Rust, etc.) that persist data to SQLite, while SyndDB infrastructure automatically captures and publishes the SQL operations for verification and replication.
 
-By using relational databases, we get indexing "for free" (since relational databases are excellent for querying) and excellent performance with low latency. SQLite triggers and other standard programmability on top of the SQL database can be used as well. We turn the sequencer into an entity that can write to the database and validators into entities that can read from the database. This looks similar to existing rollups, but with SQL instead of the EVM as the execution framework.
+The key insight is that **SQL operations themselves become the verifiable audit trail**. The sequencer runs inside a TEE with attestations proving it's running the correct code, while validators (also in TEEs) verify the SQL statements and their effects. Rather than requiring validators to re-execute complex business logic and external API calls, they focus on auditing database operations, making verification practical without sacrificing application flexibility.
 
-This design balances performance and decentralization, recognizing that some use cases do not need decentralized block production and simply need decentralized validators. As a bonus, these use cases can tolerate historical data pruning while benefiting from ultra-low latency operations and the ability to preserve state.
+The architecture is simple:
+
+1. **Write applications in any language** that use SQLite for persistence
+2. **Run a sidecar listener** that monitors the SQLite database for changes
+3. **Automatically publish SQL operations** to DA layers for durability and verification
+4. **Enable permissionless read replicas** that sync the SQL operations to serve queries
+5. **Support message passing** through application-defined tables that trigger cross-chain operations
+
+Developers don't need to change how they build applications - just ensure all state changes are persisted to SQLite. This design delivers ultra-low latency (<1ms local writes) and high throughput while maintaining verifiability at the SQL level. Applications can use any programming language, frameworks, libraries, or external services - as long as the results are persisted to SQLite, the system captures everything needed for verification.
+
+## Why SyndDB?
+
+**Use any language, get blockchain verifiability for free.** SyndDB lets you build high-performance applications in Python, JavaScript, Go, Rust, or any language with SQLite - no framework to learn, no code changes required. Get offchain performance (sub-millisecond latency, unlimited throughput) with onchain transparency (all state verifiable through SQL operations). Your application runs in a TEE for accountability, while validators provide additional guardrails before settlement. Perfect for applications where ultra-low latency matters more than full decentralization: orderbooks, gaming, social feeds, real-time analytics.
+
+### Why SQLite?
+
+SQLite is the ideal foundation for verifiable blockchain applications:
+
+- **Trival TEE Colocation**: Runs in-process with your application - no separate database server, simple to deploy together inside a single TEE
+- **Deterministic Execution**: Same SQL operations always produce the same results, making verification straightforward
+- **High Performance**: Zero-copy reads, sub-millisecond writes, millions of operations per second
+- **Extensible**: Add custom business logic via user-defined functions and triggers without changing application code
+- **Universal Support**: Available in virtually every programming language (Python, JavaScript, Go, Rust, Java, C++, etc.)
+- **Proven Stability**: Battle-tested database engine with billions of deployments worldwide
 
 ## Key Benefits
-1. Incredibly fast and low latency system
-2. Flexible asset management - assets can either:
+
+1. **Use any language and framework** - Write applications in Python, JavaScript, Go, Rust, or any language with SQLite bindings. Zero code changes required to adopt SyndDB if you already use SQLite.
+2. **Incredibly fast and low latency** - Sub-millisecond local writes with high throughput
+3. **Flexible asset management** - Assets can either:
    - Live natively on the system for maximum performance, or
    - Remain on the settlement chain with actions triggered via message passing
-   - Bridge assets only when needed (bridging is optional, not required)
-3. Few to no indexing requirements (indexing is built into the relational database)
+   - Bridge only when needed (bridging is optional, not required)
+4. **Built-in indexing** - Few to no indexing requirements (indexing is built into the relational database)
 
 ## Trade-offs
+
 For this performance, applications must accept:
-1. Significant decentralization trade-offs in block production (decentralization in validators is maintained)
-   - Single sequencer architecture means liveness failures if the sequencer goes down
-   - Fallback sequencers must restart from last published state, not the sequencer's current state (potential data loss between publications)
-2. Non-EVM execution framework
-3. Asset location flexibility comes with different trade-offs:
+
+1. **Centralized application instance** (same trust model as rollup sequencers, but with better performance)
+   - Liveness depends on the application instance staying online
+   - Fallback instances may restart from last published state (potential data loss between publications)
+   - Validators remain decentralized for security
+2. **Non-EVM execution framework** - Uses SQL instead of Solidity/EVM
+3. **Asset location flexibility** comes with different trade-offs:
    - Assets on settlement layer: Maximum security but requires message passing for actions
-   - Assets native on SyndDB: Maximum performance but relies on sequencer and validator security model
+   - Assets native on SyndDB: Maximum performance but relies on application and validator security model
    - Hybrid approach: Bridge assets as needed for specific operations (adds operational complexity)
 
 ## Architecture Overview
-At a high level, SyndDB consists of two primary roles:
-* **Sequencer** – A single trusted node that runs a local SQLite instance, sequences database transactions, batches state transitions, and publishes state diffs/state snapshots onchain or via offchain pointers (IPFS/Arweave).
-* **Read Replica** – Any node that ingests the published state (state snapshots or state diffs) and reconstructs the database locally for query and indexing. **Anyone can run a read replica** to access the data and serve queries.
 
-A subset of read replicas can optionally become validators:
-* **Validator** – A specialized read replica that runs inside a TEE (Trusted Execution Environment) with additional capabilities for processing withdrawals and settlement to the blockchain. Not all read replicas need to be validators - most read replicas will simply serve queries and provide data access.
+SyndDB makes any SQLite application blockchain-verifiable by automatically capturing and publishing SQL operations.
 
-The ingestion pipeline resembles standard blockchain pipelines, but via a different execution framework. SQLite state snapshots can be used to bootstrap new participants, while state diffs allow continuous low-latency updates.
+### Core Components
 
-In SyndDB, sequencing works analogously to an appchain, but with database-native semantics:
-* The single sequencer batches SQL statements and publishes them periodically to the blockchain.
-* Read replicas (which anyone can run) sync to these updates, ensuring they have consistent state.
-* Special database transaction types allow bridge operations (e.g., withdrawals, liquidations) from SyndDB into the broader blockchain ecosystem, processed only by the subset of read replicas that are validators.
+1. **Application - Any Language**
+   - Written in any language (Python, Node.js, Go, Rust, Java, etc.)
+   - Uses SQLite for persistence (via language-specific SQLite bindings)
+   - Runs inside a TEE for attestation and accountability
+   - Can use any libraries, frameworks, or external APIs
+   - All state changes must be persisted to SQLite
 
-This approach enables appchain-style composability while keeping the sequencer optimized for database workloads.
+2. **Sidecar Listener**
+   - Attaches to the SQLite database via WAL (Write-Ahead Logging)
+   - Captures all SQL operations automatically
+   - Batches operations into diffs, creates periodic snapshots
+   - Publishes to DA layers (Celestia, EigenDA) and storage layers (IPFS, Arweave)
+   - Zero application code changes required
 
-### Sequencer as Source of Truth
+3. **Read Replicas**
+   - Anyone can run a read replica permissionlessly
+   - Sync SQL operations from DA layers
+   - Replay operations to maintain consistent database state
+   - Serve queries with full SQL capabilities
 
-The SQLite database managed by the sequencer serves as the trusted source of truth in SyndDB's model. The sequencer operates as:
-* **Source of Truth**: The sequencer orders database transactions in real-time and publishes batched updates.
-* **Trusted Role with Guardrails**: While trust is placed in the sequencer, circuit breakers (e.g., caps on withdrawals, pool limits, or throttling of asset movements) enforce safety.
-* **Application-Specific Logic**: The sequencer can prune historical data for performance (useful for perp DEX order books or ephemeral social feeds) while still providing state snapshots for bootstrapping.
+4. **Validators**
+   - Read replicas with validation logic that runs in TEEs
+   - Verify SQL operations before signing for settlement
+   - Default checks: SQL correctness, state consistency, balance invariants
+   - Optional checks: External API verification, custom business rules
+   - Process cross-chain messages from message tables
 
-This model trades full decentralization for practical high-performance guarantees, making it suitable for applications where ultra-low latency and throughput matter more than trustless derivability of all history.
+5. **Bridge (Message Passing)**
+   - Smart contract for processing cross-chain messages
+   - Monitors message tables with schemas tied to contract ABI
+   - Processes outbound messages (withdrawals, cross-chain calls)
+   - Receives inbound messages (deposits, cross-chain responses)
 
-### Smart Contracts for Ordering + State Derivation
-Smart contracts define the interface for state publication with four primary functions:
+### Data Flow
+
+```
+Application (Any Language) → SQLite → Sidecar → DA Layers ← Validators (TEE) → Blockchain
+       in TEE                           ↓                        ↓
+                                 Message Tables           Settlement Verification
+                                                                  ↓
+                                                             Bridge.sol
+```
+
+**Application Path**: App writes to SQLite → Sidecar publishes to DA layers
+
+**Validator Path**: Validators read from DA → Verify SQL → Post to blockchain
+
+**Message Passing**: Validators detect messages in SQL → Process via Bridge.sol
+
+Validators can subscribe to the sidecar (with TEE attestation) for lower latency instead of waiting for DA publication. The application never touches the blockchain directly.
+
+### Application as Source of Truth
+
+The application runs in a TEE with hardware attestations proving it's running the correct code. This provides accountability while maintaining performance.
+
+Key properties:
+
+- **TEE Accountability**: Attestations prove the application is running unmodified code
+- **Validator Guardrails**: Validators enforce limits (withdrawal caps, rate limits) before settlement
+- **Flexible Implementation**: Use any language, external APIs, or libraries - only SQL output matters
+- **Performance Optimized**: Can prune historical data while providing snapshots for bootstrapping
+
+This trades full decentralization for extreme performance, suitable for applications where ultra-low latency matters more than fully decentralized execution.
+
+## Verifiability Model: SQL as the Audit Trail
+
+Unlike traditional rollups that require full re-execution of all logic, SyndDB uses SQL operations as the verifiable audit trail. This fundamental shift enables practical verifiability without sacrificing application flexibility.
+
+### How It Works
+
+1. **Application Writes Everything to SQL**: The application must persist all data that could affect state transitions to SQLite, including:
+   - Application state changes
+   - Logs of external API calls and their results
+   - User inputs and their effects
+   - Message passing operations via special tables
+
+2. **Sidecar Publishes to DA Layers**: The sidecar listener captures and publishes to censorship-resistant DA layers:
+   - Every INSERT, UPDATE, DELETE operation
+   - Transaction boundaries (BEGIN/COMMIT)
+   - The ordering of all operations
+   - Periodic state snapshots for bootstrapping
+   - This ensures data is widely available and reduces equivocation risk
+
+3. **Validators Verify SQL, Not Code**: Validators read from DA layers and check:
+   - SQL syntax and semantic correctness (default validation)
+   - State transitions make sense (default validation)
+   - Balances remain consistent (default validation)
+   - Message passing operations follow rules (default validation)
+   - Custom business logic checks (optional extensions)
+   - Best-effort re-derivation of external data (optional extensions)
+
+4. **Re-execution is Optional**: By default, validators don't need to:
+   - Re-run the original application (which could be in any language)
+   - Perfectly reproduce all external API calls
+   - Re-compute complex algorithms exactly
+   - Match non-deterministic operations
+
+   However, validators can be extended to perform more thorough re-execution if desired - this is purely optional and application-specific.
+
+### Why This Works
+
+TEE attestations ensure the application runs the correct code. Validators verify the SQL output, not the implementation. This is like database replication via write-ahead logs - apply the same principle to blockchain, with TEEs preventing equivocation and validators adding checks before settlement.
+
+### Example: High-Performance Orderbook
+
+**Traditional Onchain Approach** (validated but slow):
+
+- Every order placement/cancellation is a blockchain transaction
+- Matching logic runs in EVM
+- Throughput limited to ~10-50 orders/second
+- Transparent and verifiable, but impractical for high-frequency trading
+
+**Traditional Offchain Approach** (fast but not validated):
+
+- Orders processed in centralized database
+- No transparency into matching logic
+- High throughput, but trust the exchange operator
+
+**SyndDB Approach** (best of both worlds):
+
+```python
+# High-performance matching engine in any language
+def match_orders(buy_order, sell_order):
+    # Complex matching logic with sub-millisecond latency
+    # Use any libraries, optimizations, algorithms
+
+    # Just persist the results to SQLite
+    cursor.execute("""
+        INSERT INTO trades (buy_order_id, sell_order_id, price, quantity)
+        VALUES (?, ?, ?, ?)
+    """, (buy_order.id, sell_order.id, match_price, quantity))
+
+    cursor.execute("""
+        UPDATE orders SET status = 'FILLED'
+        WHERE id IN (?, ?)
+    """, (buy_order.id, sell_order.id))
+
+    db.commit()
+```
+
+**Benefits**:
+
+- Offchain performance: Sub-millisecond order matching, unlimited throughput
+- Onchain transparency: All trades verifiable through SQL operations
+- Validator checks: Can add business logic like "no self-trading" or "price must be within spread" without re-implementing the matching engine
+- Flexibility: Upgrade matching logic without changing validators
+
+## Smart Contracts and Message Passing
+
+### Publishing Model: Application → DA → Validators → Blockchain
+
+The application never touches the blockchain - the sidecar publishes to DA layers:
+
+1. **Sidecar → DA**: Publishes SQL diffs/snapshots to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with TEE signatures
+2. **Validators ← DA**: Validators sync from censorship-resistant DA layers
+3. **Validators → Blockchain**: Post verified state roots to settlement chain
+
+This keeps the application isolated from blockchain infrastructure while enabling multiple DA sources for resilience.
+
+### Validator Settlement Contract
+
+Validators (not the application) interact with the blockchain:
 
 ```solidity
-writeDiff(bytes32 diffHash, uint256 diffIndex, bytes calldata diff)
-// Publish a state diff of SQL statements to blockchain. Can be chunked via an index as necessary
+// Validators post verified state roots after checking SQL operations
+function submitStateRoot(bytes32 stateRoot, uint256 sequenceNumber, bytes[] validatorSignatures)
 
-writeDiffPointer(bytes calldata cid)
-// Publish a state diff to IPFS/Arweave, write the CID to blockchain for ordering
-
-writeSnapshot(bytes32 snapshotHash, uint256 snapshotIndex, bytes calldata snapshot)
-// Publish a state snapshot to blockchain. Can be chunked via an index as necessary
-
-writeSnapshotPointer(bytes calldata cid)
-// Publish a state snapshot to IPFS/Arweave, write the CID to blockchain for ordering
+// Reference to DA layer data for transparency
+function submitDAReference(string calldata daCid, bytes32 dataHash, uint256 sequenceNumber)
 ```
 
-New read replicas can derive state either from genesis, or by bootstrapping from the latest state snapshot. The latter is likely a good fit for data that is frequently pruned, but deriving state all the way back from genesis can be used for historical data.
+The settlement contract only accepts state roots signed by a threshold of validators running in TEEs.
 
-### Example Database Transactions
+### Message Passing Contract
 
-#### Order Book Operations
+Message passing operations are triggered when the application writes to message tables. The contract ABI is tied to the table schema, allowing flexible message types:
 
-**Example 1: Insert a new limit order:**
+```solidity
+// Generic message processing from outbound_messages table
+function processMessage(
+    uint256 messageId,
+    bytes calldata messageData,  // Decoded from table schema
+    bytes[] validatorSignatures
+)
+
+// Receives inbound messages and triggers sequencer to update inbound_messages table
+function sendMessage(
+    string calldata targetAccountId,
+    bytes calldata messageData
+)
+```
+
+Common message types include:
+
+- Asset withdrawals/deposits (bridge operations)
+- Cross-chain function calls
+- Oracle data requests/responses
+- Governance proposals
+
+### Message Tables
+
+Applications define message tables with schemas that map to contract ABIs:
+
 ```sql
-BEGIN;
-INSERT INTO orders (order_id, account_id, side, price, quantity, status)
-VALUES ('ord_123', 'acct_42', 'BUY', 42000, 0.5, 'OPEN');
-COMMIT;
+-- Example: Asset withdrawal messages
+CREATE TABLE outbound_withdrawals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    token_address TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    destination_address TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at INTEGER DEFAULT (unixepoch())
+);
+
+-- Example: Inbound deposit messages
+CREATE TABLE inbound_deposits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_tx_hash TEXT UNIQUE NOT NULL,
+    account_id TEXT NOT NULL,
+    token_address TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    block_number INTEGER NOT NULL,
+    created_at INTEGER DEFAULT (unixepoch())
+);
+
+-- Example: Generic cross-chain calls
+CREATE TABLE outbound_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_chain TEXT NOT NULL,
+    target_contract TEXT NOT NULL,
+    function_signature TEXT NOT NULL,
+    parameters BLOB NOT NULL,
+    status TEXT DEFAULT 'pending'
+);
 ```
 
-**Example 2: Match a trade between two orders:**
-```sql
-BEGIN;
-UPDATE orders SET status = 'FILLED' WHERE order_id = 'ord_123';
-UPDATE orders SET status = 'FILLED' WHERE order_id = 'ord_456';
-INSERT INTO trades (trade_id, buy_order_id, sell_order_id, price, quantity)
-VALUES ('trade_789', 'ord_123', 'ord_456', 42010, 0.5);
-COMMIT;
+**Message Flow**:
+
+1. Application writes to message table (e.g., `outbound_withdrawals`)
+2. Sidecar publishes SQL operations to DA layers with application signature
+3. Validators read from DA layers and detect message table changes
+4. Validators verify messages and submit to Bridge.sol
+5. Bridge.sol processes messages and emits events
+6. Validators detect inbound messages and write to application's inbound tables
+
+No custom bridge code needed - just define tables that match your message schema.
+
+## Validators and Settlement
+
+### Default Validator Implementation
+
+SyndDB provides a default validator implementation that:
+
+1. **Replays SQL State Transitions**: Executes all SQL operations to rebuild state
+2. **Verifies Bridge Claims**: Confirms all withdrawal/deposit amounts match bridge table entries
+3. **Validates Basic Invariants**: Ensures balances never go negative, totals sum correctly
+4. **Signs Valid States**: Approves states that pass all basic checks
+
+### Extending the Default Validator
+
+The default validator is designed to be extended with custom logic:
+
+```rust
+// Start with the default validator
+use synddb_validator::DefaultValidator;
+
+impl CustomValidator {
+    fn validate(&self, sql_ops: &[SqlOp]) -> Result<()> {
+        // Run default validation first
+        self.default.validate(sql_ops)?;
+
+        // Add external API checks
+        if self.config.check_oracles {
+            self.verify_price_feeds(sql_ops)?;
+        }
+
+        // Add guardrails on amounts
+        for op in sql_ops {
+            if let Some(withdrawal) = parse_withdrawal(op) {
+                // Reject anomalous movements
+                if withdrawal.amount > self.config.max_withdrawal {
+                    return Err("Withdrawal exceeds maximum");
+                }
+                if withdrawal.amount > self.get_historical_average() * 10 {
+                    return Err("Withdrawal 10x above average");
+                }
+            }
+        }
+
+        // Add any other custom logic
+        self.check_kyc_requirements(sql_ops)?;
+        self.verify_rate_limits(sql_ops)?;
+
+        Ok(())
+    }
+}
 ```
 
-**Example 3: Cancel an open order:**
-```sql
-BEGIN;
-UPDATE orders SET status = 'CANCELED' WHERE order_id = 'ord_321';
-COMMIT;
+### TEE Deployment (Required)
+
+Validators **must** run in Trusted Execution Environments to ensure they are running unmodified code:
+
+- **Attestation**: TEE validators prove they're running unmodified code
+- **Protected Keys**: Settlement keys remain secure within the TEE
+- **SQL Verification**: Hardware-backed guarantees prevent validator subversion
+- **Message Processing**: TEE validators can hold bridge signing authority
+
+### Running the Default Validator
+
+Deploy the default validator in a TEE:
+
+```bash
+# Run the default validator in TEE
+synddb-validator \
+    --da-layer celestia \
+    --chain-rpc https://... \
+    --mode default \
+    --tee-attestation-key /path/to/key
 ```
 
-#### ERC-20 Token Operations
+The default validator will sync from DA layers, replay SQL operations, and verify basic invariants before signing for settlement.
 
-**Example 4: Mint new tokens:**
-```sql
-BEGIN;
--- Increase total supply
-UPDATE token_metadata 
-SET total_supply = total_supply + 1000000 
-WHERE token_address = '0xabc...';
-
--- Credit recipient balance
-INSERT INTO balances (account_id, token_address, balance)
-VALUES ('acct_123', '0xabc...', 1000000)
-ON CONFLICT (account_id, token_address) 
-DO UPDATE SET balance = balance + 1000000;
-
--- Record mint event
-INSERT INTO transfer_events (event_id, token_address, from_address, to_address, amount, timestamp)
-VALUES ('evt_456', '0xabc...', '0x0', 'acct_123', 1000000, 1698765432);
-COMMIT;
-```
-
-**Example 5: Transfer tokens between accounts:**
-```sql
-BEGIN;
--- Debit sender
-UPDATE balances 
-SET balance = balance - 500 
-WHERE account_id = 'acct_123' AND token_address = '0xabc...';
-
--- Credit recipient
-INSERT INTO balances (account_id, token_address, balance)
-VALUES ('acct_456', '0xabc...', 500)
-ON CONFLICT (account_id, token_address) 
-DO UPDATE SET balance = balance + 500;
-
--- Record transfer event
-INSERT INTO transfer_events (event_id, token_address, from_address, to_address, amount, timestamp)
-VALUES ('evt_789', '0xabc...', 'acct_123', 'acct_456', 500, 1698765433);
-COMMIT;
-```
-
-**Example 6: Bridge tokens out to settlement layer:**
-```sql
-BEGIN;
--- Burn tokens from sender
-UPDATE balances 
-SET balance = balance - 1000 
-WHERE account_id = 'acct_123' AND token_address = '0xabc...';
-
--- Create withdrawal request for validator processing
-INSERT INTO withdrawal_requests (request_id, account_id, token_address, amount, destination_address, status, timestamp)
-VALUES ('withdraw_101', 'acct_123', '0xabc...', 1000, '0x789...', 'PENDING', 1698765434);
-
--- Record burn event
-INSERT INTO transfer_events (event_id, token_address, from_address, to_address, amount, timestamp)
-VALUES ('evt_234', '0xabc...', 'acct_123', '0x0', 1000, 1698765434);
-COMMIT;
-```
-
-**Example 7: Bridge tokens in from settlement layer:**
-```sql
-BEGIN;
--- Process deposit from settlement layer (triggered by validator)
-INSERT INTO balances (account_id, token_address, balance)
-VALUES ('acct_789', '0xabc...', 2000)
-ON CONFLICT (account_id, token_address) 
-DO UPDATE SET balance = balance + 2000;
-
--- Record deposit
-INSERT INTO deposit_records (deposit_id, account_id, token_address, amount, source_tx_hash, timestamp)
-VALUES ('deposit_202', 'acct_789', '0xabc...', 2000, '0xdef...', 1698765435);
-
--- Record mint event
-INSERT INTO transfer_events (event_id, token_address, from_address, to_address, amount, timestamp)
-VALUES ('evt_567', '0xabc...', '0x0', 'acct_789', 2000, 1698765435);
-COMMIT;
-```
-
-### TEE Validators for Settlement (Optional)
-For applications requiring stronger guarantees (e.g., bridging assets, financial contracts), SyndDB can incorporate Trusted Execution Environments (TEEs) to create specialized validators. **Important: Only a subset of read replicas need to become validators.**
-
-* **Validators are a Subset of Read Replicas**: While anyone can run a standard read replica for querying data, only specially designated read replicas running inside TEEs become validators with settlement authority.
-* **Most Read Replicas are Not Validators**: The majority of read replica nodes will simply sync state and serve queries. They don't need TEE hardware or settlement responsibilities.
-* **State Verification**: Validators use their TEE-protected database replica to verify derived state, checking validity from state snapshots or genesis.
-* **Settlement Authority**: Only TEE validators hold settlement keys authorized via attestation verification on the settlement chain.
-* **Bridge Operations**: Upon detecting special database transaction types (e.g., asset withdrawal requests), TEE validators (not regular read replicas) sign and submit settlement transactions through a bridge.
-
-This design allows anyone to run a read replica for data access while limiting settlement authority to a trusted subset of TEE validators, balancing accessibility with security. Circuit breakers and safeguards (implemented in settlement-layer contracts) mitigate risk from the trusted sequencer role.
+Applications can be in any language, while validators share the same implementation to ensure consistent verification across the network.
 
 ## Use Cases
+
 SyndDB is designed for high-scale applications that require ultra-low latency and high throughput, including:
-* Onchain order books for perp DEXs
-* Gaming state and leaderboards
-* Social applications and feeds
-* NFT marketplaces and metadata
-* Real-time analytics and dashboards
 
-## Implementation Architecture
-### SyndDB Core
-The SyndDB Core provides:
-* High-performance SQLite execution engine
-* State replication and synchronization
-* Blockchain integration for durability
-* Smart contracts for state publication
-* TEE-based validator infrastructure
-* Extension registration and management
+- Onchain order books for perp DEXs
+- Gaming state and leaderboards
+- Social applications and feeds
+- NFT marketplaces and metadata
+- Real-time analytics and dashboards
 
-### SyndDB Extensions
-Extensions built on SyndDB Core are responsible for:
-* Database schema design (via SchemaExtension trait)
-* Business logic and SQL transactions (via LocalWriteExtension trait)
-* Triggers and automated rules (via TriggerExtension trait)
-* Bridge message formats (via BridgeExtension trait)
-* Custom query patterns (via QueryExtension trait)
+## Implementation Guide
 
-The Core + Extensions architecture ensures clean separation between infrastructure (Core) and business logic (Extensions). See [PLAN_EXTENSIONS.md](PLAN_EXTENSIONS.md) for the complete extension development guide.
+### Building a SyndDB Application
+
+1. **Write Your Application in Any Language**
+
+   **Python Example:**
+
+   ```python
+   import sqlite3
+   from flask import Flask
+
+   app = Flask(__name__)
+   db = sqlite3.connect('app.db')
+
+   @app.route('/trade')
+   def execute_trade():
+       # Your business logic here
+       cursor = db.cursor()
+       cursor.execute("INSERT INTO trades ...")
+       db.commit()
+   ```
+
+   **Node.js Example:**
+
+   ```javascript
+   const Database = require("better-sqlite3");
+   const express = require("express");
+
+   const app = express();
+   const db = new Database("app.db");
+
+   app.post("/trade", (req, res) => {
+     // Your business logic here
+     db.prepare("INSERT INTO trades ...").run();
+   });
+   ```
+
+   **Go Example:**
+
+   ```go
+   package main
+   import (
+       "database/sql"
+       _ "github.com/mattn/go-sqlite3"
+   )
+
+   func main() {
+       db, _ := sql.Open("sqlite3", "./app.db")
+       // Your business logic here
+       db.Exec("INSERT INTO trades ...")
+   }
+   ```
+
+2. **Create Bridge Tables (if needed)**
+
+   ```sql
+   -- Add these tables if you need bridge functionality
+   CREATE TABLE bridge_withdrawals (...);
+   CREATE TABLE bridge_deposits (...);
+   ```
+
+3. **Deploy with Sidecar Listener**
+
+   ```yaml
+   # docker-compose.yml
+   services:
+     app:
+       image: your-app:latest
+       volumes:
+         - ./data:/data
+
+     synddb-sidecar:
+       image: syndicate/synddb-listener:latest
+       volumes:
+         - ./data:/data
+       environment:
+         - DATABASE_PATH=/data/app.db
+         - CHAIN_RPC=https://...
+         - IPFS_GATEWAY=https://...
+   ```
+
+4. **Run Read Replicas**
+
+   ```bash
+   # Anyone can run a read replica
+   synddb-replica \
+     --chain-rpc https://... \
+     --start-block 12345 \
+     --serve-port 8080
+   ```
+
+5. **Optional: Deploy in TEE**
+   ```bash
+   # Run the entire stack in a TEE for additional security
+   docker run --device /dev/sgx_enclave \
+     -v /var/run/aesmd:/var/run/aesmd \
+     your-app-tee:latest
+   ```
+
+### Key Design Principles
+
+- **Language Agnostic**: Use any programming language, framework, or runtime
+- **SQL as Truth**: All state changes must go through SQLite for capture
+- **Automatic Publishing**: The sidecar handles all DA layer and blockchain interaction
+- **Consistent Validation**: Validators use the same implementation for verification
+- **Permissionless Replication**: Anyone can sync and query the data
+- **Optional Message Passing**: Add message tables only if you need cross-chain operations
+
+### Migration from Existing Applications
+
+Converting any existing SQLite application to SyndDB is straightforward:
+
+1. Ensure all state changes go through SQLite (not just in-memory)
+2. Add message tables if you need cross-chain message passing functionality
+3. Deploy the sidecar listener alongside your application
+4. No code changes required to your business logic
+
+This approach makes SyndDB a drop-in solution for adding blockchain verifiability to applications written in any language.
