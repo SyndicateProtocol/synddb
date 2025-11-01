@@ -387,11 +387,20 @@ for change in changeset.iter() {
 }
 ```
 
-### Schema Change Tracking
+### Schema Change Tracking: Snapshot-on-Schema-Change
 
 **The Challenge:** SQLite Session Extension changesets only capture data changes (INSERT/UPDATE/DELETE), not schema changes (CREATE TABLE, ALTER TABLE, DROP INDEX, etc.). Validators need to know about schema changes to correctly apply data changesets.
 
-**Our Solution:** Separate DDL tracking via update hooks on `sqlite_schema` table combined with `user_version` pragma.
+**Our Solution: Automatic Snapshot on Schema Change**
+
+When the application changes the database schema, the sidecar immediately creates and publishes a full database snapshot. This is simpler and more reliable than DDL replay, and leverages our existing snapshot infrastructure.
+
+**Why Snapshot Instead of DDL Replay?**
+- **Schema changes are rare** - Acceptable overhead (happens days/weeks apart, not continuously)
+- **Simpler validators** - No DDL replay logic, no non-deterministic ALTER TABLE edge cases
+- **Natural epochs** - Schema changes create clear boundaries in database history
+- **Guaranteed consistency** - Snapshot contains exact schema + data state
+- **Audit trail preserved** - DDL still published alongside snapshot for transparency
 
 **How It Works:**
 
@@ -405,43 +414,55 @@ for change in changeset.iter() {
 
 2. **Sidecar Detects Schema Change**
    - Update hook fires when `sqlite_schema` table is modified
-   - Captures full DDL via `SELECT sql FROM sqlite_schema`
+   - Captures full DDL via `SELECT sql FROM sqlite_schema` (for audit trail)
    - Reads new `user_version` to track migration number
-   - Publishes `SchemaChange` message immediately (high priority)
+   - **Immediately creates full database snapshot** (includes schema + all data)
+   - Publishes `SnapshotWithSchemaChange` message
 
-3. **Validators Apply Schema First**
+3. **Validators Receive Snapshot**
    ```rust
    // Validator processing sequence from DA layer
    match message.payload_type {
-       PayloadType::SchemaChange => {
-           // MUST apply schema before any subsequent data changesets
-           validator.verify_schema_version(schema.old_version)?;
-           validator.execute_ddl(&schema.ddl_statements)?;
-           validator.update_schema_version(schema.new_version)?;
+       PayloadType::SnapshotWithSchemaChange { snapshot, schema_change } => {
+           // Log schema change for audit trail
+           info!("Schema migration v{} -> v{}: {}",
+               schema_change.old_version,
+               schema_change.new_version,
+               schema_change.ddl_statements.join("; ")
+           );
+
+           // Replace entire database with snapshot (includes new schema)
+           validator.replace_database(snapshot)?;
+
+           // Reset changeset tracking (new epoch begins)
+           validator.reset_changeset_sequence();
        }
        PayloadType::ChangesetBatch => {
-           // Only apply if schema version matches
-           if validator.schema_version() == expected_version {
-               validator.apply_changesets(changesets)?;
-           } else {
-               return Err("Schema version mismatch - missing migration");
-           }
+           // Schema guaranteed to match (snapshot resets state)
+           validator.apply_changesets(changesets)?;
        }
-       _ => {}
+       PayloadType::Snapshot => {
+           // Regular periodic snapshot (no schema change)
+           validator.replace_database(snapshot)?;
+       }
    }
    ```
 
 **Benefits:**
-- **Deterministic Migrations** - All validators see exact same DDL statements in order
-- **Version Tracking** - `user_version` provides clear migration ordering
-- **Schema Hash** - Quick validation that schema matches across all validators
-- **Atomic Application** - Schema changes published separately, applied before subsequent data
-- **Auditable** - Full DDL captured, not just schema diffs
+- **Simplicity** - Validators don't need DDL replay logic
+- **Guaranteed Consistency** - Snapshot has exact schema + data state
+- **Natural Epochs** - Schema changes create clear boundaries in history
+- **Fast Sync** - New validators can start from latest schema snapshot
+- **Audit Trail** - DDL statements still published for transparency
+- **No Edge Cases** - Avoids ALTER TABLE determinism issues
+
+**Message Size Impact:**
+Schema changes are rare (typically days/weeks apart), so the snapshot overhead is acceptable. A 1GB database snapshot on schema change, happening weekly, is far better than complex DDL replay logic that might break.
 
 **Application Requirements:**
-- Applications MUST use `PRAGMA user_version` to track schema versions
-- Increment `user_version` in same transaction as schema changes
-- Use sequential version numbers (1, 2, 3, ...) for clear ordering
+- Applications SHOULD use `PRAGMA user_version` to track schema versions
+- Increment `user_version` in same transaction as schema changes (helps with debugging/audit)
+- No other requirements - snapshot captures everything
 
 ### 2. Batcher
 
@@ -469,10 +490,11 @@ pub struct BatchConfig {
 
 #[derive(Debug, Clone)]
 pub enum BatchPayload {
-    /// Schema change (DDL statements)
-    /// MUST be applied by validators before subsequent data changesets
-    SchemaChange {
-        change: SchemaChange,
+    /// Full database snapshot triggered by schema change
+    /// Includes DDL statements for audit trail
+    SnapshotWithSchemaChange {
+        snapshot_data: Vec<u8>,
+        schema_change: SchemaChange,
         sequence: u64,
         timestamp: SystemTime,
     },
@@ -482,7 +504,7 @@ pub enum BatchPayload {
         sequence: u64,
         timestamp: SystemTime,
     },
-    /// Full database snapshot (recovery point)
+    /// Full database snapshot (periodic recovery point)
     Snapshot {
         data: Vec<u8>,
         sequence: u64,
@@ -502,23 +524,32 @@ impl Batcher {
         loop {
             tokio::select! {
                 Some(schema_change) = schema_rx.recv() => {
-                    // Schema changes are URGENT - flush pending changesets first,
-                    // then publish schema change immediately
-                    if !self.changesets.is_empty() {
-                        self.flush_changesets(&tx).await?;
-                    }
+                    // Schema changes trigger immediate snapshot
+                    // Discard pending changesets (snapshot includes all data)
+                    self.changesets.clear();
+                    self.buffer_size = 0;
 
-                    // Publish schema change as separate high-priority message
-                    tx.send(BatchPayload::SchemaChange {
-                        change: schema_change,
+                    // Create snapshot with current schema + data
+                    let snapshot_data = self.create_snapshot().await?;
+
+                    // Publish snapshot with schema change metadata
+                    tx.send(BatchPayload::SnapshotWithSchemaChange {
+                        snapshot_data,
+                        schema_change: schema_change.clone(),
                         sequence: self.next_sequence(),
                         timestamp: SystemTime::now(),
                     }).await?;
 
-                    info!("Published schema change v{} -> v{}",
+                    warn!(
+                        "SCHEMA CHANGE v{} -> v{}: Published snapshot ({} bytes)",
                         schema_change.old_version,
-                        schema_change.new_version
+                        schema_change.new_version,
+                        snapshot_data.len()
                     );
+
+                    // Reset state (new epoch begins)
+                    self.batch_count = 0;
+                    self.last_snapshot = Instant::now();
                 }
                 Some(changeset) = changeset_rx.recv() => {
                     self.buffer_size += changeset.data.len();
@@ -632,7 +663,7 @@ pub struct AttestedPayload {
 
 #[derive(Serialize, Deserialize)]
 pub enum PayloadType {
-    SchemaChange,
+    SnapshotWithSchemaChange,
     ChangesetBatch,
     Snapshot,
 }
@@ -641,8 +672,8 @@ impl Attestor {
     pub async fn run(self, rx: Receiver<BatchPayload>, tx: Sender<AttestedPayload>) {
         while let Some(payload) = rx.recv().await {
             let attested = match payload {
-                BatchPayload::SchemaChange { change, sequence, .. } => {
-                    self.attest_schema_change(change, sequence).await?
+                BatchPayload::SnapshotWithSchemaChange { snapshot_data, schema_change, sequence, .. } => {
+                    self.attest_snapshot_with_schema_change(snapshot_data, schema_change, sequence).await?
                 }
                 BatchPayload::ChangesetBatch { changesets, sequence, .. } => {
                     self.attest_changeset_batch(changesets, sequence).await?
@@ -656,27 +687,40 @@ impl Attestor {
         }
     }
 
-    async fn attest_schema_change(&self, change: SchemaChange, sequence: u64) -> Result<AttestedPayload> {
-        // Serialize schema change
-        let serialized = bincode::serialize(&change)?;
+    async fn attest_snapshot_with_schema_change(
+        &self,
+        snapshot_data: Vec<u8>,
+        schema_change: SchemaChange,
+        sequence: u64
+    ) -> Result<AttestedPayload> {
+        // Combine snapshot + schema metadata
+        #[derive(Serialize)]
+        struct SnapshotWithSchema {
+            snapshot: Vec<u8>,
+            schema_change: SchemaChange,
+        }
 
-        // Compress (DDL is typically very compressible)
+        let combined = SnapshotWithSchema {
+            snapshot: snapshot_data.clone(),
+            schema_change: schema_change.clone(),
+        };
+
+        let serialized = bincode::serialize(&combined)?;
         let compressed = zstd::encode_all(&serialized[..], self.compression_level)?;
         let checksum = blake3::hash(&compressed);
-
-        // Sign compressed data
         let signature = self.key_manager.sign(&compressed)?;
         let attestation_token = self.key_manager.get_attestation_token().await?;
 
         warn!(
-            "Attested SCHEMA CHANGE v{} -> v{}: {} DDL statements",
-            change.old_version,
-            change.new_version,
-            change.ddl_statements.len()
+            "Attested SNAPSHOT WITH SCHEMA CHANGE v{} -> v{}: {} bytes snapshot, {} DDL statements",
+            schema_change.old_version,
+            schema_change.new_version,
+            snapshot_data.len(),
+            schema_change.ddl_statements.len()
         );
 
         Ok(AttestedPayload {
-            payload_type: PayloadType::SchemaChange,
+            payload_type: PayloadType::SnapshotWithSchemaChange,
             compressed_data: compressed,
             signature: signature.to_vec(),
             public_key: self.key_manager.public_key_bytes(),
