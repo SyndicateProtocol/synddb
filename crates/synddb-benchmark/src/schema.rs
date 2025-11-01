@@ -5,7 +5,12 @@ use rusqlite::Connection;
 pub fn initialize_schema(conn: &Connection) -> Result<()> {
     // Enable WAL mode (required for SQLite Session Extension)
     conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
+
+    // Performance optimizations
+    conn.pragma_update(None, "synchronous", "NORMAL")?; // Balance safety and speed
+    conn.pragma_update(None, "cache_size", -64000)?; // 64MB cache
+    conn.pragma_update(None, "temp_store", "MEMORY")?; // Temp tables in memory
+    conn.pragma_update(None, "mmap_size", 268435456)?; // 256MB mmap
 
     // Users table
     conn.execute(

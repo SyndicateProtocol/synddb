@@ -18,6 +18,7 @@ async fn test_orderbook_initialization() {
             ops_per_second: 100,
         },
         duration_seconds: Some(1), // Just 1 second
+        batch_size: 100,
     };
 
     // Run simulation
@@ -39,6 +40,7 @@ async fn test_burst_mode() {
             pause_seconds: 1,
         },
         duration_seconds: Some(2), // 2 seconds total
+        batch_size: 100,
     };
 
     // Should complete at least one burst

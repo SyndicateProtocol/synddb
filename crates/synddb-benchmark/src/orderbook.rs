@@ -45,13 +45,15 @@ impl OrderbookSimulator {
 
         match config.pattern {
             LoadPattern::Continuous { ops_per_second } => {
-                self.run_continuous(ops_per_second, end_time).await?;
+                self.run_continuous(ops_per_second, end_time, config.batch_size)
+                    .await?;
             }
             LoadPattern::Burst {
                 burst_size,
                 pause_seconds,
             } => {
-                self.run_burst(burst_size, pause_seconds, end_time).await?;
+                self.run_burst(burst_size, pause_seconds, end_time, config.batch_size)
+                    .await?;
             }
         }
 
@@ -62,9 +64,11 @@ impl OrderbookSimulator {
         &mut self,
         ops_per_second: u64,
         end_time: Option<Instant>,
+        batch_size: usize,
     ) -> Result<()> {
         let interval_micros = 1_000_000 / ops_per_second;
-        let mut interval = tokio::time::interval(Duration::from_micros(interval_micros));
+        let mut interval =
+            tokio::time::interval(Duration::from_micros(interval_micros * batch_size as u64));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut last_log = Instant::now();
@@ -80,8 +84,20 @@ impl OrderbookSimulator {
                 }
             }
 
-            self.execute_random_operation()?;
-            self.operation_count += 1;
+            // Execute a batch of operations in a single transaction
+            {
+                let tx = self.conn.transaction()?;
+                for _ in 0..batch_size {
+                    if let Some(end) = end_time {
+                        if Instant::now() >= end {
+                            break;
+                        }
+                    }
+                    Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
+                    self.operation_count += 1;
+                }
+                tx.commit()?;
+            }
 
             // Log stats periodically
             if last_log.elapsed() >= log_interval {
@@ -98,6 +114,7 @@ impl OrderbookSimulator {
         burst_size: usize,
         pause_seconds: u64,
         end_time: Option<Instant>,
+        batch_size: usize,
     ) -> Result<()> {
         let mut burst_num = 0;
 
@@ -114,9 +131,21 @@ impl OrderbookSimulator {
 
             let burst_start = Instant::now();
 
-            for _ in 0..burst_size {
-                self.execute_random_operation()?;
-                self.operation_count += 1;
+            // Execute burst in batches
+            let num_batches = (burst_size + batch_size - 1) / batch_size;
+            for batch_idx in 0..num_batches {
+                let batch_ops = if batch_idx == num_batches - 1 {
+                    burst_size - (batch_idx * batch_size)
+                } else {
+                    batch_size
+                };
+
+                let tx = self.conn.transaction()?;
+                for _ in 0..batch_ops {
+                    Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
+                    self.operation_count += 1;
+                }
+                tx.commit()?;
             }
 
             let burst_duration = burst_start.elapsed();
@@ -190,6 +219,24 @@ impl OrderbookSimulator {
             51..=65 => self.cancel_order()?,   // 15% - cancel order
             66..=85 => self.execute_trade()?,  // 20% - execute trade
             86..=99 => self.update_balance()?, // 14% - update balance
+            _ => unreachable!(),
+        }
+
+        Ok(())
+    }
+
+    fn execute_random_operation_in_tx_static(
+        user_ids: &[i64],
+        tx: &rusqlite::Transaction,
+    ) -> Result<()> {
+        let mut rng = rand::thread_rng();
+        let operation_type = rng.gen_range(0..100);
+
+        match operation_type {
+            0..=50 => Self::place_order_in_tx(user_ids, tx)?, // 51% - place order
+            51..=65 => Self::cancel_order_in_tx(tx)?,         // 15% - cancel order
+            66..=85 => Self::execute_trade_in_tx(tx)?,        // 20% - execute trade
+            86..=99 => Self::update_balance_in_tx(user_ids, tx)?, // 14% - update balance
             _ => unreachable!(),
         }
 
@@ -369,13 +416,116 @@ impl OrderbookSimulator {
         )?;
         let total_trades: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM trades", [], |row| row.get(0))?;
+            .query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))?;
 
         Ok(DbStats {
             total_orders,
             active_orders,
             total_trades,
         })
+    }
+
+    // Transaction-based versions for batching
+    fn place_order_in_tx(user_ids: &[i64], tx: &rusqlite::Transaction) -> Result<()> {
+        let mut rng = rand::thread_rng();
+        let user_id = user_ids[rng.gen_range(0..user_ids.len())];
+        let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];
+        let side = if rng.gen_bool(0.5) { "buy" } else { "sell" };
+        let price = rng.gen_range(10_000..100_000);
+        let quantity = rng.gen_range(1..100);
+
+        tx.execute(
+            "INSERT INTO orders (user_id, symbol, side, order_type, price, quantity, status)
+             VALUES (?1, ?2, ?3, 'limit', ?4, ?5, 'active')",
+            params![user_id, symbol, side, price, quantity],
+        )?;
+        Ok(())
+    }
+
+    fn cancel_order_in_tx(tx: &rusqlite::Transaction) -> Result<()> {
+        let order_id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM orders WHERE status = 'active' ORDER BY RANDOM() LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(id) = order_id {
+            tx.execute(
+                "UPDATE orders SET status = 'cancelled', updated_at = unixepoch() WHERE id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn execute_trade_in_tx(tx: &rusqlite::Transaction) -> Result<()> {
+        let mut rng = rand::thread_rng();
+
+        let buy_order: Option<(i64, i64, String, i64)> = tx
+            .query_row(
+                "SELECT id, user_id, symbol, quantity FROM orders
+                 WHERE status = 'active' AND side = 'buy' ORDER BY RANDOM() LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .ok();
+
+        let sell_order: Option<(i64, i64, String, i64)> = tx
+            .query_row(
+                "SELECT id, user_id, symbol, quantity FROM orders
+                 WHERE status = 'active' AND side = 'sell' ORDER BY RANDOM() LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .ok();
+
+        if let (
+            Some((buy_id, buyer_id, buy_symbol, buy_qty)),
+            Some((sell_id, seller_id, sell_symbol, sell_qty)),
+        ) = (buy_order, sell_order)
+        {
+            if buy_symbol == sell_symbol {
+                let quantity = buy_qty.min(sell_qty);
+                let price = rng.gen_range(10_000..100_000);
+
+                tx.execute(
+                    "INSERT INTO trades (buy_order_id, sell_order_id, symbol, price, quantity, buyer_id, seller_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![buy_id, sell_id, buy_symbol, price, quantity, buyer_id, seller_id],
+                )?;
+
+                tx.execute(
+                    "UPDATE orders SET filled_quantity = filled_quantity + ?1,
+                     status = CASE WHEN filled_quantity + ?1 >= quantity THEN 'filled' ELSE 'partial' END,
+                     updated_at = unixepoch() WHERE id = ?2",
+                    params![quantity, buy_id],
+                )?;
+
+                tx.execute(
+                    "UPDATE orders SET filled_quantity = filled_quantity + ?1,
+                     status = CASE WHEN filled_quantity + ?1 >= quantity THEN 'filled' ELSE 'partial' END,
+                     updated_at = unixepoch() WHERE id = ?2",
+                    params![quantity, sell_id],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn update_balance_in_tx(user_ids: &[i64], tx: &rusqlite::Transaction) -> Result<()> {
+        let mut rng = rand::thread_rng();
+        let user_id = user_ids[rng.gen_range(0..user_ids.len())];
+        let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];
+        let amount_change: i64 = rng.gen_range(-1000..1000);
+
+        tx.execute(
+            "UPDATE balances SET amount = MAX(0, amount + ?1), updated_at = unixepoch()
+             WHERE user_id = ?2 AND symbol = ?3",
+            params![amount_change, user_id, symbol],
+        )?;
+        Ok(())
     }
 }
 

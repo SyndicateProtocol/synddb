@@ -53,6 +53,10 @@ enum Commands {
         /// Pause between bursts in seconds (for burst mode)
         #[arg(short = 'i', long, default_value = "5")]
         burst_interval: u64,
+
+        /// Batch size for transaction grouping (higher = faster writes)
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
     },
     /// Show statistics about the database
     Stats {
@@ -95,6 +99,7 @@ async fn main() -> Result<()> {
             duration,
             burst_size,
             burst_interval,
+            batch_size,
         } => {
             info!("Starting orderbook simulation at {:?}", db);
 
@@ -117,6 +122,7 @@ async fn main() -> Result<()> {
             let config = LoadConfig {
                 pattern: load_pattern,
                 duration_seconds: if duration == 0 { None } else { Some(duration) },
+                batch_size,
             };
 
             let conn = Connection::open(&db)?;
