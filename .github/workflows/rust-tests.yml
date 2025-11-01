@@ -76,6 +76,36 @@ jobs:
             local sustained=$(grep "Sustained stable rate:" "$log_file" | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
             echo "$peak $sustained"
           }
+
+          # Run a benchmark and handle errors
+          # Usage: run_benchmark <db_name> <log_file> <mode_label> <mode_flags> <batch_size>
+          run_benchmark() {
+            local db_name=$1
+            local log_file=$2
+            local mode_label=$3
+            local mode_flags=$4
+            local batch_size=$5
+
+            cargo run --package synddb-benchmark --release -- init --db "$db_name"
+            if ! cargo run --package synddb-benchmark --release -- run --db "$db_name" --clean --rate 0 $mode_flags --batch-size $batch_size > "$log_file" 2>&1; then
+              echo "❌ $mode_label benchmark failed! Output:"
+              cat "$log_file"
+              exit 1
+            fi
+          }
+
+          # Extract rates and output to GitHub Actions
+          # Usage: output_rates <log_file> <output_prefix> <display_label>
+          output_rates() {
+            local log_file=$1
+            local output_prefix=$2
+            local display_label=$3
+
+            read peak sustained <<< $(extract_rates "$log_file")
+            echo "${output_prefix}_peak=$peak" >> $GITHUB_OUTPUT
+            echo "${output_prefix}_sustained=$sustained" >> $GITHUB_OUTPUT
+            echo "$display_label - Peak: $peak ops/sec, Sustained: $sustained ops/sec"
+          }
           EOF
           chmod +x /tmp/benchmark-helpers.sh
 
@@ -109,36 +139,18 @@ jobs:
           source /tmp/benchmark-helpers.sh
 
           # Run simple benchmark
-          cargo run --package synddb-benchmark --release -- init --db bench-current-simple.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-simple.db --clean --rate 0 --simple --batch-size ${{ env.BENCHMARK_SIMPLE_BATCH_SIZE }} > bench-current-simple.log 2>&1; then
-            echo "❌ Simple benchmark failed! Output:"
-            cat bench-current-simple.log
-            exit 1
-          fi
-
-          # Extract and output simple rates
-          read SIMPLE_PEAK SIMPLE_SUSTAINED <<< $(extract_rates bench-current-simple.log)
-          echo "simple_peak=$SIMPLE_PEAK" >> $GITHUB_OUTPUT
-          echo "simple_sustained=$SIMPLE_SUSTAINED" >> $GITHUB_OUTPUT
-          echo "Current simple - Peak: $SIMPLE_PEAK ops/sec, Sustained: $SIMPLE_SUSTAINED ops/sec"
+          run_benchmark bench-current-simple.db bench-current-simple.log "Simple" "--simple" ${{ env.BENCHMARK_SIMPLE_BATCH_SIZE }}
+          output_rates bench-current-simple.log simple "Current simple"
 
           # Run full benchmark
-          cargo run --package synddb-benchmark --release -- init --db bench-current-full.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-full.db --clean --rate 0 --batch-size ${{ env.BENCHMARK_FULL_BATCH_SIZE }} > bench-current-full.log 2>&1; then
-            echo "❌ Full benchmark failed! Output:"
-            cat bench-current-full.log
-            exit 1
-          fi
-
-          # Extract and output full rates
-          read FULL_PEAK FULL_SUSTAINED <<< $(extract_rates bench-current-full.log)
-          echo "full_peak=$FULL_PEAK" >> $GITHUB_OUTPUT
-          echo "full_sustained=$FULL_SUSTAINED" >> $GITHUB_OUTPUT
-          echo "Current full - Peak: $FULL_PEAK ops/sec, Sustained: $FULL_SUSTAINED ops/sec"
+          run_benchmark bench-current-full.db bench-current-full.log "Full" "" ${{ env.BENCHMARK_FULL_BATCH_SIZE }}
+          output_rates bench-current-full.log full "Current full"
 
       - name: Run baseline benchmarks
         if: steps.cache-baseline.outputs.cache-hit != 'true'
         run: |
+          source /tmp/benchmark-helpers.sh
+
           # Checkout baseline commit
           BASELINE_SHA=${{ steps.baseline-sha.outputs.sha }}
           git fetch origin
@@ -146,20 +158,10 @@ jobs:
           cargo build --package synddb-benchmark --release
 
           # Run simple benchmark
-          cargo run --package synddb-benchmark --release -- init --db bench-baseline-simple.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-baseline-simple.db --clean --rate 0 --simple --batch-size ${{ env.BENCHMARK_SIMPLE_BATCH_SIZE }} > bench-baseline-simple.log 2>&1; then
-            echo "❌ Baseline simple benchmark failed! Output:"
-            cat bench-baseline-simple.log
-            exit 1
-          fi
+          run_benchmark bench-baseline-simple.db bench-baseline-simple.log "Baseline simple" "--simple" ${{ env.BENCHMARK_SIMPLE_BATCH_SIZE }}
 
           # Run full benchmark
-          cargo run --package synddb-benchmark --release -- init --db bench-baseline-full.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-baseline-full.db --clean --rate 0 --batch-size ${{ env.BENCHMARK_FULL_BATCH_SIZE }} > bench-baseline-full.log 2>&1; then
-            echo "❌ Baseline full benchmark failed! Output:"
-            cat bench-baseline-full.log
-            exit 1
-          fi
+          run_benchmark bench-baseline-full.db bench-baseline-full.log "Baseline full" "" ${{ env.BENCHMARK_FULL_BATCH_SIZE }}
 
           git checkout -
 
@@ -175,17 +177,9 @@ jobs:
             echo "🆕 Using fresh baseline"
           fi
 
-          # Extract and output simple rates
-          read SIMPLE_PEAK SIMPLE_SUSTAINED <<< $(extract_rates bench-baseline-simple.log)
-          echo "simple_peak=$SIMPLE_PEAK" >> $GITHUB_OUTPUT
-          echo "simple_sustained=$SIMPLE_SUSTAINED" >> $GITHUB_OUTPUT
-          echo "Baseline simple - Peak: $SIMPLE_PEAK ops/sec, Sustained: $SIMPLE_SUSTAINED ops/sec"
-
-          # Extract and output full rates
-          read FULL_PEAK FULL_SUSTAINED <<< $(extract_rates bench-baseline-full.log)
-          echo "full_peak=$FULL_PEAK" >> $GITHUB_OUTPUT
-          echo "full_sustained=$FULL_SUSTAINED" >> $GITHUB_OUTPUT
-          echo "Baseline full - Peak: $FULL_PEAK ops/sec, Sustained: $FULL_SUSTAINED ops/sec"
+          # Extract and output rates
+          output_rates bench-baseline-simple.log simple "Baseline simple"
+          output_rates bench-baseline-full.log full "Baseline full"
 
       - name: Compare performance and check for regressions
         run: |
