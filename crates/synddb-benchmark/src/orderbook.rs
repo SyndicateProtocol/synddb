@@ -209,12 +209,12 @@ impl OrderbookSimulator {
     ) -> Result<()> {
         info!("=== Max Throughput Discovery Mode ===");
         info!("Will automatically find maximum sustainable throughput");
-        info!("Starting with 1,000 ops/sec and doubling until performance degrades");
+        info!("Using adaptive algorithm with stability detection");
 
         let mut current_rate = 1_000u64;
         let mut best_rate = 0u64;
         let mut best_actual_rate = 0f64;
-        let test_duration = Duration::from_secs(5);
+        let mut best_stability = 0f64;
 
         loop {
             if let Some(end) = end_time {
@@ -225,17 +225,172 @@ impl OrderbookSimulator {
 
             info!("\n--- Testing {} ops/sec ---", current_rate);
 
-            // Run test at current rate
-            let test_start = Instant::now();
-            let ops_before = self.operation_count;
-            let test_end_time = test_start + test_duration;
+            // Run multiple samples to measure stability
+            let num_samples = 3;
+            let sample_duration = Duration::from_secs(3);
+            let mut sample_rates = Vec::new();
 
-            let interval_micros = 1_000_000 / current_rate;
+            for sample_num in 1..=num_samples {
+                let sample_start = Instant::now();
+                let ops_before = self.operation_count;
+                let sample_end_time = sample_start + sample_duration;
+
+                let interval_micros = 1_000_000 / current_rate;
+                let mut interval = tokio::time::interval(Duration::from_micros(
+                    interval_micros * batch_size as u64,
+                ));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+                while Instant::now() < sample_end_time {
+                    interval.tick().await;
+
+                    let tx = self.conn.transaction()?;
+                    for _ in 0..batch_size {
+                        if simple_mode {
+                            Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
+                        } else {
+                            Self::execute_random_operation_in_tx_static(&self.user_ids, &tx)?;
+                        }
+                        self.operation_count += 1;
+                    }
+                    tx.commit()?;
+                }
+
+                let sample_elapsed = sample_start.elapsed();
+                let ops_completed = self.operation_count - ops_before;
+                let sample_rate = ops_completed as f64 / sample_elapsed.as_secs_f64();
+                sample_rates.push(sample_rate);
+
+                info!(
+                    "  Sample {}/{}: {:.0} ops/sec",
+                    sample_num, num_samples, sample_rate
+                );
+            }
+
+            // Calculate statistics
+            let mean_rate = sample_rates.iter().sum::<f64>() / sample_rates.len() as f64;
+            let variance = sample_rates
+                .iter()
+                .map(|r| (r - mean_rate).powi(2))
+                .sum::<f64>()
+                / sample_rates.len() as f64;
+            let std_dev = variance.sqrt();
+            let coefficient_of_variation = std_dev / mean_rate; // Lower = more stable
+            let achievement_pct = (mean_rate / current_rate as f64) * 100.0;
+
+            info!(
+                "Mean: {:.0} ops/sec ({:.1}% of target) | Stability: {:.1}% CV",
+                mean_rate,
+                achievement_pct,
+                coefficient_of_variation * 100.0
+            );
+
+            // Define degradation criteria
+            let is_degraded = achievement_pct < 90.0; // Not hitting target
+            let is_unstable = coefficient_of_variation > 0.15; // >15% variance
+            let is_marginal = achievement_pct < 95.0;
+
+            if is_degraded {
+                info!("⚠ Throughput degraded (<90% of target) - backing off");
+
+                // Back off by 10% and verify stability
+                let backoff_rate = (current_rate as f64 * 0.9) as u64;
+                info!("\n--- Verifying stability at {} ops/sec ---", backoff_rate);
+
+                let verify_mean = self
+                    .run_verification_test(backoff_rate, batch_size, simple_mode)
+                    .await?;
+
+                info!(
+                    "\n=== Maximum Throughput Found ===\n\
+                     Best sustained rate: {:.0} ops/sec\n\
+                     Verified stable rate: {:.0} ops/sec\n\
+                     Degradation detected at: {} ops/sec target\n",
+                    best_actual_rate, verify_mean, current_rate
+                );
+                break;
+            }
+
+            if is_unstable {
+                info!(
+                    "⚠ Performance unstable (CV {:.1}%) - system under stress",
+                    coefficient_of_variation * 100.0
+                );
+
+                // If this is worse stability than our best, we've found the limit
+                if best_rate > 0 && coefficient_of_variation > best_stability * 1.5 {
+                    info!(
+                        "\n=== Maximum Stable Throughput Found ===\n\
+                         Best sustained rate: {:.0} ops/sec (CV {:.1}%)\n\
+                         Current rate unstable: {:.0} ops/sec (CV {:.1}%)\n\
+                         Recommendation: Use {} ops/sec for stable operation\n",
+                        best_actual_rate,
+                        best_stability * 100.0,
+                        mean_rate,
+                        coefficient_of_variation * 100.0,
+                        best_rate
+                    );
+                    break;
+                }
+            }
+
+            // Update best rate if this is better
+            if mean_rate > best_actual_rate && !is_unstable {
+                best_rate = current_rate;
+                best_actual_rate = mean_rate;
+                best_stability = coefficient_of_variation;
+            }
+
+            // Determine next rate
+            let next_rate = if is_marginal || is_unstable {
+                // Near limit or unstable - use smaller increments
+                ((current_rate as f64 * 1.2) as u64).max(current_rate + 100)
+            } else {
+                // Far from limit - double it
+                current_rate * 2
+            };
+
+            // Cap at reasonable maximum to avoid overflow
+            if next_rate > 10_000_000 {
+                info!(
+                    "\n=== Reached Testing Limit ===\n\
+                     Maximum tested rate: {:.0} ops/sec\n\
+                     Stability: {:.1}% CV\n\
+                     System can sustain even higher throughput\n",
+                    best_actual_rate,
+                    best_stability * 100.0
+                );
+                break;
+            }
+
+            current_rate = next_rate;
+        }
+
+        self.log_final_stats();
+        Ok(())
+    }
+
+    async fn run_verification_test(
+        &mut self,
+        rate: u64,
+        batch_size: usize,
+        simple_mode: bool,
+    ) -> Result<f64> {
+        let num_samples = 3;
+        let sample_duration = Duration::from_secs(3);
+        let mut sample_rates = Vec::new();
+
+        for sample_num in 1..=num_samples {
+            let sample_start = Instant::now();
+            let ops_before = self.operation_count;
+            let sample_end_time = sample_start + sample_duration;
+
+            let interval_micros = 1_000_000 / rate;
             let mut interval =
                 tokio::time::interval(Duration::from_micros(interval_micros * batch_size as u64));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-            while Instant::now() < test_end_time {
+            while Instant::now() < sample_end_time {
                 interval.tick().await;
 
                 let tx = self.conn.transaction()?;
@@ -250,53 +405,18 @@ impl OrderbookSimulator {
                 tx.commit()?;
             }
 
-            let test_elapsed = test_start.elapsed();
+            let sample_elapsed = sample_start.elapsed();
             let ops_completed = self.operation_count - ops_before;
-            let actual_rate = ops_completed as f64 / test_elapsed.as_secs_f64();
-            let achievement_pct = (actual_rate / current_rate as f64) * 100.0;
+            let sample_rate = ops_completed as f64 / sample_elapsed.as_secs_f64();
+            sample_rates.push(sample_rate);
 
             info!(
-                "Completed {} ops in {:.2}s = {:.0} ops/sec ({:.1}% of target)",
-                ops_completed,
-                test_elapsed.as_secs_f64(),
-                actual_rate,
-                achievement_pct
+                "  Verification {}/{}: {:.0} ops/sec",
+                sample_num, num_samples, sample_rate
             );
-
-            // If we achieved less than 90% of target, we've found the limit
-            if achievement_pct < 90.0 {
-                info!(
-                    "\n=== Maximum Throughput Found ===\n\
-                     Best sustained rate: {:.0} ops/sec (target: {} ops/sec)\n\
-                     System unable to sustain higher throughput\n",
-                    best_actual_rate, best_rate
-                );
-                break;
-            }
-
-            // Update best rate
-            best_rate = current_rate;
-            best_actual_rate = actual_rate;
-
-            // Double the rate for next test
-            let next_rate = current_rate * 2;
-
-            // Cap at reasonable maximum to avoid overflow
-            if next_rate > 10_000_000 {
-                info!(
-                    "\n=== Reached Testing Limit ===\n\
-                     Maximum tested rate: {:.0} ops/sec (target: {} ops/sec)\n\
-                     System can sustain even higher throughput\n",
-                    best_actual_rate, best_rate
-                );
-                break;
-            }
-
-            current_rate = next_rate;
         }
 
-        self.log_final_stats();
-        Ok(())
+        Ok(sample_rates.iter().sum::<f64>() / sample_rates.len() as f64)
     }
 
     fn initialize_users(&mut self) -> Result<()> {

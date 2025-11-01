@@ -304,7 +304,7 @@ cargo run --package synddb-benchmark --release -- run --simple --rate 100000 --b
 
 #### Max Throughput Discovery Mode
 
-Set `--rate 0` to automatically discover your system's maximum sustainable throughput. The tool will start at 1,000 ops/sec and double the rate every 5 seconds until performance degrades below 90% of the target.
+Set `--rate 0` to automatically discover your system's maximum sustainable throughput using an adaptive algorithm with stability detection.
 
 ```bash
 # Auto-discover max throughput in simple mode
@@ -315,28 +315,60 @@ cargo run --package synddb-benchmark --release -- run --rate 0 --batch-size 1000
 ```
 
 **How it works:**
-1. Starts at 1,000 ops/sec
-2. Runs for 5 seconds at each rate
-3. Doubles the rate if achieving >90% of target
-4. Stops when performance drops below 90%
-5. Reports the maximum sustained rate
+
+The algorithm uses **three signals** to detect degradation:
+
+1. **Throughput Achievement**: Measures actual vs. target rate
+   - `<90%` = Degraded (triggers backoff and verification)
+   - `90-95%` = Marginal (switches to smaller increments)
+   - `>95%` = Good (continues doubling)
+
+2. **Stability (Coefficient of Variation)**: Detects performance variance
+   - Takes 3 samples of 3 seconds each
+   - Calculates mean and CV across samples
+   - High CV (>15%) indicates system under stress or resource contention
+
+3. **Adaptive Backoff**: When degradation detected
+   - Backs off by 10% from failed rate
+   - Runs verification test at backoff rate
+   - Reports both best sustained and verified stable rates
 
 **Example output:**
 ```
-Testing 1000 ops/sec → 1983 ops/sec (198.3% of target) ✓
-Testing 2000 ops/sec → 2975 ops/sec (148.8% of target) ✓
-Testing 64000 ops/sec → 67028 ops/sec (104.7% of target) ✓
-Testing 128000 ops/sec → 125976 ops/sec (98.4% of target) ✓
-Testing 256000 ops/sec → 125132 ops/sec (48.9% of target) ✗
+Testing 1000 ops/sec
+  Sample 1/3: 1972 ops/sec
+  Sample 2/3: 1977 ops/sec
+  Sample 3/3: 1976 ops/sec
+  Mean: 1975 ops/sec (197.5% of target) | Stability: 0.1% CV ✓
 
-Maximum Throughput Found: 125,976 ops/sec
+Testing 128000 ops/sec
+  Mean: 124750 ops/sec (97.5% of target) | Stability: 0.4% CV ✓
+
+Testing 256000 ops/sec
+  Mean: 123024 ops/sec (48.1% of target) | Stability: 0.6% CV
+  ⚠ Throughput degraded - backing off
+
+Verifying stability at 230400 ops/sec
+  Verification 1/3: 123831 ops/sec
+  [...]
+
+Maximum Throughput Found:
+  Best sustained rate: 124,750 ops/sec
+  Verified stable rate: 121,649 ops/sec
 ```
 
+**Why this approach?**
+
+- **Handles interference**: CV detection catches performance degradation from other processes (e.g., sidecar snapshots, background tasks)
+- **Robust**: Multiple samples prevent false positives from transient spikes
+- **Adaptive**: Uses large increments when far from limit, small increments when close
+- **Conservative**: Backs off and verifies to ensure reported rate is truly sustainable
+
 This is ideal for:
-- Finding your system's performance limits
+- Finding your system's performance limits under realistic conditions
 - Comparing performance across different hardware
-- Validating optimizations
-- Benchmarking before/after system changes
+- Validating optimizations with statistical confidence
+- Benchmarking with other processes running (e.g., sidecar)
 
 ## SyndDB Sidecar (Coming Soon)
 
