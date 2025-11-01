@@ -89,12 +89,12 @@ Display current database statistics including order counts, trade counts, and or
 cargo run --package synddb-benchmark -- stats [--db <path>]
 ```
 
-### `clear` - Clear Data
+### `clean` - Clean Data
 
 Remove all data from tables while preserving the schema.
 
 ```bash
-cargo run --package synddb-benchmark -- clear [--db <path>]
+cargo run --package synddb-benchmark -- clean [--db <path>]
 ```
 
 ## Database Schema
