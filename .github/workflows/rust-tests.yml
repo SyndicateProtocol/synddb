@@ -15,6 +15,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  BENCHMARK_SIMPLE_BATCH_SIZE: 5000
+  BENCHMARK_FULL_BATCH_SIZE: 1000
+  REGRESSION_THRESHOLD: -20
 
 jobs:
   tests:
@@ -76,45 +79,48 @@ jobs:
             bench-baseline-full.log
           key: benchmark-baseline-${{ steps.baseline-sha.outputs.sha }}
 
-      - name: Run benchmarks on current commit (simple)
-        id: current-bench-simple
+      - name: Run benchmarks on current commit
+        id: current-bench
         run: |
+          # Helper function to extract rates from log file
+          extract_rates() {
+            local log_file=$1
+            local peak=$(grep "Peak achieved rate:" "$log_file" | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+            local sustained=$(grep "Sustained stable rate:" "$log_file" | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
+            echo "$peak $sustained"
+          }
+
+          # Run simple benchmark
           cargo run --package synddb-benchmark --release -- init --db bench-current-simple.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-simple.db --clean --rate 0 --simple --batch-size 5000 > bench-current-simple.log 2>&1; then
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-simple.db --clean --rate 0 --simple --batch-size ${{ env.BENCHMARK_SIMPLE_BATCH_SIZE }} > bench-current-simple.log 2>&1; then
             echo "❌ Simple benchmark failed! Output:"
             cat bench-current-simple.log
             exit 1
           fi
 
-          # Extract peak achieved and sustained stable rates
-          PEAK_RATE=$(grep "Peak achieved rate:" bench-current-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-          SUSTAINED_RATE=$(grep "Sustained stable rate:" bench-current-simple.log | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
-          echo "peak_rate=$PEAK_RATE" >> $GITHUB_OUTPUT
-          echo "sustained_rate=$SUSTAINED_RATE" >> $GITHUB_OUTPUT
-          echo "Current simple - Peak: $PEAK_RATE ops/sec, Sustained: $SUSTAINED_RATE ops/sec"
+          # Extract and output simple rates
+          read SIMPLE_PEAK SIMPLE_SUSTAINED <<< $(extract_rates bench-current-simple.log)
+          echo "simple_peak=$SIMPLE_PEAK" >> $GITHUB_OUTPUT
+          echo "simple_sustained=$SIMPLE_SUSTAINED" >> $GITHUB_OUTPUT
+          echo "Current simple - Peak: $SIMPLE_PEAK ops/sec, Sustained: $SIMPLE_SUSTAINED ops/sec"
 
-      - name: Run benchmarks on current commit (full)
-        id: current-bench-full
-        run: |
+          # Run full benchmark
           cargo run --package synddb-benchmark --release -- init --db bench-current-full.db
-          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-full.db --clean --rate 0 --batch-size 1000 > bench-current-full.log 2>&1; then
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-current-full.db --clean --rate 0 --batch-size ${{ env.BENCHMARK_FULL_BATCH_SIZE }} > bench-current-full.log 2>&1; then
             echo "❌ Full benchmark failed! Output:"
             cat bench-current-full.log
             exit 1
           fi
 
-          # Extract peak achieved and sustained stable rates
-          PEAK_RATE=$(grep "Peak achieved rate:" bench-current-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-          SUSTAINED_RATE=$(grep "Sustained stable rate:" bench-current-full.log | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
-          echo "peak_rate=$PEAK_RATE" >> $GITHUB_OUTPUT
-          echo "sustained_rate=$SUSTAINED_RATE" >> $GITHUB_OUTPUT
-          echo "Current full - Peak: $PEAK_RATE ops/sec, Sustained: $SUSTAINED_RATE ops/sec"
+          # Extract and output full rates
+          read FULL_PEAK FULL_SUSTAINED <<< $(extract_rates bench-current-full.log)
+          echo "full_peak=$FULL_PEAK" >> $GITHUB_OUTPUT
+          echo "full_sustained=$FULL_SUSTAINED" >> $GITHUB_OUTPUT
+          echo "Current full - Peak: $FULL_PEAK ops/sec, Sustained: $FULL_SUSTAINED ops/sec"
 
       - name: Run baseline benchmarks
         if: steps.cache-baseline.outputs.cache-hit != 'true'
         run: |
-          set +e
-
           # Checkout baseline commit
           BASELINE_SHA=${{ steps.baseline-sha.outputs.sha }}
           git fetch origin
@@ -123,8 +129,7 @@ jobs:
 
           # Run simple benchmark
           cargo run --package synddb-benchmark --release -- init --db bench-baseline-simple.db
-          cargo run --package synddb-benchmark --release -- run --db bench-baseline-simple.db --clean --rate 0 --simple --batch-size 5000 > bench-baseline-simple.log 2>&1
-          if [ $? -ne 0 ]; then
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-baseline-simple.db --clean --rate 0 --simple --batch-size ${{ env.BENCHMARK_SIMPLE_BATCH_SIZE }} > bench-baseline-simple.log 2>&1; then
             echo "❌ Baseline simple benchmark failed! Output:"
             cat bench-baseline-simple.log
             exit 1
@@ -132,8 +137,7 @@ jobs:
 
           # Run full benchmark
           cargo run --package synddb-benchmark --release -- init --db bench-baseline-full.db
-          cargo run --package synddb-benchmark --release -- run --db bench-baseline-full.db --clean --rate 0 --batch-size 1000 > bench-baseline-full.log 2>&1
-          if [ $? -ne 0 ]; then
+          if ! cargo run --package synddb-benchmark --release -- run --db bench-baseline-full.db --clean --rate 0 --batch-size ${{ env.BENCHMARK_FULL_BATCH_SIZE }} > bench-baseline-full.log 2>&1; then
             echo "❌ Baseline full benchmark failed! Output:"
             cat bench-baseline-full.log
             exit 1
@@ -144,6 +148,14 @@ jobs:
       - name: Extract baseline rates
         id: baseline-rates
         run: |
+          # Helper function to extract rates from log file
+          extract_rates() {
+            local log_file=$1
+            local peak=$(grep "Peak achieved rate:" "$log_file" | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
+            local sustained=$(grep "Sustained stable rate:" "$log_file" | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
+            echo "$peak $sustained"
+          }
+
           # Extract from logs (either cached or freshly generated)
           if [ "${{ steps.cache-baseline.outputs.cache-hit }}" == "true" ]; then
             echo "📦 Using cached baseline"
@@ -151,21 +163,17 @@ jobs:
             echo "🆕 Using fresh baseline"
           fi
 
-          # Extract peak and sustained rates for simple mode
-          BASELINE_SIMPLE_PEAK=$(grep "Peak achieved rate:" bench-baseline-simple.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-          BASELINE_SIMPLE_SUSTAINED=$(grep "Sustained stable rate:" bench-baseline-simple.log | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
+          # Extract and output simple rates
+          read SIMPLE_PEAK SIMPLE_SUSTAINED <<< $(extract_rates bench-baseline-simple.log)
+          echo "simple_peak=$SIMPLE_PEAK" >> $GITHUB_OUTPUT
+          echo "simple_sustained=$SIMPLE_SUSTAINED" >> $GITHUB_OUTPUT
+          echo "Baseline simple - Peak: $SIMPLE_PEAK ops/sec, Sustained: $SIMPLE_SUSTAINED ops/sec"
 
-          # Extract peak and sustained rates for full mode
-          BASELINE_FULL_PEAK=$(grep "Peak achieved rate:" bench-baseline-full.log | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-          BASELINE_FULL_SUSTAINED=$(grep "Sustained stable rate:" bench-baseline-full.log | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
-
-          echo "simple_peak=$BASELINE_SIMPLE_PEAK" >> $GITHUB_OUTPUT
-          echo "simple_sustained=$BASELINE_SIMPLE_SUSTAINED" >> $GITHUB_OUTPUT
-          echo "full_peak=$BASELINE_FULL_PEAK" >> $GITHUB_OUTPUT
-          echo "full_sustained=$BASELINE_FULL_SUSTAINED" >> $GITHUB_OUTPUT
-
-          echo "Baseline simple - Peak: $BASELINE_SIMPLE_PEAK ops/sec, Sustained: $BASELINE_SIMPLE_SUSTAINED ops/sec"
-          echo "Baseline full - Peak: $BASELINE_FULL_PEAK ops/sec, Sustained: $BASELINE_FULL_SUSTAINED ops/sec"
+          # Extract and output full rates
+          read FULL_PEAK FULL_SUSTAINED <<< $(extract_rates bench-baseline-full.log)
+          echo "full_peak=$FULL_PEAK" >> $GITHUB_OUTPUT
+          echo "full_sustained=$FULL_SUSTAINED" >> $GITHUB_OUTPUT
+          echo "Baseline full - Peak: $FULL_PEAK ops/sec, Sustained: $FULL_SUSTAINED ops/sec"
 
       - name: Compare performance and check for regressions
         run: |
@@ -176,10 +184,10 @@ jobs:
           BASELINE_FULL_SUSTAINED=${{ steps.baseline-rates.outputs.full_sustained }}
 
           # Get current rates
-          CURRENT_SIMPLE_PEAK=${{ steps.current-bench-simple.outputs.peak_rate }}
-          CURRENT_SIMPLE_SUSTAINED=${{ steps.current-bench-simple.outputs.sustained_rate }}
-          CURRENT_FULL_PEAK=${{ steps.current-bench-full.outputs.peak_rate }}
-          CURRENT_FULL_SUSTAINED=${{ steps.current-bench-full.outputs.sustained_rate }}
+          CURRENT_SIMPLE_PEAK=${{ steps.current-bench.outputs.simple_peak }}
+          CURRENT_SIMPLE_SUSTAINED=${{ steps.current-bench.outputs.simple_sustained }}
+          CURRENT_FULL_PEAK=${{ steps.current-bench.outputs.full_peak }}
+          CURRENT_FULL_SUSTAINED=${{ steps.current-bench.outputs.full_sustained }}
 
           # Determine comparison label based on event type
           if [ "${{ github.event_name }}" == "pull_request" ]; then
@@ -222,31 +230,31 @@ jobs:
           echo "| Sustained stable | $BASELINE_FULL_SUSTAINED ops/sec | $CURRENT_FULL_SUSTAINED ops/sec | $CHANGE_FULL% |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Check for regression > 20% in either mode (based on sustained rates)
-          REGRESSION_THRESHOLD=-20
-          IS_REGRESSION_SIMPLE=$(echo "$CHANGE_SIMPLE < $REGRESSION_THRESHOLD" | bc)
-          IS_REGRESSION_FULL=$(echo "$CHANGE_FULL < $REGRESSION_THRESHOLD" | bc)
+          # Check for regression (based on sustained rates)
+          THRESHOLD=${{ env.REGRESSION_THRESHOLD }}
+          IS_REGRESSION_SIMPLE=$(echo "$CHANGE_SIMPLE < $THRESHOLD" | bc)
+          IS_REGRESSION_FULL=$(echo "$CHANGE_FULL < $THRESHOLD" | bc)
 
           if [ "$IS_REGRESSION_SIMPLE" -eq 1 ] || [ "$IS_REGRESSION_FULL" -eq 1 ]; then
             echo "❌ PERFORMANCE REGRESSION DETECTED!"
             if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
-              echo "Simple mode: ${CHANGE_SIMPLE}% (exceeds ${REGRESSION_THRESHOLD}% threshold)"
+              echo "Simple mode: ${CHANGE_SIMPLE}% (exceeds ${THRESHOLD}% threshold)"
             fi
             if [ "$IS_REGRESSION_FULL" -eq 1 ]; then
-              echo "Full mode: ${CHANGE_FULL}% (exceeds ${REGRESSION_THRESHOLD}% threshold)"
+              echo "Full mode: ${CHANGE_FULL}% (exceeds ${THRESHOLD}% threshold)"
             fi
             echo "### ❌ Performance Regression Detected" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
-              echo "**Simple mode** sustained rate decreased by **${CHANGE_SIMPLE}%** (threshold: ${REGRESSION_THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+              echo "**Simple mode** sustained rate decreased by **${CHANGE_SIMPLE}%** (threshold: ${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
             fi
             if [ "$IS_REGRESSION_FULL" -eq 1 ]; then
-              echo "**Full mode** sustained rate decreased by **${CHANGE_FULL}%** (threshold: ${REGRESSION_THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+              echo "**Full mode** sustained rate decreased by **${CHANGE_FULL}%** (threshold: ${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
             fi
             exit 1
           elif [ $(echo "$CHANGE_SIMPLE < 0" | bc) -eq 1 ] || [ $(echo "$CHANGE_FULL < 0" | bc) -eq 1 ]; then
             echo "⚠️  Minor performance decrease detected"
-            echo "This is within acceptable range (< ${REGRESSION_THRESHOLD}%)."
+            echo "This is within acceptable range (< ${THRESHOLD}%)."
             echo "### ⚠️ Minor Performance Decrease" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Changes are within acceptable range." >> $GITHUB_STEP_SUMMARY
