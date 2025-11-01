@@ -69,7 +69,7 @@ mod tests {
 
         assert_eq!(config.duration_seconds, Some(60));
         assert_eq!(config.batch_size, 100);
-        assert_eq!(config.simple_mode, false);
+        assert!(!config.simple_mode);
     }
 
     #[test]
@@ -83,7 +83,7 @@ mod tests {
 
         assert_eq!(config.duration_seconds, None);
         assert_eq!(config.batch_size, 50);
-        assert_eq!(config.simple_mode, false);
+        assert!(!config.simple_mode);
     }
 
     #[test]
