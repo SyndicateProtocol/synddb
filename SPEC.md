@@ -69,9 +69,10 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - All state changes must be persisted to SQLite
 
 2. **Sidecar Listener**
-   - Attaches to the SQLite database via WAL (Write-Ahead Logging)
-   - Captures all SQL operations automatically
-   - Batches operations into diffs, creates periodic snapshots
+   - Attaches to the SQLite database via Session Extension
+   - Captures deterministic changesets (logical INSERT/UPDATE/DELETE operations)
+   - Creates periodic snapshots for recovery points
+   - Batches changesets into diffs, publishes with snapshots to DA layers
    - Publishes to DA layers (Celestia, EigenDA) and storage layers (IPFS, Arweave)
    - Zero application code changes required
 
@@ -225,8 +226,10 @@ Validators (not the application) interact with the blockchain:
 
 ```solidity
 // Reference to DA layer data for transparency
+// Changesets contain logical database changes (INSERT/UPDATE/DELETE operations)
 function submitChangeset(string calldata daCid, bytes32 dataHash, uint256 sequenceNumber)
 
+// Snapshots are full database states for recovery/bootstrapping
 function submitSnapshot(string calldata daCid, bytes32 dataHash, uint256 sequenceNumber)
 ```
 
@@ -508,8 +511,10 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 ### Core Architecture Terms
 
 - **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes database operations to blockchain
-- **Sidecar Listener** - Lightweight process that attaches to SQLite databases and automatically captures/publishes state changes.
+- **Sidecar Listener** - Lightweight process that attaches to SQLite databases via Session Extension and automatically captures/publishes state changes as changesets
 - **SQL Audit Trail** - The sequence of SQL operations that serves as the verifiable record of application state changes. SQLite executes deterministically, making all operations fully verifiable.
+- **Changesets** - Deterministic logical database changes (INSERT/UPDATE/DELETE) captured via SQLite Session Extension, more compact and auditable than physical page changes
+- **Snapshots** - Complete database state at a point in time, published periodically for recovery/bootstrapping and immediately on schema changes
 
 ### Node Types
 
@@ -520,8 +525,8 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 ### State Management Terms
 
 - **SQL Operations** - Database statements executed by the application and captured for verification
-- **State Diff** - Batched SQL statements representing incremental database changes, published to DA layers
-- **State Snapshot** - Complete SQLite database file at a specific version, published to DA layers for bootstrapping
+- **State Diff** - Batched changesets representing incremental logical database changes (not SQL statements, but INSERT/UPDATE/DELETE operations with values), published to DA layers
+- **State Snapshot** - Complete SQLite database file at a specific version, published to DA layers for bootstrapping and recovery (also published immediately on schema changes)
 - **Settlement** - Process where validators publish verified state to blockchain after reading from DA layers
 
 ### Message Passing Components
