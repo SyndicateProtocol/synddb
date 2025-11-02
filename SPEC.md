@@ -69,7 +69,7 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - All state changes must be persisted to SQLite
 
 2. **Sidecar Listener**
-   - Attaches to the SQLite database via Session Extension (official SQLite API for capturing logical changes, far more robust than parsing physical WAL pages)
+   - Attaches to the SQLite database via Session Extension (official SQLite API for capturing logical changes deterministically)
    - Captures SQL operations as changesets (INSERT/UPDATE/DELETE with values)
    - Creates periodic snapshots for recovery points
    - Batches and publishes changesets with snapshots to DA layers
