@@ -212,11 +212,12 @@ def match_orders(buy_order, sell_order):
 
 The application never touches the blockchain - the sidecar publishes to DA layers:
 
+0. **Application → SQLite**: Application writes all state changes to SQLite database
 1. **Sidecar → DA**: Publishes SQL diffs/snapshots to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with TEE signatures
 2. **Validators ← DA**: Validators sync from censorship-resistant DA layers
-3. **Validators → Blockchain**: Post verified state roots to settlement chain
+3. **Validators → Blockchain**: Post verified state transitions to settlement contract. Messages in the bridge tables are processed via Bridge.sol.
 
-This keeps the application isolated from blockchain infrastructure while enabling multiple DA sources for resilience.
+This keeps the application isolated from blockchain infrastructure while enabling multiple DA sources for resilience. No custom bridge code needed - just define tables that match your message schema.
 
 ### Validator Settlement Contract
 
@@ -295,17 +296,6 @@ CREATE TABLE outbound_messages (
     status TEXT DEFAULT 'pending'
 );
 ```
-
-**Message Flow**:
-
-1. Application writes to message table (e.g., `outbound_withdrawals`)
-2. Sidecar publishes SQL operations to DA layers with application signature
-3. Validators read from DA layers and detect message table changes
-4. Validators verify messages and submit to Bridge.sol
-5. Bridge.sol processes messages and emits events
-6. Validators detect inbound messages and write to application's inbound tables
-
-No custom bridge code needed - just define tables that match your message schema.
 
 ## Validators and Settlement
 
