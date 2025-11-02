@@ -86,12 +86,16 @@ jobs:
             local mode_flags=$4
             local batch_size=$5
 
+            echo "Starting $mode_label benchmark..."
             cargo run --package synddb-benchmark --release -- init --db "$db_name"
-            if ! cargo run --package synddb-benchmark --release -- run --db "$db_name" --clean --rate 0 $mode_flags --batch-size $batch_size > "$log_file" 2>&1; then
+
+            # Run benchmark with tee to capture output to file AND show progress
+            if ! cargo run --package synddb-benchmark --release -- run --db "$db_name" --clean --rate 0 $mode_flags --batch-size $batch_size 2>&1 | tee "$log_file"; then
               echo "❌ $mode_label benchmark failed! Output:"
               cat "$log_file"
               exit 1
             fi
+            echo "✅ $mode_label benchmark completed"
           }
 
           # Extract rates and output to GitHub Actions
