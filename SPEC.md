@@ -1,32 +1,5 @@
 # SyndDB: High-Performance Blockchain Database
 
-## Terminology Glossary
-
-### Core Architecture Terms
-
-- **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes database operations to blockchain
-- **Sidecar Listener** - Lightweight process that attaches to SQLite databases and automatically captures/publishes state changes.
-- **SQL Audit Trail** - The sequence of SQL operations that serves as the verifiable record of application state changes. SQLite executes deterministically, making all operations fully verifiable.
-
-### Node Types
-
-- **Application** - Your application (any language) running inside a TEE with SQLite, publishing SQL operations via sidecar to DA layers
-- **Read Replica** - Any node that syncs published SQL operations to serve queries (anyone can run permissionlessly)
-- **Validator** - Read replica with additional validation logic that runs in a TEE and verifies SQL operations before signing for settlement
-
-### State Management Terms
-
-- **SQL Operations** - Database statements executed by the application and captured for verification
-- **State Diff** - Batched SQL statements representing incremental database changes, published to DA layers
-- **State Snapshot** - Complete SQLite database file at a specific version, published to DA layers for bootstrapping
-- **Settlement** - Process where validators publish verified state to blockchain after reading from DA layers
-
-### Message Passing Components
-
-- **Message Tables** - Special SQLite tables for cross-chain operations (e.g., `outbound_messages`, `inbound_messages`) monitored by validators
-- **Bridge.sol** - Smart contract that processes messages from message tables, with ABI tied to table schema
-- **Message Passing** - Automatic detection and processing of cross-chain messages via application-defined table schemas that map to smart contract ABIs
-
 ## Overview
 
 SyndDB enables developers to build high-performance blockchain applications using **any programming language** with SQLite bindings. Instead of learning a new framework, developers write applications in their preferred language (Python, JavaScript, Go, Rust, etc.) that persist data to SQLite, while SyndDB infrastructure automatically captures and publishes the SQL operations for verification and replication.
@@ -542,3 +515,30 @@ Converting any existing SQLite application to SyndDB is straightforward:
 4. No code changes required to your business logic
 
 This approach makes SyndDB a drop-in solution for adding blockchain verifiability to applications written in any language.
+
+## Terminology Glossary
+
+### Core Architecture Terms
+
+- **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes database operations to blockchain
+- **Sidecar Listener** - Lightweight process that attaches to SQLite databases and automatically captures/publishes state changes.
+- **SQL Audit Trail** - The sequence of SQL operations that serves as the verifiable record of application state changes. SQLite executes deterministically, making all operations fully verifiable.
+
+### Node Types
+
+- **Application** - Your application (any language) running inside a TEE with SQLite, publishing SQL operations via sidecar to DA layers
+- **Read Replica** - Any node that syncs published SQL operations to serve queries (anyone can run permissionlessly)
+- **Validator** - Read replica with additional validation logic that runs in a TEE and verifies SQL operations before signing for settlement
+
+### State Management Terms
+
+- **SQL Operations** - Database statements executed by the application and captured for verification
+- **State Diff** - Batched SQL statements representing incremental database changes, published to DA layers
+- **State Snapshot** - Complete SQLite database file at a specific version, published to DA layers for bootstrapping
+- **Settlement** - Process where validators publish verified state to blockchain after reading from DA layers
+
+### Message Passing Components
+
+- **Message Tables** - Special SQLite tables for cross-chain operations (e.g., `outbound_messages`, `inbound_messages`) monitored by validators
+- **Bridge.sol** - Smart contract that processes messages from message tables, with ABI tied to table schema
+- **Message Passing** - Automatic detection and processing of cross-chain messages via application-defined table schemas that map to smart contract ABIs
