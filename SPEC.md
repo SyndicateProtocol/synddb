@@ -512,7 +512,7 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 
 - **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes database operations to blockchain
 - **Sidecar Listener** - Lightweight process that attaches to SQLite databases via Session Extension and automatically captures/publishes state changes as changesets
-- **SQL Audit Trail** - The sequence of SQL operations that serves as the verifiable record of application state changes. SQLite executes deterministically, making all operations fully verifiable.
+- **SQL Audit Trail** - The sequence of changesets (deterministic logical INSERT/UPDATE/DELETE operations) captured via the SQLite Session Extension that serves as the verifiable record of application state changes. This approach ensures all state transitions are fully auditable and replayable, rather than relying on raw SQL statements.
 - **Changesets** - Deterministic logical database changes (INSERT/UPDATE/DELETE) captured via SQLite Session Extension, more compact and auditable than physical page changes
 - **Snapshots** - Complete database state at a point in time, published periodically for recovery/bootstrapping and immediately on schema changes
 
