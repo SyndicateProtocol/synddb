@@ -297,8 +297,8 @@ impl OrderbookSimulator {
                 // Back off by 10% and verify stability
                 let backoff_rate = (current_rate as f64 * 0.9) as u64;
                 info!(
-                    "\n--- Verifying stability at {} ops/sec (10 samples over 30s) ---",
-                    backoff_rate
+                    "\n--- Verifying stability at {} ops/sec ({} × 0.9 backoff, 10 samples over 30s) ---",
+                    backoff_rate, current_rate
                 );
 
                 let verify_mean = self
