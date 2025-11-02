@@ -1,4 +1,4 @@
-name: Rust Tests & Benchmarks
+name: Rust CI
 
 on:
   # Run workflow on every push to main (always run to ensure cross-service compatibility)
