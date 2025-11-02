@@ -224,11 +224,10 @@ This keeps the application isolated from blockchain infrastructure while enablin
 Validators (not the application) interact with the blockchain:
 
 ```solidity
-// Validators post verified state roots after checking SQL operations
-function submitStateRoot(bytes32 stateRoot, uint256 sequenceNumber, bytes[] validatorSignatures)
-
 // Reference to DA layer data for transparency
-function submitDAReference(string calldata daCid, bytes32 dataHash, uint256 sequenceNumber)
+function submitChangeset(string calldata daCid, bytes32 dataHash, uint256 sequenceNumber)
+
+function submitSnapshot(string calldata daCid, bytes32 dataHash, uint256 sequenceNumber)
 ```
 
 The settlement contract only accepts state roots signed by a threshold of validators running in TEEs.
