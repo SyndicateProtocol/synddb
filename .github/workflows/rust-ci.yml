@@ -11,7 +11,7 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
-      - ".github/workflows/rust-tests.yml"
+      - ".github/workflows/rust-ci.yml"
 
 env:
   CARGO_TERM_COLOR: always
