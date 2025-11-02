@@ -127,7 +127,7 @@ This trades full decentralization for extreme performance, suitable for applicat
 
 Unlike traditional rollups that require full re-execution of all logic, SyndDB uses SQL operations as the verifiable audit trail. This fundamental shift enables practical verifiability without sacrificing application flexibility.
 
-### How It Works
+### Four Pillars of SyndDB Verifiability
 
 1. **Application Writes Everything to SQL**: The application must persist all data that could affect state transitions to SQLite, including:
    - Application state changes
