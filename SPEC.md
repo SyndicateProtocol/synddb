@@ -4,7 +4,7 @@
 
 SyndDB enables developers to build high-performance blockchain applications using **any programming language** with SQLite bindings. Instead of learning a new framework, developers write applications in their preferred language (Python, JavaScript, Go, Rust, etc.) that persist data to SQLite, while SyndDB infrastructure automatically captures and publishes the SQL operations for verification and replication.
 
-The key insight is that **SQL operations themselves become the verifiable audit trail**. The sequencer runs inside a TEE with attestations proving it's running the correct code, while validators (also in TEEs) verify the SQL statements and their effects. Rather than requiring validators to re-execute complex business logic and external API calls, they focus on auditing database operations, making verification practical without sacrificing application flexibility.
+The key insight is that **SQL operations themselves become the verifiable audit trail**. The application runs inside a TEE with attestations proving it's running the correct code, while validators (also in TEEs) verify the SQL operations and their effects. Rather than requiring validators to re-execute complex business logic and external API calls, they focus on auditing database operations, making verification practical without sacrificing application flexibility.
 
 The architecture is simple:
 
@@ -69,7 +69,7 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - All state changes must be persisted to SQLite
 
 2. **Sidecar Listener**
-   - Attaches to the SQLite database via Session Extension
+   - Attaches to the SQLite database via Session Extension (official SQLite API for capturing logical changes, far more robust than parsing physical WAL pages)
    - Captures SQL operations as changesets (INSERT/UPDATE/DELETE with values)
    - Creates periodic snapshots for recovery points
    - Batches and publishes changesets with snapshots to DA layers
@@ -140,7 +140,7 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
    - SQL operations are captured as changesets (INSERT/UPDATE/DELETE with values)
    - Sequence numbers maintaining strict ordering
    - Periodic snapshots for bootstrapping and recovery
-   - Immediate snapshots on schema changes
+   - Immediate snapshots on schema changes (DDL operations like ALTER TABLE automatically trigger a full snapshot, ensuring validators can always reconstruct the complete database schema and state)
    - This ensures data is widely available and reduces equivocation risk
 
 3. **Validators Verify SQL Operations, Not Code**: Validators read from DA layers and check:
@@ -214,7 +214,7 @@ def match_orders(buy_order, sell_order):
 The application never touches the blockchain - the sidecar publishes to DA layers:
 
 0. **Application → SQLite**: Application writes all state changes to SQLite database
-1. **Sidecar → DA**: Publishes SQL diffs/snapshots to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with TEE signatures
+1. **Sidecar → DA**: Publishes SQL operations (changesets/snapshots) to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with TEE signatures
 2. **Validators ← DA**: Validators sync from censorship-resistant DA layers
 3. **Validators → Blockchain**: Post verified state transitions to settlement contract. Messages in the bridge tables are processed via Bridge.sol.
 
