@@ -518,9 +518,9 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 
 ### Node Types
 
-- **Application** - Your application (any language) running inside a TEE with SQLite, publishing SQL operations via sidecar to DA layers
-- **Read Replica** - Any node that syncs published SQL operations to serve queries (anyone can run permissionlessly)
-- **Validator** - Read replica with additional validation logic that runs in a TEE and verifies SQL operations before signing for settlement
+- **Application** - Your application (any language) running inside a TEE with SQLite, publishing changesets (database operations) via sidecar to DA layers
+- **Read Replica** - Any node that syncs published changesets (database operations) to serve queries (anyone can run permissionlessly)
+- **Validator** - Read replica with additional validation logic that runs in a TEE and verifies changesets (database operations) before signing for settlement
 
 ### State Management Terms
 
