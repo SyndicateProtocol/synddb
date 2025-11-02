@@ -524,7 +524,7 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 
 ### State Management Terms
 
-- **SQL Operations** - Database statements executed by the application and captured for verification
+- **SQL Operations** - Logical database changes (INSERT/UPDATE/DELETE with values) as captured in changesets via the SQLite Session Extension; not raw SQL statements, but the deterministic operations that are verified and replicated
 - **State Diff** - Batched changesets representing incremental logical database changes (not SQL statements, but INSERT/UPDATE/DELETE operations with values), published to DA layers
 - **State Snapshot** - Complete SQLite database file at a specific version, published to DA layers for bootstrapping and recovery (also published immediately on schema changes)
 - **Settlement** - Process where validators publish verified state to blockchain after reading from DA layers
