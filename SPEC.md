@@ -57,7 +57,7 @@ For this performance, applications must accept:
 
 ## Architecture Overview
 
-SyndDB makes any SQLite application blockchain-verifiable by automatically capturing and publishing SQL operations.
+SyndDB makes any SQLite application blockchain-verifiable by automatically capturing changesets (logical database operations) and publishing them with periodic snapshots.
 
 ### Core Components
 
@@ -78,14 +78,14 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
 
 3. **Read Replicas**
    - Anyone can run a read replica permissionlessly
-   - Sync SQL operations from DA layers
-   - Replay operations to maintain consistent database state
+   - Sync changesets and snapshots from DA layers
+   - Replay changesets to maintain consistent database state
    - Serve queries with full SQL capabilities
 
 4. **Validators**
    - Read replicas with validation logic that runs in TEEs
-   - Verify SQL operations before signing for settlement
-   - Default checks: SQL correctness, state consistency, balance invariants
+   - Verify changesets before signing for settlement
+   - Default checks: Changeset validity, state consistency, balance invariants
    - Optional checks: External API verification, custom business rules
    - Process cross-chain messages from message tables
 
@@ -137,10 +137,10 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
    - Message passing operations via special tables
 
 2. **Sidecar Publishes to DA Layers**: The sidecar listener captures and publishes to censorship-resistant DA layers:
-   - Every INSERT, UPDATE, DELETE operation
-   - Transaction boundaries (BEGIN/COMMIT)
-   - The ordering of all operations
-   - Periodic state snapshots for bootstrapping
+   - Changesets containing logical INSERT/UPDATE/DELETE operations with values
+   - Sequence numbers maintaining strict ordering
+   - Periodic snapshots for bootstrapping and recovery
+   - Immediate snapshots on schema changes
    - This ensures data is widely available and reduces equivocation risk
 
 3. **Validators Verify SQL, Not Code**: Validators read from DA layers and check:
@@ -161,7 +161,7 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
 
 ### Why This Works
 
-TEE attestations ensure the application runs the correct code. Validators verify the SQL output, not the implementation. This is like database replication via write-ahead logs - apply the same principle to blockchain, with TEEs preventing equivocation and validators adding checks before settlement.
+TEE attestations ensure the application runs the correct code. Validators verify the changesets (logical database operations), not the implementation. This is like database replication via changesets - apply the same principle to blockchain, with TEEs preventing equivocation and validators adding checks before settlement.
 
 ### Example: High-Performance Orderbook
 
@@ -305,7 +305,7 @@ CREATE TABLE outbound_messages (
 
 SyndDB provides a default validator implementation that:
 
-1. **Replays SQL State Transitions**: Executes all SQL operations to rebuild state
+1. **Replays Changesets**: Applies changesets to rebuild state deterministically
 2. **Verifies Bridge Claims**: Confirms all withdrawal/deposit amounts match bridge table entries
 3. **Validates Basic Invariants**: Ensures balances never go negative, totals sum correctly
 4. **Signs Valid States**: Approves states that pass all basic checks
@@ -319,18 +319,18 @@ The default validator is designed to be extended with custom logic:
 use synddb_validator::DefaultValidator;
 
 impl CustomValidator {
-    fn validate(&self, sql_ops: &[SqlOp]) -> Result<()> {
+    fn validate(&self, changesets: &[Changeset]) -> Result<()> {
         // Run default validation first
-        self.default.validate(sql_ops)?;
+        self.default.validate(changesets)?;
 
         // Add external API checks
         if self.config.check_oracles {
-            self.verify_price_feeds(sql_ops)?;
+            self.verify_price_feeds(changesets)?;
         }
 
         // Add guardrails on amounts
-        for op in sql_ops {
-            if let Some(withdrawal) = parse_withdrawal(op) {
+        for changeset in changesets {
+            if let Some(withdrawal) = parse_withdrawal(changeset) {
                 // Reject anomalous movements
                 if withdrawal.amount > self.config.max_withdrawal {
                     return Err("Withdrawal exceeds maximum");
@@ -342,8 +342,8 @@ impl CustomValidator {
         }
 
         // Add any other custom logic
-        self.check_kyc_requirements(sql_ops)?;
-        self.verify_rate_limits(sql_ops)?;
+        self.check_kyc_requirements(changesets)?;
+        self.verify_rate_limits(changesets)?;
 
         Ok(())
     }
@@ -356,7 +356,7 @@ Validators **must** run in Trusted Execution Environments to ensure they are run
 
 - **Attestation**: TEE validators prove they're running unmodified code
 - **Protected Keys**: Settlement keys remain secure within the TEE
-- **SQL Verification**: Hardware-backed guarantees prevent validator subversion
+- **Changeset Verification**: Hardware-backed guarantees prevent validator subversion
 - **Message Processing**: TEE validators can hold bridge signing authority
 
 ### Running the Default Validator
@@ -372,7 +372,7 @@ synddb-validator \
     --tee-attestation-key /path/to/key
 ```
 
-The default validator will sync from DA layers, replay SQL operations, and verify basic invariants before signing for settlement.
+The default validator will sync changesets and snapshots from DA layers, apply changesets to rebuild state, and verify basic invariants before signing for settlement.
 
 Applications can be in any language, while validators share the same implementation to ensure consistent verification across the network.
 
