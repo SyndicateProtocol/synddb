@@ -126,7 +126,7 @@ This trades full decentralization for extreme performance, suitable for applicat
 
 ## Verifiability Model: SQL as the Audit Trail
 
-Unlike traditional rollups that require full re-execution of all logic, SyndDB uses SQL operations as the verifiable audit trail. This fundamental shift enables practical verifiability without sacrificing application flexibility.
+Unlike traditional rollups that require full re-execution of all logic, SyndDB uses changesets (containing SQL operations) as the verifiable audit trail. This fundamental shift enables practical verifiability without sacrificing application flexibility.
 
 ### Four Pillars of SyndDB Verifiability
 
