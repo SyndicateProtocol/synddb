@@ -350,7 +350,7 @@ BEGIN TRANSACTION;
   PRAGMA user_version = 2;  -- Increment version
 COMMIT;
 
--- This allows sidecar to detect and publish schema changes
+-- This allows sequencer to detect and publish schema changes
 ```
 
 ### Why Session Extension (Changesets) is the Right Choice
@@ -1129,7 +1129,7 @@ providing strong isolation while maintaining filesystem access to the SQLite dat
 │           └──────────────────────┘                              │
 │                                                                   │
 │  Container-level isolation prevents application from accessing   │
-│  sidecar memory space where Ethereum keys are held.             │
+│  sequencer memory space where Ethereum keys are held.           │
 └──────────────────────────────────────────────────────────────────┘
                      ↓ Attestation Token + Signature
 ┌──────────────────────────────────────────────────────────────────┐
@@ -1147,7 +1147,7 @@ providing strong isolation while maintaining filesystem access to the SQLite dat
 3. **Memory Encryption**: AMD SEV-SNP encrypts all VM memory including both containers
 4. **No Shared Memory**: Containers communicate only via filesystem (SQLite DB file)
 5. **Principle of Least Privilege**: Application has no credentials to access Secret Manager
-6. **Attestation Binding**: Keys in Secret Manager are bound to sidecar container digest only
+6. **Attestation Binding**: Keys in Secret Manager are bound to sequencer container digest only
 
 ### Key Management Implementation
 
@@ -1270,7 +1270,7 @@ impl KeyManager {
         let client = reqwest::Client::new();
 
         // Custom audience for our application
-        let audience = "https://synddb.io/sidecar";
+        let audience = "https://synddb.io/sequencer";
 
         let response = client
             .get("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
@@ -1312,7 +1312,7 @@ impl KeyManager {
         let secret_data = serde_json::to_vec(&key_data)?;
 
         // Create secret with Workload Identity binding
-        // IAM policy ensures only sidecar container with matching digest can access
+        // IAM policy ensures only sequencer container with matching digest can access
         secret_client
             .create_secret(
                 project_id,
@@ -1320,7 +1320,7 @@ impl KeyManager {
                 secret_data,
                 Some(vec![
                     ("synddb/environment", "confidential-space"),
-                    ("synddb/component", "sidecar"),
+                    ("synddb/component", "sequencer"),
                     ("synddb/key-type", "secp256k1-ethereum"),
                 ]),
             )
@@ -1411,7 +1411,7 @@ HEALTHCHECK --interval=30s --timeout=3s \
 
 # Entry point with attestation initialization
 ENTRYPOINT ["/usr/local/bin/synddb-sequencer"]
-CMD ["--attestation", "confidential-space", "--config", "/config/sidecar.yaml"]
+CMD ["--attestation", "confidential-space", "--config", "/config/sequencer.yaml"]
 ```
 
 ### Deployment Configuration
@@ -1452,7 +1452,7 @@ spec:
       - key: tee-restart-policy
         value: "Always"
       - key: tee-env-ATTESTATION_AUDIENCE
-        value: "https://synddb.io/sidecar"
+        value: "https://synddb.io/sequencer"
       - key: tee-env-SECRET_PROJECT_ID
         value: "${PROJECT_ID}"
 
@@ -1508,7 +1508,7 @@ spec:
 ### Configuration File
 
 ```yaml
-# config/sidecar-confidential.yaml
+# config/sequencer-confidential.yaml
 database:
   path: "/data/app.db"
   wal_mode: true
@@ -1521,7 +1521,7 @@ attestation:
   gcp:
     project_id: "${PROJECT_ID}"
     secret_name: "synddb-sequencer-signing-key"
-    attestation_audience: "https://synddb.io/sidecar"
+    attestation_audience: "https://synddb.io/sequencer"
 
     # Expected measurements for verification
     expected_measurements:
@@ -1554,7 +1554,7 @@ monitoring:
 
 ### 1. Disaster Recovery & Persistence ⚠️ TODO
 
-**Problem:** If sidecar crashes, in-memory changesets are lost
+**Problem:** If sequencer crashes, in-memory changesets are lost
 **Solution:** Persistent queue before DA publish
 ```rust
 // src/publish/persistent_queue.rs
@@ -1595,7 +1595,7 @@ impl PersistentQueue {
 
 ### 2. Backpressure & Memory Management ⚠️ TODO
 
-**Problem:** Application writes faster than sidecar can publish
+**Problem:** Application writes faster than sequencer can publish
 **Solution:** Bounded channels with monitoring
 ```rust
 // Bounded channels prevent memory exhaustion
@@ -1640,11 +1640,11 @@ impl Sequencer {
     }
 
     async fn save_checkpoint(&self) -> Result<()> {
-        let state = SidecarState {
+        let state = SequencerState {
             last_published_sequence: self.sequence.load(Ordering::SeqCst),
             last_schema_version: self.schema_version,
         };
-        fs::write("/data/sidecar.checkpoint", serde_json::to_vec(&state)?)?;
+        fs::write("/data/sequencer.checkpoint", serde_json::to_vec(&state)?)?;
         Ok(())
     }
 }
@@ -1734,7 +1734,7 @@ impl KeyManager {
 **Critical Metrics:**
 ```rust
 // GCP Cloud Logging structured events
-pub struct SidecarMetrics {
+pub struct SequencerMetrics {
     // Lag metrics
     pub changeset_lag_seconds: f64,        // Time from commit to publish
     pub queue_depth: usize,                 // Unpublished changesets
@@ -1761,7 +1761,7 @@ pub struct SidecarMetrics {
 **Known Limitations:**
 - ❌ Memory databases (`:memory:`) - Cannot persist
 - ❌ Temporary tables - Not replicated by Session Extension
-- ⚠️ ATTACH DATABASE - Each database needs separate sidecar
+- ⚠️ ATTACH DATABASE - Each database needs separate sequencer
 - ⚠️ Encrypted databases (SQLCipher) - Need special handling
 - ⚠️ Custom collations - Must match on validators
 
@@ -1844,8 +1844,8 @@ async fn test_end_to_end() {
     // Start test SQLite database
     let db = setup_test_db().await;
 
-    // Start sidecar
-    let sidecar = Sidecar::new(config).start().await;
+    // Start sequencer
+    let sequencer = Sequencer::new(config).start().await;
 
     // Perform SQL operations
     db.execute("INSERT INTO test VALUES (1, 'data')").await;
@@ -1938,7 +1938,7 @@ pub struct PublishPayload {
 
 Ethereum signing keys are protected by multiple layers:
 
-1. **Container Isolation**: Application container cannot access sidecar memory
+1. **Container Isolation**: Application container cannot access sequencer memory
 2. **Secret Manager Binding**: Keys only accessible to container with matching digest
 3. **Memory Encryption**: AMD SEV-SNP encrypts all VM memory
 4. **No Key Export**: Keys never serialized outside Secret Manager
@@ -1947,7 +1947,7 @@ Ethereum signing keys are protected by multiple layers:
 // Sequencer loads key from Secret Manager on startup
 let key_manager = KeyManager::init().await?;
 
-// Application has no access to Secret Manager or sidecar memory
+// Application has no access to Secret Manager or sequencer memory
 // Keys remain in sidecar process memory only
 ```
 
@@ -1972,7 +1972,7 @@ For existing applications:
 PRAGMA journal_mode=WAL;
 ```
 
-2. **Deploy sidecar**:
+2. **Deploy sequencer**:
 
 ```bash
 docker run -v /app/data:/data syndicate/synddb-sequencer
