@@ -19,9 +19,7 @@ interface IPreExecutionModule {
      * @return shouldExecute True if validation passes, false to reject
      * @return reason If false, explanation for rejection
      */
-    function beforeExecution(
-        bytes32 messageId,
-        bytes calldata payload,
-        ExecutionContext calldata context
-    ) external returns (bool shouldExecute, string memory reason);
+    function beforeExecution(bytes32 messageId, bytes calldata payload, ExecutionContext calldata context)
+        external
+        returns (bool shouldExecute, string memory reason);
 }

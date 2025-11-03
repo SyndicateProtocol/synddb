@@ -47,11 +47,7 @@ interface IBridge {
      * @param payload Message data containing type and parameters
      * @param context Execution context with validator signatures
      */
-    function initializeMessage(
-        bytes32 messageId,
-        bytes calldata payload,
-        ExecutionContext calldata context
-    ) external;
+    function initializeMessage(bytes32 messageId, bytes calldata payload, ExecutionContext calldata context) external;
 
     /**
      * @notice Execute PreExecution modules for validation
@@ -82,11 +78,8 @@ interface IBridge {
      * @param payload Message data
      * @param context Execution context
      */
-    function processMessageComplete(
-        bytes32 messageId,
-        bytes calldata payload,
-        ExecutionContext calldata context
-    ) external;
+    function processMessageComplete(bytes32 messageId, bytes calldata payload, ExecutionContext calldata context)
+        external;
 
     // ========== Module Management Functions ==========
 

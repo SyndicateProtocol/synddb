@@ -18,10 +18,6 @@ interface IPostExecutionModule {
      * @param result Execution result data
      * @param context Execution context
      */
-    function afterExecution(
-        bytes32 messageId,
-        bool success,
-        bytes calldata result,
-        ExecutionContext calldata context
-    ) external;
+    function afterExecution(bytes32 messageId, bool success, bytes calldata result, ExecutionContext calldata context)
+        external;
 }
