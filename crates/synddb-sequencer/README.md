@@ -1,12 +1,12 @@
-# SyndDB Sidecar
+# SyndDB Sequencer
 
-The SyndDB sidecar monitors SQLite database changes using the Session Extension and publishes them to data availability layers for verification and replication.
+The SyndDB sequencer monitors SQLite database changes using the Session Extension and publishes them to data availability layers for verification and replication. The sequencer runs as a sidecar process alongside your application.
 
 ## Status
 
 🚧 **Coming Soon** - Implementation in progress
 
-See [PLAN_SIDECAR.md](../../PLAN_SIDECAR.md) for detailed architecture and implementation plan.
+See [PLAN_SEQUENCER.md](../../PLAN_SEQUENCER.md) for detailed architecture and implementation plan.
 
 ## Planned Architecture
 
@@ -21,8 +21,8 @@ See [PLAN_SIDECAR.md](../../PLAN_SIDECAR.md) for detailed architecture and imple
 # Terminal 1: Run benchmark to generate database activity
 cargo run --package synddb-benchmark -- run --rate 100
 
-# Terminal 2: Run sidecar (once implemented)
-cargo run --package synddb-sidecar -- --db orderbook.db
+# Terminal 2: Run sequencer (sidecar process) once implemented
+cargo run --package synddb-sequencer -- --db orderbook.db
 ```
 
 ## Design Goals
@@ -32,3 +32,4 @@ cargo run --package synddb-sidecar -- --db orderbook.db
 - **High Performance**: Minimal overhead on application performance
 - **Deterministic Replication**: Session Extension changesets for validators
 - **Automatic Publishing**: Handles all DA layer interaction
+- **Sidecar Architecture**: Runs as a separate process alongside your application

@@ -9,7 +9,7 @@ The key insight is that **SQL operations themselves become the verifiable audit 
 The architecture is simple:
 
 1. **Write applications in any language** that use SQLite for persistence
-2. **Run a sidecar listener** that monitors the SQLite database for changes
+2. **Run a sequencer** (as a sidecar process) that monitors the SQLite database for changes
 3. **Automatically publish SQL operations** to DA layers for durability and verification
 4. **Enable permissionless read replicas** that sync the SQL operations to serve queries
 5. **Support message passing** through application-defined tables that trigger cross-chain operations
@@ -68,7 +68,7 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - Can use any libraries, frameworks, or external APIs
    - All state changes must be persisted to SQLite
 
-2. **Sidecar Listener**
+2. **Sequencer** (runs as a sidecar process)
    - Attaches to the SQLite database via Session Extension (official SQLite API for capturing logical changes deterministically)
    - Captures SQL operations as changesets (INSERT/UPDATE/DELETE with values)
    - Creates periodic snapshots for recovery points
@@ -98,18 +98,18 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
 ### Data Flow
 
 ```
-Application (Any Language) → SQLite → Sidecar → DA Layers ← Validators (TEE) → Blockchain → Bridge.sol
-       in TEE                           ↓                        ↓
-                                 Message Tables           Message Verification
+Application (Any Language) → SQLite → Sequencer → DA Layers ← Validators (TEE) → Blockchain → Bridge.sol
+       in TEE                     (sidecar)       ↓                        ↓
+                                           Message Tables           Message Verification
 ```
 
-**Application Path**: App writes to SQLite → Sidecar publishes to DA layers
+**Application Path**: App writes to SQLite → Sequencer publishes to DA layers
 
 **Validator Path**: Validators read from DA → Verify SQL → Post to blockchain
 
 **Message Passing**: Validators detect messages in SQL → Process via Bridge.sol
 
-Validators can subscribe to the sidecar (with TEE attestation) for lower latency instead of waiting for DA publication. The application never touches the blockchain directly.
+Validators can subscribe to the sequencer (with TEE attestation) for lower latency instead of waiting for DA publication. The application never touches the blockchain directly.
 
 ### Application as Source of Truth
 
@@ -136,7 +136,7 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
    - User inputs and their effects
    - Message passing operations via special tables
 
-2. **Sidecar Publishes to DA Layers**: The sidecar listener captures SQL operations and publishes to censorship-resistant DA layers:
+2. **Sequencer Publishes to DA Layers**: The sequencer (running as a sidecar process) captures SQL operations and publishes to censorship-resistant DA layers:
    - SQL operations are captured as changesets (INSERT/UPDATE/DELETE with values)
    - Sequence numbers maintaining strict ordering
    - Periodic snapshots for bootstrapping and recovery
@@ -211,10 +211,10 @@ def match_orders(buy_order, sell_order):
 
 ### Publishing Model: Application → DA → Validators → Blockchain
 
-The application never touches the blockchain - the sidecar publishes to DA layers:
+The application never touches the blockchain - the sequencer publishes to DA layers:
 
 0. **Application → SQLite**: Application writes all state changes to SQLite database
-1. **Sidecar → DA**: Publishes SQL operations (changesets/snapshots) to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with TEE signatures
+1. **Sequencer → DA**: The sequencer (running as a sidecar process) publishes SQL operations (changesets/snapshots) to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with TEE signatures
 2. **Validators ← DA**: Validators sync from censorship-resistant DA layers
 3. **Validators → Blockchain**: Post verified state transitions to settlement contract. Messages in the bridge tables are processed via Bridge.sol.
 
@@ -448,7 +448,7 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
    CREATE TABLE bridge_deposits (...);
    ```
 
-3. **Deploy with Sidecar Listener**
+3. **Deploy with Sequencer (Sidecar Process)**
 
    ```yaml
    # docker-compose.yml
@@ -458,8 +458,8 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
        volumes:
          - ./data:/data
 
-     synddb-sidecar:
-       image: syndicate/synddb-listener:latest
+     synddb-sequencer:
+       image: syndicate/synddb-sequencer:latest
        volumes:
          - ./data:/data
        environment:
@@ -490,7 +490,7 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
 
 - **Language Agnostic**: Use any programming language, framework, or runtime
 - **SQL as Truth**: All state changes must go through SQLite for capture
-- **Automatic Publishing**: The sidecar handles all DA layer and blockchain interaction
+- **Automatic Publishing**: The sequencer (running as a sidecar process) handles all DA layer and blockchain interaction
 - **Consistent Validation**: Validators use the same implementation for verification
 - **Permissionless Replication**: Anyone can sync and query the data
 - **Optional Message Passing**: Add message tables only if you need cross-chain operations
@@ -501,7 +501,7 @@ Converting any existing SQLite application to SyndDB is straightforward:
 
 1. Ensure all state changes go through SQLite (not just in-memory)
 2. Add message tables if you need cross-chain message passing functionality
-3. Deploy the sidecar listener alongside your application
+3. Deploy the sequencer (as a sidecar process) alongside your application
 4. No code changes required to your business logic
 
 This approach makes SyndDB a drop-in solution for adding blockchain verifiability to applications written in any language.
@@ -511,14 +511,14 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 ### Core Architecture Terms
 
 - **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes SQL operations to blockchain
-- **Sidecar Listener** - Lightweight process that attaches to SQLite databases via Session Extension and automatically captures/publishes SQL operations as changesets
+- **Sequencer** - Lightweight process (running as a sidecar) that attaches to SQLite databases via Session Extension and automatically captures/publishes SQL operations as changesets
 - **SQL Operations** - Database modifications (INSERT/UPDATE/DELETE) that form the verifiable audit trail. Captured as changesets for efficient replication.
 - **Changesets** - The technical mechanism for capturing SQL operations: deterministic logical database changes via SQLite Session Extension, more compact and auditable than physical page changes
 - **Snapshots** - Complete database state at a point in time, published periodically for recovery/bootstrapping and immediately on schema changes
 
 ### Node Types
 
-- **Application** - Your application (any language) running inside a TEE with SQLite, publishing SQL operations via sidecar to DA layers
+- **Application** - Your application (any language) running inside a TEE with SQLite, publishing SQL operations via sequencer to DA layers
 - **Read Replica** - Any node that syncs published SQL operations to serve queries (anyone can run permissionlessly)
 - **Validator** - Read replica with additional validation logic that runs in a TEE and verifies SQL operations before signing for settlement
 

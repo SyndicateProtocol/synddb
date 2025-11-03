@@ -15,7 +15,7 @@ The SyndDB bridge is primarily a **Solidity smart contract** that mirrors the of
 │  - outbound_calls                                                │
 │  Application code just writes SQL, nothing blockchain-specific   │
 └─────────────────────────────────────────────────────────────────┘
-                              ↓ (via Sidecar → DA)
+                              ↓ (via Sequencer → DA)
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Validator Network (TEEs)                     │
 │  Validators are just read replicas in validator mode:           │
