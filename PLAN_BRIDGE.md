@@ -69,6 +69,14 @@ The Bridge processes messages in four distinct stages. Each stage is called expl
             bridge.executePostModules(messageId)
 ```
 
+### State Transitions
+
+```
+NotStarted → PreExecution → Executing → PostExecution → Completed
+                  ↓
+              Rejected (terminal)
+```
+
 ### Component Structure
 
 The Bridge contract manages:
@@ -134,8 +142,8 @@ struct MessageState {
     uint256 postModuleCheckpoint;
     ProcessingStage stage;
     bytes payload;
-    bool executionSuccess; // optional as it can be inferred from stage
-    uint256 createdAt; // is it needed?
+    bool executionSuccess;
+    bytes executionResult;
 }
 
 enum ProcessingStage {
@@ -143,7 +151,8 @@ enum ProcessingStage {
     PreExecution,
     Executing,
     PostExecution,
-    Completed
+    Completed,
+    Rejected
 }
 
 struct ExecutionContext {
@@ -197,11 +206,11 @@ function executeMessage(bytes32 messageId) external;
  */
 function executePostModules(bytes32 messageId) external;
 
-/// *** OPTIONAL HELPER. Need to experiment if gas limits allow. *** ///
 
 /**
  * Convenience function to process message through all stages
  * Executes initialize, pre, core, and post in sequence
+ * OPTIONAL helper - use only if gas limits allow
  *
  * @param messageId Unique identifier from DA layer
  * @param payload Message data
@@ -322,8 +331,30 @@ Payload Format:
 [4:end] bytes   - ABI-encoded parameters specific to message type
 ```
 
+### Standard Message Types
+
+**Withdrawal:**
+
+```solidity
+bytes4 constant WITHDRAW = bytes4(keccak256("withdraw(address,address,uint256)"));
+// Parameters: (address token, address recipient, uint256 amount)
+```
+
+**Generic Call:**
+
+```solidity
+bytes4 constant CALL = bytes4(keccak256("call(address,bytes)"));
+// Parameters: (address target, bytes data)
+```
+
+**Batch:**
+
+```solidity
+bytes4 constant BATCH = bytes4(keccak256("batch(bytes[])"));
+// Parameters: (bytes[] messages)
+```
+
 ## Further Considerations
 
 - Have a Batch contract that the Bridge can call to batch multiple messages together for gas efficiency.
-- Should we add processMessageComplete() as a convenience function to process all stages in one call within Bridge.sol?
-- is a createdAt timestamp needed in MessageState struct? // consider use cases for message age.
+- Is there a special case for error handling or retries here? Say a callback to return funds to SyndDB if execution fails?
