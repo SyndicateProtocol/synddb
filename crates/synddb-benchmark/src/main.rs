@@ -10,7 +10,7 @@ use synddb_benchmark::{load_patterns, orderbook, schema};
 
 #[derive(Parser)]
 #[command(name = "orderbook-bench")]
-#[command(about = "Orderbook benchmark tool for SyndDB sidecar development", long_about = None)]
+#[command(about = "Orderbook benchmark tool for SyndDB sequencer development", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
