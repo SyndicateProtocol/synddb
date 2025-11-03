@@ -19,7 +19,7 @@ The synddb-replica serves dual purposes: as a permissionless read replica that s
 │ ┌──────────────────────────────────────────────────────────┐  │
 │ │                    DA Syncer                              │  │
 │ │  ┌────────────┐  ┌────────────┐  ┌────────────┐        │  │
-│ │  │ Fetcher    │→ │ Verifier   │→ │ Sequencer  │        │  │
+│ │  │ Fetcher    │→ │ Verifier   │→ │  Orderer   │        │  │
 │ │  └────────────┘  └────────────┘  └────────────┘        │  │
 │ └──────────────────────────────────────────────────────────┘  │
 │                           ↓                                    │
@@ -128,7 +128,7 @@ synddb-replica/
 │   │   ├── mod.rs                   # DA syncing orchestration
 │   │   ├── fetcher.rs               # Fetch from DA layers
 │   │   ├── verifier.rs              # Verify data integrity
-│   │   ├── sequencer.rs             # Order operations
+│   │   ├── orderer.rs               # Order operations for replay
 │   │   ├── state_manager.rs         # Track sync state
 │   │   └── providers/
 │   │       ├── celestia.rs          # Celestia fetcher
@@ -206,7 +206,7 @@ pub struct DaSyncer {
     providers: Vec<Box<dyn DaProvider>>,
     state_manager: StateManager,
     verifier: DataVerifier,
-    sequencer: OperationSequencer,
+    orderer: OperationOrderer,
 }
 
 #[async_trait]
@@ -226,12 +226,12 @@ impl DaSyncer {
             if latest_sequence > local_sequence {
                 let packets = self.fetch_missing(local_sequence + 1, latest_sequence).await?;
                 
-                // Verify and sequence operations
+                // Verify and order operations
                 let verified = self.verifier.verify_all(packets)?;
-                let sequenced = self.sequencer.sequence(verified)?;
-                
+                let ordered = self.orderer.order(verified)?;
+
                 // Send to replay engine
-                for batch in sequenced {
+                for batch in ordered {
                     tx.send(batch).await?;
                 }
                 
