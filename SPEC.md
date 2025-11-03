@@ -98,9 +98,9 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
 ### Data Flow
 
 ```
-Application (Any Language) → SQLite → Sequencer → DA Layers → Validators (TEE) → Blockchain → Bridge.sol
-       in TEE                     (sidecar)                                ↓              ↓
-                                                                    Message Tables  Bridge Contract
+Application (Any Language) → SQLite → Sequencer  → DA Layers → Validators (TEE) → Blockchain → Bridge.sol
+       in TEE                  ↓      (sidecar)                       ↓
+                        Message Tables                          Bridge Contract
 ```
 
 **Application Path**: App writes to SQLite → Sequencer publishes to DA layers
