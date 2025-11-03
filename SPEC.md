@@ -98,9 +98,9 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
 ### Data Flow
 
 ```
-Application (Any Language) → SQLite → Sequencer → DA Layers ← Validators (TEE) → Blockchain → Bridge.sol
-       in TEE                     (sidecar)       ↓                        ↓
-                                           Message Tables           Message Verification
+Application (Any Language) → SQLite → Sequencer → DA Layers → Validators (TEE) → Blockchain → Bridge.sol
+       in TEE                     (sidecar)                                ↓              ↓
+                                                                    Message Tables  Bridge Contract
 ```
 
 **Application Path**: App writes to SQLite → Sequencer publishes to DA layers
@@ -215,7 +215,7 @@ The application never touches the blockchain - the sequencer publishes to DA lay
 
 0. **Application → SQLite**: Application writes all state changes to SQLite database
 1. **Sequencer → DA**: The sequencer (running as a sidecar process) publishes SQL operations (changesets/snapshots) to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with TEE signatures
-2. **Validators ← DA**: Validators sync from censorship-resistant DA layers
+2. **DA → Validators**: Validators sync from censorship-resistant DA layers
 3. **Validators → Blockchain**: Post verified state transitions to settlement contract. Messages in the bridge tables are processed via Bridge.sol.
 
 This keeps the application isolated from blockchain infrastructure while enabling multiple DA sources for resilience. No custom bridge code needed - just define tables that match your message schema.
