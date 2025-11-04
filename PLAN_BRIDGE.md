@@ -178,7 +178,7 @@ struct ExecutionContext {
  * Initialize a new message for processing
  * Creates message state and stores payload
  *
- * @param messageId Unique identifier from DA layer
+ * @param messageId Unique identifier
  * @param payload Message data containing type and parameters
  * @param context Execution context with validator signatures
  */
@@ -220,7 +220,7 @@ function executePostModules(bytes32 messageId) internal;
  * Convenience function to process message through all stages
  * Executes initialize, pre, core, and post in sequence
  *
- * @param messageId Unique identifier from DA layer
+ * @param messageId Unique identifier
  * @param payload Message data
  * @param context Execution context
  */
@@ -292,7 +292,7 @@ interface IPreExecutionModule {
      * Validate a message before execution
      * Called by Bridge during PreExecution stage
      *
-     * @param messageId Unique message identifier from DA layer
+     * @param messageId Unique message identifier
      * @param payload Message data containing type and parameters
      * @param context Execution context with validator signatures
      * @return errorCode If false, error code for rejection (0 = success)
@@ -319,7 +319,7 @@ interface IPostExecutionModule {
      * Called by Bridge during PostExecution stage
      * Can revert to block message completion
      *
-     * @param messageId Unique message identifier from DA layer
+     * @param messageId Unique message identifier
      * @param success Whether core execution succeeded
      * @param result Execution result data
      * @param context Execution context

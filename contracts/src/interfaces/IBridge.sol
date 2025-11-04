@@ -43,7 +43,7 @@ interface IBridge {
     /**
      * @notice Initialize a new message for processing
      * @dev Creates message state and stores payload
-     * @param messageId Unique identifier from DA layer
+     * @param messageId Unique identifier
      * @param payload Message data containing type and parameters
      * @param context Execution context with validator signatures
      */
@@ -73,8 +73,7 @@ interface IBridge {
     /**
      * @notice Convenience function to process message through all stages
      * @dev Executes initialize, pre, core, and post in sequence
-     *      OPTIONAL helper - use only if gas limits allow
-     * @param messageId Unique identifier from DA layer
+     * @param messageId Unique identifier
      * @param payload Message data
      * @param context Execution context
      */
