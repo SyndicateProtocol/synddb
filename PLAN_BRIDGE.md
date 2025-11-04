@@ -6,24 +6,29 @@ The Bridge is a modular smart contract system that processes messages from SyndD
 
 The Bridge acts as the settlement layer for SyndDB, handling:
 
-- Asset withdrawals from the bridge contract
-- Generic contract calls to any address
+- Chain crossing token transfers (deposits and withdrawals)
 - Cross-chain message passing
-- Result callbacks to SyndDB infrastructure
+
+## Inspiration
+
+This bridge architecture draws inspiration from proven modular smart contract systems:
+
+- **[Safe Guards](https://docs.safe.global/advanced/smart-account-guards)**: Pre and post-execution hooks for smart account transactions
+- **[Zodiac Modules](https://github.com/gnosisguild/zodiac)**: Modular access control patterns
 
 ### Design Principles
 
-- Modular design: Users can add custom before and after hooks
-- Checkpoint-based processing: No unbounded loops, predictable gas usage
-- Validator consensus: Threshold signatures from validators
-- Immutable core: Bridge logic is fixed, modules are upgradeable
-- DA layer integration: Messages published to DA before bridge execution, messageId sourced from DA layer
+- **Modular design**: Users can add custom before and after hooks
+- **Atomic execution**: All stages (pre, core, post) execute in a single transaction - any revert blocks the entire message
+- **Validator consensus**: Threshold signatures from validators
+- **Composable validation**: Modules can be stacked for complex logic and validation
+- **Immutable core**: Bridge logic is fixed, modules are upgradeable
 
 ## Architecture
 
 ### High-Level Flow
 
-The Bridge processes messages in four distinct stages. Each stage is called explicitly and can be executed across multiple transactions for gas control.
+The Bridge processes messages in four distinct stages. **All stages execute atomically in a single transaction** - any module revert (pre or post) will block the entire message from completing.
 
 **Stage 1: Initialization**
 
@@ -50,31 +55,36 @@ The Bridge processes messages in four distinct stages. Each stage is called expl
 **Stage 4: PostExecution (Post-Processing)**
 
 - Run PostExecution modules sequentially
-- Process execution results
-- Examples: emit events, send callbacks, collect fees
+- Process execution results and enforce post-execution invariants
+- Can revert to block message completion (e.g. supply cap violations)
+- Examples: emit events, send callbacks, validate invariants
 
 ### Data Flow
 
 ```
-                     Validators
+                     Via Sequencer
                          ↓
-                    Sign messageId
+                ValidatorsSign messageId
                          ↓
-            bridge.initializeMessage(messageId, payload, context)
-                         ↓
-            bridge.executePreModules(messageId)
-                         ↓
-            bridge.executeMessage(messageId)
-                         ↓
-            bridge.executePostModules(messageId)
+            ┌─────────────────────────────────────┐
+            │  Single Atomic Transaction          │
+            │                                     │
+            │  1. initializeMessage()             │
+            │  2. executePreModules()             │
+            │  3. executeMessage()                │
+            │  4. executePostModules()            │
+            │                                     │
+            │  Any revert → entire TX reverts     │
+            └─────────────────────────────────────┘
 ```
 
 ### State Transitions
 
 ```
 NotStarted → PreExecution → Executing → PostExecution → Completed
-                  ↓
-              Rejected (terminal)
+                  ↓              ↓              ↓
+                  └──────────────┴──────────────┘
+                            Rejected (any revert is terminal)
 ```
 
 ### Component Structure
@@ -83,7 +93,6 @@ The Bridge contract manages:
 
 - Message state and processing stage tracking
 - Module registries (PreExecution and PostExecution)
-- Checkpoint-based processing for gas efficiency
 - Core execution logic for standard message types
 - Replay protection via processed message tracking
 
@@ -177,7 +186,7 @@ function initializeMessage(
     bytes32 messageId,
     bytes calldata payload,
     ExecutionContext calldata context
-) external;
+) internal;
 
 /**
  * Execute PreExecution modules for validation
@@ -186,7 +195,7 @@ function initializeMessage(
  *
  * @param messageId The message to validate
  */
-function executePreModules(bytes32 messageId) external;
+function executePreModules(bytes32 messageId) internal;
 
 /**
  * Execute the core message logic
@@ -195,7 +204,7 @@ function executePreModules(bytes32 messageId) external;
  *
  * @param messageId The message to execute
  */
-function executeMessage(bytes32 messageId) external;
+function executeMessage(bytes32 messageId) internal;
 
 /**
  * Execute PostExecution modules for post-processing
@@ -204,13 +213,12 @@ function executeMessage(bytes32 messageId) external;
  *
  * @param messageId The message to process
  */
-function executePostModules(bytes32 messageId) external;
+function executePostModules(bytes32 messageId) internal;
 
 
 /**
  * Convenience function to process message through all stages
  * Executes initialize, pre, core, and post in sequence
- * OPTIONAL helper - use only if gas limits allow
  *
  * @param messageId Unique identifier from DA layer
  * @param payload Message data
@@ -273,10 +281,13 @@ function getPostExecutionModules() external view returns (address[] memory);
 
 ### IPreExecutionModule Interface
 
-PreExecution modules validate messages before core execution. Any module returning false will reject the message.
+PreExecution modules validate messages before core execution. Modules return bools to enable composable validation logic.
 
 ```solidity
 interface IPreExecutionModule {
+    /// @notice Custom errors for pre-execution failures
+    error PreExecutionFailed(bytes32 messageId, uint256 errorCode);
+
     /**
      * Validate a message before execution
      * Called by Bridge during PreExecution stage
@@ -284,26 +295,29 @@ interface IPreExecutionModule {
      * @param messageId Unique message identifier from DA layer
      * @param payload Message data containing type and parameters
      * @param context Execution context with validator signatures
-     * @return shouldExecute True if validation passes, false to reject
-     * @return reason If false, explanation for rejection
+     * @return errorCode If false, error code for rejection (0 = success)
      */
     function beforeExecution(
         bytes32 messageId,
         bytes calldata payload,
         ExecutionContext calldata context
-    ) external returns (bool shouldExecute, string memory reason);
+    ) external returns (bool shouldExecute, uint256 errorCode);
 }
 ```
 
 ### IPostExecutionModule Interface
 
-PostExecution modules process results after core execution. Module failures do not block message completion.
+PostExecution modules process results after core execution and can enforce post-execution invariants. Modules can revert to block message completion (e.g., supply cap violations).
 
 ```solidity
 interface IPostExecutionModule {
+    /// @notice Custom errors for post-execution failures
+    error PostExecutionFailed(bytes32 messageId, uint256 errorCode);
+
     /**
      * Process results after message execution
      * Called by Bridge during PostExecution stage
+     * Can revert to block message completion
      *
      * @param messageId Unique message identifier from DA layer
      * @param success Whether core execution succeeded
@@ -335,26 +349,18 @@ Payload Format:
 
 **Withdrawal:**
 
+Withdraws tokens from the bridge to a recipient on the destination chain.
+
 ```solidity
 bytes4 constant WITHDRAW = bytes4(keccak256("withdraw(address,address,uint256)"));
 // Parameters: (address token, address recipient, uint256 amount)
 ```
 
-**Generic Call:**
+**Deposit:**
+
+Deposits tokens into the bridge from a sender on the source chain. When the deposit amount is zero, the message is treated as a generic contract call with a payload to execute on the target contract.
 
 ```solidity
-bytes4 constant CALL = bytes4(keccak256("call(address,bytes)"));
-// Parameters: (address target, bytes data)
+bytes4 constant DEPOSIT = bytes4(keccak256("deposit(address,address,uint256)"));
+// Parameters: (address token, address sender, uint256 amount)
 ```
-
-**Batch:**
-
-```solidity
-bytes4 constant BATCH = bytes4(keccak256("batch(bytes[])"));
-// Parameters: (bytes[] messages)
-```
-
-## Further Considerations
-
-- Have a Batch contract that the Bridge can call to batch multiple messages together for gas efficiency.
-- Is there a special case for error handling or retries here? Say a callback to return funds to SyndDB if execution fails?
