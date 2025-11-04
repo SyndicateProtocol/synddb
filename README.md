@@ -1,30 +1,30 @@
 # SyndDB - High-Performance Blockchain Database
 
-SyndDB enables developers to build high-performance blockchain applications using **any programming language** with SQLite bindings. The sidecar automatically captures and publishes SQL operations for verification and replication.
+SyndDB enables developers to build high-performance blockchain applications using **any programming language** with SQLite bindings. The sequencer (running as a sidecar process) automatically captures and publishes SQL operations for verification and replication.
 
 ## Overview
 
 SyndDB consists of two main components:
 
 1. **Your Application** - Uses SQLite as normal (any language, any framework)
-2. **SyndDB Sidecar** - Monitors changes and publishes to data availability layers
+2. **SyndDB Sequencer** - Monitors changes and publishes to data availability layers (runs as a sidecar process)
 
-No code changes required - just run your app with the sidecar.
+No code changes required - just run your app with the sequencer.
 
 ## Documentation
 
 - **[SPEC.md](SPEC.md)** - Complete technical specification covering architecture, terminology, and design decisions
-- **[PLAN_SIDECAR.md](PLAN_SIDECAR.md)** - Sidecar implementation plan (Session Extension monitoring, batching, publishing)
+- **[PLAN_SEQUENCER.md](PLAN_SEQUENCER.md)** - Sequencer implementation plan (Session Extension monitoring, batching, publishing)
 
 ## Repository Structure
 
 ```
 SyndDB/
 ├── crates/
-│   ├── synddb-benchmark/    # Orderbook benchmark tool for sidecar development
-│   └── synddb-sidecar/      # Sidecar listener (coming soon)
+│   ├── synddb-benchmark/    # Orderbook benchmark tool for sequencer development
+│   └── synddb-sequencer/    # Sequencer (coming soon)
 ├── SPEC.md                  # Full specification
-├── PLAN_SIDECAR.md         # Sidecar architecture plan
+├── PLAN_SEQUENCER.md       # Sequencer architecture plan
 └── README.md               # This file
 ```
 
@@ -55,14 +55,14 @@ cargo run --package synddb-benchmark --release -- stats
 
 See [crates/synddb-benchmark/README.md](crates/synddb-benchmark/README.md) for full documentation.
 
-### 3. Run the Sidecar (Coming Soon)
+### 3. Run the Sequencer (Coming Soon)
 
 ```bash
 # Terminal 1: Run your application (or benchmark)
 cargo run --package synddb-benchmark -- run --rate 100
 
-# Terminal 2: Run sidecar
-cargo run --package synddb-sidecar -- --db orderbook.db
+# Terminal 2: Run sequencer (sidecar process)
+cargo run --package synddb-sequencer -- --db orderbook.db
 ```
 
 ## Key Features
@@ -70,14 +70,14 @@ cargo run --package synddb-sidecar -- --db orderbook.db
 - **Language Agnostic**: Works with any language that has SQLite bindings (Python, JavaScript, Go, Rust, etc.)
 - **High Performance**: Sub-millisecond writes, 50,000-100,000+ ops/sec throughput
 - **Deterministic Replication**: Session Extension changesets for validators
-- **Automatic Publishing**: Sidecar handles all DA layer interaction
+- **Automatic Publishing**: Sequencer (sidecar process) handles all DA layer interaction
 - **Zero Code Changes**: Drop-in solution for existing SQLite applications
 
 ## Components
 
 ### Benchmark Tool
 
-A high-performance orderbook simulator for testing and developing the sidecar:
+A high-performance orderbook simulator for testing and developing the sequencer:
 
 - **Multiple load patterns**: Continuous, burst, or auto-discover max throughput
 - **Realistic operations**: Orders, trades, cancellations, balance updates
@@ -86,16 +86,16 @@ A high-performance orderbook simulator for testing and developing the sidecar:
 
 [Full Documentation →](crates/synddb-benchmark/README.md)
 
-### Sidecar (Coming Soon)
+### Sequencer (Coming Soon)
 
-The sidecar monitors SQLite changes and publishes them to data availability layers:
+The sequencer (running as a sidecar process) monitors SQLite changes and publishes them to data availability layers:
 
 - **Session Monitor**: Attach to SQLite via Session Extension
 - **Batcher**: Accumulate changesets and create periodic snapshots
 - **Attestor**: Compress and sign batches with TEE-protected keys
 - **Publisher**: Publish to multiple DA layers (Celestia, EigenDA, IPFS, Arweave)
 
-[Implementation Plan →](PLAN_SIDECAR.md)
+[Implementation Plan →](PLAN_SEQUENCER.md)
 
 ## Use Cases
 
@@ -130,7 +130,7 @@ RUST_LOG=debug cargo run --package synddb-benchmark -- run --rate 100
 
 ## Architecture
 
-SyndDB uses SQLite's Session Extension to capture row-level changes deterministically. The sidecar:
+SyndDB uses SQLite's Session Extension to capture row-level changes deterministically. The sequencer:
 
 1. Attaches to your SQLite database
 2. Captures changesets using Session Extension
@@ -138,7 +138,7 @@ SyndDB uses SQLite's Session Extension to capture row-level changes deterministi
 4. Compresses and signs batches
 5. Publishes to configured DA layers
 
-Applications continue using SQLite normally - the sidecar operates transparently in the background.
+Applications continue using SQLite normally - the sequencer operates transparently in the background as a sidecar process.
 
 ## Requirements
 

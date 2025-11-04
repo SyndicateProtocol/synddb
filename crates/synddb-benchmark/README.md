@@ -1,6 +1,6 @@
 # SyndDB Benchmark Tool
 
-A high-performance orderbook benchmark tool for testing and developing the SyndDB sidecar. Simulates realistic database workload with configurable throughput and load patterns.
+A high-performance orderbook benchmark tool for testing and developing the SyndDB sequencer. Simulates realistic database workload with configurable throughput and load patterns.
 
 ## Features
 
@@ -169,7 +169,7 @@ The benchmark simulates realistic orderbook activity:
 Maintains a steady rate of operations per second. Useful for:
 
 - Baseline performance testing
-- Consistent workload for sidecar development
+- Consistent workload for sequencer development
 - Long-running stability tests
 
 ```bash
@@ -181,7 +181,7 @@ cargo run --package synddb-benchmark -- run --pattern continuous --rate 100
 
 Generates periodic bursts of activity with quiet periods between. Useful for:
 
-- Testing batch accumulation in the sidecar
+- Testing batch accumulation in the sequencer
 - Simulating real trading activity (quiet periods followed by high activity)
 - Testing compression effectiveness on varied workloads
 
@@ -444,7 +444,7 @@ cargo run --package synddb-benchmark --release -- run --simple --rate 100000 --b
 
 - Stress testing SQLite and system performance limits
 - Benchmarking raw database write throughput
-- Testing sidecar changeset capture under extreme load
+- Testing sequencer changeset capture under extreme load
 - Identifying system bottlenecks (CPU, disk I/O, memory)
 
 **Note:** Simple mode is not representative of realistic orderbook workload, but is useful for finding the maximum performance ceiling of your system.
@@ -506,7 +506,7 @@ Maximum Throughput Found:
 
 **Why this approach?**
 
-- **Handles interference**: CV detection catches performance degradation from other processes (e.g., sidecar snapshots, background tasks)
+- **Handles interference**: CV detection catches performance degradation from other processes (e.g., sequencer snapshots, background tasks)
 - **Robust**: Multiple samples prevent false positives from transient spikes
 - **Adaptive**: Uses large increments when far from limit, small increments when close
 - **Conservative**: Backs off and verifies to ensure reported rate is truly sustainable
@@ -515,7 +515,7 @@ This is ideal for:
 - Finding your system's performance limits under realistic conditions
 - Comparing performance across different hardware
 - Validating optimizations with statistical confidence
-- Benchmarking with other processes running (e.g., sidecar)
+- Benchmarking with other processes running (e.g., sequencer)
 
 ## Development
 

@@ -62,9 +62,10 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 ### Data Flow
 
 ```
-                     Via Sequencer
+                    Via Sequencer
                          ↓
-                ValidatorsSign messageId
+                Validators Sign message
+                that has unique identifier
                          ↓
             ┌─────────────────────────────────────┐
             │  Single Atomic Transaction          │
