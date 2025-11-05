@@ -86,7 +86,9 @@ tower = "0.4"  # Middleware stack for retries/timeouts
 axum = { version = "0.7", features = ["sse"] }  # HTTP server with SSE support
 
 # Blockchain monitoring for deposits
-ethers = "2.0"  # Ethereum client for monitoring bridge events
+alloy = { version = "0.1", features = ["full"] }  # Modern Ethereum client from Foundry team
+alloy-rpc-client = "0.1"  # RPC client for blockchain interaction
+alloy-contract = "0.1"  # Contract interaction utilities
 
 # GCP Confidential Space and Ethereum signing
 gcp-auth = "0.10"  # GCP authentication
