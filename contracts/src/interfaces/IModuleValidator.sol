@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.30;
+
+import {IBridge} from "./IBridge.sol";
+
+interface IModuleValidator {
+    function validate(IBridge.ProcessingStage stage, bytes calldata payload) external returns (bool);
+}
