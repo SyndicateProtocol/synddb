@@ -151,7 +151,12 @@ synddb-sequencer/
 │   │   ├── inbound_monitor.rs     # Blockchain event monitoring for inbound messages
 │   │   ├── outbound_monitor.rs    # SQLite table monitoring for outbound messages
 │   │   ├── queue.rs               # Message queue management
-│   │   └── api.rs                 # HTTP API for bidirectional messaging
+│   │   ├── api.rs                 # HTTP API for bidirectional messaging
+│   │   ├── consistency.rs         # Consistency enforcement between messages
+│   │   ├── degradation.rs         # Progressive degradation management
+│   │   ├── alerts.rs              # Application alerting mechanisms
+│   │   ├── attestations.rs        # Sequencer attestations for validators
+│   │   └── recovery.rs            # Recovery protocols and validation
 │   ├── tee/
 │   │   ├── mod.rs                 # GCP Confidential Space TEE
 │   │   └── attestation.rs         # Fetch attestation tokens from metadata service
@@ -1467,6 +1472,370 @@ pub struct ConsistencyStatus {
 }
 ```
 
+### Progressive Degradation and Recovery
+
+When the application fails to acknowledge inbound messages, the sequencer follows a progressive degradation strategy to maintain system integrity while attempting recovery.
+
+#### Degradation Levels and Actions
+
+```rust
+// src/messages/degradation.rs
+use std::time::Duration;
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SystemStatus {
+    Healthy,
+    Degraded(DegradedReason),
+    Halted(HaltReason),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DegradedReason {
+    PendingAcknowledgments { count: usize, oldest: DateTime<Utc> },
+    ApplicationUnresponsive { since: DateTime<Utc> },
+    ConsistencyCheckFailed { details: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HaltReason {
+    ConsistencyViolation { missing_messages: Vec<String> },
+    ApplicationTimeout { duration_mins: u64 },
+    ManualIntervention { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ErrorCode {
+    // Recoverable errors (E00x)
+    E001_MISSING_INBOUND_ACK,      // Missing inbound acknowledgments
+    E002_CONSISTENCY_VIOLATION,     // State inconsistency detected
+    E003_APPLICATION_TIMEOUT,       // App not responding
+    E004_PARTIAL_ACKNOWLEDGMENT,    // Some but not all messages ack'd
+
+    // Critical errors (E10x)
+    E101_INVALID_STATE_TRANSITION,  // App made invalid state change
+    E102_AUDIT_TRAIL_BROKEN,        // Missing trigger references
+    E103_IDEMPOTENCY_VIOLATION,     // Duplicate message detected
+    E104_IRRECOVERABLE_STATE,       // Cannot recover without intervention
+}
+
+pub struct DegradationManager {
+    status: Arc<RwLock<SystemStatus>>,
+    first_issue_detected: Option<DateTime<Utc>>,
+    missing_messages: Arc<Mutex<Vec<String>>>,
+    attestation_publisher: Arc<AttestationPublisher>,
+}
+
+impl DegradationManager {
+    pub async fn evaluate_and_respond(&mut self, consistency_status: &ConsistencyStatus) {
+        let missing_count = consistency_status.missing_count;
+
+        if missing_count == 0 {
+            // All clear - ensure we're healthy
+            if !matches!(*self.status.read().await, SystemStatus::Healthy) {
+                self.recover_to_healthy().await;
+            }
+            return;
+        }
+
+        // Track when issues first appeared
+        if self.first_issue_detected.is_none() {
+            self.first_issue_detected = Some(Utc::now());
+        }
+
+        let issue_duration = Utc::now() - self.first_issue_detected.unwrap();
+
+        // Progressive degradation based on duration and severity
+        let new_status = match (issue_duration.num_seconds(), missing_count) {
+            // Level 1: Warning (< 30 seconds OR < 3 messages)
+            (d, c) if d < 30 || c < 3 => {
+                info!("Level 1: Warning - {} missing acknowledgments", c);
+                self.send_application_alert(AlertLevel::Warning).await;
+                SystemStatus::Healthy  // Still healthy, just warning
+            }
+
+            // Level 2: Degraded (< 5 minutes AND < 10 messages)
+            (d, c) if d < 300 && c < 10 => {
+                warn!("Level 2: Degraded - {} missing acknowledgments for {}s", c, d);
+                self.send_application_alert(AlertLevel::Critical).await;
+                SystemStatus::Degraded(DegradedReason::PendingAcknowledgments {
+                    count: c as usize,
+                    oldest: self.first_issue_detected.unwrap(),
+                })
+            }
+
+            // Level 3: Critical Degradation (< 30 minutes OR < 50 messages)
+            (d, c) if d < 1800 || c < 50 => {
+                error!("Level 3: Critical - {} missing acknowledgments for {}s", c, d);
+                self.send_application_alert(AlertLevel::Emergency).await;
+                SystemStatus::Degraded(DegradedReason::ApplicationUnresponsive {
+                    since: self.first_issue_detected.unwrap(),
+                })
+            }
+
+            // Level 4: Halt (> 30 minutes OR > 50 messages)
+            (d, c) => {
+                error!("Level 4: HALTING - {} missing acknowledgments for {}s", c, d);
+                self.initiate_shutdown().await;
+                SystemStatus::Halted(HaltReason::ConsistencyViolation {
+                    missing_messages: self.missing_messages.lock().await.clone(),
+                })
+            }
+        };
+
+        // Update status and publish attestation
+        *self.status.write().await = new_status.clone();
+        self.publish_attestation(new_status).await;
+    }
+
+    async fn publish_attestation(&self, status: SystemStatus) {
+        let attestation = SequencerAttestation {
+            sequence_number: self.get_next_sequence(),
+            timestamp: Utc::now(),
+            status: status.clone(),
+            error_code: self.determine_error_code(&status),
+            last_valid_state: self.get_last_valid_state().await,
+            details: self.gather_attestation_details().await,
+        };
+
+        // Sign with TEE key and publish
+        self.attestation_publisher.publish(attestation).await;
+    }
+
+    async fn recover_to_healthy(&mut self) {
+        info!("System recovering to healthy state");
+
+        // Clear tracking
+        self.first_issue_detected = None;
+        self.missing_messages.lock().await.clear();
+
+        // Update status
+        *self.status.write().await = SystemStatus::Healthy;
+
+        // Publish recovery attestation
+        self.publish_attestation(SystemStatus::Healthy).await;
+
+        // Resume normal operations
+        self.resume_operations().await;
+    }
+}
+```
+
+#### Application Alert Mechanism
+
+```rust
+// src/messages/alerts.rs
+
+#[derive(Debug, Clone)]
+pub enum AlertLevel {
+    Warning,    // 1-5 missing messages
+    Critical,   // 5-10 missing messages
+    Emergency,  // 10+ missing messages
+}
+
+pub struct ApplicationAlerter {
+    api_client: Arc<MessageApiClient>,
+    health_endpoint: Arc<HealthEndpoint>,
+}
+
+impl ApplicationAlerter {
+    pub async fn send_alert(&self, level: AlertLevel, details: AlertDetails) {
+        match level {
+            AlertLevel::Warning => {
+                // Add warning headers to API responses
+                self.api_client.set_response_headers(vec![
+                    ("X-Sequencer-Warning", "Missing acknowledgments"),
+                    ("X-Missing-Count", &details.missing_count.to_string()),
+                ]).await;
+
+                // Increase retry frequency for message delivery
+                self.api_client.set_retry_interval(Duration::from_secs(1)).await;
+            }
+
+            AlertLevel::Critical => {
+                // Return errors on non-essential endpoints
+                self.api_client.set_global_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({
+                        "error": "Critical: Must acknowledge inbound messages",
+                        "missing_count": details.missing_count,
+                        "oldest_missing": details.oldest_missing,
+                    })
+                ).await;
+
+                // Only allow message acknowledgment endpoints
+                self.api_client.restrict_to_essential_only().await;
+            }
+
+            AlertLevel::Emergency => {
+                // Fail health checks to trigger container restart
+                self.health_endpoint.set_status(HealthStatus::Failing).await;
+
+                // Return errors on ALL endpoints including health
+                self.api_client.set_global_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({
+                        "error": "Emergency: System halted due to consistency violation",
+                        "action_required": "Acknowledge all pending messages",
+                        "missing_messages": details.missing_messages,
+                    })
+                ).await;
+
+                // Log critical event for monitoring systems
+                error!("EMERGENCY: Application unresponsive - {} messages unacknowledged",
+                       details.missing_count);
+            }
+        }
+    }
+}
+```
+
+#### Sequencer Attestations for Validators
+
+```rust
+// src/messages/attestations.rs
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SequencerAttestation {
+    pub sequence_number: u64,
+    pub timestamp: DateTime<Utc>,
+    pub status: SystemStatus,
+    pub error_code: Option<ErrorCode>,
+    pub last_valid_state: StateReference,
+    pub details: AttestationDetails,
+    pub signature: Signature,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateReference {
+    pub sequence: u64,
+    pub state_root: H256,
+    pub da_reference: String,  // CID or transaction hash
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationDetails {
+    pub missing_acknowledgments: Vec<String>,
+    pub pending_outbound: usize,
+    pub last_successful_publish: DateTime<Utc>,
+    pub health_metrics: HealthMetrics,
+}
+
+pub struct AttestationPublisher {
+    da_publisher: Arc<DaPublisher>,
+    tee_signer: Arc<TeeSigner>,
+    attestation_log: Arc<Mutex<Vec<SequencerAttestation>>>,
+}
+
+impl AttestationPublisher {
+    pub async fn publish(&self, mut attestation: SequencerAttestation) -> Result<()> {
+        // Sign with TEE-protected key
+        let signature = self.tee_signer.sign(&attestation)?;
+        attestation.signature = signature;
+
+        // Publish to DA layer even when halted
+        // This ensures validators always know system status
+        let receipt = self.da_publisher
+            .publish_attestation(&attestation)
+            .await?;
+
+        // Log locally
+        self.attestation_log.lock().await.push(attestation.clone());
+
+        info!("Published attestation #{} with status {:?}",
+              attestation.sequence_number, attestation.status);
+
+        // Emit metrics
+        metrics::counter!("synddb.attestations.published", 1,
+            "status" => format!("{:?}", attestation.status));
+
+        Ok(())
+    }
+}
+```
+
+#### Recovery Protocol
+
+```rust
+// src/messages/recovery.rs
+
+pub struct RecoveryManager {
+    consistency_enforcer: Arc<ConsistencyEnforcer>,
+    degradation_manager: Arc<Mutex<DegradationManager>>,
+    da_publisher: Arc<DaPublisher>,
+}
+
+impl RecoveryManager {
+    /// Called when application starts acknowledging messages again
+    pub async fn attempt_recovery(&self) -> Result<RecoveryStatus> {
+        info!("Attempting system recovery");
+
+        // Step 1: Verify all missing messages are now acknowledged
+        let consistency = self.consistency_enforcer.check_consistency().await?;
+
+        if consistency.missing_count > 0 {
+            warn!("Cannot recover - still {} messages unacknowledged",
+                  consistency.missing_count);
+            return Ok(RecoveryStatus::Incomplete {
+                remaining: consistency.missing_count as usize,
+            });
+        }
+
+        // Step 2: Validate database consistency
+        if let Err(e) = self.validate_database_state().await {
+            error!("Cannot recover - database validation failed: {}", e);
+            return Ok(RecoveryStatus::Failed {
+                reason: format!("Database validation failed: {}", e),
+            });
+        }
+
+        // Step 3: Clear degradation state
+        self.degradation_manager.lock().await
+            .recover_to_healthy().await;
+
+        // Step 4: Publish recovery attestation
+        let recovery_attestation = SequencerAttestation {
+            sequence_number: self.get_next_sequence(),
+            timestamp: Utc::now(),
+            status: SystemStatus::Healthy,
+            error_code: None,
+            last_valid_state: self.get_current_state().await,
+            details: AttestationDetails {
+                missing_acknowledgments: vec![],
+                pending_outbound: 0,
+                last_successful_publish: Utc::now(),
+                health_metrics: self.gather_health_metrics().await,
+            },
+            signature: Signature::default(),  // Will be signed by publisher
+        };
+
+        self.publish_attestation(recovery_attestation).await?;
+
+        // Step 5: Resume operations
+        self.resume_all_operations().await?;
+
+        info!("System successfully recovered");
+        Ok(RecoveryStatus::Success)
+    }
+
+    async fn validate_database_state(&self) -> Result<()> {
+        // Verify critical tables exist and have valid schema
+        // Check foreign key constraints
+        // Validate sequence numbers are continuous
+        // Ensure no orphaned records
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum RecoveryStatus {
+    Success,
+    Incomplete { remaining: usize },
+    Failed { reason: String },
+}
+```
+
 #### Inbound Message Monitor
 
 ```rust
@@ -2245,6 +2614,38 @@ impl Validator {
     }
 }
 ```
+
+### Progressive Degradation Strategy Summary
+
+The sequencer's progressive degradation strategy ensures system integrity while maximizing availability:
+
+#### Degradation Levels
+
+| Level | Duration | Missing Messages | Status | Actions |
+|-------|----------|-----------------|--------|---------|
+| **L1: Warning** | < 30s | < 3 | Healthy (with warnings) | Alert app, increase retry frequency |
+| **L2: Degraded** | < 5min | < 10 | Degraded | Halt outbound, restrict API, alert critical |
+| **L3: Critical** | < 30min | < 50 | Critical Degraded | Fail health checks, emergency alerts |
+| **L4: Halt** | > 30min | > 50 | Halted | Full shutdown, final attestation |
+
+#### Key Principles
+
+1. **Transparency First**: Always publish attestations about system status, even when halted
+2. **Progressive Response**: Start with warnings, escalate only as needed
+3. **Recovery Enabled**: All actions are reversible when consistency is restored
+4. **Validator Protection**: Provide clear signals about system health via signed attestations
+5. **Application Communication**: Multiple channels (HTTP headers, errors, health checks) to alert the application
+
+#### Attestation Publishing
+
+The sequencer publishes signed attestations to DA layers that include:
+- Current system status (Healthy/Degraded/Halted)
+- Error codes for specific issues
+- Reference to last known valid state
+- Details about missing acknowledgments
+- Health metrics
+
+This ensures validators always have complete visibility into system state, even during degradation or halt conditions.
 
 ### Benefits of This Architecture
 
