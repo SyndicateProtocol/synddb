@@ -90,8 +90,7 @@ dcap-ql = { version = "0.3", optional = true }
 teaclave-attestation = { version = "0.5", optional = true }
 
 # State management
-merkle-tree = "0.2"  # Merkle tree for state roots
-blake3 = "1.5"  # Fast hashing
+blake3 = "1.5"  # Fast hashing for state updates
 
 # Monitoring and logging
 tracing = "0.1"
@@ -182,7 +181,7 @@ synddb-replica/
 │   │   └── collectors.rs            # Custom collectors
 │   └── utils/
 │       ├── mod.rs
-│       ├── merkle.rs                # Merkle tree utilities
+│       ├── hash.rs                  # State hashing utilities
 │       └── codec.rs                 # Encoding/decoding
 ├── config/
 │   ├── replica.yaml                 # Read replica config
@@ -340,8 +339,8 @@ impl SqlReplayer {
         // Commit transaction
         tx.commit()?;
         
-        // Update state root
-        self.update_state_root().await?;
+        // Update state hash
+        self.update_state_hash().await?;
         
         Ok(())
     }
@@ -441,8 +440,8 @@ pub trait SyndDbRpc {
     #[method(name = "query")]
     async fn query(&self, sql: String) -> Result<QueryResult, Error>;
     
-    #[method(name = "getStateRoot")]
-    async fn get_state_root(&self) -> Result<String, Error>;
+    #[method(name = "getStateHash")]
+    async fn get_state_hash(&self) -> Result<String, Error>;
     
     #[method(name = "getSequence")]
     async fn get_sequence(&self) -> Result<u64, Error>;
@@ -633,16 +632,16 @@ pub struct SettlementPoster {
 }
 
 impl SettlementPoster {
-    pub async fn post_state_root(&self, state_root: H256, sequence: u64) -> Result<()> {
+    pub async fn post_state_update(&self, state_update_hash: H256, sequence: u64) -> Result<()> {
         // Generate attestation
-        let attestation = self.attestor.generate_attestation(&state_root)?;
-        
+        let attestation = self.attestor.generate_attestation(&state_update_hash)?;
+
         // Get validator signatures
-        let signatures = self.consensus.sign_state_root(state_root, sequence).await?;
-        
+        let signatures = self.consensus.sign_state_update(state_update_hash, sequence).await?;
+
         // Submit to contract
         let tx = self.contract
-            .submit_state_root(state_root, sequence, signatures, attestation)
+            .submit_state_update(state_update_hash, sequence, signatures, attestation)
             .from(self.signer.address())
             .gas_price(self.get_gas_price().await?)
             .send()
@@ -863,7 +862,7 @@ Validators run in GCP Confidential Space to ensure secure key management and pro
 │  │  ┌────────────────────────────────────────────────┐  │  │
 │  │  │  Message Signing                                │  │  │
 │  │  │  - Sign withdrawal messages                    │  │  │
-│  │  │  - Sign state roots                           │  │  │
+│  │  │  - Sign state updates                         │  │  │
 │  │  │  - Include attestation proofs                  │  │  │
 │  │  └────────────────────────────────────────────────┘  │  │
 │  └──────────────────────────────────────────────────────┘  │
@@ -1124,10 +1123,10 @@ impl ConfidentialValidator {
         }
     }
 
-    pub async fn sign_state_root(&self, state_root: H256, sequence: u64) -> Result<StateRootSignature> {
-        // Create state root message
-        let message = StateRootMessage {
-            state_root,
+    pub async fn sign_state_update(&self, state_update_hash: H256, sequence: u64) -> Result<StateUpdateSignature> {
+        // Create state update message
+        let message = StateUpdateMessage {
+            state_update_hash,
             sequence,
             timestamp: chrono::Utc::now().timestamp(),
             validator: self.ethereum_address,
@@ -1140,8 +1139,8 @@ impl ConfidentialValidator {
         // Get current attestation
         let attestation = self.refresh_attestation_if_needed().await?;
 
-        Ok(StateRootSignature {
-            state_root,
+        Ok(StateUpdateSignature {
+            state_update_hash,
             sequence,
             signature: signature.as_bytes().to_vec(),
             validator: self.ethereum_address,
@@ -1159,16 +1158,16 @@ pub struct ValidatorSignature {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct StateRootMessage {
-    pub state_root: H256,
+pub struct StateUpdateMessage {
+    pub state_update_hash: H256,
     pub sequence: u64,
     pub timestamp: i64,
     pub validator: Address,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct StateRootSignature {
-    pub state_root: H256,
+pub struct StateUpdateSignature {
+    pub state_update_hash: H256,
     pub sequence: u64,
     pub signature: Vec<u8>,
     pub validator: Address,
@@ -1645,5 +1644,5 @@ Key metrics exposed via Prometheus:
 - `synddb_sql_operations_replayed` - Total operations replayed
 - `synddb_validation_failures` - Failed validations
 - `synddb_query_latency_ms` - Query response time
-- `synddb_state_root_submissions` - Successful settlements (validator only)
+- `synddb_state_update_submissions` - Successful settlements (validator only)
 - `synddb_message_processing_time` - Message processing latency (validator only)

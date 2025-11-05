@@ -233,7 +233,7 @@ function submitChangeset(string calldata daCid, bytes32 dataHash, uint256 sequen
 function submitSnapshot(string calldata daCid, bytes32 dataHash, uint256 sequenceNumber)
 ```
 
-The settlement contract only accepts state roots signed by a threshold of validators running in TEEs.
+The settlement contract only accepts state updates signed by a threshold of validators running in TEEs.
 
 ### Message Passing Contract
 

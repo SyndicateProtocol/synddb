@@ -1709,7 +1709,7 @@ pub struct StateCommitment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateReference {
     pub sequence: u64,
-    pub state_root: H256,
+    pub state_update_hash: H256,  // Hash of the state update (changeset or snapshot)
     pub da_reference: String,  // CID or transaction hash
     pub timestamp: DateTime<Utc>,
 }
@@ -2641,7 +2641,7 @@ The sequencer's progressive degradation strategy ensures system integrity while 
 The sequencer publishes signed state commitments to DA layers that include:
 - Current system status (Healthy/Degraded/Halted)
 - Error codes for specific issues
-- Reference to committed state with state root
+- Reference to committed state with state update hash
 - Details about missing acknowledgments
 - Health metrics
 - Cryptographic signature from TEE-protected key
