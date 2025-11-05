@@ -50,5 +50,4 @@ interface IBridge {
     function getPreModules() external view returns (address[] memory);
 
     function getPostModules() external view returns (address[] memory);
-
 }

@@ -170,6 +170,7 @@ enum ProcessingStage {
 /**
  * Initialize a new message for processing
  * Creates message state and stores validator signatures
+ * This is initiated by the sequencer upon receiving a signed message
  *
  * @param messageId Unique identifier
  * @param payload Message data containing type and parameters

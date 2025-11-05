@@ -6,7 +6,7 @@ import {ModuleValidator} from "./ModuleValidator.sol";
 contract Bridge is ModuleValidator {
     mapping(bytes32 messageId => MessageState state) public messageStates;
     mapping(bytes32 messageId => ValidatorSignatures sigs) public messageSignatures;
-    
+
     event MessageInitialized(bytes32 indexed messageId, bytes payload);
     event MessageExecuted(bytes32 indexed messageId, bool success);
 
