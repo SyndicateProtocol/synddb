@@ -1,8 +1,10 @@
-# PLAN_SIDECAR.md - Lightweight SQLite Monitor and Publisher
+# PLAN_SEQUENCER.md - Lightweight SQLite Monitor and Publisher
 
 ## Overview
 
-The synddb-sidecar is a zero-configuration Rust process that attaches to any SQLite database using the **SQLite Session Extension** to capture deterministic changesets. It publishes logical database changes (INSERT/UPDATE/DELETE operations) to multiple DA layers. This approach is far more robust than WAL parsing and ensures validators can deterministically re-derive state. It requires zero application code changes and works with SQLite databases from any programming language.
+The synddb-sequencer is a zero-configuration Rust process that attaches to any SQLite database using the **SQLite Session Extension** to capture deterministic changesets. It publishes logical database changes (INSERT/UPDATE/DELETE operations) to multiple DA layers. This approach is far more robust than WAL parsing and ensures validators can deterministically re-derive state. It requires zero application code changes and works with SQLite databases from any programming language.
+
+**Note:** The sequencer runs as a **sidecar process** - a separate process that runs alongside the application. While we call it the "sequencer" (reflecting its role in ordering and publishing transactions), it's architecturally deployed as a sidecar.
 
 ## Architecture
 
@@ -15,7 +17,7 @@ The synddb-sidecar is a zero-configuration Rust process that attaches to any SQL
                     Database Transactions (via Session Extension)
                                 ↓
 ┌──────────────────────────────────────────────────────────────┐
-│                      synddb-sidecar                          │
+│                      synddb-sequencer                          │
 │ ┌─────────────────┐  ┌─────────────┐  ┌─────────────┐      │
 │ │ Session Monitor │→ │   Batcher   │→ │  Attestor   │      │
 │ │ (Changesets)    │  │ (+ Snapshot)│  │(Sign+Compress)     │
@@ -91,7 +93,7 @@ crossbeam-channel = "0.5"  # Multi-producer multi-consumer channels
 ## Directory Structure
 
 ```
-synddb-sidecar/
+synddb-sequencer/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs                    # Entry point, CLI args
@@ -348,7 +350,7 @@ BEGIN TRANSACTION;
   PRAGMA user_version = 2;  -- Increment version
 COMMIT;
 
--- This allows sidecar to detect and publish schema changes
+-- This allows sequencer to detect and publish schema changes
 ```
 
 ### Why Session Extension (Changesets) is the Right Choice
@@ -393,7 +395,7 @@ for change in changeset.iter() {
 
 **Our Solution: Automatic Snapshot on Schema Change**
 
-When the application changes the database schema, the sidecar immediately creates and publishes a full database snapshot. This is simpler and more reliable than DDL replay, and leverages our existing snapshot infrastructure.
+When the application changes the database schema, the sequencer immediately creates and publishes a full database snapshot. This is simpler and more reliable than DDL replay, and leverages our existing snapshot infrastructure.
 
 **Why Snapshot Instead of DDL Replay?**
 - **Schema changes are rare** - Acceptable overhead (happens days/weeks apart, not continuously)
@@ -412,7 +414,7 @@ When the application changes the database schema, the sidecar immediately create
    COMMIT;
    ```
 
-2. **Sidecar Detects Schema Change**
+2. **Sequencer Detects Schema Change**
    - Update hook fires when `sqlite_schema` table is modified
    - Captures full DDL via `SELECT sql FROM sqlite_schema` (for audit trail)
    - Reads new `user_version` to track migration number
@@ -1098,8 +1100,8 @@ logging:
 
 ## TEE Integration with GCP Confidential Space
 
-The sidecar leverages GCP Confidential Space for hardware-protected Ethereum key management.
-The sidecar runs in a **separate container** from the application within the same Confidential Space VM,
+The sequencer leverages GCP Confidential Space for hardware-protected Ethereum key management.
+The sequencer runs in a **separate container** from the application within the same Confidential Space VM,
 providing strong isolation while maintaining filesystem access to the SQLite database.
 
 ### Security Model: Same-VM, Separate Containers
@@ -1110,7 +1112,7 @@ providing strong isolation while maintaining filesystem access to the SQLite dat
 │  Hardware Root of Trust (AMD SEV-SNP / Intel TDX)               │
 │                                                                   │
 │  ┌────────────────────────┐  ┌────────────────────────┐        │
-│  │   Application          │  │   synddb-sidecar       │        │
+│  │   Application          │  │   synddb-sequencer       │        │
 │  │   Container            │  │   Container            │        │
 │  │                        │  │                        │        │
 │  │  - Any language        │  │  - Read-only SQLite    │        │
@@ -1127,7 +1129,7 @@ providing strong isolation while maintaining filesystem access to the SQLite dat
 │           └──────────────────────┘                              │
 │                                                                   │
 │  Container-level isolation prevents application from accessing   │
-│  sidecar memory space where Ethereum keys are held.             │
+│  sequencer memory space where Ethereum keys are held.           │
 └──────────────────────────────────────────────────────────────────┘
                      ↓ Attestation Token + Signature
 ┌──────────────────────────────────────────────────────────────────┐
@@ -1141,11 +1143,11 @@ providing strong isolation while maintaining filesystem access to the SQLite dat
 ### Why Same-VM Architecture is Secure
 
 1. **Container Isolation**: Linux namespaces and cgroups prevent cross-container memory access
-2. **Read-Only SQLite Access**: Sidecar opens DB with `SQLITE_OPEN_READ_ONLY` flag
+2. **Read-Only SQLite Access**: Sequencer opens DB with `SQLITE_OPEN_READ_ONLY` flag
 3. **Memory Encryption**: AMD SEV-SNP encrypts all VM memory including both containers
 4. **No Shared Memory**: Containers communicate only via filesystem (SQLite DB file)
 5. **Principle of Least Privilege**: Application has no credentials to access Secret Manager
-6. **Attestation Binding**: Keys in Secret Manager are bound to sidecar container digest only
+6. **Attestation Binding**: Keys in Secret Manager are bound to sequencer container digest only
 
 ### Key Management Implementation
 
@@ -1162,7 +1164,7 @@ use anyhow::Result;
 
 /// Manages Ethereum secp256k1 keys for signing batches.
 /// Keys are generated in TEE and stored in GCP Secret Manager,
-/// bound to the sidecar container digest via Workload Identity.
+/// bound to the sequencer container digest via Workload Identity.
 pub struct KeyManager {
     signing_key: SigningKey,
     verifying_key: VerifyingKey,
@@ -1194,7 +1196,7 @@ impl KeyManager {
         let config = ClientConfig::default().with_auth().await?;
         let secret_client = SecretClient::new(config).await?;
 
-        let secret_name = "synddb-sidecar-signing-key".to_string();
+        let secret_name = "synddb-sequencer-signing-key".to_string();
 
         // Try to load existing key or generate new one
         let (signing_key, verifying_key, ethereum_address) =
@@ -1268,7 +1270,7 @@ impl KeyManager {
         let client = reqwest::Client::new();
 
         // Custom audience for our application
-        let audience = "https://synddb.io/sidecar";
+        let audience = "https://synddb.io/sequencer";
 
         let response = client
             .get("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
@@ -1310,7 +1312,7 @@ impl KeyManager {
         let secret_data = serde_json::to_vec(&key_data)?;
 
         // Create secret with Workload Identity binding
-        // IAM policy ensures only sidecar container with matching digest can access
+        // IAM policy ensures only sequencer container with matching digest can access
         secret_client
             .create_secret(
                 project_id,
@@ -1318,7 +1320,7 @@ impl KeyManager {
                 secret_data,
                 Some(vec![
                     ("synddb/environment", "confidential-space"),
-                    ("synddb/component", "sidecar"),
+                    ("synddb/component", "sequencer"),
                     ("synddb/key-type", "secp256k1-ethereum"),
                 ]),
             )
@@ -1395,11 +1397,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary
-COPY --from=builder /app/target/release/synddb-sidecar /usr/local/bin/
+COPY --from=builder /app/target/release/synddb-sequencer /usr/local/bin/
 
 # Create non-root user
 RUN useradd -m -u 1000 synddb && \
-    chown -R synddb:synddb /usr/local/bin/synddb-sidecar
+    chown -R synddb:synddb /usr/local/bin/synddb-sequencer
 
 USER synddb
 
@@ -1408,8 +1410,8 @@ HEALTHCHECK --interval=30s --timeout=3s \
     CMD curl -f http://localhost:9090/health || exit 1
 
 # Entry point with attestation initialization
-ENTRYPOINT ["/usr/local/bin/synddb-sidecar"]
-CMD ["--attestation", "confidential-space", "--config", "/config/sidecar.yaml"]
+ENTRYPOINT ["/usr/local/bin/synddb-sequencer"]
+CMD ["--attestation", "confidential-space", "--config", "/config/sequencer.yaml"]
 ```
 
 ### Deployment Configuration
@@ -1419,7 +1421,7 @@ CMD ["--attestation", "confidential-space", "--config", "/config/sidecar.yaml"]
 apiVersion: compute.cnrm.cloud.google.com/v1beta1
 kind: ComputeInstance
 metadata:
-  name: synddb-sidecar-tee
+  name: synddb-sequencer-tee
 spec:
   machineType: n2d-standard-4 # AMD SEV-SNP capable
   zone: us-central1-a
@@ -1437,7 +1439,7 @@ spec:
     onHostMaintenance: TERMINATE # Required for Confidential VMs
 
   serviceAccounts:
-    - email: synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com
+    - email: synddb-sequencer@${PROJECT_ID}.iam.gserviceaccount.com
       scopes:
         - https://www.googleapis.com/auth/cloud-platform
 
@@ -1446,11 +1448,11 @@ spec:
       - key: tee-container-log-redirect
         value: "true"
       - key: tee-image-reference
-        value: "gcr.io/${PROJECT_ID}/synddb-sidecar:latest"
+        value: "gcr.io/${PROJECT_ID}/synddb-sequencer:latest"
       - key: tee-restart-policy
         value: "Always"
       - key: tee-env-ATTESTATION_AUDIENCE
-        value: "https://synddb.io/sidecar"
+        value: "https://synddb.io/sequencer"
       - key: tee-env-SECRET_PROJECT_ID
         value: "${PROJECT_ID}"
 
@@ -1466,18 +1468,18 @@ spec:
 apiVersion: iam.cnrm.cloud.google.com/v1beta1
 kind: IAMServiceAccount
 metadata:
-  name: synddb-sidecar
+  name: synddb-sequencer
 spec:
-  displayName: SyndDB Sidecar Service Account
+  displayName: SyndDB Sequencer Service Account
 ---
 apiVersion: iam.cnrm.cloud.google.com/v1beta1
 kind: IAMPolicyMember
 metadata:
-  name: synddb-sidecar-secretmanager
+  name: synddb-sequencer-secretmanager
 spec:
   memberFrom:
     serviceAccountRef:
-      name: synddb-sidecar
+      name: synddb-sequencer
   role: roles/secretmanager.secretAccessor
   resourceRef:
     kind: Project
@@ -1485,20 +1487,20 @@ spec:
 apiVersion: iam.cnrm.cloud.google.com/v1beta1
 kind: IAMPolicy
 metadata:
-  name: synddb-sidecar-secret-policy
+  name: synddb-sequencer-secret-policy
 spec:
   resourceRef:
     kind: Secret
-    name: synddb-sidecar-signing-key
+    name: synddb-sequencer-signing-key
   policy:
     bindings:
       - role: roles/secretmanager.secretAccessor
         members:
-          - serviceAccount:synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com
+          - serviceAccount:synddb-sequencer@${PROJECT_ID}.iam.gserviceaccount.com
         condition:
           title: Only from Confidential Space
           expression: |
-            assertion.sub == 'synddb-sidecar@${PROJECT_ID}.iam.gserviceaccount.com' &&
+            assertion.sub == 'synddb-sequencer@${PROJECT_ID}.iam.gserviceaccount.com' &&
             'image_digest' in assertion &&
             assertion.image_digest == '${EXPECTED_IMAGE_DIGEST}'
 ```
@@ -1506,7 +1508,7 @@ spec:
 ### Configuration File
 
 ```yaml
-# config/sidecar-confidential.yaml
+# config/sequencer-confidential.yaml
 database:
   path: "/data/app.db"
   wal_mode: true
@@ -1518,8 +1520,8 @@ attestation:
   # GCP Confidential Space settings
   gcp:
     project_id: "${PROJECT_ID}"
-    secret_name: "synddb-sidecar-signing-key"
-    attestation_audience: "https://synddb.io/sidecar"
+    secret_name: "synddb-sequencer-signing-key"
+    attestation_audience: "https://synddb.io/sequencer"
 
     # Expected measurements for verification
     expected_measurements:
@@ -1552,7 +1554,7 @@ monitoring:
 
 ### 1. Disaster Recovery & Persistence ⚠️ TODO
 
-**Problem:** If sidecar crashes, in-memory changesets are lost
+**Problem:** If sequencer crashes, in-memory changesets are lost
 **Solution:** Persistent queue before DA publish
 ```rust
 // src/publish/persistent_queue.rs
@@ -1593,7 +1595,7 @@ impl PersistentQueue {
 
 ### 2. Backpressure & Memory Management ⚠️ TODO
 
-**Problem:** Application writes faster than sidecar can publish
+**Problem:** Application writes faster than sequencer can publish
 **Solution:** Bounded channels with monitoring
 ```rust
 // Bounded channels prevent memory exhaustion
@@ -1602,7 +1604,7 @@ let (batch_tx, batch_rx) = mpsc::channel::<BatchPayload>(100);
 
 // Monitor queue depth
 if changeset_tx.capacity() < 100 {
-    warn!("Sidecar falling behind: {} changesets queued",
+    warn!("Sequencer falling behind: {} changesets queued",
           1000 - changeset_tx.capacity());
 }
 ```
@@ -1611,10 +1613,10 @@ if changeset_tx.capacity() < 100 {
 
 ### 3. Graceful Shutdown ⚠️ TODO
 
-**Problem:** Sidecar shutdown could lose in-flight changesets
+**Problem:** Sequencer shutdown could lose in-flight changesets
 **Solution:** Flush all pending work before exit
 ```rust
-impl Sidecar {
+impl Sequencer {
     pub async fn shutdown(&mut self) -> Result<()> {
         info!("Graceful shutdown initiated");
 
@@ -1638,11 +1640,11 @@ impl Sidecar {
     }
 
     async fn save_checkpoint(&self) -> Result<()> {
-        let state = SidecarState {
+        let state = SequencerState {
             last_published_sequence: self.sequence.load(Ordering::SeqCst),
             last_schema_version: self.schema_version,
         };
-        fs::write("/data/sidecar.checkpoint", serde_json::to_vec(&state)?)?;
+        fs::write("/data/sequencer.checkpoint", serde_json::to_vec(&state)?)?;
         Ok(())
     }
 }
@@ -1732,7 +1734,7 @@ impl KeyManager {
 **Critical Metrics:**
 ```rust
 // GCP Cloud Logging structured events
-pub struct SidecarMetrics {
+pub struct SequencerMetrics {
     // Lag metrics
     pub changeset_lag_seconds: f64,        // Time from commit to publish
     pub queue_depth: usize,                 // Unpublished changesets
@@ -1759,7 +1761,7 @@ pub struct SidecarMetrics {
 **Known Limitations:**
 - ❌ Memory databases (`:memory:`) - Cannot persist
 - ❌ Temporary tables - Not replicated by Session Extension
-- ⚠️ ATTACH DATABASE - Each database needs separate sidecar
+- ⚠️ ATTACH DATABASE - Each database needs separate sequencer
 - ⚠️ Encrypted databases (SQLCipher) - Need special handling
 - ⚠️ Custom collations - Must match on validators
 
@@ -1842,8 +1844,8 @@ async fn test_end_to_end() {
     // Start test SQLite database
     let db = setup_test_db().await;
 
-    // Start sidecar
-    let sidecar = Sidecar::new(config).start().await;
+    // Start sequencer
+    let sequencer = Sequencer::new(config).start().await;
 
     // Perform SQL operations
     db.execute("INSERT INTO test VALUES (1, 'data')").await;
@@ -1879,8 +1881,8 @@ RUN cargo build --release --features tee
 
 FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y ca-certificates
-COPY --from=builder /app/target/release/synddb-sidecar /usr/local/bin/
-ENTRYPOINT ["synddb-sidecar"]
+COPY --from=builder /app/target/release/synddb-sequencer /usr/local/bin/
+ENTRYPOINT ["synddb-sequencer"]
 ```
 
 ### Resource Requirements
@@ -1910,7 +1912,7 @@ All metrics and logs are sent to GCP Cloud Logging for centralized monitoring:
 
 ### 1. Read-Only Access
 
-Sidecar only reads from SQLite, never writes:
+Sequencer only reads from SQLite, never writes:
 
 ```rust
 let conn = Connection::open_with_flags(
@@ -1936,16 +1938,16 @@ pub struct PublishPayload {
 
 Ethereum signing keys are protected by multiple layers:
 
-1. **Container Isolation**: Application container cannot access sidecar memory
+1. **Container Isolation**: Application container cannot access sequencer memory
 2. **Secret Manager Binding**: Keys only accessible to container with matching digest
 3. **Memory Encryption**: AMD SEV-SNP encrypts all VM memory
 4. **No Key Export**: Keys never serialized outside Secret Manager
 
 ```rust
-// Sidecar loads key from Secret Manager on startup
+// Sequencer loads key from Secret Manager on startup
 let key_manager = KeyManager::init().await?;
 
-// Application has no access to Secret Manager or sidecar memory
+// Application has no access to Secret Manager or sequencer memory
 // Keys remain in sidecar process memory only
 ```
 
@@ -1970,10 +1972,10 @@ For existing applications:
 PRAGMA journal_mode=WAL;
 ```
 
-2. **Deploy sidecar**:
+2. **Deploy sequencer**:
 
 ```bash
-docker run -v /app/data:/data syndicate/synddb-sidecar
+docker run -v /app/data:/data syndicate/synddb-sequencer
 ```
 
 3. **Verify publishing**:
@@ -1982,4 +1984,4 @@ docker run -v /app/data:/data syndicate/synddb-sidecar
 curl http://localhost:9090/metrics | grep synddb_
 ```
 
-No application code changes required - the sidecar is completely passive and transparent to the application.
+No application code changes required - the sequencer is completely passive and transparent to the application.

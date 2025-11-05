@@ -15,6 +15,8 @@ This bridge architecture draws inspiration from proven modular smart contract sy
 
 - **[Safe Guards](https://docs.safe.global/advanced/smart-account-guards)**: Pre and post-execution hooks for smart account transactions
 - **[Zodiac Modules](https://github.com/gnosisguild/zodiac)**: Modular access control patterns
+- **[Hyperlane ISMs](https://docs.hyperlane.xyz/docs/protocol/ISM/modular-security)**: Composable module logic with AND/OR patterns, message-type-specific routing
+- **[LayerZero DVNs](https://docs.layerzero.network/v2/home/protocol/dvn)**: Flexible verification thresholds and configurable security stacks
 
 ### Design Principles
 
@@ -23,6 +25,14 @@ This bridge architecture draws inspiration from proven modular smart contract sy
 - **Validator consensus**: Threshold signatures from validators
 - **Composable validation**: Modules can be stacked for complex logic and validation
 - **Immutable core**: Bridge logic is fixed, modules are upgradeable
+
+### Modular Architecture
+
+The modular architecture enables advanced validation patterns:
+
+- **Flexible thresholds**: Per-module validation requirements (e.g., "2 of 3 signature validators OR 1 trusted module")
+- **Message-type routing**: Different validation rules for WITHDRAW vs DEPOSIT messages (DEPOSIT with zero value indicates a generic call)
+- **Default module sets**: Sensible default modules with optional custom overrides
 
 ## Architecture
 
@@ -40,7 +50,7 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 **Stage 2: PreExecution (Validation)**
 
 - Run PreExecution modules sequentially
-- Each module validates the message
+- Each module validates the message (validation only, no state mutations)
 - Any module can reject the message
 - If all pass, advance to execution stage
 - Examples: signature verification, balance checks, withdrawal limits
@@ -55,16 +65,17 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 **Stage 4: PostExecution (Post-Processing)**
 
 - Run PostExecution modules sequentially
-- Process execution results and enforce post-execution invariants
+- Process execution results and enforce post-execution invariants (validation only, no state mutations)
 - Can revert to block message completion (e.g. supply cap violations)
-- Examples: emit events, send callbacks, validate invariants
+- Examples: emit events, validate invariants
 
 ### Data Flow
 
 ```
-                     Via Sequencer
+                    Via Sequencer
                          ↓
-                ValidatorsSign messageId
+                Validators sign message
+                that has unique identifier
                          ↓
             ┌─────────────────────────────────────┐
             │  Single Atomic Transaction          │
@@ -117,8 +128,8 @@ synddb-bridge/
 │   │   │
 │   │   └── post/ -> Example PostExecution modules
 │   │       ├── EventEmitterModule.sol      # Emit detailed events
-│   │       ├── CallbackModule.sol          # Send confirmation to SyndDB
-│   │       └── FeeCollectorModule.sol      # Collect protocol fees
+│   │       ├── SupplyCapModule.sol         # Enforce supply caps
+│   │       └── InvariantCheckModule.sol    # Validate post-execution invariants
 │   │
 │   └── types/
 │       ├── MessageTypes.sol                # Message type constants
@@ -186,7 +197,7 @@ function initializeMessage(
     bytes32 messageId,
     bytes calldata payload,
     ExecutionContext calldata context
-) internal;
+) public;
 
 /**
  * Execute PreExecution modules for validation
@@ -195,7 +206,7 @@ function initializeMessage(
  *
  * @param messageId The message to validate
  */
-function executePreModules(bytes32 messageId) internal;
+function executePreModules(bytes32 messageId) public;
 
 /**
  * Execute the core message logic
@@ -204,7 +215,7 @@ function executePreModules(bytes32 messageId) internal;
  *
  * @param messageId The message to execute
  */
-function executeMessage(bytes32 messageId) internal;
+function executeMessage(bytes32 messageId) public;
 
 /**
  * Execute PostExecution modules for post-processing
@@ -213,7 +224,7 @@ function executeMessage(bytes32 messageId) internal;
  *
  * @param messageId The message to process
  */
-function executePostModules(bytes32 messageId) internal;
+function executePostModules(bytes32 messageId) public;
 
 
 /**
@@ -307,7 +318,7 @@ interface IPreExecutionModule {
 
 ### IPostExecutionModule Interface
 
-PostExecution modules process results after core execution and can enforce post-execution invariants. Modules can revert to block message completion (e.g., supply cap violations).
+PostExecution modules process results after core execution and can enforce post-execution invariants. Modules can return false to block message completion (e.g., supply cap violations). They are stateless validators that perform read-only checks. They should not mutate state or make external calls to avoid gas griefing and reentrancy risks.
 
 ```solidity
 interface IPostExecutionModule {
