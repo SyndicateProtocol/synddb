@@ -146,11 +146,12 @@ synddb-sequencer/
 │   │   ├── arweave.rs             # Arweave publisher
 │   │   ├── retry.rs               # Retry logic
 │   │   └── manifest.rs            # Track published batches (sequence, DA location, hash)
-│   ├── deposits/
-│   │   ├── mod.rs                 # Deposit handling module
-│   │   ├── chain_monitor.rs       # Blockchain event monitoring
-│   │   ├── queue.rs               # Deposit queue management
-│   │   └── api.rs                 # HTTP API for applications
+│   ├── messages/
+│   │   ├── mod.rs                 # Message passing module
+│   │   ├── inbound_monitor.rs     # Blockchain event monitoring for inbound messages
+│   │   ├── outbound_monitor.rs    # SQLite table monitoring for outbound messages
+│   │   ├── queue.rs               # Message queue management
+│   │   └── api.rs                 # HTTP API for bidirectional messaging
 │   ├── tee/
 │   │   ├── mod.rs                 # GCP Confidential Space TEE
 │   │   └── attestation.rs         # Fetch attestation tokens from metadata service
@@ -1065,77 +1066,95 @@ impl DaPublisher for IpfsPublisher {
 }
 ```
 
-## Deposit Handling - Blockchain to Application Bridge
+## Message Passing - Bidirectional Bridge Communication
 
-The sequencer monitors blockchain events and provides a simple HTTP API for applications to receive deposit notifications. Since the sequencer and application run as separate containers on the same physical machine, we use a localhost HTTP interface for maximum developer simplicity.
+The sequencer handles bidirectional message passing between the application and blockchain. It monitors outbound messages from SQLite tables and inbound messages from blockchain events, providing a simple HTTP API for applications. Since the sequencer and application run as separate containers on the same physical machine, we use a localhost HTTP interface for maximum developer simplicity.
 
 ### Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                         Blockchain (L1/L2)                       │
-│                    Bridge Contract (Deposits)                    │
+│                    Bridge Contract (Messages)                    │
 └──────────────────────────────────────────────────────────────────┘
-                                 │
-                          Event Monitoring
-                                 ↓
+                     ↑                           │
+              Outbound Messages           Inbound Events
+                     │                           ↓
 ┌──────────────────────────────────────────────────────────────────┐
 │                      synddb-sequencer Container                  │
 │                                                                   │
 │  ┌────────────────────┐    ┌─────────────────────────┐         │
-│  │  Chain Monitor     │───▶│   Deposit Queue         │         │
-│  │  - Watch events    │    │   - Buffer deposits     │         │
+│  │  Table Monitor     │───▶│   Message Publisher    │         │
+│  │  - Watch tables    │    │   - Queue messages     │         │
+│  │  - Detect changes  │    │   - Batch for DA       │         │
+│  └────────────────────┘    └─────────────────────────┘         │
+│                                                                   │
+│  ┌────────────────────┐    ┌─────────────────────────┐         │
+│  │  Chain Monitor     │───▶│   Inbound Queue        │         │
+│  │  - Watch events    │    │   - Buffer messages    │         │
 │  │  - Handle reorgs   │    │   - Track confirmations │         │
 │  └────────────────────┘    └─────────────────────────┘         │
 │                                         │                        │
 │                                         ▼                        │
 │                            ┌─────────────────────────┐          │
-│                            │   Deposit HTTP API      │          │
+│                            │   Message HTTP API      │          │
 │                            │   localhost:8432        │          │
 │                            └─────────────────────────┘          │
 └──────────────────────────────────────────────────────────────────┘
-                                         │
-                               localhost HTTP
-                                         ▼
+                     ↑                           │
+            SQLite Message Tables      localhost HTTP
+                     ↑                           ↓
 ┌──────────────────────────────────────────────────────────────────┐
 │                      Application Container                       │
 │                                                                   │
 │  ┌────────────────────────────────────────────────────────┐     │
-│  │  Simple Integration:                                    │     │
-│  │  - EventSource for real-time: /deposits/stream         │     │
-│  │  - REST polling fallback: GET /deposits?after_id=123   │     │
+│  │  Bidirectional Message Flow:                           │     │
+│  │  - Write to message tables for outbound                │     │
+│  │  - EventSource for real-time: /messages/inbound/stream │     │
+│  │  - REST polling fallback: GET /messages/inbound        │     │
 │  │  - No blockchain libraries needed                      │     │
 │  └────────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Deposit API Specification
+### Message API Specification
 
-The sequencer exposes a simple HTTP server on localhost port 8432 that provides deposit information to the application. This API is designed to be as simple as possible for developers familiar with REST and Server-Sent Events (SSE).
+The sequencer exposes a simple HTTP server on localhost port 8432 that provides bidirectional message passing for the application. This API is designed to be as simple as possible for developers familiar with REST and Server-Sent Events (SSE).
 
-#### 1. Real-time Deposit Stream (SSE)
+#### Inbound Messages (Blockchain → Application)
 
-**Endpoint:** `GET http://localhost:8432/deposits/stream`
+##### 1. Real-time Inbound Message Stream (SSE)
 
-Returns a Server-Sent Events stream of new deposits as they are confirmed on-chain.
+**Endpoint:** `GET http://localhost:8432/messages/inbound/stream`
+
+Returns a Server-Sent Events stream of new inbound messages as they are confirmed on-chain.
 
 **Example Response (SSE format):**
 ```
-data: {"id":1,"from":"0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb3","amount":"1000000","token":"USDC","txHash":"0xabc...","blockNumber":19234567,"confirmations":12,"timestamp":"2024-01-15T10:30:00Z"}
+data: {"id":1,"messageType":"deposit","payload":{"from":"0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb3","amount":"1000000","token":"USDC"},"txHash":"0xabc...","blockNumber":19234567,"confirmations":12,"timestamp":"2024-01-15T10:30:00Z"}
 
-data: {"id":2,"from":"0x5aAeb6053f3E94C9b9A09f33669435E7Ef1BeAed","amount":"500000","token":"USDC","txHash":"0xdef...","blockNumber":19234568,"confirmations":12,"timestamp":"2024-01-15T10:31:00Z"}
+data: {"id":2,"messageType":"call","payload":{"target":"0x5aAeb6053f3E94C9b9A09f33669435E7Ef1BeAed","method":"updatePrice","params":["ETH",3500]},"txHash":"0xdef...","blockNumber":19234568,"confirmations":12,"timestamp":"2024-01-15T10:31:00Z"}
 ```
 
 **Client Example (JavaScript):**
 ```javascript
-const events = new EventSource('http://localhost:8432/deposits/stream');
+const events = new EventSource('http://localhost:8432/messages/inbound/stream');
 
-events.onmessage = (event) => {
-  const deposit = JSON.parse(event.data);
-  console.log(`New deposit: ${deposit.amount} ${deposit.token} from ${deposit.from}`);
+events.onmessage = async (event) => {
+  const message = JSON.parse(event.data);
+  console.log(`New message: type=${message.messageType}, id=${message.id}`);
 
-  // Process deposit in application
-  await processDeposit(deposit);
+  // Process message based on type
+  switch(message.messageType) {
+    case 'deposit':
+      await processDeposit(message.payload);
+      break;
+    case 'call':
+      await processCall(message.payload);
+      break;
+    default:
+      await processGenericMessage(message);
+  }
 };
 
 events.onerror = (error) => {
@@ -1144,25 +1163,29 @@ events.onerror = (error) => {
 };
 ```
 
-#### 2. Deposit Queue (REST Polling)
+##### 2. Inbound Message Queue (REST Polling)
 
-**Endpoint:** `GET http://localhost:8432/deposits?after_id={last_processed_id}`
+**Endpoint:** `GET http://localhost:8432/messages/inbound?after_id={last_processed_id}`
 
-Returns all deposits after the specified ID. Used for polling or recovery after disconnection.
+Returns all inbound messages after the specified ID. Used for polling or recovery after disconnection.
 
 **Query Parameters:**
-- `after_id` (optional): Return only deposits with ID greater than this value
-- `limit` (optional): Maximum number of deposits to return (default: 100, max: 1000)
+- `after_id` (optional): Return only messages with ID greater than this value
+- `limit` (optional): Maximum number of messages to return (default: 100, max: 1000)
+- `type` (optional): Filter by message type (e.g., "deposit", "call")
 
 **Example Response:**
 ```json
 {
-  "deposits": [
+  "messages": [
     {
       "id": 124,
-      "from": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb3",
-      "amount": "1000000",
-      "token": "USDC",
+      "messageType": "deposit",
+      "payload": {
+        "from": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb3",
+        "amount": "1000000",
+        "token": "USDC"
+      },
       "txHash": "0xabc123...",
       "blockNumber": 19234567,
       "confirmations": 12,
@@ -1170,9 +1193,12 @@ Returns all deposits after the specified ID. Used for polling or recovery after 
     },
     {
       "id": 125,
-      "from": "0x5aAeb6053f3E94C9b9A09f33669435E7Ef1BeAed",
-      "amount": "500000",
-      "token": "USDC",
+      "messageType": "withdrawal",
+      "payload": {
+        "to": "0x5aAeb6053f3E94C9b9A09f33669435E7Ef1BeAed",
+        "amount": "500000",
+        "token": "USDC"
+      },
       "txHash": "0xdef456...",
       "blockNumber": 19234568,
       "confirmations": 12,
@@ -1192,27 +1218,30 @@ import time
 last_id = 0
 
 while True:
-    response = requests.get(f'http://localhost:8432/deposits?after_id={last_id}')
+    response = requests.get(f'http://localhost:8432/messages/inbound?after_id={last_id}')
     data = response.json()
 
-    for deposit in data['deposits']:
-        process_deposit(deposit)
-        last_id = deposit['id']
+    for message in data['messages']:
+        if message['messageType'] == 'deposit':
+            process_deposit(message['payload'])
+        elif message['messageType'] == 'call':
+            process_call(message['payload'])
+        last_id = message['id']
 
     time.sleep(5)  # Poll every 5 seconds
 ```
 
-#### 3. Acknowledge Deposit (Optional)
+##### 3. Acknowledge Message (Optional)
 
-**Endpoint:** `POST http://localhost:8432/deposits/{id}/ack`
+**Endpoint:** `POST http://localhost:8432/messages/inbound/{id}/ack`
 
-Optionally acknowledge that a deposit has been processed. This is for monitoring/debugging purposes only and doesn't affect deposit delivery.
+Optionally acknowledge that a message has been processed. This is for monitoring/debugging purposes only and doesn't affect message delivery.
 
 **Request Body:**
 ```json
 {
   "processed": true,
-  "processingNote": "Credited to user account"  // Optional
+  "processingNote": "Message processed successfully"  // Optional
 }
 ```
 
@@ -1220,16 +1249,65 @@ Optionally acknowledge that a deposit has been processed. This is for monitoring
 ```json
 {
   "success": true,
-  "deposit_id": 124
+  "message_id": 124
+}
+```
+
+#### Outbound Messages (Application → Blockchain)
+
+The sequencer monitors designated SQLite tables for outbound messages. When the application writes to these tables, the sequencer automatically detects the changes and publishes them to DA layers for validator processing.
+
+##### Message Table Schema
+
+Applications define message tables with schemas that map to the Bridge contract's expected format:
+
+```sql
+-- Generic outbound messages table
+CREATE TABLE outbound_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_type TEXT NOT NULL,  -- 'withdrawal', 'call', etc.
+    payload BLOB NOT NULL,        -- ABI-encoded message data
+    status TEXT DEFAULT 'pending',
+    created_at INTEGER DEFAULT (unixepoch()),
+    processed_at INTEGER,
+    tx_hash TEXT,
+    error TEXT
+);
+
+-- Example: Specific withdrawal messages
+CREATE TABLE outbound_withdrawals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient TEXT NOT NULL,
+    token_address TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at INTEGER DEFAULT (unixepoch())
+);
+```
+
+##### Status Monitoring
+
+**Endpoint:** `GET http://localhost:8432/messages/outbound/{id}/status`
+
+Check the status of an outbound message.
+
+**Response:**
+```json
+{
+  "id": 456,
+  "status": "confirmed",  // 'pending', 'published', 'confirmed', 'failed'
+  "txHash": "0x789abc...",
+  "confirmations": 12,
+  "error": null
 }
 ```
 
 ### Implementation
 
-#### Chain Monitor Component
+#### Inbound Message Monitor
 
 ```rust
-// src/deposits/chain_monitor.rs
+// src/messages/inbound_monitor.rs
 use alloy::{
     primitives::{Address, U256, B256},
     providers::{Provider, ProviderBuilder, WsConnect},
@@ -1241,23 +1319,29 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use chrono::Utc;
 
-// Define the Deposit event using alloy's sol! macro
+// Define Bridge events using alloy's sol! macro
 sol! {
-    event Deposit(address indexed from, uint256 amount, address indexed token);
+    // Generic message event from Bridge contract
+    event MessageReceived(
+        bytes32 indexed messageId,
+        bytes4 indexed messageType,
+        bytes payload,
+        address sender
+    );
 }
 
-pub struct ChainMonitor {
+pub struct InboundMonitor {
     provider: Arc<dyn Provider>,
     bridge_contract: Address,
-    deposit_queue: Arc<Mutex<DepositQueue>>,
+    message_queue: Arc<Mutex<MessageQueue>>,
     confirmation_blocks: u64,
 }
 
-impl ChainMonitor {
+impl InboundMonitor {
     pub async fn new(
         rpc_url: &str,
         bridge_address: &str,
-        deposit_queue: Arc<Mutex<DepositQueue>>,
+        message_queue: Arc<Mutex<MessageQueue>>,
         confirmation_blocks: u64,
     ) -> Result<Self> {
         // Connect to WebSocket provider
@@ -1271,16 +1355,16 @@ impl ChainMonitor {
         Ok(Self {
             provider: Arc::new(provider),
             bridge_contract,
-            deposit_queue,
+            message_queue,
             confirmation_blocks,
         })
     }
 
     pub async fn start_monitoring(self) -> Result<()> {
-        // Create filter for Deposit events
+        // Create filter for MessageReceived events
         let filter = Filter::new()
             .address(self.bridge_contract)
-            .event_signature(Deposit::SIGNATURE_HASH);
+            .event_signature(MessageReceived::SIGNATURE_HASH);
 
         // Subscribe to logs
         let subscription = self.provider.subscribe_logs(&filter).await?;
@@ -1288,16 +1372,16 @@ impl ChainMonitor {
 
         // Process events as they arrive
         while let Some(log) = stream.next().await {
-            match self.process_deposit_event(log).await {
+            match self.process_message_event(log).await {
                 Ok(_) => {},
-                Err(e) => error!("Failed to process deposit: {}", e),
+                Err(e) => error!("Failed to process message: {}", e),
             }
         }
 
         Ok(())
     }
 
-    async fn process_deposit_event(&self, log: Log) -> Result<()> {
+    async fn process_message_event(&self, log: Log) -> Result<()> {
         // Wait for confirmations
         let current_block = self.provider.get_block_number().await?;
         let log_block = log.block_number.unwrap_or_default();
@@ -1306,21 +1390,27 @@ impl ChainMonitor {
         if confirmations < self.confirmation_blocks {
             // Not enough confirmations yet, re-queue for later
             tokio::time::sleep(Duration::from_secs(12)).await;
-            return self.process_deposit_event(log).await;
+            return self.process_message_event(log).await;
         }
 
-        // Decode the Deposit event
-        let deposit_event = log.log_decode::<Deposit>()?.inner;
+        // Decode the MessageReceived event
+        let message_event = log.log_decode::<MessageReceived>()?.inner;
 
-        // Get token symbol
-        let token_symbol = self.get_token_symbol(deposit_event.token).await?;
+        // Decode message type
+        let message_type = match &message_event.messageType[..] {
+            b"\x12\x34\x56\x78" => "deposit",  // Example type signatures
+            b"\x87\x65\x43\x21" => "withdrawal",
+            b"\xab\xcd\xef\x00" => "call",
+            _ => "unknown",
+        };
 
-        // Create deposit record
-        let deposit = Deposit {
-            id: self.deposit_queue.lock().await.next_id(),
-            from: format!("{:?}", deposit_event.from),
-            amount: deposit_event.amount.to_string(),
-            token: token_symbol,
+        // Create message record
+        let message = InboundMessage {
+            id: self.message_queue.lock().await.next_id(),
+            message_id: format!("{:?}", message_event.messageId),
+            message_type: message_type.to_string(),
+            payload: message_event.payload,
+            sender: format!("{:?}", message_event.sender),
             tx_hash: format!("{:?}", log.transaction_hash.unwrap_or_default()),
             block_number: log_block,
             confirmations,
@@ -1328,111 +1418,88 @@ impl ChainMonitor {
         };
 
         // Add to queue
-        self.deposit_queue.lock().await.add_deposit(deposit)?;
+        self.message_queue.lock().await.add_message(message)?;
 
-        info!("Processed deposit: {} {} from {} (tx: {})",
-              deposit.amount, deposit.token, deposit.from, deposit.tx_hash);
+        info!("Processed inbound message: type={}, id={}, tx={}",
+              message_type, message.message_id, message.tx_hash);
 
         Ok(())
     }
 
-    async fn get_token_symbol(&self, token_address: Address) -> Result<String> {
-        // Production version: Query ERC20 contract for symbol
-        // Using alloy's sol! macro to define the interface
-        sol! {
-            #[sol(rpc)]
-            interface IERC20 {
-                function symbol() external view returns (string);
-                function decimals() external view returns (uint8);
-            }
-        }
-
-        // Try to query the token contract
-        match IERC20::new(token_address, &self.provider).symbol().await {
-            Ok(symbol) => Ok(symbol),
-            Err(_) => {
-                // Fallback to known token mapping
-                let addr_str = format!("{:?}", token_address).to_lowercase();
-                match addr_str.as_str() {
-                    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" => Ok("USDC".to_string()),
-                    "0xdac17f958d2ee523a2206206994597c13d831ec7" => Ok("USDT".to_string()),
-                    "0x6b175474e89094c44da98b954eedeac495271d0f" => Ok("DAI".to_string()),
-                    _ => Ok("UNKNOWN".to_string()),
-                }
-            }
-        }
-    }
 }
 ```
 
-#### Deposit Queue
+#### Message Queue
 
 ```rust
-// src/deposits/queue.rs
+// src/messages/queue.rs
 use std::collections::VecDeque;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Deposit {
+pub struct InboundMessage {
     pub id: u64,
-    pub from: String,
-    pub amount: String,
-    pub token: String,
+    pub message_id: String,
+    pub message_type: String,
+    pub payload: Value,  // Generic JSON payload
+    pub sender: String,
     pub tx_hash: String,
     pub block_number: u64,
     pub confirmations: u64,
     pub timestamp: DateTime<Utc>,
 }
 
-pub struct DepositQueue {
-    deposits: VecDeque<Deposit>,
+pub struct MessageQueue {
+    messages: VecDeque<InboundMessage>,
     next_id: AtomicU64,
     max_queue_size: usize,
     retention_period: Duration,
 }
 
-impl DepositQueue {
+impl MessageQueue {
     pub fn new(max_queue_size: usize, retention_period: Duration) -> Self {
         Self {
-            deposits: VecDeque::new(),
+            messages: VecDeque::new(),
             next_id: AtomicU64::new(1),
             max_queue_size,
             retention_period,
         }
     }
 
-    pub fn add_deposit(&mut self, mut deposit: Deposit) -> Result<()> {
-        deposit.id = self.next_id.fetch_add(1, Ordering::SeqCst);
+    pub fn add_message(&mut self, mut message: InboundMessage) -> Result<()> {
+        message.id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
-        // Remove old deposits beyond retention period
+        // Remove old messages beyond retention period
         let cutoff = Utc::now() - self.retention_period;
-        self.deposits.retain(|d| d.timestamp > cutoff);
+        self.messages.retain(|m| m.timestamp > cutoff);
 
         // Ensure queue doesn't grow unbounded
-        if self.deposits.len() >= self.max_queue_size {
-            self.deposits.pop_front();
+        if self.messages.len() >= self.max_queue_size {
+            self.messages.pop_front();
         }
 
-        self.deposits.push_back(deposit.clone());
+        self.messages.push_back(message.clone());
 
-        info!("New deposit queued: {} {} from {} (id: {})",
-              deposit.amount, deposit.token, deposit.from, deposit.id);
+        info!("New message queued: type={}, id={}, from={}",
+              message.message_type, message.id, message.sender);
 
         Ok(())
     }
 
-    pub fn get_deposits_after(&self, after_id: u64, limit: usize) -> Vec<Deposit> {
-        self.deposits
+    pub fn get_messages_after(&self, after_id: u64, limit: usize, message_type: Option<&str>) -> Vec<InboundMessage> {
+        self.messages
             .iter()
-            .filter(|d| d.id > after_id)
+            .filter(|m| m.id > after_id)
+            .filter(|m| message_type.map_or(true, |t| m.message_type == t))
             .take(limit)
             .cloned()
             .collect()
     }
 
-    pub fn get_latest_deposits(&self, count: usize) -> Vec<Deposit> {
-        self.deposits
+    pub fn get_latest_messages(&self, count: usize) -> Vec<InboundMessage> {
+        self.messages
             .iter()
             .rev()
             .take(count)
@@ -1447,10 +1514,98 @@ impl DepositQueue {
 }
 ```
 
+#### Outbound Message Monitor
+
+```rust
+// src/messages/outbound_monitor.rs
+use rusqlite::{Connection, hooks::Action};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct OutboundMonitor {
+    db_path: PathBuf,
+    conn: Connection,
+    outbound_tx: Sender<OutboundMessage>,
+}
+
+impl OutboundMonitor {
+    pub async fn new(
+        db_path: PathBuf,
+        outbound_tx: Sender<OutboundMessage>,
+    ) -> Result<Self> {
+        let mut conn = Connection::open(&db_path)?;
+
+        // Install update hook to detect changes to message tables
+        conn.update_hook(Some(Self::on_update));
+
+        Ok(Self {
+            db_path,
+            conn,
+            outbound_tx,
+        })
+    }
+
+    /// Update hook called for every INSERT/UPDATE/DELETE
+    fn on_update(&mut self, action: Action, db: &str, table: &str, rowid: i64) {
+        // Check if this is an outbound message table
+        if table.starts_with("outbound_") && action == Action::INSERT {
+            match self.process_outbound_message(table, rowid) {
+                Ok(_) => {},
+                Err(e) => error!("Failed to process outbound message: {}", e),
+            }
+        }
+    }
+
+    fn process_outbound_message(&mut self, table: &str, rowid: i64) -> Result<()> {
+        // Query the new message from the table
+        let query = format!("SELECT * FROM {} WHERE rowid = ?", table);
+        let mut stmt = self.conn.prepare(&query)?;
+
+        let message = stmt.query_row([rowid], |row| {
+            Ok(OutboundMessage {
+                table: table.to_string(),
+                id: row.get(0)?,
+                message_type: row.get(1)?,
+                payload: row.get(2)?,
+                status: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+
+        // Send to processing queue
+        if let Err(e) = self.outbound_tx.blocking_send(message) {
+            error!("Failed to queue outbound message: {}", e);
+        }
+
+        Ok(())
+    }
+
+    pub async fn run(mut self) -> Result<()> {
+        // Monitor is passive - changes detected via update hook
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+
+            // Periodic health check
+            self.conn.execute("SELECT 1", [])?;
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OutboundMessage {
+    pub table: String,
+    pub id: u64,
+    pub message_type: String,
+    pub payload: Vec<u8>,
+    pub status: String,
+    pub created_at: i64,
+}
+```
+
 #### HTTP API Server
 
 ```rust
-// src/deposits/api.rs
+// src/messages/api.rs
 use axum::{
     extract::{Query, Path, State},
     response::sse::{Event, Sse},
@@ -1460,37 +1615,45 @@ use tokio_stream::StreamExt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-pub struct DepositApi {
-    deposit_queue: Arc<Mutex<DepositQueue>>,
+pub struct MessageApi {
+    inbound_queue: Arc<Mutex<MessageQueue>>,
+    outbound_status: Arc<Mutex<OutboundStatus>>,
     sse_broadcaster: Arc<Mutex<SseBroadcaster>>,
 }
 
-impl DepositApi {
-    pub fn router(deposit_queue: Arc<Mutex<DepositQueue>>) -> Router {
+impl MessageApi {
+    pub fn router(
+        inbound_queue: Arc<Mutex<MessageQueue>>,
+        outbound_status: Arc<Mutex<OutboundStatus>>,
+    ) -> Router {
         let sse_broadcaster = Arc::new(Mutex::new(SseBroadcaster::new()));
 
         let api = Arc::new(Self {
-            deposit_queue: deposit_queue.clone(),
-            sse_broadcaster: sse_broadcaster.clone(),
+            inbound_queue,
+            outbound_status,
+            sse_broadcaster,
         });
 
         Router::new()
-            .route("/deposits/stream", get(Self::deposit_stream))
-            .route("/deposits", get(Self::get_deposits))
-            .route("/deposits/:id/ack", post(Self::acknowledge_deposit))
+            // Inbound message endpoints
+            .route("/messages/inbound/stream", get(Self::inbound_stream))
+            .route("/messages/inbound", get(Self::get_inbound_messages))
+            .route("/messages/inbound/:id/ack", post(Self::acknowledge_message))
+            // Outbound message endpoints
+            .route("/messages/outbound/:id/status", get(Self::get_outbound_status))
             .with_state(api)
     }
 
-    // SSE endpoint for real-time deposits
-    async fn deposit_stream(
-        State(api): State<Arc<DepositApi>>,
+    // SSE endpoint for real-time inbound messages
+    async fn inbound_stream(
+        State(api): State<Arc<MessageApi>>,
     ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
         let receiver = api.sse_broadcaster.lock().await.subscribe();
 
         let stream = BroadcastStream::new(receiver).map(|msg| {
             match msg {
-                Ok(deposit) => {
-                    let data = serde_json::to_string(&deposit).unwrap_or_default();
+                Ok(message) => {
+                    let data = serde_json::to_string(&message).unwrap_or_default();
                     Ok(Event::default().data(data))
                 }
                 Err(_) => Ok(Event::default().comment("error")),
@@ -1502,38 +1665,54 @@ impl DepositApi {
     }
 
     // REST endpoint for polling/recovery
-    async fn get_deposits(
-        State(api): State<Arc<DepositApi>>,
-        Query(params): Query<GetDepositsParams>,
-    ) -> Json<GetDepositsResponse> {
-        let queue = api.deposit_queue.lock().await;
+    async fn get_inbound_messages(
+        State(api): State<Arc<MessageApi>>,
+        Query(params): Query<GetMessagesParams>,
+    ) -> Json<GetMessagesResponse> {
+        let queue = api.inbound_queue.lock().await;
 
         let after_id = params.after_id.unwrap_or(0);
         let limit = params.limit.unwrap_or(100).min(1000);
 
-        let deposits = queue.get_deposits_after(after_id, limit);
-        let has_more = deposits.len() >= limit;
-        let latest_id = deposits.last().map(|d| d.id).unwrap_or(after_id);
+        let messages = queue.get_messages_after(after_id, limit, params.message_type.as_deref());
+        let has_more = messages.len() >= limit;
+        let latest_id = messages.last().map(|m| m.id).unwrap_or(after_id);
 
-        Json(GetDepositsResponse {
-            deposits,
+        Json(GetMessagesResponse {
+            messages,
             has_more,
             latest_id,
         })
     }
 
     // Optional acknowledgment endpoint
-    async fn acknowledge_deposit(
-        State(api): State<Arc<DepositApi>>,
+    async fn acknowledge_message(
+        State(api): State<Arc<MessageApi>>,
         Path(id): Path<u64>,
         Json(body): Json<AckRequest>,
     ) -> Json<AckResponse> {
-        info!("Deposit {} acknowledged: processed={}, note={:?}",
+        info!("Message {} acknowledged: processed={}, note={:?}",
               id, body.processed, body.processing_note);
 
         Json(AckResponse {
             success: true,
-            deposit_id: id,
+            message_id: id,
+        })
+    }
+
+    // Get status of outbound message
+    async fn get_outbound_status(
+        State(api): State<Arc<MessageApi>>,
+        Path(id): Path<u64>,
+    ) -> Json<OutboundStatusResponse> {
+        let status = api.outbound_status.lock().await.get_status(id);
+
+        Json(OutboundStatusResponse {
+            id,
+            status: status.status,
+            tx_hash: status.tx_hash,
+            confirmations: status.confirmations,
+            error: status.error,
         })
     }
 }
@@ -1594,26 +1773,35 @@ impl SseBroadcaster {
 Add to the sequencer configuration file:
 
 ```yaml
-# Deposit monitoring configuration
-deposits:
-  # Blockchain monitoring
-  chain:
+# Message passing configuration
+messages:
+  # Inbound messages from blockchain
+  inbound:
     enabled: true
     rpc_url: "wss://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
     bridge_contract: "0x..."  # Bridge contract address
     confirmation_blocks: 12    # Wait for 12 confirmations
     poll_interval_secs: 12     # Check every 12 seconds (1 block)
 
+  # Outbound messages from application
+  outbound:
+    enabled: true
+    monitor_tables:            # Tables to monitor for outbound messages
+      - "outbound_messages"
+      - "outbound_withdrawals"
+      - "outbound_calls"
+    batch_interval_ms: 1000    # Batch messages for 1 second before publishing
+
   # HTTP API for applications
   api:
     enabled: true
     host: "127.0.0.1"         # localhost only (same machine)
-    port: 8432                # Deposit API port
+    port: 8432                # Message API port
 
   # Queue management
   queue:
-    max_size: 10000           # Maximum deposits in queue
-    retention_hours: 24       # Keep deposits for 24 hours
+    max_size: 10000           # Maximum messages in queue
+    retention_hours: 24       # Keep messages for 24 hours
 
   # Monitoring
   monitoring:
