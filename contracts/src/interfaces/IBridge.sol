@@ -51,7 +51,7 @@ interface IBridge {
 
     /**
      * @notice Execute PreExecution modules for validation
-     * @dev Runs modules from current checkpoint. Any module can reject the message.
+     * @dev Runs pre execution modules.
      * @param messageId The message to validate
      */
     function executePreModules(bytes32 messageId) external;
@@ -65,7 +65,7 @@ interface IBridge {
 
     /**
      * @notice Execute PostExecution modules for post-processing
-     * @dev Runs modules from current checkpoint. Module failures do not block completion.
+     * @dev Runs post execution modules
      * @param messageId The message to process
      */
     function executePostModules(bytes32 messageId) external;
