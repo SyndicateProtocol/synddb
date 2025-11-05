@@ -1230,12 +1230,24 @@ Optionally acknowledge that a deposit has been processed. This is for monitoring
 
 ```rust
 // src/deposits/chain_monitor.rs
-use ethers::prelude::*;
+use alloy::{
+    primitives::{Address, U256, B256},
+    providers::{Provider, ProviderBuilder, WsConnect},
+    rpc::types::{Filter, Log},
+    sol,
+    sol_types::SolEvent,
+};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use chrono::Utc;
+
+// Define the Deposit event using alloy's sol! macro
+sol! {
+    event Deposit(address indexed from, uint256 amount, address indexed token);
+}
 
 pub struct ChainMonitor {
-    provider: Arc<Provider<Ws>>,
+    provider: Arc<dyn Provider>,
     bridge_contract: Address,
     deposit_queue: Arc<Mutex<DepositQueue>>,
     confirmation_blocks: u64,
@@ -1248,7 +1260,12 @@ impl ChainMonitor {
         deposit_queue: Arc<Mutex<DepositQueue>>,
         confirmation_blocks: u64,
     ) -> Result<Self> {
-        let provider = Provider::<Ws>::connect(rpc_url).await?;
+        // Connect to WebSocket provider
+        let ws = WsConnect::new(rpc_url);
+        let provider = ProviderBuilder::new()
+            .on_ws(ws)
+            .await?;
+
         let bridge_contract = bridge_address.parse::<Address>()?;
 
         Ok(Self {
@@ -1260,35 +1277,14 @@ impl ChainMonitor {
     }
 
     pub async fn start_monitoring(self) -> Result<()> {
-        // Define the Deposit event ABI
-        let deposit_event = Event {
-            name: "Deposit".to_string(),
-            inputs: vec![
-                EventParam {
-                    name: "from".to_string(),
-                    kind: ParamType::Address,
-                    indexed: true,
-                },
-                EventParam {
-                    name: "amount".to_string(),
-                    kind: ParamType::Uint(256),
-                    indexed: false,
-                },
-                EventParam {
-                    name: "token".to_string(),
-                    kind: ParamType::Address,
-                    indexed: true,
-                },
-            ],
-            anonymous: false,
-        };
-
-        // Subscribe to Deposit events
+        // Create filter for Deposit events
         let filter = Filter::new()
             .address(self.bridge_contract)
-            .event(&deposit_event);
+            .event_signature(Deposit::SIGNATURE_HASH);
 
-        let mut stream = self.provider.subscribe_logs(&filter).await?;
+        // Subscribe to logs
+        let subscription = self.provider.subscribe_logs(&filter).await?;
+        let mut stream = subscription.into_stream();
 
         // Process events as they arrive
         while let Some(log) = stream.next().await {
@@ -1304,7 +1300,8 @@ impl ChainMonitor {
     async fn process_deposit_event(&self, log: Log) -> Result<()> {
         // Wait for confirmations
         let current_block = self.provider.get_block_number().await?;
-        let confirmations = current_block.saturating_sub(log.block_number.unwrap_or_default());
+        let log_block = log.block_number.unwrap_or_default();
+        let confirmations = current_block.saturating_sub(log_block);
 
         if confirmations < self.confirmation_blocks {
             // Not enough confirmations yet, re-queue for later
@@ -1312,31 +1309,57 @@ impl ChainMonitor {
             return self.process_deposit_event(log).await;
         }
 
-        // Parse deposit data from log
+        // Decode the Deposit event
+        let deposit_event = log.log_decode::<Deposit>()?.inner;
+
+        // Get token symbol
+        let token_symbol = self.get_token_symbol(deposit_event.token).await?;
+
+        // Create deposit record
         let deposit = Deposit {
             id: self.deposit_queue.lock().await.next_id(),
-            from: format!("0x{:x}", log.topics[1]),  // First indexed param
-            amount: U256::from_big_endian(&log.data[0..32]).to_string(),
-            token: self.get_token_symbol(log.topics[2]).await?,
-            tx_hash: format!("0x{:x}", log.transaction_hash.unwrap_or_default()),
-            block_number: log.block_number.unwrap_or_default().as_u64(),
-            confirmations: confirmations.as_u64(),
+            from: format!("{:?}", deposit_event.from),
+            amount: deposit_event.amount.to_string(),
+            token: token_symbol,
+            tx_hash: format!("{:?}", log.transaction_hash.unwrap_or_default()),
+            block_number: log_block,
+            confirmations,
             timestamp: Utc::now(),
         };
 
         // Add to queue
         self.deposit_queue.lock().await.add_deposit(deposit)?;
 
+        info!("Processed deposit: {} {} from {} (tx: {})",
+              deposit.amount, deposit.token, deposit.from, deposit.tx_hash);
+
         Ok(())
     }
 
-    async fn get_token_symbol(&self, token_address: H256) -> Result<String> {
-        // In production, query token contract for symbol
-        // For now, use a simple mapping
-        match format!("{:x}", token_address).as_str() {
-            "a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" => Ok("USDC".to_string()),
-            "dac17f958d2ee523a2206206994597c13d831ec7" => Ok("USDT".to_string()),
-            _ => Ok("UNKNOWN".to_string()),
+    async fn get_token_symbol(&self, token_address: Address) -> Result<String> {
+        // Production version: Query ERC20 contract for symbol
+        // Using alloy's sol! macro to define the interface
+        sol! {
+            #[sol(rpc)]
+            interface IERC20 {
+                function symbol() external view returns (string);
+                function decimals() external view returns (uint8);
+            }
+        }
+
+        // Try to query the token contract
+        match IERC20::new(token_address, &self.provider).symbol().await {
+            Ok(symbol) => Ok(symbol),
+            Err(_) => {
+                // Fallback to known token mapping
+                let addr_str = format!("{:?}", token_address).to_lowercase();
+                match addr_str.as_str() {
+                    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" => Ok("USDC".to_string()),
+                    "0xdac17f958d2ee523a2206206994597c13d831ec7" => Ok("USDT".to_string()),
+                    "0x6b175474e89094c44da98b954eedeac495271d0f" => Ok("DAI".to_string()),
+                    _ => Ok("UNKNOWN".to_string()),
+                }
+            }
         }
     }
 }
