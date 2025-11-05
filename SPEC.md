@@ -69,11 +69,13 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - All state changes must be persisted to SQLite
 
 2. **Sequencer** (runs as a sidecar process)
+   - Read-only access to SQLite database (application is the only writer)
    - Attaches to the SQLite database via Session Extension (official SQLite API for capturing logical changes deterministically)
    - Captures SQL operations as changesets (INSERT/UPDATE/DELETE with values)
    - Creates periodic snapshots for recovery points
    - Batches and publishes changesets with snapshots to DA layers
    - Publishes to DA layers (Celestia, EigenDA) and storage layers (IPFS, Arweave)
+   - Monitors blockchain for inbound messages and delivers them to application
    - Zero application code changes required
 
 3. **Read Replicas**
@@ -91,9 +93,9 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
 
 5. **Bridge (Message Passing)**
    - Smart contract for processing cross-chain messages
-   - Monitors message tables with schemas tied to contract ABI
+   - Sequencer monitors message tables with schemas tied to contract ABI
    - Processes outbound messages (withdrawals, cross-chain calls)
-   - Receives inbound messages (deposits, cross-chain responses)
+   - Delivers inbound messages to application (deposits, cross-chain responses)
 
 ### Data Flow
 
@@ -247,7 +249,7 @@ function processMessage(
     bytes[] validatorSignatures
 )
 
-// Receives inbound messages and triggers sequencer to update inbound_messages table
+// Receives inbound messages and sequencer delivers them to application
 function sendMessage(
     string calldata targetAccountId,
     bytes calldata messageData
