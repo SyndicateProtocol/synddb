@@ -12,6 +12,9 @@ The synddb-sequencer is a zero-configuration Rust process that attaches to any S
 ┌──────────────────────────────────────────────────────────────┐
 │                  Application (Any Language)                  │
 │         Python/JS/Go/Rust/Java → SQLite API → app.db        │
+│                              ↑                               │
+│                    HTTP localhost:8432                       │
+│                    (Deposit Events)                          │
 └──────────────────────────────────────────────────────────────┘
                                 │
                     Database Transactions (via Session Extension)
@@ -32,6 +35,21 @@ The synddb-sequencer is a zero-configuration Rust process that attaches to any S
 │ │  │Celestia │ │EigenDA  │ │ IPFS │ │ Arweave │  │        │
 │ │  └─────────┘ └─────────┘ └──────┘ └─────────┘  │        │
 │ └──────────────────────────────────────────────────┘        │
+│                                                              │
+│ ┌──────────────────────────────────────────────────┐        │
+│ │            Deposit Monitor                        │        │
+│ │  ┌────────────────┐    ┌────────────────────┐   │        │
+│ │  │ Chain Monitor  │───▶│  Deposit HTTP API  │   │        │
+│ │  │ (Bridge Events)│    │  localhost:8432    │   │        │
+│ │  └────────────────┘    └────────────────────┘   │        │
+│ └──────────────────────────────────────────────────┘        │
+└──────────────────────────────────────────────────────────────┘
+                                ↑
+                          Event Monitoring
+                                │
+┌──────────────────────────────────────────────────────────────┐
+│                    Blockchain (L1/L2)                        │
+│                 Bridge Contract (Deposits)                   │
 └──────────────────────────────────────────────────────────────┘
 
 Key Benefits:
@@ -65,6 +83,10 @@ arweave-rs = "0.1"  # Arweave client
 tokio = { version = "1.35", features = ["full"] }
 hyper = { version = "1.0", features = ["full"] }
 tower = "0.4"  # Middleware stack for retries/timeouts
+axum = { version = "0.7", features = ["sse"] }  # HTTP server with SSE support
+
+# Blockchain monitoring for deposits
+ethers = "2.0"  # Ethereum client for monitoring bridge events
 
 # GCP Confidential Space and Ethereum signing
 gcp-auth = "0.10"  # GCP authentication
@@ -122,6 +144,11 @@ synddb-sequencer/
 │   │   ├── arweave.rs             # Arweave publisher
 │   │   ├── retry.rs               # Retry logic
 │   │   └── manifest.rs            # Track published batches (sequence, DA location, hash)
+│   ├── deposits/
+│   │   ├── mod.rs                 # Deposit handling module
+│   │   ├── chain_monitor.rs       # Blockchain event monitoring
+│   │   ├── queue.rs               # Deposit queue management
+│   │   └── api.rs                 # HTTP API for applications
 │   ├── tee/
 │   │   ├── mod.rs                 # GCP Confidential Space TEE
 │   │   └── attestation.rs         # Fetch attestation tokens from metadata service
@@ -1035,6 +1062,677 @@ impl DaPublisher for IpfsPublisher {
     }
 }
 ```
+
+## Deposit Handling - Blockchain to Application Bridge
+
+The sequencer monitors blockchain events and provides a simple HTTP API for applications to receive deposit notifications. Since the sequencer and application run as separate containers on the same physical machine, we use a localhost HTTP interface for maximum developer simplicity.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         Blockchain (L1/L2)                       │
+│                    Bridge Contract (Deposits)                    │
+└──────────────────────────────────────────────────────────────────┘
+                                 │
+                          Event Monitoring
+                                 ↓
+┌──────────────────────────────────────────────────────────────────┐
+│                      synddb-sequencer Container                  │
+│                                                                   │
+│  ┌────────────────────┐    ┌─────────────────────────┐         │
+│  │  Chain Monitor     │───▶│   Deposit Queue         │         │
+│  │  - Watch events    │    │   - Buffer deposits     │         │
+│  │  - Handle reorgs   │    │   - Track confirmations │         │
+│  └────────────────────┘    └─────────────────────────┘         │
+│                                         │                        │
+│                                         ▼                        │
+│                            ┌─────────────────────────┐          │
+│                            │   Deposit HTTP API      │          │
+│                            │   localhost:8432        │          │
+│                            └─────────────────────────┘          │
+└──────────────────────────────────────────────────────────────────┘
+                                         │
+                               localhost HTTP
+                                         ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                      Application Container                       │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────┐     │
+│  │  Simple Integration:                                    │     │
+│  │  - EventSource for real-time: /deposits/stream         │     │
+│  │  - REST polling fallback: GET /deposits?after_id=123   │     │
+│  │  - No blockchain libraries needed                      │     │
+│  └────────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Deposit API Specification
+
+The sequencer exposes a simple HTTP server on localhost port 8432 that provides deposit information to the application. This API is designed to be as simple as possible for developers familiar with REST and Server-Sent Events (SSE).
+
+#### 1. Real-time Deposit Stream (SSE)
+
+**Endpoint:** `GET http://localhost:8432/deposits/stream`
+
+Returns a Server-Sent Events stream of new deposits as they are confirmed on-chain.
+
+**Example Response (SSE format):**
+```
+data: {"id":1,"from":"0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb3","amount":"1000000","token":"USDC","txHash":"0xabc...","blockNumber":19234567,"confirmations":12,"timestamp":"2024-01-15T10:30:00Z"}
+
+data: {"id":2,"from":"0x5aAeb6053f3E94C9b9A09f33669435E7Ef1BeAed","amount":"500000","token":"USDC","txHash":"0xdef...","blockNumber":19234568,"confirmations":12,"timestamp":"2024-01-15T10:31:00Z"}
+```
+
+**Client Example (JavaScript):**
+```javascript
+const events = new EventSource('http://localhost:8432/deposits/stream');
+
+events.onmessage = (event) => {
+  const deposit = JSON.parse(event.data);
+  console.log(`New deposit: ${deposit.amount} ${deposit.token} from ${deposit.from}`);
+
+  // Process deposit in application
+  await processDeposit(deposit);
+};
+
+events.onerror = (error) => {
+  console.error('SSE connection error:', error);
+  // EventSource will auto-reconnect
+};
+```
+
+#### 2. Deposit Queue (REST Polling)
+
+**Endpoint:** `GET http://localhost:8432/deposits?after_id={last_processed_id}`
+
+Returns all deposits after the specified ID. Used for polling or recovery after disconnection.
+
+**Query Parameters:**
+- `after_id` (optional): Return only deposits with ID greater than this value
+- `limit` (optional): Maximum number of deposits to return (default: 100, max: 1000)
+
+**Example Response:**
+```json
+{
+  "deposits": [
+    {
+      "id": 124,
+      "from": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb3",
+      "amount": "1000000",
+      "token": "USDC",
+      "txHash": "0xabc123...",
+      "blockNumber": 19234567,
+      "confirmations": 12,
+      "timestamp": "2024-01-15T10:30:00Z"
+    },
+    {
+      "id": 125,
+      "from": "0x5aAeb6053f3E94C9b9A09f33669435E7Ef1BeAed",
+      "amount": "500000",
+      "token": "USDC",
+      "txHash": "0xdef456...",
+      "blockNumber": 19234568,
+      "confirmations": 12,
+      "timestamp": "2024-01-15T10:31:00Z"
+    }
+  ],
+  "hasMore": false,
+  "latestId": 125
+}
+```
+
+**Client Example (Python):**
+```python
+import requests
+import time
+
+last_id = 0
+
+while True:
+    response = requests.get(f'http://localhost:8432/deposits?after_id={last_id}')
+    data = response.json()
+
+    for deposit in data['deposits']:
+        process_deposit(deposit)
+        last_id = deposit['id']
+
+    time.sleep(5)  # Poll every 5 seconds
+```
+
+#### 3. Acknowledge Deposit (Optional)
+
+**Endpoint:** `POST http://localhost:8432/deposits/{id}/ack`
+
+Optionally acknowledge that a deposit has been processed. This is for monitoring/debugging purposes only and doesn't affect deposit delivery.
+
+**Request Body:**
+```json
+{
+  "processed": true,
+  "processingNote": "Credited to user account"  // Optional
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "deposit_id": 124
+}
+```
+
+### Implementation
+
+#### Chain Monitor Component
+
+```rust
+// src/deposits/chain_monitor.rs
+use ethers::prelude::*;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct ChainMonitor {
+    provider: Arc<Provider<Ws>>,
+    bridge_contract: Address,
+    deposit_queue: Arc<Mutex<DepositQueue>>,
+    confirmation_blocks: u64,
+}
+
+impl ChainMonitor {
+    pub async fn new(
+        rpc_url: &str,
+        bridge_address: &str,
+        deposit_queue: Arc<Mutex<DepositQueue>>,
+        confirmation_blocks: u64,
+    ) -> Result<Self> {
+        let provider = Provider::<Ws>::connect(rpc_url).await?;
+        let bridge_contract = bridge_address.parse::<Address>()?;
+
+        Ok(Self {
+            provider: Arc::new(provider),
+            bridge_contract,
+            deposit_queue,
+            confirmation_blocks,
+        })
+    }
+
+    pub async fn start_monitoring(self) -> Result<()> {
+        // Define the Deposit event ABI
+        let deposit_event = Event {
+            name: "Deposit".to_string(),
+            inputs: vec![
+                EventParam {
+                    name: "from".to_string(),
+                    kind: ParamType::Address,
+                    indexed: true,
+                },
+                EventParam {
+                    name: "amount".to_string(),
+                    kind: ParamType::Uint(256),
+                    indexed: false,
+                },
+                EventParam {
+                    name: "token".to_string(),
+                    kind: ParamType::Address,
+                    indexed: true,
+                },
+            ],
+            anonymous: false,
+        };
+
+        // Subscribe to Deposit events
+        let filter = Filter::new()
+            .address(self.bridge_contract)
+            .event(&deposit_event);
+
+        let mut stream = self.provider.subscribe_logs(&filter).await?;
+
+        // Process events as they arrive
+        while let Some(log) = stream.next().await {
+            match self.process_deposit_event(log).await {
+                Ok(_) => {},
+                Err(e) => error!("Failed to process deposit: {}", e),
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn process_deposit_event(&self, log: Log) -> Result<()> {
+        // Wait for confirmations
+        let current_block = self.provider.get_block_number().await?;
+        let confirmations = current_block.saturating_sub(log.block_number.unwrap_or_default());
+
+        if confirmations < self.confirmation_blocks {
+            // Not enough confirmations yet, re-queue for later
+            tokio::time::sleep(Duration::from_secs(12)).await;
+            return self.process_deposit_event(log).await;
+        }
+
+        // Parse deposit data from log
+        let deposit = Deposit {
+            id: self.deposit_queue.lock().await.next_id(),
+            from: format!("0x{:x}", log.topics[1]),  // First indexed param
+            amount: U256::from_big_endian(&log.data[0..32]).to_string(),
+            token: self.get_token_symbol(log.topics[2]).await?,
+            tx_hash: format!("0x{:x}", log.transaction_hash.unwrap_or_default()),
+            block_number: log.block_number.unwrap_or_default().as_u64(),
+            confirmations: confirmations.as_u64(),
+            timestamp: Utc::now(),
+        };
+
+        // Add to queue
+        self.deposit_queue.lock().await.add_deposit(deposit)?;
+
+        Ok(())
+    }
+
+    async fn get_token_symbol(&self, token_address: H256) -> Result<String> {
+        // In production, query token contract for symbol
+        // For now, use a simple mapping
+        match format!("{:x}", token_address).as_str() {
+            "a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" => Ok("USDC".to_string()),
+            "dac17f958d2ee523a2206206994597c13d831ec7" => Ok("USDT".to_string()),
+            _ => Ok("UNKNOWN".to_string()),
+        }
+    }
+}
+```
+
+#### Deposit Queue
+
+```rust
+// src/deposits/queue.rs
+use std::collections::VecDeque;
+use chrono::{DateTime, Utc};
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Deposit {
+    pub id: u64,
+    pub from: String,
+    pub amount: String,
+    pub token: String,
+    pub tx_hash: String,
+    pub block_number: u64,
+    pub confirmations: u64,
+    pub timestamp: DateTime<Utc>,
+}
+
+pub struct DepositQueue {
+    deposits: VecDeque<Deposit>,
+    next_id: AtomicU64,
+    max_queue_size: usize,
+    retention_period: Duration,
+}
+
+impl DepositQueue {
+    pub fn new(max_queue_size: usize, retention_period: Duration) -> Self {
+        Self {
+            deposits: VecDeque::new(),
+            next_id: AtomicU64::new(1),
+            max_queue_size,
+            retention_period,
+        }
+    }
+
+    pub fn add_deposit(&mut self, mut deposit: Deposit) -> Result<()> {
+        deposit.id = self.next_id.fetch_add(1, Ordering::SeqCst);
+
+        // Remove old deposits beyond retention period
+        let cutoff = Utc::now() - self.retention_period;
+        self.deposits.retain(|d| d.timestamp > cutoff);
+
+        // Ensure queue doesn't grow unbounded
+        if self.deposits.len() >= self.max_queue_size {
+            self.deposits.pop_front();
+        }
+
+        self.deposits.push_back(deposit.clone());
+
+        info!("New deposit queued: {} {} from {} (id: {})",
+              deposit.amount, deposit.token, deposit.from, deposit.id);
+
+        Ok(())
+    }
+
+    pub fn get_deposits_after(&self, after_id: u64, limit: usize) -> Vec<Deposit> {
+        self.deposits
+            .iter()
+            .filter(|d| d.id > after_id)
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_latest_deposits(&self, count: usize) -> Vec<Deposit> {
+        self.deposits
+            .iter()
+            .rev()
+            .take(count)
+            .rev()
+            .cloned()
+            .collect()
+    }
+
+    pub fn next_id(&self) -> u64 {
+        self.next_id.load(Ordering::SeqCst)
+    }
+}
+```
+
+#### HTTP API Server
+
+```rust
+// src/deposits/api.rs
+use axum::{
+    extract::{Query, Path, State},
+    response::sse::{Event, Sse},
+    Json, Router,
+};
+use tokio_stream::StreamExt;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct DepositApi {
+    deposit_queue: Arc<Mutex<DepositQueue>>,
+    sse_broadcaster: Arc<Mutex<SseBroadcaster>>,
+}
+
+impl DepositApi {
+    pub fn router(deposit_queue: Arc<Mutex<DepositQueue>>) -> Router {
+        let sse_broadcaster = Arc::new(Mutex::new(SseBroadcaster::new()));
+
+        let api = Arc::new(Self {
+            deposit_queue: deposit_queue.clone(),
+            sse_broadcaster: sse_broadcaster.clone(),
+        });
+
+        Router::new()
+            .route("/deposits/stream", get(Self::deposit_stream))
+            .route("/deposits", get(Self::get_deposits))
+            .route("/deposits/:id/ack", post(Self::acknowledge_deposit))
+            .with_state(api)
+    }
+
+    // SSE endpoint for real-time deposits
+    async fn deposit_stream(
+        State(api): State<Arc<DepositApi>>,
+    ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+        let receiver = api.sse_broadcaster.lock().await.subscribe();
+
+        let stream = BroadcastStream::new(receiver).map(|msg| {
+            match msg {
+                Ok(deposit) => {
+                    let data = serde_json::to_string(&deposit).unwrap_or_default();
+                    Ok(Event::default().data(data))
+                }
+                Err(_) => Ok(Event::default().comment("error")),
+            }
+        });
+
+        Sse::new(stream)
+            .keep_alive(Duration::from_secs(30))
+    }
+
+    // REST endpoint for polling/recovery
+    async fn get_deposits(
+        State(api): State<Arc<DepositApi>>,
+        Query(params): Query<GetDepositsParams>,
+    ) -> Json<GetDepositsResponse> {
+        let queue = api.deposit_queue.lock().await;
+
+        let after_id = params.after_id.unwrap_or(0);
+        let limit = params.limit.unwrap_or(100).min(1000);
+
+        let deposits = queue.get_deposits_after(after_id, limit);
+        let has_more = deposits.len() >= limit;
+        let latest_id = deposits.last().map(|d| d.id).unwrap_or(after_id);
+
+        Json(GetDepositsResponse {
+            deposits,
+            has_more,
+            latest_id,
+        })
+    }
+
+    // Optional acknowledgment endpoint
+    async fn acknowledge_deposit(
+        State(api): State<Arc<DepositApi>>,
+        Path(id): Path<u64>,
+        Json(body): Json<AckRequest>,
+    ) -> Json<AckResponse> {
+        info!("Deposit {} acknowledged: processed={}, note={:?}",
+              id, body.processed, body.processing_note);
+
+        Json(AckResponse {
+            success: true,
+            deposit_id: id,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct GetDepositsParams {
+    after_id: Option<u64>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct GetDepositsResponse {
+    deposits: Vec<Deposit>,
+    has_more: bool,
+    latest_id: u64,
+}
+
+#[derive(Deserialize)]
+struct AckRequest {
+    processed: bool,
+    processing_note: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AckResponse {
+    success: bool,
+    deposit_id: u64,
+}
+
+// SSE broadcaster for pushing deposits to all connected clients
+struct SseBroadcaster {
+    clients: Vec<tokio::sync::broadcast::Sender<Deposit>>,
+}
+
+impl SseBroadcaster {
+    fn new() -> Self {
+        Self {
+            clients: Vec::new(),
+        }
+    }
+
+    fn subscribe(&mut self) -> tokio::sync::broadcast::Receiver<Deposit> {
+        let (tx, rx) = tokio::sync::broadcast::channel(100);
+        self.clients.push(tx);
+        rx
+    }
+
+    async fn broadcast(&self, deposit: Deposit) {
+        for client in &self.clients {
+            let _ = client.send(deposit.clone());
+        }
+    }
+}
+```
+
+### Configuration
+
+Add to the sequencer configuration file:
+
+```yaml
+# Deposit monitoring configuration
+deposits:
+  # Blockchain monitoring
+  chain:
+    enabled: true
+    rpc_url: "wss://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+    bridge_contract: "0x..."  # Bridge contract address
+    confirmation_blocks: 12    # Wait for 12 confirmations
+    poll_interval_secs: 12     # Check every 12 seconds (1 block)
+
+  # HTTP API for applications
+  api:
+    enabled: true
+    host: "127.0.0.1"         # localhost only (same machine)
+    port: 8432                # Deposit API port
+
+  # Queue management
+  queue:
+    max_size: 10000           # Maximum deposits in queue
+    retention_hours: 24       # Keep deposits for 24 hours
+
+  # Monitoring
+  monitoring:
+    log_level: "info"
+    metrics: true
+```
+
+### Integration Examples
+
+#### Node.js Application
+
+```javascript
+// Simple deposit handler for Node.js applications
+class DepositHandler {
+  constructor() {
+    this.lastProcessedId = this.loadLastProcessedId();
+    this.eventSource = null;
+  }
+
+  async start() {
+    // Try SSE first for real-time updates
+    this.connectSSE();
+
+    // Also poll periodically as backup
+    setInterval(() => this.pollDeposits(), 30000);
+  }
+
+  connectSSE() {
+    this.eventSource = new EventSource('http://localhost:8432/deposits/stream');
+
+    this.eventSource.onmessage = async (event) => {
+      const deposit = JSON.parse(event.data);
+      await this.processDeposit(deposit);
+    };
+
+    this.eventSource.onerror = (error) => {
+      console.error('SSE error, will reconnect:', error);
+      // EventSource auto-reconnects
+    };
+  }
+
+  async pollDeposits() {
+    try {
+      const response = await fetch(
+        `http://localhost:8432/deposits?after_id=${this.lastProcessedId}`
+      );
+      const data = await response.json();
+
+      for (const deposit of data.deposits) {
+        await this.processDeposit(deposit);
+      }
+    } catch (error) {
+      console.error('Polling error:', error);
+    }
+  }
+
+  async processDeposit(deposit) {
+    console.log(`Processing deposit ${deposit.id}: ${deposit.amount} ${deposit.token}`);
+
+    // Update user balance in database
+    await db.query(
+      'UPDATE user_balances SET amount = amount + ? WHERE address = ? AND token = ?',
+      [deposit.amount, deposit.from, deposit.token]
+    );
+
+    this.lastProcessedId = deposit.id;
+    this.saveLastProcessedId(deposit.id);
+
+    // Optional: acknowledge processing
+    await fetch(`http://localhost:8432/deposits/${deposit.id}/ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ processed: true })
+    });
+  }
+}
+```
+
+#### Python Application
+
+```python
+import asyncio
+import aiohttp
+import json
+from aiohttp_sse_client import client as sse_client
+
+class DepositHandler:
+    def __init__(self):
+        self.base_url = "http://localhost:8432"
+        self.last_processed_id = self.load_last_processed_id()
+
+    async def start(self):
+        # Start both SSE and polling concurrently
+        await asyncio.gather(
+            self.listen_sse(),
+            self.poll_periodically()
+        )
+
+    async def listen_sse(self):
+        async with sse_client.EventSource(
+            f'{self.base_url}/deposits/stream'
+        ) as event_source:
+            async for event in event_source:
+                if event.data:
+                    deposit = json.loads(event.data)
+                    await self.process_deposit(deposit)
+
+    async def poll_periodically(self):
+        while True:
+            await asyncio.sleep(30)  # Poll every 30 seconds
+            await self.poll_deposits()
+
+    async def poll_deposits(self):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f'{self.base_url}/deposits',
+                params={'after_id': self.last_processed_id}
+            ) as response:
+                data = await response.json()
+                for deposit in data['deposits']:
+                    await self.process_deposit(deposit)
+
+    async def process_deposit(self, deposit):
+        print(f"Processing deposit {deposit['id']}: "
+              f"{deposit['amount']} {deposit['token']} from {deposit['from']}")
+
+        # Update application state
+        # ...
+
+        self.last_processed_id = deposit['id']
+        self.save_last_processed_id(deposit['id'])
+```
+
+### Benefits of This Architecture
+
+1. **Simple for Developers**: Just HTTP/REST and SSE - technologies every developer knows
+2. **No Blockchain Complexity**: Applications don't need web3 libraries or blockchain knowledge
+3. **Reliable**: Dual mechanism (SSE + polling) ensures no deposits are missed
+4. **Fast**: localhost communication has microsecond latency
+5. **Testable**: Easy to mock HTTP endpoints for testing
+6. **Language Agnostic**: Works with any programming language that has HTTP support
+7. **Monitoring Friendly**: Clear HTTP endpoints make debugging and monitoring straightforward
+
+The sequencer handles all blockchain complexity (reorgs, confirmations, event parsing) and presents a clean, simple interface that any application developer can integrate with minimal effort.
 
 ## Configuration
 
