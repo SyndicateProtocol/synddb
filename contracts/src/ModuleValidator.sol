@@ -20,6 +20,8 @@ abstract contract ModuleValidator is Ownable {
     error InvalidModuleAddress();
     error ModuleAlreadyExists();
     error ModuleDoesNotExist();
+    error InvalidPreExecutionStage(IBridge.ProcessingStage stage);
+    error InvalidPostExecutionStage(IBridge.ProcessingStage stage);
     error ModuleCheckFailed(address module, IBridge.ProcessingStage stage);
 
     constructor() Ownable(msg.sender) {}
@@ -59,23 +61,38 @@ abstract contract ModuleValidator is Ownable {
     function _validateModules(
         EnumerableSet.AddressSet storage modules,
         IBridge.ProcessingStage stage,
-        bytes calldata payload
+        bytes calldata payload,
+        IBridge.ValidatorSignatures calldata executionSigs
     ) internal returns (bool) {
         uint256 length = modules.length();
         for (uint256 i = 0; i < length; i++) {
             address moduleAddress = modules.at(i);
-            if (!IModuleValidator(moduleAddress).validate(stage, payload)) {
+            if (!IModuleValidator(moduleAddress).validate(stage, payload, executionSigs)) {
                 revert ModuleCheckFailed(moduleAddress, stage);
             }
         }
         return true;
     }
 
-    function _validatePreModules(bytes calldata payload) internal returns (bool) {
-        return _validateModules(preModules, IBridge.ProcessingStage.PreExecution, payload);
+    function _validatePreModules(
+        IBridge.ProcessingStage stage,
+        bytes calldata payload,
+        IBridge.ValidatorSignatures calldata executionSigs
+    ) internal returns (bool) {
+        if (stage != IBridge.ProcessingStage.PreExecution) {
+            revert InvalidPreExecutionStage(stage);
+        }
+        return _validateModules(preModules, stage, payload, executionSigs);
     }
 
-    function _validatePostModules(bytes calldata payload) internal returns (bool) {
-        return _validateModules(postModules, IBridge.ProcessingStage.PostExecution, payload);
+    function _validatePostModules(
+        IBridge.ProcessingStage stage,
+        bytes calldata payload,
+        IBridge.ValidatorSignatures calldata executionSigs
+    ) internal returns (bool) {
+        if (stage != IBridge.ProcessingStage.PostExecution) {
+            revert InvalidPostExecutionStage(stage);
+        }
+        return _validateModules(postModules, stage, payload, executionSigs);
     }
 }

@@ -4,5 +4,5 @@ pragma solidity 0.8.30;
 import {IBridge} from "./IBridge.sol";
 
 interface IModuleValidator {
-    function validate(IBridge.ProcessingStage stage, bytes calldata payload) external returns (bool);
+    function validate(IBridge.ProcessingStage stage, bytes calldata payload, IBridge.ValidatorSignatures calldata executionSigs) external returns (bool);
 }
