@@ -14,7 +14,11 @@ contract ERC20SupplyValidator is IModuleValidator {
         MAX_SUPPLY = _maxSupply;
     }
 
-    function validate(IBridge.ProcessingStage, bytes calldata) external view returns (bool) {
+    function validate(IBridge.ProcessingStage, bytes calldata, IBridge.ValidatorSignatures calldata)
+        external
+        view
+        returns (bool)
+    {
         uint256 currentSupply = TOKEN.totalSupply();
         return currentSupply <= MAX_SUPPLY;
     }
