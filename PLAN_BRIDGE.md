@@ -15,6 +15,8 @@ This bridge architecture draws inspiration from proven modular smart contract sy
 
 - **[Safe Guards](https://docs.safe.global/advanced/smart-account-guards)**: Pre and post-execution hooks for smart account transactions
 - **[Zodiac Modules](https://github.com/gnosisguild/zodiac)**: Modular access control patterns
+- **[Hyperlane ISMs](https://docs.hyperlane.xyz/docs/protocol/ISM/modular-security)**: Composable module logic with AND/OR patterns, message-type-specific routing
+- **[LayerZero DVNs](https://docs.layerzero.network/v2/home/protocol/dvn)**: Flexible verification thresholds and configurable security stacks
 
 ### Design Principles
 
@@ -23,6 +25,14 @@ This bridge architecture draws inspiration from proven modular smart contract sy
 - **Validator consensus**: Threshold signatures from validators
 - **Composable validation**: Modules can be stacked for complex logic and validation
 - **Immutable core**: Bridge logic is fixed, modules are upgradeable
+
+### Modular Architecture
+
+The modular architecture enables advanced validation patterns:
+
+- **Flexible thresholds**: Per-module validation requirements (e.g., "2 of 3 signature validators OR 1 trusted module")
+- **Message-type routing**: Different validation rules for WITHDRAW vs DEPOSIT messages (DEPOSIT with zero value indicates a generic call)
+- **Default module sets**: Sensible default modules with optional custom overrides
 
 ## Architecture
 
