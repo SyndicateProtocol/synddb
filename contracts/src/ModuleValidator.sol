@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.30;
+
+import {IModuleValidator} from "./interfaces/IModuleValidator.sol";
+import {IBridge} from "./interfaces/IBridge.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+
+abstract contract ModuleValidator is Ownable {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
+    EnumerableSet.AddressSet private preModules;
+    EnumerableSet.AddressSet private postModules;
+
+    event PreModuleAdded(address indexed module);
+    event PostModuleAdded(address indexed module);
+    event PreModuleRemoved(address indexed module);
+    event PostModuleRemoved(address indexed module);
+
+    error InvalidModuleAddress();
+    error ModuleAlreadyExists();
+    error ModuleDoesNotExist();
+    error ModuleCheckFailed(address module, IBridge.ProcessingStage stage);
+
+    constructor() Ownable(msg.sender) {}
+
+    function addPreModule(address module) external onlyOwner {
+        if (module == address(0)) revert InvalidModuleAddress();
+        if (!preModules.add(module)) revert ModuleAlreadyExists();
+        emit PreModuleAdded(module);
+    }
+
+    function addPostModule(address module) external onlyOwner {
+        if (module == address(0)) revert InvalidModuleAddress();
+        if (!postModules.add(module)) revert ModuleAlreadyExists();
+        emit PostModuleAdded(module);
+    }
+
+    function removePreModule(address module) external onlyOwner {
+        if (module == address(0)) revert InvalidModuleAddress();
+        if (!preModules.remove(module)) revert ModuleDoesNotExist();
+        emit PreModuleRemoved(module);
+    }
+
+    function removePostModule(address module) external onlyOwner {
+        if (module == address(0)) revert InvalidModuleAddress();
+        if (!postModules.remove(module)) revert ModuleDoesNotExist();
+        emit PostModuleRemoved(module);
+    }
+
+    function getPreModules() external view returns (address[] memory) {
+        return preModules.values();
+    }
+
+    function getPostModules() external view returns (address[] memory) {
+        return postModules.values();
+    }
+
+    function _validateModules(
+        EnumerableSet.AddressSet storage modules,
+        IBridge.ProcessingStage stage,
+        bytes calldata payload
+    ) internal returns (bool) {
+        uint256 length = modules.length();
+        for (uint256 i = 0; i < length; i++) {
+            address moduleAddress = modules.at(i);
+            if (!IModuleValidator(moduleAddress).validate(stage, payload)) {
+                revert ModuleCheckFailed(moduleAddress, stage);
+            }
+        }
+        return true;
+    }
+
+    function _validatePreModules(bytes calldata payload) internal returns (bool) {
+        return _validateModules(preModules, IBridge.ProcessingStage.PreExecution, payload);
+    }
+
+    function _validatePostModules(bytes calldata payload) internal returns (bool) {
+        return _validateModules(postModules, IBridge.ProcessingStage.PostExecution, payload);
+    }
+}
