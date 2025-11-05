@@ -155,7 +155,7 @@ synddb-sequencer/
 │   │   ├── consistency.rs         # Consistency enforcement between messages
 │   │   ├── degradation.rs         # Progressive degradation management
 │   │   ├── alerts.rs              # Application alerting mechanisms
-│   │   ├── attestations.rs        # Sequencer attestations for validators
+│   │   ├── state_commitments.rs   # Signed state commitments for validators
 │   │   └── recovery.rs            # Recovery protocols and validation
 │   ├── tee/
 │   │   ├── mod.rs                 # GCP Confidential Space TEE
@@ -1523,7 +1523,7 @@ pub struct DegradationManager {
     status: Arc<RwLock<SystemStatus>>,
     first_issue_detected: Option<DateTime<Utc>>,
     missing_messages: Arc<Mutex<Vec<String>>>,
-    attestation_publisher: Arc<AttestationPublisher>,
+    commitment_publisher: Arc<StateCommitmentPublisher>,
 }
 
 impl DegradationManager {
@@ -1583,23 +1583,23 @@ impl DegradationManager {
             }
         };
 
-        // Update status and publish attestation
+        // Update status and publish state commitment
         *self.status.write().await = new_status.clone();
-        self.publish_attestation(new_status).await;
+        self.publish_state_commitment(new_status).await;
     }
 
-    async fn publish_attestation(&self, status: SystemStatus) {
-        let attestation = SequencerAttestation {
+    async fn publish_state_commitment(&self, status: SystemStatus) {
+        let commitment = StateCommitment {
             sequence_number: self.get_next_sequence(),
             timestamp: Utc::now(),
-            status: status.clone(),
+            system_status: status.clone(),
             error_code: self.determine_error_code(&status),
-            last_valid_state: self.get_last_valid_state().await,
-            details: self.gather_attestation_details().await,
+            committed_state: self.get_last_valid_state().await,
+            details: self.gather_commitment_details().await,
         };
 
         // Sign with TEE key and publish
-        self.attestation_publisher.publish(attestation).await;
+        self.commitment_publisher.publish(commitment).await;
     }
 
     async fn recover_to_healthy(&mut self) {
@@ -1612,8 +1612,8 @@ impl DegradationManager {
         // Update status
         *self.status.write().await = SystemStatus::Healthy;
 
-        // Publish recovery attestation
-        self.publish_attestation(SystemStatus::Healthy).await;
+        // Publish recovery state commitment
+        self.publish_state_commitment(SystemStatus::Healthy).await;
 
         // Resume normal operations
         self.resume_operations().await;
@@ -1690,20 +1690,20 @@ impl ApplicationAlerter {
 }
 ```
 
-#### Sequencer Attestations for Validators
+#### State Commitments for Validators
 
 ```rust
-// src/messages/attestations.rs
+// src/messages/state_commitments.rs
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SequencerAttestation {
+pub struct StateCommitment {
     pub sequence_number: u64,
     pub timestamp: DateTime<Utc>,
-    pub status: SystemStatus,
+    pub system_status: SystemStatus,
     pub error_code: Option<ErrorCode>,
-    pub last_valid_state: StateReference,
-    pub details: AttestationDetails,
-    pub signature: Signature,
+    pub committed_state: StateReference,
+    pub details: CommitmentDetails,
+    pub signature: Signature,  // Signed by sequencer's TEE-protected key
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1715,40 +1715,40 @@ pub struct StateReference {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AttestationDetails {
+pub struct CommitmentDetails {
     pub missing_acknowledgments: Vec<String>,
     pub pending_outbound: usize,
     pub last_successful_publish: DateTime<Utc>,
     pub health_metrics: HealthMetrics,
 }
 
-pub struct AttestationPublisher {
+pub struct StateCommitmentPublisher {
     da_publisher: Arc<DaPublisher>,
     tee_signer: Arc<TeeSigner>,
-    attestation_log: Arc<Mutex<Vec<SequencerAttestation>>>,
+    commitment_log: Arc<Mutex<Vec<StateCommitment>>>,
 }
 
-impl AttestationPublisher {
-    pub async fn publish(&self, mut attestation: SequencerAttestation) -> Result<()> {
-        // Sign with TEE-protected key
-        let signature = self.tee_signer.sign(&attestation)?;
-        attestation.signature = signature;
+impl StateCommitmentPublisher {
+    pub async fn publish(&self, mut commitment: StateCommitment) -> Result<()> {
+        // Sign with TEE-protected key (not to be confused with TEE attestation)
+        let signature = self.tee_signer.sign(&commitment)?;
+        commitment.signature = signature;
 
         // Publish to DA layer even when halted
-        // This ensures validators always know system status
+        // This ensures validators always know system state
         let receipt = self.da_publisher
-            .publish_attestation(&attestation)
+            .publish_state_commitment(&commitment)
             .await?;
 
         // Log locally
-        self.attestation_log.lock().await.push(attestation.clone());
+        self.commitment_log.lock().await.push(commitment.clone());
 
-        info!("Published attestation #{} with status {:?}",
-              attestation.sequence_number, attestation.status);
+        info!("Published state commitment #{} with status {:?}",
+              commitment.sequence_number, commitment.system_status);
 
         // Emit metrics
-        metrics::counter!("synddb.attestations.published", 1,
-            "status" => format!("{:?}", attestation.status));
+        metrics::counter!("synddb.state_commitments.published", 1,
+            "status" => format!("{:?}", commitment.system_status));
 
         Ok(())
     }
@@ -1794,14 +1794,14 @@ impl RecoveryManager {
         self.degradation_manager.lock().await
             .recover_to_healthy().await;
 
-        // Step 4: Publish recovery attestation
-        let recovery_attestation = SequencerAttestation {
+        // Step 4: Publish recovery state commitment
+        let recovery_commitment = StateCommitment {
             sequence_number: self.get_next_sequence(),
             timestamp: Utc::now(),
-            status: SystemStatus::Healthy,
+            system_status: SystemStatus::Healthy,
             error_code: None,
-            last_valid_state: self.get_current_state().await,
-            details: AttestationDetails {
+            committed_state: self.get_current_state().await,
+            details: CommitmentDetails {
                 missing_acknowledgments: vec![],
                 pending_outbound: 0,
                 last_successful_publish: Utc::now(),
@@ -1810,7 +1810,7 @@ impl RecoveryManager {
             signature: Signature::default(),  // Will be signed by publisher
         };
 
-        self.publish_attestation(recovery_attestation).await?;
+        self.publish_state_commitment(recovery_commitment).await?;
 
         // Step 5: Resume operations
         self.resume_all_operations().await?;
@@ -2626,26 +2626,27 @@ The sequencer's progressive degradation strategy ensures system integrity while 
 | **L1: Warning** | < 30s | < 3 | Healthy (with warnings) | Alert app, increase retry frequency |
 | **L2: Degraded** | < 5min | < 10 | Degraded | Halt outbound, restrict API, alert critical |
 | **L3: Critical** | < 30min | < 50 | Critical Degraded | Fail health checks, emergency alerts |
-| **L4: Halt** | > 30min | > 50 | Halted | Full shutdown, final attestation |
+| **L4: Halt** | > 30min | > 50 | Halted | Full shutdown, final state commitment |
 
 #### Key Principles
 
-1. **Transparency First**: Always publish attestations about system status, even when halted
+1. **Transparency First**: Always publish signed state commitments about system state, even when halted
 2. **Progressive Response**: Start with warnings, escalate only as needed
 3. **Recovery Enabled**: All actions are reversible when consistency is restored
-4. **Validator Protection**: Provide clear signals about system health via signed attestations
+4. **Validator Protection**: Provide clear signals about system health via state commitments
 5. **Application Communication**: Multiple channels (HTTP headers, errors, health checks) to alert the application
 
-#### Attestation Publishing
+#### State Commitment Publishing
 
-The sequencer publishes signed attestations to DA layers that include:
+The sequencer publishes signed state commitments to DA layers that include:
 - Current system status (Healthy/Degraded/Halted)
 - Error codes for specific issues
-- Reference to last known valid state
+- Reference to committed state with state root
 - Details about missing acknowledgments
 - Health metrics
+- Cryptographic signature from TEE-protected key
 
-This ensures validators always have complete visibility into system state, even during degradation or halt conditions.
+This ensures validators always have complete visibility into the sequencer's committed state, even during degradation or halt conditions. These state commitments allow validators to verify the sequencer's view of the system state and detect any inconsistencies.
 
 ### Benefits of This Architecture
 
