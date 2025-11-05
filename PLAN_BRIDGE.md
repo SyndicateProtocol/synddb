@@ -40,7 +40,7 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 **Stage 2: PreExecution (Validation)**
 
 - Run PreExecution modules sequentially
-- Each module validates the message
+- Each module validates the message (validation only, no state mutations)
 - Any module can reject the message
 - If all pass, advance to execution stage
 - Examples: signature verification, balance checks, withdrawal limits
@@ -55,16 +55,16 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 **Stage 4: PostExecution (Post-Processing)**
 
 - Run PostExecution modules sequentially
-- Process execution results and enforce post-execution invariants
+- Process execution results and enforce post-execution invariants (validation only, no state mutations)
 - Can revert to block message completion (e.g. supply cap violations)
-- Examples: emit events, send callbacks, validate invariants
+- Examples: emit events, validate invariants
 
 ### Data Flow
 
 ```
                     Via Sequencer
                          ↓
-                Validators Sign message
+                Validators sign message
                 that has unique identifier
                          ↓
             ┌─────────────────────────────────────┐
@@ -118,8 +118,8 @@ synddb-bridge/
 │   │   │
 │   │   └── post/ -> Example PostExecution modules
 │   │       ├── EventEmitterModule.sol      # Emit detailed events
-│   │       ├── CallbackModule.sol          # Send confirmation to SyndDB
-│   │       └── FeeCollectorModule.sol      # Collect protocol fees
+│   │       ├── SupplyCapModule.sol         # Enforce supply caps
+│   │       └── InvariantCheckModule.sol    # Validate post-execution invariants
 │   │
 │   └── types/
 │       ├── MessageTypes.sol                # Message type constants
@@ -187,7 +187,7 @@ function initializeMessage(
     bytes32 messageId,
     bytes calldata payload,
     ExecutionContext calldata context
-) internal;
+) public;
 
 /**
  * Execute PreExecution modules for validation
@@ -196,7 +196,7 @@ function initializeMessage(
  *
  * @param messageId The message to validate
  */
-function executePreModules(bytes32 messageId) internal;
+function executePreModules(bytes32 messageId) public;
 
 /**
  * Execute the core message logic
@@ -205,7 +205,7 @@ function executePreModules(bytes32 messageId) internal;
  *
  * @param messageId The message to execute
  */
-function executeMessage(bytes32 messageId) internal;
+function executeMessage(bytes32 messageId) public;
 
 /**
  * Execute PostExecution modules for post-processing
@@ -214,7 +214,7 @@ function executeMessage(bytes32 messageId) internal;
  *
  * @param messageId The message to process
  */
-function executePostModules(bytes32 messageId) internal;
+function executePostModules(bytes32 messageId) public;
 
 
 /**
@@ -308,7 +308,7 @@ interface IPreExecutionModule {
 
 ### IPostExecutionModule Interface
 
-PostExecution modules process results after core execution and can enforce post-execution invariants. Modules can revert to block message completion (e.g., supply cap violations).
+PostExecution modules process results after core execution and can enforce post-execution invariants. Modules can return false to block message completion (e.g., supply cap violations). They are stateless validators that perform read-only checks. They should not mutate state or make external calls to avoid gas griefing and reentrancy risks.
 
 ```solidity
 interface IPostExecutionModule {
