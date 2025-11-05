@@ -1068,7 +1068,13 @@ impl DaPublisher for IpfsPublisher {
 
 ## Message Passing - Bidirectional Bridge Communication
 
-The sequencer handles bidirectional message passing between the application and blockchain. It monitors outbound messages from SQLite tables and inbound messages from blockchain events, providing a simple HTTP API for applications. Since the sequencer and application run as separate containers on the same physical machine, we use a localhost HTTP interface for maximum developer simplicity.
+The sequencer handles bidirectional message passing between the application and blockchain while maintaining a **read-only** relationship with SQLite. It monitors message tables written by the application and enforces consistency between blockchain events and application acknowledgments. Since the sequencer and application run as separate containers on the same physical machine, we use a localhost HTTP interface for maximum developer simplicity.
+
+### Key Principle: Single Writer Model
+
+- **Application**: The ONLY writer to SQLite (maintains single-writer model)
+- **Sequencer**: Read-only monitor that enforces consistency
+- **Validators**: Can verify complete audit trail of messages and their triggers
 
 ### Architecture
 
@@ -1081,38 +1087,39 @@ The sequencer handles bidirectional message passing between the application and 
               Outbound Messages           Inbound Events
                      │                           ↓
 ┌──────────────────────────────────────────────────────────────────┐
-│                      synddb-sequencer Container                  │
+│              synddb-sequencer Container (READ-ONLY)             │
 │                                                                   │
 │  ┌────────────────────┐    ┌─────────────────────────┐         │
-│  │  Table Monitor     │───▶│   Message Publisher    │         │
-│  │  - Watch tables    │    │   - Queue messages     │         │
-│  │  - Detect changes  │    │   - Batch for DA       │         │
-│  └────────────────────┘    └─────────────────────────┘         │
-│                                                                   │
-│  ┌────────────────────┐    ┌─────────────────────────┐         │
-│  │  Chain Monitor     │───▶│   Inbound Queue        │         │
-│  │  - Watch events    │    │   - Buffer messages    │         │
-│  │  - Handle reorgs   │    │   - Track confirmations │         │
+│  │  Table Monitor     │───▶│  Consistency Enforcer   │         │
+│  │  - Read msg tables │    │  - Verify ack'd inbound │         │
+│  │  - Read ack tables │    │  - Block if missing     │         │
 │  └────────────────────┘    └─────────────────────────┘         │
 │                                         │                        │
 │                                         ▼                        │
 │                            ┌─────────────────────────┐          │
-│                            │   Message HTTP API      │          │
+│  ┌────────────────────┐    │   Message Publisher    │          │
+│  │  Chain Monitor     │    │   - Publish outbound    │          │
+│  │  - Watch events    │    │   - Only if consistent  │          │
+│  │  - Track confirms  │    └─────────────────────────┘          │
+│  └────────────────────┘                │                        │
+│            │                            ▼                        │
+│            │                ┌─────────────────────────┐          │
+│            └───────────────▶│   Message HTTP API      │          │
 │                            │   localhost:8432        │          │
 │                            └─────────────────────────┘          │
 └──────────────────────────────────────────────────────────────────┘
-                     ↑                           │
-            SQLite Message Tables      localhost HTTP
-                     ↑                           ↓
+                     ↑ READ                     │ OFFER
+            SQLite Message Tables         Inbound Messages
+                     ↑ WRITE                    ↓ PROCESS
 ┌──────────────────────────────────────────────────────────────────┐
-│                      Application Container                       │
+│                  Application Container (SINGLE WRITER)           │
 │                                                                   │
 │  ┌────────────────────────────────────────────────────────┐     │
-│  │  Bidirectional Message Flow:                           │     │
-│  │  - Write to message tables for outbound                │     │
-│  │  - EventSource for real-time: /messages/inbound/stream │     │
-│  │  - REST polling fallback: GET /messages/inbound        │     │
-│  │  - No blockchain libraries needed                      │     │
+│  │  Message Flow:                                         │     │
+│  │  1. Receive inbound via HTTP API                       │     │
+│  │  2. Process and write to inbound_message_log           │     │
+│  │  3. Write outbound to message_log with triggers        │     │
+│  │  4. Sequencer reads and enforces consistency           │     │
 │  └────────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -1257,31 +1264,71 @@ Optionally acknowledge that a message has been processed. This is for monitoring
 
 The sequencer monitors designated SQLite tables for outbound messages. When the application writes to these tables, the sequencer automatically detects the changes and publishes them to DA layers for validator processing.
 
-##### Message Table Schema
+##### Message Table Schemas
 
-Applications define message tables with schemas that map to the Bridge contract's expected format:
+Applications must create these tables for message passing:
 
 ```sql
--- Generic outbound messages table
-CREATE TABLE outbound_messages (
+-- Outbound messages (Application writes, Sequencer reads)
+CREATE TABLE message_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_type TEXT NOT NULL,  -- 'withdrawal', 'call', etc.
-    payload BLOB NOT NULL,        -- ABI-encoded message data
-    status TEXT DEFAULT 'pending',
+    message_type TEXT NOT NULL,      -- 'withdrawal', 'call', etc.
+    payload JSON NOT NULL,            -- Message data as JSON
+    idempotency_key TEXT UNIQUE,     -- Prevents duplicate messages
+    status TEXT DEFAULT 'pending',   -- Updated by sequencer
     created_at INTEGER DEFAULT (unixepoch()),
-    processed_at INTEGER,
+
+    -- Audit fields for validators
+    trigger_event TEXT,               -- What caused this message (e.g., 'order_match')
+    trigger_id INTEGER,               -- Reference to causing record
+
+    -- Status tracking
+    published_at INTEGER,
     tx_hash TEXT,
     error TEXT
 );
 
--- Example: Specific withdrawal messages
-CREATE TABLE outbound_withdrawals (
+-- Inbound message acknowledgments (Application writes, Sequencer reads)
+CREATE TABLE inbound_message_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    recipient TEXT NOT NULL,
-    token_address TEXT NOT NULL,
-    amount TEXT NOT NULL,
-    status TEXT DEFAULT 'pending',
-    created_at INTEGER DEFAULT (unixepoch())
+    message_id TEXT UNIQUE NOT NULL,  -- Message ID from blockchain
+    message_type TEXT NOT NULL,
+    payload JSON NOT NULL,
+    processed_at INTEGER DEFAULT (unixepoch()),
+
+    -- Application records what it did
+    action_taken TEXT,                -- What the app did with the message
+    action_result JSON                -- Result of processing
+);
+
+-- Example: Order match triggers withdrawal
+INSERT INTO message_log (
+    message_type,
+    payload,
+    idempotency_key,
+    trigger_event,
+    trigger_id
+) VALUES (
+    'withdrawal',
+    '{"recipient": "0x123...", "amount": "1000", "token": "USDC"}',
+    'withdrawal-order-456',  -- Prevents duplicate withdrawals
+    'order_match',
+    456  -- References orders.id = 456
+);
+
+-- Example: Application acknowledges deposit
+INSERT INTO inbound_message_log (
+    message_id,
+    message_type,
+    payload,
+    action_taken,
+    action_result
+) VALUES (
+    '0xabc123...',
+    'deposit',
+    '{"from": "0x456...", "amount": "1000", "token": "USDC"}',
+    'credit_user_balance',
+    '{"user_id": 42, "new_balance": "5000"}'
 );
 ```
 
@@ -1303,6 +1350,122 @@ Check the status of an outbound message.
 ```
 
 ### Implementation
+
+#### Consistency Enforcer
+
+The consistency enforcer ensures that all inbound messages are acknowledged before allowing outbound messages to be published. This maintains data integrity and prevents message loss.
+
+```rust
+// src/messages/consistency.rs
+use rusqlite::{Connection, OpenFlags};
+use std::collections::HashSet;
+
+pub struct ConsistencyEnforcer {
+    db_path: PathBuf,
+    blockchain_messages: Arc<Mutex<HashSet<String>>>,  // Message IDs from chain
+    halt_outbound: Arc<AtomicBool>,
+}
+
+impl ConsistencyEnforcer {
+    pub async fn new(db_path: PathBuf) -> Result<Self> {
+        Ok(Self {
+            db_path,
+            blockchain_messages: Arc::new(Mutex::new(HashSet::new())),
+            halt_outbound: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Called when blockchain monitor sees a new inbound message
+    pub async fn record_blockchain_message(&self, message_id: String) {
+        self.blockchain_messages.lock().await.insert(message_id);
+
+        // Immediately check consistency
+        self.check_consistency().await;
+    }
+
+    /// Periodically check that all blockchain messages are acknowledged
+    pub async fn check_consistency(&self) -> Result<()> {
+        // Open SQLite in read-only mode
+        let conn = Connection::open_with_flags(
+            &self.db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+        )?;
+
+        // Get all acknowledged messages from application
+        let mut stmt = conn.prepare(
+            "SELECT message_id FROM inbound_message_log"
+        )?;
+
+        let acknowledged: HashSet<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<HashSet<_>, _>>()?;
+
+        // Check for missing acknowledgments
+        let blockchain_msgs = self.blockchain_messages.lock().await;
+        let missing: Vec<_> = blockchain_msgs
+            .iter()
+            .filter(|id| !acknowledged.contains(*id))
+            .cloned()
+            .collect();
+
+        if !missing.is_empty() {
+            warn!("Missing acknowledgments for {} messages: {:?}",
+                  missing.len(), missing);
+
+            // CRITICAL: Halt outbound message processing
+            self.halt_outbound.store(true, Ordering::SeqCst);
+
+            // Alert metrics/monitoring
+            metrics::gauge!("synddb.missing_acknowledgments", missing.len() as f64);
+        } else {
+            info!("All {} blockchain messages acknowledged", blockchain_msgs.len());
+
+            // Resume outbound processing if it was halted
+            self.halt_outbound.store(false, Ordering::SeqCst);
+        }
+
+        Ok(())
+    }
+
+    /// Check if outbound messages can be processed
+    pub fn can_process_outbound(&self) -> bool {
+        !self.halt_outbound.load(Ordering::SeqCst)
+    }
+
+    /// Get detailed consistency status
+    pub async fn get_status(&self) -> ConsistencyStatus {
+        let conn = Connection::open_with_flags(
+            &self.db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+        ).ok();
+
+        let acknowledged_count = conn.and_then(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM inbound_message_log",
+                [],
+                |row| row.get::<_, i64>(0)
+            ).ok()
+        }).unwrap_or(0);
+
+        let blockchain_count = self.blockchain_messages.lock().await.len() as i64;
+
+        ConsistencyStatus {
+            blockchain_messages: blockchain_count,
+            acknowledged_messages: acknowledged_count,
+            missing_count: blockchain_count - acknowledged_count,
+            outbound_halted: self.halt_outbound.load(Ordering::SeqCst),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConsistencyStatus {
+    pub blockchain_messages: i64,
+    pub acknowledged_messages: i64,
+    pub missing_count: i64,
+    pub outbound_halted: bool,
+}
+```
 
 #### Inbound Message Monitor
 
@@ -1518,75 +1681,123 @@ impl MessageQueue {
 
 ```rust
 // src/messages/outbound_monitor.rs
-use rusqlite::{Connection, hooks::Action};
+use rusqlite::{Connection, OpenFlags};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct OutboundMonitor {
     db_path: PathBuf,
-    conn: Connection,
+    consistency: Arc<ConsistencyEnforcer>,
     outbound_tx: Sender<OutboundMessage>,
+    last_processed_id: Arc<AtomicU64>,
 }
 
 impl OutboundMonitor {
     pub async fn new(
         db_path: PathBuf,
+        consistency: Arc<ConsistencyEnforcer>,
         outbound_tx: Sender<OutboundMessage>,
     ) -> Result<Self> {
-        let mut conn = Connection::open(&db_path)?;
-
-        // Install update hook to detect changes to message tables
-        conn.update_hook(Some(Self::on_update));
-
         Ok(Self {
             db_path,
-            conn,
+            consistency,
             outbound_tx,
+            last_processed_id: Arc::new(AtomicU64::new(0)),
         })
     }
 
-    /// Update hook called for every INSERT/UPDATE/DELETE
-    fn on_update(&mut self, action: Action, db: &str, table: &str, rowid: i64) {
-        // Check if this is an outbound message table
-        if table.starts_with("outbound_") && action == Action::INSERT {
-            match self.process_outbound_message(table, rowid) {
-                Ok(_) => {},
-                Err(e) => error!("Failed to process outbound message: {}", e),
+    pub async fn run(self) -> Result<()> {
+        loop {
+            // Only process if consistency check passes
+            if !self.consistency.can_process_outbound() {
+                warn!("Outbound processing halted: waiting for inbound acknowledgments");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
             }
+
+            // Poll for new outbound messages (read-only)
+            self.poll_outbound_messages().await?;
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
-    fn process_outbound_message(&mut self, table: &str, rowid: i64) -> Result<()> {
-        // Query the new message from the table
-        let query = format!("SELECT * FROM {} WHERE rowid = ?", table);
-        let mut stmt = self.conn.prepare(&query)?;
+    async fn poll_outbound_messages(&self) -> Result<()> {
+        // Open connection in read-only mode
+        let conn = Connection::open_with_flags(
+            &self.db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+        )?;
 
-        let message = stmt.query_row([rowid], |row| {
+        // Query for new messages since last check
+        let last_id = self.last_processed_id.load(Ordering::SeqCst);
+        let mut stmt = conn.prepare(
+            "SELECT id, message_type, payload, idempotency_key,
+                    trigger_event, trigger_id, status
+             FROM message_log
+             WHERE id > ? AND status = 'pending'
+             ORDER BY id
+             LIMIT 100"
+        )?;
+
+        let messages = stmt.query_map([last_id], |row| {
             Ok(OutboundMessage {
-                table: table.to_string(),
                 id: row.get(0)?,
                 message_type: row.get(1)?,
                 payload: row.get(2)?,
-                status: row.get(3)?,
-                created_at: row.get(4)?,
+                idempotency_key: row.get(3)?,
+                trigger_event: row.get(4)?,
+                trigger_id: row.get(5)?,
+                status: row.get(6)?,
             })
         })?;
 
-        // Send to processing queue
-        if let Err(e) = self.outbound_tx.blocking_send(message) {
-            error!("Failed to queue outbound message: {}", e);
+        for msg_result in messages {
+            let msg = msg_result?;
+
+            // Validate message has proper audit trail
+            if let Err(e) = self.validate_message_context(&conn, &msg) {
+                error!("Invalid message context for {}: {}", msg.id, e);
+                continue;
+            }
+
+            // Update last processed ID
+            self.last_processed_id.store(msg.id, Ordering::SeqCst);
+
+            // Send to publisher
+            if let Err(e) = self.outbound_tx.send(msg).await {
+                error!("Failed to queue outbound message: {}", e);
+            }
         }
 
         Ok(())
     }
 
-    pub async fn run(mut self) -> Result<()> {
-        // Monitor is passive - changes detected via update hook
-        loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
+    /// Validate that the message has proper audit trail
+    fn validate_message_context(&self, conn: &Connection, msg: &OutboundMessage) -> Result<()> {
+        // Ensure trigger references exist
+        if let (Some(event), Some(id)) = (&msg.trigger_event, msg.trigger_id) {
+            // Verify the trigger record exists
+            let query = format!(
+                "SELECT COUNT(*) FROM {} WHERE id = ?",
+                self.get_trigger_table(event)?
+            );
 
-            // Periodic health check
-            self.conn.execute("SELECT 1", [])?;
+            let count: i64 = conn.query_row(&query, [id], |row| row.get(0))?;
+
+            if count == 0 {
+                return Err(anyhow!("Trigger record not found: {} id={}", event, id));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_trigger_table(&self, event: &str) -> Result<&str> {
+        match event {
+            "order_match" => Ok("orders"),
+            "user_withdrawal" => Ok("users"),
+            _ => Err(anyhow!("Unknown trigger event: {}", event))
         }
     }
 }
@@ -1935,17 +2146,118 @@ class DepositHandler:
         self.save_last_processed_id(deposit['id'])
 ```
 
+### Validator Verification
+
+Validators can verify the complete audit trail of messages, ensuring that:
+1. All inbound messages were properly acknowledged
+2. Outbound messages have valid triggers
+3. Message ordering is consistent
+
+```rust
+// In validator implementation
+impl Validator {
+    /// Verify a withdrawal message has proper preconditions
+    fn validate_withdrawal(&self, msg: &OutboundMessage, sql_history: &SqlHistory) -> Result<()> {
+        // 1. Check the trigger exists and is valid
+        if msg.trigger_event == "order_match" {
+            let order = sql_history.get_record("orders", msg.trigger_id)?;
+
+            // Verify order was actually matched
+            assert_eq!(order.get("status"), "matched");
+
+            // Verify amounts match
+            let withdrawal_amount: u64 = serde_json::from_str(&msg.payload)?
+                .get("amount")
+                .ok_or("Missing amount")?
+                .parse()?;
+
+            assert_eq!(withdrawal_amount, order.get("matched_amount"));
+        }
+
+        // 2. Verify user has sufficient balance
+        let user_id = self.get_user_from_trigger(msg.trigger_id)?;
+        let balance = sql_history.query_one(
+            "SELECT balance FROM users WHERE id = ?",
+            &[user_id]
+        )?;
+
+        assert!(balance >= withdrawal_amount, "Insufficient balance");
+
+        // 3. Verify all related deposits were acknowledged
+        let deposits = sql_history.query(
+            "SELECT * FROM inbound_message_log
+             WHERE message_type = 'deposit'
+             AND action_result LIKE ?",
+            &[format!("%user_id: {}%", user_id)]
+        )?;
+
+        assert!(!deposits.is_empty(), "No deposits found for user");
+
+        // 4. Check idempotency - no duplicate withdrawals
+        let duplicate = sql_history.query(
+            "SELECT COUNT(*) FROM message_log
+             WHERE idempotency_key = ? AND id < ?",
+            &[&msg.idempotency_key, &msg.id]
+        )?;
+
+        assert_eq!(duplicate, 0, "Duplicate withdrawal detected");
+
+        Ok(())
+    }
+
+    /// Verify consistency between inbound and outbound messages
+    fn validate_message_consistency(&self, sql_history: &SqlHistory) -> Result<()> {
+        // Get all blockchain messages from changeset history
+        let blockchain_messages = sql_history.query(
+            "SELECT DISTINCT message_id FROM inbound_message_log",
+            &[]
+        )?;
+
+        // Get all outbound messages
+        let outbound_messages = sql_history.query(
+            "SELECT * FROM message_log WHERE status != 'pending'",
+            &[]
+        )?;
+
+        // Verify no outbound messages were processed while inbound were missing
+        for outbound in outbound_messages {
+            let created_at = outbound.get("created_at");
+
+            // Check if any inbound messages were unacknowledged at this time
+            let unacked = sql_history.query(
+                "SELECT message_id FROM blockchain_events
+                 WHERE timestamp < ?
+                 AND message_id NOT IN (
+                     SELECT message_id FROM inbound_message_log
+                     WHERE processed_at < ?
+                 )",
+                &[created_at, created_at]
+            )?;
+
+            assert!(
+                unacked.is_empty(),
+                "Outbound message {} processed while inbound messages pending",
+                outbound.get("id")
+            );
+        }
+
+        Ok(())
+    }
+}
+```
+
 ### Benefits of This Architecture
 
-1. **Simple for Developers**: Just HTTP/REST and SSE - technologies every developer knows
-2. **No Blockchain Complexity**: Applications don't need web3 libraries or blockchain knowledge
-3. **Reliable**: Dual mechanism (SSE + polling) ensures no deposits are missed
-4. **Fast**: localhost communication has microsecond latency
-5. **Testable**: Easy to mock HTTP endpoints for testing
-6. **Language Agnostic**: Works with any programming language that has HTTP support
-7. **Monitoring Friendly**: Clear HTTP endpoints make debugging and monitoring straightforward
+1. **Single Writer Preserved**: Only the application writes to SQLite - maintains data consistency
+2. **Full Auditability**: Validators see complete message history with triggers and acknowledgments
+3. **Consistency Guaranteed**: Sequencer enforces that all inbound messages are acknowledged
+4. **No Blockchain Complexity**: Applications don't need web3 libraries or blockchain knowledge
+5. **Idempotency Built-in**: Database constraints prevent duplicate messages
+6. **Natural Causality**: Message triggers create auditable chains of events
+7. **Fast and Reliable**: Localhost HTTP with SSE for real-time updates
+8. **Language Agnostic**: Works with any programming language that supports SQLite and HTTP
 
-The sequencer handles all blockchain complexity (reorgs, confirmations, event parsing) and presents a clean, simple interface that any application developer can integrate with minimal effort.
+The sequencer acts as a **read-only consistency enforcer**, ensuring data integrity while the application maintains full control over the database. This design enables validators to verify not just that messages were sent, but WHY they were sent, creating a complete audit trail from trigger to execution.
 
 ## Configuration
 
