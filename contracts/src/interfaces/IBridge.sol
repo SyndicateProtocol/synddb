@@ -15,7 +15,6 @@ interface IBridge {
         bytes32 messageId;
         ProcessingStage stage;
         bytes payload;
-        bool executionSuccess;
     }
 
     struct ValidatorSignatures {
@@ -34,6 +33,12 @@ interface IBridge {
         ValidatorSignatures calldata executionSigs
     ) external;
 
+    function isMessageExecuted(bytes32 messageId) external view returns (bool);
+
+    /*//////////////////////////////////////////////////////////////
+                            VALIDATION FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
     function addPreModule(address module) external;
 
     function addPostModule(address module) external;
@@ -46,7 +51,4 @@ interface IBridge {
 
     function getPostModules() external view returns (address[] memory);
 
-    function isMessageExecuted(bytes32 messageId) external view returns (bool);
-
-    function checkMessageState(bytes32 messageId) external view returns (MessageState memory);
 }
