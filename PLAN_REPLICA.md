@@ -647,7 +647,7 @@ impl SettlementPoster {
             .send()
             .await?;
             
-        info!("State root posted: {:?}", tx.hash());
+        info!("State update posted: {:?}", tx.hash());
         Ok(())
     }
 }
