@@ -18,6 +18,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
     error MessageNotInitialized(bytes32 messageId);
     error MessageAlreadyHandled(bytes32 messageId);
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
+    error ArrayLengthMismatch();
 
     constructor(address admin) ModuleCheckRegistry(admin) {}
 
@@ -95,5 +96,33 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
     function isMessageHandled(bytes32 messageId) external view returns (bool) {
         return messageStates[messageId].stage == ProcessingStage.Completed;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            BATCH OPERATIONS
+    //////////////////////////////////////////////////////////////*/
+
+    function batchInitializeMessage(
+        bytes32[] calldata messageIds,
+        address[] calldata targetAddresses,
+        bytes[] calldata payloads,
+        SequencerSignature[] calldata _sequencerSignatures
+    ) external onlyRole(SEQUENCER_ROLE) {
+        if (
+            messageIds.length != targetAddresses.length || messageIds.length != payloads.length
+                || messageIds.length != _sequencerSignatures.length
+        ) {
+            revert ArrayLengthMismatch();
+        }
+
+        for (uint256 i = 0; i < messageIds.length; i++) {
+            initializeMessage(messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i]);
+        }
+    }
+
+    function batchHandleMessage(bytes32[] calldata messageIds) external {
+        for (uint256 i = 0; i < messageIds.length; i++) {
+            handleMessage(messageIds[i]);
+        }
     }
 }
