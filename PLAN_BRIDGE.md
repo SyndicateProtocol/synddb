@@ -81,9 +81,9 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
             │  Single Atomic Transaction          │
             │                                     │
             │  1. initializeMessage()             │
-            │  2. executePreModules()             │
-            │  3. executeMessage()                │
-            │  4. executePostModules()            │
+            │  2. _validatePreModules()           │
+            │  3. handleMessage()                 │
+            │  4. _validatePostModules()          │
             │                                     │
             │  Any revert → entire TX reverts     │
             └─────────────────────────────────────┘
@@ -183,35 +183,35 @@ function initializeMessage(
 ) public;
 
 /**
- * Execute the message through all validation and execution stages
+ * Pass the message through all validation and execution stages
  * Runs pre-validation, core execution, and post-validation
  *
- * @param messageId The message to execute
+ * @param messageId The message to handle
  */
-function executeMessage(bytes32 messageId) public;
+function handleMessage(bytes32 messageId) public;
 
 /**
- * Convenience function to initialize and execute in one call
- * Combines initializeMessage() and executeMessage()
+ * Convenience function to initialize and handle in one call
+ * Combines initializeMessage() and handleMessage()
  *
  * @param messageId Unique identifier
  * @param payload Message data
  * @param executionSignatures Validator signatures
  */
-function initializeAndExecuteMessage(
+function initializeAndHandleMessage(
     bytes32 messageId,
     bytes calldata payload,
     ValidatorSignatures calldata executionSignatures
 ) external;
 
 /**
- * Check if a message has been executed
+ * Check if a message has been handled
  * Returns true if messageStates[messageId].stage == ProcessingStage.Completed
  *
  * @param messageId The message to check
  * @return bool True if message is completed
  */
-function isMessageExecuted(bytes32 messageId) external view returns (bool);
+function isMessageHandled(bytes32 messageId) external view returns (bool);
 ```
 
 #### Module Management

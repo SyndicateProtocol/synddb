@@ -12,7 +12,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
     mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 
     event MessageInitialized(bytes32 indexed messageId, bytes payload);
-    event MessageExecuted(bytes32 indexed messageId, bool success);
+    event MessageHandled(bytes32 indexed messageId, bool success);
 
     error MessageAlreadyInitialized(bytes32 messageId);
     error MessageNotInitialized(bytes32 messageId);
@@ -41,7 +41,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
         emit MessageInitialized(messageId, payload);
     }
 
-    function executeMessage(bytes32 messageId) public nonReentrant {
+    function handleMessage(bytes32 messageId) public nonReentrant {
         MessageState storage state = messageStates[messageId];
 
         if (state.stage == ProcessingStage.NotStarted) {
@@ -49,7 +49,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
         }
 
         if (state.stage == ProcessingStage.Completed) {
-            revert MessageAlreadyExecuted(messageId);
+            revert MessageAlreadyHandled(messageId);
         }
 
         SequencerSignature memory signature = sequencerSignatures[messageId];
@@ -67,19 +67,19 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
         state.stage = ProcessingStage.Completed;
 
-        emit MessageExecuted(messageId, true);
+        emit MessageHandled(messageId, true);
     }
 
-    function initializeAndExecuteMessage(
+    function initializeAndHandleMessage(
         bytes32 messageId,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature
     ) external {
         initializeMessage(messageId, payload, sequencerSignature);
-        executeMessage(messageId);
+        handleMessage(messageId);
     }
 
-    function isMessageExecuted(bytes32 messageId) external view returns (bool) {
+    function isMessageHandled(bytes32 messageId) external view returns (bool) {
         return messageStates[messageId].stage == ProcessingStage.Completed;
     }
 }

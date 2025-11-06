@@ -10,9 +10,9 @@ interface IBridge {
         SequencerSignature calldata sequencerSignature
     ) external;
 
-    function executeMessage(bytes32 messageId) external;
+    function handleMessage(bytes32 messageId) external;
 
-    function initializeAndExecuteMessage(
+    function initializeAndHandleMessage(
         bytes32 messageId,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature
