@@ -71,25 +71,6 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
         return postModules.values();
     }
 
-    function signMessage(bytes32 messageId) external onlyRole(VALIDATOR_ROLE) {
-        // Direct validator call pattern - validator calls via msg.sender
-        validatorSignatures[messageId][msg.sender] = true;
-        emit MessageSigned(messageId, msg.sender);
-    }
-
-    function signMessageWithSignature(bytes32 messageId, bytes calldata signature) external {
-        // Relayer pattern - relayer submits validator's signature
-        bytes32 messageHash = MessageHashUtils.toEthSignedMessageHash(messageId);
-        address validator = ECDSA.recover(messageHash, signature);
-
-        if (!hasRole(VALIDATOR_ROLE, validator)) {
-            revert ValidatorNotAuthorized();
-        }
-
-        validatorSignatures[messageId][validator] = true;
-        emit MessageSigned(messageId, validator);
-    }
-
     function _validateModules(
         EnumerableSet.AddressSet storage modules,
         ProcessingStage stage,
@@ -126,5 +107,28 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
             revert InvalidPostExecutionStage(stage);
         }
         return _validateModules(postModules, stage, payload, sequencerSignature);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                                 VALIDATORS SIGNING
+    //////////////////////////////////////////////////////////////*/
+
+    function signMessage(bytes32 messageId) external onlyRole(VALIDATOR_ROLE) {
+        // Direct validator call pattern - validator calls via msg.sender
+        validatorSignatures[messageId][msg.sender] = true;
+        emit MessageSigned(messageId, msg.sender);
+    }
+
+    function signMessageWithSignature(bytes32 messageId, bytes calldata signature) public {
+        // Relayer pattern - relayer submits validator's signature
+        bytes32 messageHash = MessageHashUtils.toEthSignedMessageHash(messageId);
+        address validator = ECDSA.recover(messageHash, signature);
+
+        if (!hasRole(VALIDATOR_ROLE, validator)) {
+            revert ValidatorNotAuthorized();
+        }
+
+        validatorSignatures[messageId][validator] = true;
+        emit MessageSigned(messageId, validator);
     }
 }

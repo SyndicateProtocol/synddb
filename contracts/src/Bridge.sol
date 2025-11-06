@@ -78,10 +78,18 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
     function initializeAndHandleMessage(
         bytes32 messageId,
+        address targetAddress,
         bytes calldata payload,
-        SequencerSignature calldata sequencerSignature
+        SequencerSignature calldata sequencerSignature,
+        bytes[] calldata validatorSignatures
     ) external {
-        initializeMessage(messageId, payload, sequencerSignature);
+        initializeMessage(messageId, targetAddress, payload, sequencerSignature);
+
+        // collect validator signatures and verify them
+        for (uint256 i = 0; i < validatorSignatures.length; i++) {
+            signMessageWithSignature(messageId, validatorSignatures[i]);
+        }
+
         handleMessage(messageId);
     }
 

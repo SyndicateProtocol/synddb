@@ -17,7 +17,8 @@ interface IBridge {
         bytes32 messageId,
         address targetAddress,
         bytes calldata payload,
-        SequencerSignature calldata sequencerSignature
+        SequencerSignature calldata sequencerSignature,
+        bytes[] calldata validatorSignatures
     ) external;
 
     function isMessageHandled(bytes32 messageId) external view returns (bool);
