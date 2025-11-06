@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {ModuleValidator} from "./ModuleValidator.sol";
+import {ModuleChecker} from "./ModuleChecker.sol";
 
-contract Bridge is ModuleValidator {
+contract Bridge is ModuleChecker {
     mapping(bytes32 messageId => MessageState state) public messageStates;
     mapping(bytes32 messageId => ValidatorSignatures sigs) public messageSignatures;
 
