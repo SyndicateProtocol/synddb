@@ -5,8 +5,9 @@ import {ModuleCheckRegistry} from "src/ModuleCheckRegistry.sol";
 
 import {IBridge} from "src/interfaces/IBridge.sol";
 import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataTypes.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract Bridge is IBridge, ModuleCheckRegistry {
+contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
     mapping(bytes32 messageId => MessageState state) public messageStates;
     mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 
@@ -40,7 +41,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         emit MessageInitialized(messageId, payload);
     }
 
-    function executeMessage(bytes32 messageId) public {
+    function executeMessage(bytes32 messageId) public nonReentrant {
         MessageState storage state = messageStates[messageId];
 
         if (state.stage == ProcessingStage.NotStarted) {
