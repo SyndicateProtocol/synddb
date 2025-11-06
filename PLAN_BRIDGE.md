@@ -30,7 +30,7 @@ This bridge architecture draws inspiration from proven modular smart contract sy
 
 The modular architecture enables advanced validation patterns:
 
-- **Flexible thresholds**: Per-module validation requirements (e.g., "2 of 3 signature validators OR 1 trusted module")
+- **Flexible thresholds**: Per-module validation requirements (e.g. "at least 3 signatures from validators")
 - **Message-type routing**: Different validation rules for WITHDRAW vs DEPOSIT messages (DEPOSIT with zero value indicates a generic call)
 - **Default module sets**: Sensible default modules with optional custom overrides
 
@@ -42,32 +42,36 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 
 **Stage 1: Initialization**
 
-- Create message state with messageId, stage, and payload
-- Store ValidatorSignatures separately in dedicated mapping
+- Create message state with messageId, targetAddress, stage, payload, and createdAt timestamp
+- Store SequencerSignature separately in dedicated mapping
 - Mark stage as PreExecution
+- Restricted to SEQUENCER_ROLE
 
 **Stage 2: PreExecution (Validation)**
 
 - Run all registered pre-execution modules
-- Each module receives ProcessingStage and payload
+- Each module receives messageId, ProcessingStage, payload, and SequencerSignature
 - Modules return bool (true = pass, false = fail)
-- ModuleValidator reverts with `ModuleCheckFailed(address module, ProcessingStage stage)` on failure
-- Modules can write state for later validation (e.g., record pre-execution NFT count)
-- Examples: signature verification, balance checks, withdrawal limits
+- ModuleCheckRegistry reverts with `ModuleCheckFailed(address module, ProcessingStage stage)` on failure
+- Modules can write state for later validation (e.g. record pre-execution NFT count)
+- Examples: signature threshold verification, balance checks, withdrawal limits
 
 **Stage 3: Core Execution**
 
-- Execute the core message logic
+- Execute the core message logic by calling targetAddress with payload
+- Low-level call: `targetAddress.call(payload)`
+- Reverts with `MessageExecutionFailed(messageId, returnData)` if call fails
 - Update stage to Executing → PostExecution
+- Protected by reentrancy guard
 
 **Stage 4: PostExecution (Post-Processing)**
 
 - Run all registered post-execution modules
 - Modules can read stored state from pre-execution
-- Example: Verify NFT count increased by expected amount
-- Modules return bool, ModuleValidator reverts on failure
+- Example: Verify token supply increased within allowed limits
+- Modules return bool, ModuleCheckRegistry reverts on failure
 - Mark stage as Completed
-- Examples: supply cap validation, invariant checks
+- Examples: supply change validation, invariant checks
 
 ### Data Flow
 
@@ -111,15 +115,22 @@ The Bridge contract manages:
 
 ```
 contracts/src/
-├── Bridge.sol                          # Core bridge contract (inherits ModuleValidator)
-├── ModuleValidator.sol                 # Base contract for module management
+├── Bridge.sol                                    # Core bridge contract (inherits ModuleCheckRegistry)
+├── ModuleCheckRegistry.sol                       # Base contract for module management and validator signing
 │
 ├── interfaces/
-│   ├── IBridge.sol                     # Bridge interface with shared types
-│   └── IModuleValidator.sol            # Unified module interface
+│   ├── IBridge.sol                              # Bridge interface
+│   ├── IModuleCheck.sol                         # Unified module check interface
+│   ├── IModuleCheckRegistry.sol                 # Module registry interface
+│   └── IValidatorSigningAndQuery.sol            # Validator signing and querying interface
+│
+├── types/
+│   └── DataTypes.sol                            # Shared data structures
 │
 └── modules/
-    └── ERC20SupplyValidator.sol           # Example: ERC20 supply cap validation
+    ├── ERC20TotalSupplyCheckModule.sol          # Example: ERC20 supply cap validation
+    ├── ERC20MaxSupplyIncreaseModule.sol         # Example: ERC20 supply change tracking
+    └── ValidatorSignatureThresholdModule.sol    # Example: Validator signature threshold check
 ```
 
 ## Core Components
@@ -131,13 +142,17 @@ The main bridge contract that orchestrates message processing across all stages.
 #### State Variables
 
 ```solidity
-// In ModuleValidator
+// In ModuleCheckRegistry (inherited by Bridge)
 EnumerableSet.AddressSet private preModules;
 EnumerableSet.AddressSet private postModules;
+mapping(bytes32 messageId => mapping(address validator => bool hasSigned)) public validatorSignatures;
+
+bytes32 public constant SEQUENCER_ROLE = keccak256("SEQUENCER_ROLE");
+bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
 
 // In Bridge
 mapping(bytes32 messageId => MessageState state) public messageStates;
-mapping(bytes32 messageId => ValidatorSignatures sigs) public messageSignatures;
+mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 ```
 
 #### Data Structures
@@ -145,13 +160,15 @@ mapping(bytes32 messageId => ValidatorSignatures sigs) public messageSignatures;
 ```solidity
 struct MessageState {
     bytes32 messageId;
+    address targetAddress;    // Target contract to call
     ProcessingStage stage;
-    bytes payload;
+    bytes payload;           // Calldata to execute
+    uint256 createdAt;      // Timestamp when message was initialized
 }
 
-struct ValidatorSignatures {
-    bytes[] validatorSignatures;
-    uint256 submittedAt;
+struct SequencerSignature {
+    bytes signature;        // Single sequencer signature (not array)
+    uint256 submittedAt;   // Timestamp when signature was submitted
 }
 
 enum ProcessingStage {
@@ -169,17 +186,20 @@ enum ProcessingStage {
 ```solidity
 /**
  * Initialize a new message for processing
- * Creates message state and stores validator signatures
+ * Creates message state and stores sequencer signature
  * This is initiated by the sequencer upon receiving a signed message
+ * Restricted to SEQUENCER_ROLE
  *
  * @param messageId Unique identifier
- * @param payload Message data containing type and parameters
- * @param executionSignatures Validator signatures and submission timestamp
+ * @param targetAddress Target contract to call
+ * @param payload Calldata to execute on target
+ * @param sequencerSignature Sequencer signature and submission timestamp
  */
 function initializeMessage(
     bytes32 messageId,
+    address targetAddress,
     bytes calldata payload,
-    ValidatorSignatures calldata executionSignatures
+    SequencerSignature calldata sequencerSignature
 ) public;
 
 /**
@@ -192,16 +212,20 @@ function handleMessage(bytes32 messageId) public;
 
 /**
  * Convenience function to initialize and handle in one call
- * Combines initializeMessage() and handleMessage()
+ * Also collects and verifies validator signatures via relayer pattern
  *
  * @param messageId Unique identifier
- * @param payload Message data
- * @param executionSignatures Validator signatures
+ * @param targetAddress Target contract to call
+ * @param payload Calldata to execute
+ * @param sequencerSignature Sequencer signature
+ * @param validatorSignatures Array of validator signatures to verify
  */
 function initializeAndHandleMessage(
     bytes32 messageId,
+    address targetAddress,
     bytes calldata payload,
-    ValidatorSignatures calldata executionSignatures
+    SequencerSignature calldata sequencerSignature,
+    bytes[] calldata validatorSignatures
 ) external;
 
 /**
@@ -262,24 +286,26 @@ function getPreModules() external view returns (address[] memory);
 function getPostModules() external view returns (address[] memory);
 ```
 
-### IModuleValidator Interface
+### IModuleCheck Interface
 
 A unified interface for both pre and post-execution modules. Modules can determine their behavior based on the ProcessingStage parameter.
 
 ```solidity
-interface IModuleValidator {
+interface IModuleCheck {
     /**
-     * Validate message at a specific processing stage
+     * Check message at a specific processing stage
      *
+     * @param messageId Unique message identifier
      * @param stage Current processing stage (PreExecution or PostExecution)
      * @param payload Message data
-     * @param executionSignatures Validator signatures and submission timestamp
+     * @param sequencerSignature Sequencer signature and submission timestamp
      * @return bool True if validation passes, false otherwise
      */
-    function validate(
-        IBridge.ProcessingStage stage,
+    function check(
+        bytes32 messageId,
+        ProcessingStage stage,
         bytes memory payload,
-        IBridge.ValidatorSignatures memory executionSignatures
+        SequencerSignature memory sequencerSignature
     ) external returns (bool);
 }
 ```
@@ -287,33 +313,35 @@ interface IModuleValidator {
 **Key Design Decisions:**
 
 - **Unified Interface**: Single interface for both pre and post-execution modules
+- **Message ID Access**: Modules receive `messageId` parameter for state tracking and queries
 - **Stage-Aware**: Modules receive `stage` parameter to determine execution context
 - **Bool Return**: Returns bool instead of reverting directly
-- **ModuleValidator Reverts**: Parent ModuleValidator contract handles reverting with `ModuleCheckFailed(address module, ProcessingStage stage)`
+- **ModuleCheckRegistry Reverts**: Parent ModuleCheckRegistry contract handles reverting with `ModuleCheckFailed(address module, ProcessingStage stage)`
 - **State Mutations Allowed**: Modules can write state (not view-only) to enable pre/post state comparison patterns
-- **Example Use Case**: Record NFT supply in pre-execution, verify expected change in post-execution
+- **Example Use Case**: Record token supply in pre-execution, verify expected change in post-execution
 
-### Example: ERC20SupplyValidator
+### Example: ERC20TotalSupplyCheckModule
 
 A reference implementation demonstrating the module pattern:
 
 ```solidity
-contract ERC20SupplyValidator is IModuleValidator {
-    IERC20 public immutable token;
-    uint256 public immutable maxSupply;
+contract ERC20TotalSupplyCheckModule is IModuleCheck {
+    IERC20 public immutable TOKEN;
+    uint256 public immutable TOTAL_SUPPLY_ALLOWED;
 
-    constructor(address _token, uint256 _maxSupply) {
-        token = IERC20(_token);
-        maxSupply = _maxSupply;
+    constructor(address _token, uint256 _totalSupplyAllowed) {
+        TOKEN = IERC20(_token);
+        TOTAL_SUPPLY_ALLOWED = _totalSupplyAllowed;
     }
 
-    function validate(
-        IBridge.ProcessingStage,
+    function check(
+        bytes32,
+        ProcessingStage,
         bytes memory,
-        IBridge.ValidatorSignatures memory
+        SequencerSignature memory
     ) external view returns (bool) {
-        uint256 currentSupply = token.totalSupply();
-        return currentSupply <= maxSupply;
+        uint256 currentSupply = TOKEN.totalSupply();
+        return currentSupply <= TOTAL_SUPPLY_ALLOWED;
     }
 }
 ```
@@ -323,7 +351,7 @@ contract ERC20SupplyValidator is IModuleValidator {
 - Can be registered as either pre or post-execution module
 - Checks if ERC20 token supply exceeds a maximum threshold
 - Returns `false` if supply cap is violated
-- Bridge's ModuleValidator reverts with the module address on failure
+- Bridge's ModuleCheckRegistry reverts with the module address on failure
 - Demonstrates simple validation pattern without state storage
 
 ## Message Format Specification
