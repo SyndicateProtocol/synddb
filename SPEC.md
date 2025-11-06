@@ -528,6 +528,8 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 
 - **State Diff** - Batched SQL operations (captured as changesets) representing incremental database changes, published to DA layers
 - **State Snapshot** - Complete SQLite database file at a specific version, published to DA layers for bootstrapping and recovery (also published immediately on schema changes)
+- **State Update** - Generic term for either a changeset or snapshot. The cryptographic hash of a state update uniquely identifies that version of the database. This term replaces "state root" used in Merkle-based blockchains, since SyndDB uses changesets/snapshots rather than Merkle trees.
+- **State Commitment** - Signed message published by the sequencer containing a state update hash, system status (Healthy/Degraded/Halted), and metadata. This TEE-signed attestation allows validators to verify the sequencer's view of the system state. Similar to how rollups publish "state commitments" that include state roots plus metadata, but adapted for SyndDB's non-Merkle architecture.
 - **Sequence Number** - Monotonically increasing counter ensuring strict ordering of SQL operations
 - **Settlement** - Process where validators publish verified state to blockchain after reading from DA layers
 
