@@ -1937,11 +1937,14 @@ impl InboundMonitor {
         };
 
         // Create message record
+        let payload_json = serde_json::from_slice(&message_event.payload)
+            .unwrap_or_else(|_| json!({ "raw": hex::encode(&message_event.payload) }));
+
         let message = InboundMessage {
             id: self.message_queue.lock().await.next_id(),
             message_id: format!("{:?}", message_event.messageId),
             message_type: message_type.to_string(),
-            payload: message_event.payload,
+            payload: payload_json,
             sender: format!("{:?}", message_event.sender),
             tx_hash: format!("{:?}", log.transaction_hash.unwrap_or_default()),
             block_number: log_block,
@@ -2101,8 +2104,8 @@ impl OutboundMonitor {
         // Query for new messages since last check
         let last_id = self.last_processed_id.load(Ordering::SeqCst);
         let mut stmt = conn.prepare(
-            "SELECT id, message_type, payload, idempotency_key,
-                    trigger_event, trigger_id, status
+            "SELECT 'message_log' as table, id, message_type, payload,
+                    status, created_at
              FROM message_log
              WHERE id > ? AND status = 'pending'
              ORDER BY id
@@ -2111,13 +2114,12 @@ impl OutboundMonitor {
 
         let messages = stmt.query_map([last_id], |row| {
             Ok(OutboundMessage {
-                id: row.get(0)?,
-                message_type: row.get(1)?,
-                payload: row.get(2)?,
-                idempotency_key: row.get(3)?,
-                trigger_event: row.get(4)?,
-                trigger_id: row.get(5)?,
-                status: row.get(6)?,
+                table: row.get(0)?,
+                id: row.get(1)?,
+                message_type: row.get(2)?,
+                payload: row.get(3)?,
+                status: row.get(4)?,
+                created_at: row.get(5)?,
             })
         })?;
 
