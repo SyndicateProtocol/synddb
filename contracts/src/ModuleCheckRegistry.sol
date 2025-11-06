@@ -63,35 +63,37 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, Ownable {
         EnumerableSet.AddressSet storage modules,
         ProcessingStage stage,
         bytes memory payload,
-        ValidatorSignatures memory executionSigs
+        ValidatorSignatures memory executionSignatures
     ) internal returns (bool) {
         uint256 length = modules.length();
         for (uint256 i = 0; i < length; i++) {
             address moduleAddress = modules.at(i);
-            if (!IModuleCheck(moduleAddress).check(stage, payload, executionSigs)) {
+            if (!IModuleCheck(moduleAddress).check(stage, payload, executionSignatures)) {
                 revert ModuleCheckFailed(moduleAddress, stage);
             }
         }
         return true;
     }
 
-    function _validatePreModules(ProcessingStage stage, bytes memory payload, ValidatorSignatures memory executionSigs)
-        internal
-        returns (bool)
-    {
+    function _validatePreModules(
+        ProcessingStage stage,
+        bytes memory payload,
+        ValidatorSignatures memory executionSignatures
+    ) internal returns (bool) {
         if (stage != ProcessingStage.PreExecution) {
             revert InvalidPreExecutionStage(stage);
         }
-        return _validateModules(preModules, stage, payload, executionSigs);
+        return _validateModules(preModules, stage, payload, executionSignatures);
     }
 
-    function _validatePostModules(ProcessingStage stage, bytes memory payload, ValidatorSignatures memory executionSigs)
-        internal
-        returns (bool)
-    {
+    function _validatePostModules(
+        ProcessingStage stage,
+        bytes memory payload,
+        ValidatorSignatures memory executionSignatures
+    ) internal returns (bool) {
         if (stage != ProcessingStage.PostExecution) {
             revert InvalidPostExecutionStage(stage);
         }
-        return _validateModules(postModules, stage, payload, executionSigs);
+        return _validateModules(postModules, stage, payload, executionSignatures);
     }
 }

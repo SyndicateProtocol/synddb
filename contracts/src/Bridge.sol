@@ -17,9 +17,11 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageNotInitialized(bytes32 messageId);
     error MessageAlreadyExecuted(bytes32 messageId);
 
-    function initializeMessage(bytes32 messageId, bytes calldata payload, ValidatorSignatures calldata executionSigs)
-        public
-    {
+    function initializeMessage(
+        bytes32 messageId,
+        bytes calldata payload,
+        ValidatorSignatures calldata executionSignatures
+    ) public {
         if (messageStates[messageId].stage != ProcessingStage.NotStarted) {
             revert MessageAlreadyInitialized(messageId);
         }
@@ -27,7 +29,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         messageStates[messageId] =
             MessageState({messageId: messageId, stage: ProcessingStage.PreExecution, payload: payload});
 
-        messageSignatures[messageId] = executionSigs;
+        messageSignatures[messageId] = executionSignatures;
 
         emit MessageInitialized(messageId, payload);
     }
@@ -64,9 +66,9 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     function initializeAndExecuteMessage(
         bytes32 messageId,
         bytes calldata payload,
-        ValidatorSignatures calldata executionSigs
+        ValidatorSignatures calldata executionSignatures
     ) external {
-        initializeMessage(messageId, payload, executionSigs);
+        initializeMessage(messageId, payload, executionSignatures);
         executeMessage(messageId);
     }
 

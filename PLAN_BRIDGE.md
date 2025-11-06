@@ -174,12 +174,12 @@ enum ProcessingStage {
  *
  * @param messageId Unique identifier
  * @param payload Message data containing type and parameters
- * @param executionSigs Validator signatures and submission timestamp
+ * @param executionSignatures Validator signatures and submission timestamp
  */
 function initializeMessage(
     bytes32 messageId,
     bytes calldata payload,
-    ValidatorSignatures calldata executionSigs
+    ValidatorSignatures calldata executionSignatures
 ) public;
 
 /**
@@ -196,12 +196,12 @@ function executeMessage(bytes32 messageId) public;
  *
  * @param messageId Unique identifier
  * @param payload Message data
- * @param executionSigs Validator signatures
+ * @param executionSignatures Validator signatures
  */
 function initializeAndExecuteMessage(
     bytes32 messageId,
     bytes calldata payload,
-    ValidatorSignatures calldata executionSigs
+    ValidatorSignatures calldata executionSignatures
 ) external;
 
 /**
@@ -273,13 +273,13 @@ interface IModuleValidator {
      *
      * @param stage Current processing stage (PreExecution or PostExecution)
      * @param payload Message data
-     * @param executionSigs Validator signatures and submission timestamp
+     * @param executionSignatures Validator signatures and submission timestamp
      * @return bool True if validation passes, false otherwise
      */
     function validate(
         IBridge.ProcessingStage stage,
         bytes memory payload,
-        IBridge.ValidatorSignatures memory executionSigs
+        IBridge.ValidatorSignatures memory executionSignatures
     ) external returns (bool);
 }
 ```
