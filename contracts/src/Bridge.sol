@@ -26,8 +26,12 @@ contract Bridge is IBridge, ModuleCheckRegistry {
             revert MessageAlreadyInitialized(messageId);
         }
 
-        messageStates[messageId] =
-            MessageState({messageId: messageId, stage: ProcessingStage.PreExecution, payload: payload});
+        messageStates[messageId] = MessageState({
+            messageId: messageId,
+            stage: ProcessingStage.PreExecution,
+            payload: payload,
+            createdAt: block.timestamp
+        });
 
         messageSignatures[messageId] = executionSignatures;
 

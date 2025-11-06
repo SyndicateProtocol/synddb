@@ -14,6 +14,7 @@ struct MessageState {
     bytes32 messageId;
     ProcessingStage stage;
     bytes payload;
+    uint256 createdAt;
 }
 
 struct ValidatorSignatures {
