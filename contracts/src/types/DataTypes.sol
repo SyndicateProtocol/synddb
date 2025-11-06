@@ -12,6 +12,7 @@ enum ProcessingStage {
 
 struct MessageState {
     bytes32 messageId;
+    address targetAddress;
     ProcessingStage stage;
     bytes payload;
     uint256 createdAt;

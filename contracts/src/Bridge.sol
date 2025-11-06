@@ -16,12 +16,14 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
     error MessageAlreadyInitialized(bytes32 messageId);
     error MessageNotInitialized(bytes32 messageId);
-    error MessageAlreadyExecuted(bytes32 messageId);
+    error MessageAlreadyHandled(bytes32 messageId);
+    error MessageExecutionFailed(bytes32 messageId, bytes returnData);
 
     constructor(address admin) ModuleCheckRegistry(admin) {}
 
     function initializeMessage(
         bytes32 messageId,
+        address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature
     ) public onlyRole(SEQUENCER_ROLE) {
@@ -31,6 +33,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
         messageStates[messageId] = MessageState({
             messageId: messageId,
+            targetAddress: targetAddress,
             stage: ProcessingStage.PreExecution,
             payload: payload,
             createdAt: block.timestamp
@@ -58,8 +61,11 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
         state.stage = ProcessingStage.Executing;
 
-        // How does execution entail? Is it sending the call to a cross chain contract?
-        // some sort of execution logic would go here
+        (bool success, bytes memory returnData) = state.targetAddress.call(state.payload);
+
+        if (!success) {
+            revert MessageExecutionFailed(messageId, returnData);
+        }
 
         state.stage = ProcessingStage.PostExecution;
 
