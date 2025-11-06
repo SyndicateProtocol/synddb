@@ -3,13 +3,14 @@ pragma solidity 0.8.30;
 
 import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
 import {ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
-import {IModuleCheckResgistry} from "src/interfaces/IModuleCheckResgistry.sol";
+import {IModuleCheckRegistry} from "src/interfaces/IModuleCheckRegistry.sol";
+import {IValidatorSigningAndQuery} from "src/interfaces/IValidatorSigningAndQuery.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
-abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
+abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigningAndQuery, AccessControl {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     bytes32 public constant SEQUENCER_ROLE = keccak256("SEQUENCER_ROLE");
@@ -24,7 +25,6 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
     event PostModuleAdded(address indexed module);
     event PreModuleRemoved(address indexed module);
     event PostModuleRemoved(address indexed module);
-    event MessageSigned(bytes32 indexed messageId, address indexed validator);
 
     error InvalidModuleAddress();
     error ModuleAlreadyExists();
@@ -33,7 +33,6 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
     error InvalidPostExecutionStage(ProcessingStage stage);
     error ModuleCheckFailed(address module, ProcessingStage stage);
     error InvalidValidatorSignature();
-    error ValidatorNotAuthorized();
 
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -72,6 +71,7 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
     }
 
     function _validateModules(
+        bytes32 messageId,
         EnumerableSet.AddressSet storage modules,
         ProcessingStage stage,
         bytes memory payload,
@@ -80,7 +80,7 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
         uint256 length = modules.length();
         for (uint256 i = 0; i < length; i++) {
             address moduleAddress = modules.at(i);
-            if (!IModuleCheck(moduleAddress).check(stage, payload, sequencerSignature)) {
+            if (!IModuleCheck(moduleAddress).check(messageId, stage, payload, sequencerSignature)) {
                 revert ModuleCheckFailed(moduleAddress, stage);
             }
         }
@@ -88,6 +88,7 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
     }
 
     function _validatePreModules(
+        bytes32 messageId,
         ProcessingStage stage,
         bytes memory payload,
         SequencerSignature memory sequencerSignature
@@ -95,10 +96,11 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
         if (stage != ProcessingStage.PreExecution) {
             revert InvalidPreExecutionStage(stage);
         }
-        return _validateModules(preModules, stage, payload, sequencerSignature);
+        return _validateModules(messageId, preModules, stage, payload, sequencerSignature);
     }
 
     function _validatePostModules(
+        bytes32 messageId,
         ProcessingStage stage,
         bytes memory payload,
         SequencerSignature memory sequencerSignature
@@ -106,7 +108,7 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
         if (stage != ProcessingStage.PostExecution) {
             revert InvalidPostExecutionStage(stage);
         }
-        return _validateModules(postModules, stage, payload, sequencerSignature);
+        return _validateModules(messageId, postModules, stage, payload, sequencerSignature);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -130,5 +132,19 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, AccessControl {
 
         validatorSignatures[messageId][validator] = true;
         emit MessageSigned(messageId, validator);
+    }
+
+    function getValidatorSignatureCount(bytes32 messageId, address[] calldata validators)
+        external
+        view
+        returns (uint256)
+    {
+        uint256 count = 0;
+        for (uint256 i = 0; i < validators.length; i++) {
+            if (validatorSignatures[messageId][validators[i]]) {
+                count++;
+            }
+        }
+        return count;
     }
 }

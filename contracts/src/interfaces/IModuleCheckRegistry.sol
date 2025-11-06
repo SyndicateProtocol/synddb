@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-interface IModuleCheckResgistry {
+interface IModuleCheckRegistry {
     function addPreModule(address module) external;
     function addPostModule(address module) external;
     function removePreModule(address module) external;

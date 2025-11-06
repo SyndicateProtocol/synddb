@@ -57,7 +57,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
         SequencerSignature memory signature = sequencerSignatures[messageId];
 
-        _validatePreModules(ProcessingStage.PreExecution, state.payload, signature);
+        _validatePreModules(messageId, ProcessingStage.PreExecution, state.payload, signature);
 
         state.stage = ProcessingStage.Executing;
 
@@ -69,7 +69,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
         state.stage = ProcessingStage.PostExecution;
 
-        _validatePostModules(ProcessingStage.PostExecution, state.payload, signature);
+        _validatePostModules(messageId, ProcessingStage.PostExecution, state.payload, signature);
 
         state.stage = ProcessingStage.Completed;
 

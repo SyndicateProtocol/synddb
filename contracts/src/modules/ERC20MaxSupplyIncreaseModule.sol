@@ -16,7 +16,7 @@ contract ERC20MaxSupplyIncreaseModule is IModuleCheck {
         MAX_SUPPLY_INCREASE = _maxSupplyIncrease;
     }
 
-    function check(ProcessingStage stage, bytes memory, SequencerSignature memory) external returns (bool) {
+    function check(bytes32, ProcessingStage stage, bytes memory, SequencerSignature memory) external returns (bool) {
         uint256 currentSupply = TOKEN.totalSupply();
 
         if (stage == ProcessingStage.PreExecution) {

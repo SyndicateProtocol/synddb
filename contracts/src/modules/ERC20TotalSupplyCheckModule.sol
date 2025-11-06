@@ -14,7 +14,7 @@ contract ERC20TotalSupplyCheckModule is IModuleCheck {
         TOTAL_SUPPLY_ALLOWED = _totalSupplyAllowed;
     }
 
-    function check(ProcessingStage, bytes memory, SequencerSignature memory) external view returns (bool) {
+    function check(bytes32, ProcessingStage, bytes memory, SequencerSignature memory) external view returns (bool) {
         uint256 currentSupply = TOKEN.totalSupply();
         return currentSupply <= TOTAL_SUPPLY_ALLOWED;
     }
