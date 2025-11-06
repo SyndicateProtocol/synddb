@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {IModuleChecker} from "./interfaces/IModuleChecker.sol";
-import {IBridge} from "./interfaces/IBridge.sol";
+import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
+import {ProcessingStage, ValidatorSignatures} from "src/types/DataTypes.sol";
+import {IModuleCheckResgistry} from "src/interfaces/IModuleCheckResgistry.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-abstract contract ModuleChecker is Ownable, IBridge {
+abstract contract ModuleCheckRegistry is IModuleCheckResgistry, Ownable {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     EnumerableSet.AddressSet private preModules;
@@ -67,7 +68,7 @@ abstract contract ModuleChecker is Ownable, IBridge {
         uint256 length = modules.length();
         for (uint256 i = 0; i < length; i++) {
             address moduleAddress = modules.at(i);
-            if (!IModuleChecker(moduleAddress).check(stage, payload, executionSigs)) {
+            if (!IModuleCheck(moduleAddress).check(stage, payload, executionSigs)) {
                 revert ModuleCheckFailed(moduleAddress, stage);
             }
         }

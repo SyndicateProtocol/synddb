@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {IModuleChecker} from "../interfaces/IModuleChecker.sol";
-import {IBridge} from "../interfaces/IBridge.sol";
+import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
+import {ProcessingStage, ValidatorSignatures} from "src/types/DataTypes.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract ERC20SupplyCheckModule is IModuleChecker {
+contract ERC20SupplyCheckModule is IModuleCheck {
     IERC20 public immutable TOKEN;
     uint256 public immutable MAX_SUPPLY;
 
@@ -14,11 +14,7 @@ contract ERC20SupplyCheckModule is IModuleChecker {
         MAX_SUPPLY = _maxSupply;
     }
 
-    function check(IBridge.ProcessingStage, bytes memory, IBridge.ValidatorSignatures memory)
-        external
-        view
-        returns (bool)
-    {
+    function check(ProcessingStage, bytes memory, ValidatorSignatures memory) external view returns (bool) {
         uint256 currentSupply = TOKEN.totalSupply();
         return currentSupply <= MAX_SUPPLY;
     }
