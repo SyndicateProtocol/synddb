@@ -2,7 +2,7 @@
 pragma solidity 0.8.30;
 
 import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
-import {ProcessingStage, ValidatorSignatures} from "src/types/DataTypes.sol";
+import {ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract ERC20SupplyCheckModule is IModuleCheck {
@@ -14,7 +14,7 @@ contract ERC20SupplyCheckModule is IModuleCheck {
         MAX_SUPPLY = _maxSupply;
     }
 
-    function check(ProcessingStage, bytes memory, ValidatorSignatures memory) external view returns (bool) {
+    function check(ProcessingStage, bytes memory, SequencerSignature memory) external view returns (bool) {
         uint256 currentSupply = TOKEN.totalSupply();
         return currentSupply <= MAX_SUPPLY;
     }

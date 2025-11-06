@@ -2,7 +2,7 @@
 pragma solidity 0.8.30;
 
 import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
-import {ProcessingStage, ValidatorSignatures} from "src/types/DataTypes.sol";
+import {ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
 import {IModuleCheckResgistry} from "src/interfaces/IModuleCheckResgistry.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -63,12 +63,12 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, Ownable {
         EnumerableSet.AddressSet storage modules,
         ProcessingStage stage,
         bytes memory payload,
-        ValidatorSignatures memory executionSignatures
+        SequencerSignature memory sequencerSignature
     ) internal returns (bool) {
         uint256 length = modules.length();
         for (uint256 i = 0; i < length; i++) {
             address moduleAddress = modules.at(i);
-            if (!IModuleCheck(moduleAddress).check(stage, payload, executionSignatures)) {
+            if (!IModuleCheck(moduleAddress).check(stage, payload, sequencerSignature)) {
                 revert ModuleCheckFailed(moduleAddress, stage);
             }
         }
@@ -78,22 +78,22 @@ abstract contract ModuleCheckRegistry is IModuleCheckResgistry, Ownable {
     function _validatePreModules(
         ProcessingStage stage,
         bytes memory payload,
-        ValidatorSignatures memory executionSignatures
+        SequencerSignature memory sequencerSignature
     ) internal returns (bool) {
         if (stage != ProcessingStage.PreExecution) {
             revert InvalidPreExecutionStage(stage);
         }
-        return _validateModules(preModules, stage, payload, executionSignatures);
+        return _validateModules(preModules, stage, payload, sequencerSignature);
     }
 
     function _validatePostModules(
         ProcessingStage stage,
         bytes memory payload,
-        ValidatorSignatures memory executionSignatures
+        SequencerSignature memory sequencerSignature
     ) internal returns (bool) {
         if (stage != ProcessingStage.PostExecution) {
             revert InvalidPostExecutionStage(stage);
         }
-        return _validateModules(postModules, stage, payload, executionSignatures);
+        return _validateModules(postModules, stage, payload, sequencerSignature);
     }
 }

@@ -4,11 +4,11 @@ pragma solidity 0.8.30;
 import {ModuleCheckRegistry} from "src/ModuleCheckRegistry.sol";
 
 import {IBridge} from "src/interfaces/IBridge.sol";
-import {ProcessingStage, MessageState, ValidatorSignatures} from "src/types/DataTypes.sol";
+import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataTypes.sol";
 
 contract Bridge is IBridge, ModuleCheckRegistry {
     mapping(bytes32 messageId => MessageState state) public messageStates;
-    mapping(bytes32 messageId => ValidatorSignatures sigs) public messageSignatures;
+    mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 
     event MessageInitialized(bytes32 indexed messageId, bytes payload);
     event MessageExecuted(bytes32 indexed messageId, bool success);
@@ -20,7 +20,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     function initializeMessage(
         bytes32 messageId,
         bytes calldata payload,
-        ValidatorSignatures calldata executionSignatures
+        SequencerSignature calldata sequencerSignature
     ) public {
         if (messageStates[messageId].stage != ProcessingStage.NotStarted) {
             revert MessageAlreadyInitialized(messageId);
@@ -33,7 +33,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
             createdAt: block.timestamp
         });
 
-        messageSignatures[messageId] = executionSignatures;
+        sequencerSignatures[messageId] = sequencerSignature;
 
         emit MessageInitialized(messageId, payload);
     }
@@ -49,9 +49,9 @@ contract Bridge is IBridge, ModuleCheckRegistry {
             revert MessageAlreadyExecuted(messageId);
         }
 
-        ValidatorSignatures memory sigs = messageSignatures[messageId];
+        SequencerSignature memory signature = sequencerSignatures[messageId];
 
-        _validatePreModules(ProcessingStage.PreExecution, state.payload, sigs);
+        _validatePreModules(ProcessingStage.PreExecution, state.payload, signature);
 
         state.stage = ProcessingStage.Executing;
 
@@ -60,7 +60,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
         state.stage = ProcessingStage.PostExecution;
 
-        _validatePostModules(ProcessingStage.PostExecution, state.payload, sigs);
+        _validatePostModules(ProcessingStage.PostExecution, state.payload, signature);
 
         state.stage = ProcessingStage.Completed;
 
@@ -70,9 +70,9 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     function initializeAndExecuteMessage(
         bytes32 messageId,
         bytes calldata payload,
-        ValidatorSignatures calldata executionSignatures
+        SequencerSignature calldata sequencerSignature
     ) external {
-        initializeMessage(messageId, payload, executionSignatures);
+        initializeMessage(messageId, payload, sequencerSignature);
         executeMessage(messageId);
     }
 

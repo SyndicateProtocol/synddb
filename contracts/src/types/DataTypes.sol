@@ -17,7 +17,7 @@ struct MessageState {
     uint256 createdAt;
 }
 
-struct ValidatorSignatures {
-    bytes[] validatorSignatures;
+struct SequencerSignature {
+    bytes signature;
     uint256 submittedAt;
 }
