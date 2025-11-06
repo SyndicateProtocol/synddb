@@ -17,11 +17,13 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageNotInitialized(bytes32 messageId);
     error MessageAlreadyExecuted(bytes32 messageId);
 
+    constructor(address admin) ModuleCheckRegistry(admin) {}
+
     function initializeMessage(
         bytes32 messageId,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature
-    ) public {
+    ) public onlyRole(SEQUENCER_ROLE) {
         if (messageStates[messageId].stage != ProcessingStage.NotStarted) {
             revert MessageAlreadyInitialized(messageId);
         }
