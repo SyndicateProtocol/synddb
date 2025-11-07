@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {Test} from "forge-std/Test.sol";
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ERC20TotalSupplyCheckModule} from "src/modules/ERC20TotalSupplyCheckModule.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
 import {MockWETH} from "./mocks/MockWETH.sol";
 import {ETHReceiver} from "./mocks/ETHReceiver.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 
-contract UseCase1_ETHTransfer is Test {
+/**
+ * @title UseCase1_ETHTransfer
+ * @notice Tests for ETH transfer through the bridge with validator signatures
+ */
+contract UseCase1_ETHTransfer is UseCaseBaseTest {
     Bridge public bridge;
     MockWETH public weth;
     ETHReceiver public recipient;
@@ -21,55 +24,24 @@ contract UseCase1_ETHTransfer is Test {
     address public sequencer;
     address public user;
 
-    // Validators
-    uint256 public validator1PrivateKey;
-    uint256 public validator2PrivateKey;
-    uint256 public validator3PrivateKey;
-    address public validator1;
-    address public validator2;
-    address public validator3;
-    address[] public validators;
-
     function setUp() public {
         admin = address(this);
         sequencer = makeAddr("sequencer");
         user = makeAddr("user");
 
-        // Setup validators with known private keys
-        validator1PrivateKey = 0x1;
-        validator2PrivateKey = 0x2;
-        validator3PrivateKey = 0x3;
-        validator1 = vm.addr(validator1PrivateKey);
-        validator2 = vm.addr(validator2PrivateKey);
-        validator3 = vm.addr(validator3PrivateKey);
-
-        validators.push(validator1);
-        validators.push(validator2);
-        validators.push(validator3);
-
         weth = new MockWETH();
         bridge = new Bridge(admin, address(weth));
         recipient = new ETHReceiver();
 
+        setupValidators(bridge);
+        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
         supplyCheckModule = new ERC20TotalSupplyCheckModule(address(weth), 1000000 ether);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2); // 2 of 3 threshold
 
         bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);
-        bridge.grantRole(bridge.VALIDATOR_ROLE(), validator1);
-        bridge.grantRole(bridge.VALIDATOR_ROLE(), validator2);
-        bridge.grantRole(bridge.VALIDATOR_ROLE(), validator3);
-
         bridge.addPreModule(address(supplyCheckModule));
         bridge.addPreModule(address(validatorModule));
 
         vm.deal(user, 100 ether);
-    }
-
-    /// @notice Helper function to sign message with validator private key
-    function signMessage(bytes32 messageId, uint256 validatorPrivateKey) internal pure returns (bytes memory) {
-        bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageId);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(validatorPrivateKey, ethSignedMessageHash);
-        return abi.encodePacked(r, s, v);
     }
 
     /// @notice Test Bridge auto-wraps ETH to WETH
@@ -100,11 +72,7 @@ contract UseCase1_ETHTransfer is Test {
         bridge.initializeMessage(messageId, address(weth), payload, sig);
 
         // Submit validator signatures (2 out of 3 threshold)
-        bytes memory sig1 = signMessage(messageId, validator1PrivateKey);
-        bytes memory sig2 = signMessage(messageId, validator2PrivateKey);
-
-        bridge.signMessageWithSignature(messageId, sig1);
-        bridge.signMessageWithSignature(messageId, sig2);
+        submitValidatorSignatures(bridge, messageId);
 
         bridge.handleMessage(messageId);
 
@@ -153,10 +121,7 @@ contract UseCase1_ETHTransfer is Test {
             bridge.initializeMessage(messageId, address(weth), payload, sig);
 
             // Submit validator signatures
-            bytes memory sig1 = signMessage(messageId, validator1PrivateKey);
-            bytes memory sig2 = signMessage(messageId, validator2PrivateKey);
-            bridge.signMessageWithSignature(messageId, sig1);
-            bridge.signMessageWithSignature(messageId, sig2);
+            submitValidatorSignatures(bridge, messageId);
 
             bridge.handleMessage(messageId);
         }
@@ -211,10 +176,7 @@ contract UseCase1_ETHTransfer is Test {
         bridge.initializeMessage(messageId, address(weth), payload, sig);
 
         // Submit exactly 2 signatures (threshold is 2)
-        bytes memory sig1 = signMessage(messageId, validator1PrivateKey);
-        bytes memory sig2 = signMessage(messageId, validator2PrivateKey);
-        bridge.signMessageWithSignature(messageId, sig1);
-        bridge.signMessageWithSignature(messageId, sig2);
+        submitValidatorSignatures(bridge, messageId);
 
         bridge.handleMessage(messageId);
 

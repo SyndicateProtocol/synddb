@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {Test} from "forge-std/Test.sol";
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
 import {MockWETH} from "./mocks/MockWETH.sol";
 import {MockNFT} from "./mocks/MockNFT.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 
 /**
  * @title UseCase2_NFTMinting
  * @notice Tests for NFT minting through the bridge with validator signature verification
  */
-contract UseCase2_NFTMinting is Test {
+contract UseCase2_NFTMinting is UseCaseBaseTest {
     Bridge public bridge;
     MockWETH public weth;
     MockNFT public freeNFT;
@@ -24,15 +23,6 @@ contract UseCase2_NFTMinting is Test {
     address public sequencer;
     address public user;
 
-    // Validators
-    uint256 public validator1PrivateKey;
-    uint256 public validator2PrivateKey;
-    uint256 public validator3PrivateKey;
-    address public validator1;
-    address public validator2;
-    address public validator3;
-    address[] public validators;
-
     uint256 public constant NFT_PRICE = 0.1 ether;
 
     function setUp() public {
@@ -40,48 +30,18 @@ contract UseCase2_NFTMinting is Test {
         sequencer = makeAddr("sequencer");
         user = makeAddr("user");
 
-        // Setup validators
-        validator1PrivateKey = 0x1;
-        validator2PrivateKey = 0x2;
-        validator3PrivateKey = 0x3;
-        validator1 = vm.addr(validator1PrivateKey);
-        validator2 = vm.addr(validator2PrivateKey);
-        validator3 = vm.addr(validator3PrivateKey);
-
-        validators.push(validator1);
-        validators.push(validator2);
-        validators.push(validator3);
-
         weth = new MockWETH();
         bridge = new Bridge(admin, address(weth));
         freeNFT = new MockNFT("Free NFT", "FREE", 0);
         paidNFT = new MockNFT("Paid NFT", "PAID", NFT_PRICE);
 
+        setupValidators(bridge);
         validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
 
         bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);
-        bridge.grantRole(bridge.VALIDATOR_ROLE(), validator1);
-        bridge.grantRole(bridge.VALIDATOR_ROLE(), validator2);
-        bridge.grantRole(bridge.VALIDATOR_ROLE(), validator3);
-
         bridge.addPreModule(address(validatorModule));
 
         vm.deal(user, 100 ether);
-    }
-
-    /// @notice Helper function to sign message with validator private key
-    function signMessage(bytes32 messageId, uint256 validatorPrivateKey) internal pure returns (bytes memory) {
-        bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageId);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(validatorPrivateKey, ethSignedMessageHash);
-        return abi.encodePacked(r, s, v);
-    }
-
-    /// @notice Helper function to submit validator signatures
-    function submitValidatorSignatures(bytes32 messageId) internal {
-        bytes memory sig1 = signMessage(messageId, validator1PrivateKey);
-        bytes memory sig2 = signMessage(messageId, validator2PrivateKey);
-        bridge.signMessageWithSignature(messageId, sig1);
-        bridge.signMessageWithSignature(messageId, sig2);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -98,7 +58,7 @@ contract UseCase2_NFTMinting is Test {
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
 
-        submitValidatorSignatures(messageId);
+        submitValidatorSignatures(bridge, messageId);
 
         bridge.handleMessage(messageId);
 
@@ -119,7 +79,7 @@ contract UseCase2_NFTMinting is Test {
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
 
-            submitValidatorSignatures(messageId);
+            submitValidatorSignatures(bridge, messageId);
 
             bridge.handleMessage(messageId);
         }
@@ -147,7 +107,7 @@ contract UseCase2_NFTMinting is Test {
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
 
-            submitValidatorSignatures(messageId);
+            submitValidatorSignatures(bridge, messageId);
 
             bridge.handleMessage(messageId);
         }
@@ -176,7 +136,7 @@ contract UseCase2_NFTMinting is Test {
         vm.prank(sequencer);
         bridge.initializeMessage(approveMessageId, address(weth), approvePayload, sig);
 
-        submitValidatorSignatures(approveMessageId);
+        submitValidatorSignatures(bridge, approveMessageId);
 
         bridge.handleMessage(approveMessageId);
 
@@ -186,7 +146,7 @@ contract UseCase2_NFTMinting is Test {
         vm.prank(sequencer);
         bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, sig);
 
-        submitValidatorSignatures(mintMessageId);
+        submitValidatorSignatures(bridge, mintMessageId);
 
         bridge.handleMessage(mintMessageId);
 
@@ -212,7 +172,7 @@ contract UseCase2_NFTMinting is Test {
         vm.prank(sequencer);
         bridge.initializeMessage(approveMessageId, address(weth), approvePayload, sig);
 
-        submitValidatorSignatures(approveMessageId);
+        submitValidatorSignatures(bridge, approveMessageId);
 
         bridge.handleMessage(approveMessageId);
 
@@ -223,7 +183,7 @@ contract UseCase2_NFTMinting is Test {
         vm.prank(sequencer);
         bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, sig);
 
-        submitValidatorSignatures(mintMessageId);
+        submitValidatorSignatures(bridge, mintMessageId);
 
         vm.expectRevert();
         bridge.handleMessage(mintMessageId);
@@ -243,7 +203,7 @@ contract UseCase2_NFTMinting is Test {
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
 
-        submitValidatorSignatures(messageId);
+        submitValidatorSignatures(bridge, messageId);
 
         vm.expectRevert();
         bridge.handleMessage(messageId);
@@ -259,7 +219,7 @@ contract UseCase2_NFTMinting is Test {
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
 
-        submitValidatorSignatures(messageId);
+        submitValidatorSignatures(bridge, messageId);
 
         bridge.handleMessage(messageId);
 
