@@ -32,6 +32,7 @@ contract ModuleAddingAndRemovingTest is Test {
     Bridge public bridge;
     address public admin;
     address public sequencer;
+    address public weth;
 
     event PreModuleAdded(address indexed module);
     event PreModuleRemoved(address indexed module);
@@ -39,8 +40,9 @@ contract ModuleAddingAndRemovingTest is Test {
     function setUp() public {
         admin = address(this);
         sequencer = makeAddr("sequencer");
+        weth = makeAddr("weth");
 
-        bridge = new Bridge(admin);
+        bridge = new Bridge(admin, weth);
         bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);
     }
 
@@ -64,7 +66,7 @@ contract ModuleAddingAndRemovingTest is Test {
 
         for (uint256 j = 0; j < moduleCounts.length; j++) {
             // Deploy fresh Bridge for each test
-            Bridge testBridge = new Bridge(admin);
+            Bridge testBridge = new Bridge(admin, weth);
 
             // Add modules
             address[] memory modules = new address[](moduleCounts[j]);
@@ -129,8 +131,7 @@ contract ModuleAddingAndRemovingTest is Test {
         // All removal operations should have similar gas costs
         // Allow 20% variance
         for (uint256 i = 1; i < gasCosts.length; i++) {
-            uint256 diff =
-                gasCosts[i] > gasCosts[0] ? gasCosts[i] - gasCosts[0] : gasCosts[0] - gasCosts[i];
+            uint256 diff = gasCosts[i] > gasCosts[0] ? gasCosts[i] - gasCosts[0] : gasCosts[0] - gasCosts[i];
             uint256 maxDiff = (gasCosts[0] * 20) / 100;
             assertLt(diff, maxDiff, "Removal gas cost varies too much by position");
         }
@@ -159,7 +160,7 @@ contract ModuleAddingAndRemovingTest is Test {
 
         for (uint256 j = 0; j < moduleCounts.length; j++) {
             // Deploy fresh Bridge for each test
-            Bridge testBridge = new Bridge(admin);
+            Bridge testBridge = new Bridge(admin, weth);
             testBridge.grantRole(testBridge.SEQUENCER_ROLE(), sequencer);
 
             // Add gas-consuming modules
@@ -171,8 +172,7 @@ contract ModuleAddingAndRemovingTest is Test {
             // Create a test message
             bytes32 messageId = keccak256(abi.encodePacked("test", j));
             bytes memory payload = abi.encodeWithSignature("test()");
-            SequencerSignature memory sig =
-                SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+            SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
             // Initialize message
             vm.startPrank(sequencer);
@@ -187,9 +187,7 @@ contract ModuleAddingAndRemovingTest is Test {
                 emit log_named_uint("Module count", moduleCounts[j]);
                 emit log_named_uint("Total gas used", gasUsed);
                 emit log_named_uint("Gas per module (approx)", gasUsed / moduleCounts[j]);
-                emit log_named_decimal_uint(
-                    "% of block gas limit", (gasUsed * 100) / 30_000_000, 2
-                );
+                emit log_named_decimal_uint("% of block gas limit", (gasUsed * 100) / 30_000_000, 2);
                 emit log_string("");
 
                 if (gasUsed > 10_000_000) {
@@ -290,8 +288,7 @@ contract ModuleAddingAndRemovingTest is Test {
         // Test message handling with these modules
         bytes32 messageId = keccak256("realistic-test");
         bytes memory payload = abi.encodeWithSignature("test()");
-        SequencerSignature memory sig =
-            SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(this), payload, sig);
@@ -353,9 +350,7 @@ contract ModuleAddingAndRemovingTest is Test {
         emit log_named_uint("Gas to remove critical module", removeGas);
 
         // Assert removal is much cheaper than adding (demonstrating O(1) vs potential O(n) growth)
-        assertTrue(
-            removeGas < 50000, "Removal should remain under 50k gas regardless of set size"
-        );
+        assertTrue(removeGas < 50000, "Removal should remain under 50k gas regardless of set size");
 
         // The key insight: removal gas should not scale with number of modules
         emit log_string("SUCCESS: Removal is O(1) even with 501 modules");
