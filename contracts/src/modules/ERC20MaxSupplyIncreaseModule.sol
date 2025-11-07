@@ -9,28 +9,32 @@ contract ERC20MaxSupplyIncreaseModule is IModuleCheck {
     IERC20 public immutable TOKEN;
     uint256 public immutable MAX_SUPPLY_INCREASE;
 
-    uint256 public preExecutionSupply;
+    mapping(bytes32 messageId => uint256 supply) public preExecutionSupply;
 
     constructor(address _token, uint256 _maxSupplyIncrease) {
         TOKEN = IERC20(_token);
         MAX_SUPPLY_INCREASE = _maxSupplyIncrease;
     }
 
-    function check(bytes32, ProcessingStage stage, bytes memory, SequencerSignature memory) external returns (bool) {
+    function check(bytes32 messageId, ProcessingStage stage, bytes memory, SequencerSignature memory)
+        external
+        returns (bool)
+    {
         uint256 currentSupply = TOKEN.totalSupply();
 
         if (stage == ProcessingStage.PreExecution) {
-            preExecutionSupply = currentSupply;
+            preExecutionSupply[messageId] = currentSupply;
             return true;
         } else if (stage == ProcessingStage.PostExecution) {
-            if (currentSupply > preExecutionSupply) {
-                uint256 supplyIncrease = currentSupply - preExecutionSupply;
+            uint256 storedSupply = preExecutionSupply[messageId];
+            if (currentSupply > storedSupply) {
+                uint256 supplyIncrease = currentSupply - storedSupply;
                 if (supplyIncrease > MAX_SUPPLY_INCREASE) {
                     return false;
                 }
             }
 
-            preExecutionSupply = 0;
+            delete preExecutionSupply[messageId];
             return true;
         }
 
