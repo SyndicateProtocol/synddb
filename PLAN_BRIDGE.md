@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Bridge is a modular smart contract system that processes messages from SyndDB validators and executes them on-chain. It uses a two-stage module architecture where users can compose custom validation and post-processing logic through PreExecution and PostExecution modules.
+The Bridge is a modular smart contract system following a "secure by module design" architecture. It processes messages from SyndDB validators and executes them on-chain using a unified module validation system where developers can compose custom pre and post-execution validation logic.
 
 The Bridge acts as the settlement layer for SyndDB, handling:
 
@@ -30,7 +30,7 @@ This bridge architecture draws inspiration from proven modular smart contract sy
 
 The modular architecture enables advanced validation patterns:
 
-- **Flexible thresholds**: Per-module validation requirements (e.g., "2 of 3 signature validators OR 1 trusted module")
+- **Flexible thresholds**: Per-module validation requirements (e.g. "at least 3 signatures from validators")
 - **Message-type routing**: Different validation rules for WITHDRAW vs DEPOSIT messages (DEPOSIT with zero value indicates a generic call)
 - **Default module sets**: Sensible default modules with optional custom overrides
 
@@ -42,32 +42,36 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 
 **Stage 1: Initialization**
 
-- Create message state
-- Store payload
-- Set initial checkpoint values
-- Mark message as active
+- Create message state with messageId, targetAddress, stage, payload, and createdAt timestamp
+- Store SequencerSignature separately in dedicated mapping
+- Mark stage as PreExecution
+- Restricted to SEQUENCER_ROLE
 
 **Stage 2: PreExecution (Validation)**
 
-- Run PreExecution modules sequentially
-- Each module validates the message (validation only, no state mutations)
-- Any module can reject the message
-- If all pass, advance to execution stage
-- Examples: signature verification, balance checks, withdrawal limits
+- Run all registered pre-execution modules
+- Each module receives messageId, ProcessingStage, payload, and SequencerSignature
+- Modules return bool (true = pass, false = fail)
+- ModuleCheckRegistry reverts with `ModuleCheckFailed(address module, ProcessingStage stage)` on failure
+- Modules can write state for later validation (e.g. record pre-execution NFT count)
+- Examples: signature threshold verification, balance checks, withdrawal limits
 
 **Stage 3: Core Execution**
 
-- Decode message type from payload
-- Execute the operation
-- Record success or failure
-- Store execution result
+- Execute the core message logic by calling targetAddress with payload
+- Low-level call: `targetAddress.call(payload)`
+- Reverts with `MessageExecutionFailed(messageId, returnData)` if call fails
+- Update stage to Executing → PostExecution
+- Protected by reentrancy guard
 
 **Stage 4: PostExecution (Post-Processing)**
 
-- Run PostExecution modules sequentially
-- Process execution results and enforce post-execution invariants (validation only, no state mutations)
-- Can revert to block message completion (e.g. supply cap violations)
-- Examples: emit events, validate invariants
+- Run all registered post-execution modules
+- Modules can read stored state from pre-execution
+- Example: Verify token supply increased within allowed limits
+- Modules return bool, ModuleCheckRegistry reverts on failure
+- Mark stage as Completed
+- Examples: supply change validation, invariant checks
 
 ### Data Flow
 
@@ -81,9 +85,9 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
             │  Single Atomic Transaction          │
             │                                     │
             │  1. initializeMessage()             │
-            │  2. executePreModules()             │
-            │  3. executeMessage()                │
-            │  4. executePostModules()            │
+            │  2. _validatePreModules()           │
+            │  3. handleMessage()                 │
+            │  4. _validatePostModules()          │
             │                                     │
             │  Any revert → entire TX reverts     │
             └─────────────────────────────────────┘
@@ -103,36 +107,30 @@ NotStarted → PreExecution → Executing → PostExecution → Completed
 The Bridge contract manages:
 
 - Message state and processing stage tracking
-- Module registries (PreExecution and PostExecution)
+- Pre and post validation of messages via modules
 - Core execution logic for standard message types
 - Replay protection via processed message tracking
 
 ## Directory Structure
 
 ```
-synddb-bridge/
-├── src/
-│   ├── Bridge.sol                          # Core bridge contract
-│   │
-│   ├── interfaces/
-│   │   ├── IBridge.sol                     # Bridge interface
-│   │   ├── IPreExecutionModule.sol         # PreExecution module interface
-│   │   └── IPostExecutionModule.sol        # PostExecution module interface
-│   │
-│   ├── modules/
-│   │   ├── pre/ -> Example PreExecution modules
-│   │   │   ├── SignatureValidator.sol      # Validator signature verification
-│   │   │   ├── WithdrawalLimitModule.sol   # Daily withdrawal caps
-│   │   │   ├── WhitelistModule.sol         # Recipient whitelist checks
-│   │   │   └── BalanceCheckModule.sol      # Balance verification
-│   │   │
-│   │   └── post/ -> Example PostExecution modules
-│   │       ├── EventEmitterModule.sol      # Emit detailed events
-│   │       ├── SupplyCapModule.sol         # Enforce supply caps
-│   │       └── InvariantCheckModule.sol    # Validate post-execution invariants
-│   │
-│   └── types/
-│       ├── MessageTypes.sol                # Message type constants
+contracts/src/
+├── Bridge.sol                                    # Core bridge contract (inherits ModuleCheckRegistry)
+├── ModuleCheckRegistry.sol                       # Base contract for module management and validator signing
+│
+├── interfaces/
+│   ├── IBridge.sol                              # Bridge interface
+│   ├── IModuleCheck.sol                         # Unified module check interface
+│   ├── IModuleCheckRegistry.sol                 # Module registry interface
+│   └── IValidatorSigningAndQuery.sol            # Validator signing and querying interface
+│
+├── types/
+│   └── DataTypes.sol                            # Shared data structures
+│
+└── modules/
+    ├── ERC20TotalSupplyCheckModule.sol          # Example: ERC20 supply cap validation
+    ├── ERC20MaxSupplyIncreaseModule.sol         # Example: ERC20 supply change tracking
+    └── ValidatorSignatureThresholdModule.sol    # Example: Validator signature threshold check
 ```
 
 ## Core Components
@@ -144,13 +142,17 @@ The main bridge contract that orchestrates message processing across all stages.
 #### State Variables
 
 ```solidity
-// Module registries using OpenZeppelin EnumerableSet
-EnumerableSet.AddressSet internal preExecutionModules;
-EnumerableSet.AddressSet internal postExecutionModules;
+// In ModuleCheckRegistry (inherited by Bridge)
+EnumerableSet.AddressSet private preModules;
+EnumerableSet.AddressSet private postModules;
+mapping(bytes32 messageId => mapping(address validator => bool hasSigned)) public validatorSignatures;
 
-// Message tracking
-mapping(bytes32 messageId => bool hasBeenProcessed) public processedMessages;
-mapping(bytes32 messageId => MessageState messageState) public messageStates;
+bytes32 public constant SEQUENCER_ROLE = keccak256("SEQUENCER_ROLE");
+bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
+
+// In Bridge
+mapping(bytes32 messageId => MessageState state) public messageStates;
+mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 ```
 
 #### Data Structures
@@ -158,12 +160,15 @@ mapping(bytes32 messageId => MessageState messageState) public messageStates;
 ```solidity
 struct MessageState {
     bytes32 messageId;
-    uint256 preModuleCheckpoint;
-    uint256 postModuleCheckpoint;
+    address targetAddress;    // Target contract to call
     ProcessingStage stage;
-    bytes payload;
-    bool executionSuccess;
-    bytes executionResult;
+    bytes payload;           // Calldata to execute
+    uint256 createdAt;      // Timestamp when message was initialized
+}
+
+struct SequencerSignature {
+    bytes signature;        // Single sequencer signature (not array)
+    uint256 submittedAt;   // Timestamp when signature was submitted
 }
 
 enum ProcessingStage {
@@ -174,12 +179,6 @@ enum ProcessingStage {
     Completed,
     Rejected
 }
-
-struct ExecutionContext {
-    address initiator;
-    bytes[] validatorSignatures;
-    uint256 timestamp;
-}
 ```
 
 #### Core Functions
@@ -187,162 +186,173 @@ struct ExecutionContext {
 ```solidity
 /**
  * Initialize a new message for processing
- * Creates message state and stores payload
+ * Creates message state and stores sequencer signature
+ * This is initiated by the sequencer upon receiving a signed message
+ * Restricted to SEQUENCER_ROLE
  *
- * @param messageId Unique identifier from DA layer
- * @param payload Message data containing type and parameters
- * @param context Execution context with validator signatures
+ * @param messageId Unique identifier
+ * @param targetAddress Target contract to call
+ * @param payload Calldata to execute on target
+ * @param sequencerSignature Sequencer signature and submission timestamp
  */
 function initializeMessage(
     bytes32 messageId,
+    address targetAddress,
     bytes calldata payload,
-    ExecutionContext calldata context
+    SequencerSignature calldata sequencerSignature
 ) public;
 
 /**
- * Execute PreExecution modules for validation
- * Runs modules from current checkpoint
- * Any module can reject the message
+ * Pass the message through all validation and execution stages
+ * Runs pre-validation, core execution, and post-validation
  *
- * @param messageId The message to validate
+ * @param messageId The message to handle
  */
-function executePreModules(bytes32 messageId) public;
+function handleMessage(bytes32 messageId) public;
 
 /**
- * Execute the core message logic
- * Decodes message type and routes to appropriate handler
- * Records execution success and result
+ * Convenience function to initialize and handle in one call
+ * Also collects and verifies validator signatures via relayer pattern
  *
- * @param messageId The message to execute
+ * @param messageId Unique identifier
+ * @param targetAddress Target contract to call
+ * @param payload Calldata to execute
+ * @param sequencerSignature Sequencer signature
+ * @param validatorSignatures Array of validator signatures to verify
  */
-function executeMessage(bytes32 messageId) public;
-
-/**
- * Execute PostExecution modules for post-processing
- * Runs modules from current checkpoint
- * Module failures do not block message completion
- *
- * @param messageId The message to process
- */
-function executePostModules(bytes32 messageId) public;
-
-
-/**
- * Convenience function to process message through all stages
- * Executes initialize, pre, core, and post in sequence
- *
- * @param messageId Unique identifier from DA layer
- * @param payload Message data
- * @param context Execution context
- */
-function processMessageComplete(
+function initializeAndHandleMessage(
     bytes32 messageId,
+    address targetAddress,
     bytes calldata payload,
-    ExecutionContext calldata context
+    SequencerSignature calldata sequencerSignature,
+    bytes[] calldata validatorSignatures
 ) external;
+
+/**
+ * Check if a message has been handled
+ * Returns true if messageStates[messageId].stage == ProcessingStage.Completed
+ *
+ * @param messageId The message to check
+ * @return bool True if message is completed
+ */
+function isMessageHandled(bytes32 messageId) external view returns (bool);
 ```
 
 #### Module Management
 
 ```solidity
 /**
- * Add a PreExecution module to the registry
+ * Add a pre-execution module to the registry
  * Modules execute in the order they are added
  *
  * @param module Address of the module contract
  */
-function addPreExecutionModule(address module) external;
+function addPreModule(address module) external;
 
 /**
- * Add a PostExecution module to the registry
+ * Add a post-execution module to the registry
  * Modules execute in the order they are added
  *
  * @param module Address of the module contract
  */
-function addPostExecutionModule(address module) external;
+function addPostModule(address module) external;
 
 /**
- * Remove a PreExecution module from the registry
+ * Remove a pre-execution module from the registry
  *
  * @param module Address of the module to remove
  */
-function removePreExecutionModule(address module) external;
+function removePreModule(address module) external;
 
 /**
- * Remove a PostExecution module from the registry
+ * Remove a post-execution module from the registry
  *
  * @param module Address of the module to remove
  */
-function removePostExecutionModule(address module) external;
+function removePostModule(address module) external;
 
 /**
- * Get all registered PreExecution modules
+ * Get all registered pre-execution modules
  *
  * @return Array of module addresses
  */
-function getPreExecutionModules() external view returns (address[] memory);
+function getPreModules() external view returns (address[] memory);
 
 /**
- * Get all registered PostExecution modules
+ * Get all registered post-execution modules
  *
  * @return Array of module addresses
  */
-function getPostExecutionModules() external view returns (address[] memory);
+function getPostModules() external view returns (address[] memory);
 ```
 
-### IPreExecutionModule Interface
+### IModuleCheck Interface
 
-PreExecution modules validate messages before core execution. Modules return bools to enable composable validation logic.
+A unified interface for both pre and post-execution modules. Modules can determine their behavior based on the ProcessingStage parameter.
 
 ```solidity
-interface IPreExecutionModule {
-    /// @notice Custom errors for pre-execution failures
-    error PreExecutionFailed(bytes32 messageId, uint256 errorCode);
-
+interface IModuleCheck {
     /**
-     * Validate a message before execution
-     * Called by Bridge during PreExecution stage
+     * Check message at a specific processing stage
      *
-     * @param messageId Unique message identifier from DA layer
-     * @param payload Message data containing type and parameters
-     * @param context Execution context with validator signatures
-     * @return errorCode If false, error code for rejection (0 = success)
+     * @param messageId Unique message identifier
+     * @param stage Current processing stage (PreExecution or PostExecution)
+     * @param payload Message data
+     * @param sequencerSignature Sequencer signature and submission timestamp
+     * @return bool True if validation passes, false otherwise
      */
-    function beforeExecution(
+    function check(
         bytes32 messageId,
-        bytes calldata payload,
-        ExecutionContext calldata context
-    ) external returns (bool shouldExecute, uint256 errorCode);
+        ProcessingStage stage,
+        bytes memory payload,
+        SequencerSignature memory sequencerSignature
+    ) external returns (bool);
 }
 ```
 
-### IPostExecutionModule Interface
+**Key Design Decisions:**
 
-PostExecution modules process results after core execution and can enforce post-execution invariants. Modules can return false to block message completion (e.g., supply cap violations). They are stateless validators that perform read-only checks. They should not mutate state or make external calls to avoid gas griefing and reentrancy risks.
+- **Unified Interface**: Single interface for both pre and post-execution modules
+- **Message ID Access**: Modules receive `messageId` parameter for state tracking and queries
+- **Stage-Aware**: Modules receive `stage` parameter to determine execution context
+- **Bool Return**: Returns bool instead of reverting directly
+- **ModuleCheckRegistry Reverts**: Parent ModuleCheckRegistry contract handles reverting with `ModuleCheckFailed(address module, ProcessingStage stage)`
+- **State Mutations Allowed**: Modules can write state (not view-only) to enable pre/post state comparison patterns
+- **Example Use Case**: Record token supply in pre-execution, verify expected change in post-execution
+
+### Example: ERC20TotalSupplyCheckModule
+
+A reference implementation demonstrating the module pattern:
 
 ```solidity
-interface IPostExecutionModule {
-    /// @notice Custom errors for post-execution failures
-    error PostExecutionFailed(bytes32 messageId, uint256 errorCode);
+contract ERC20TotalSupplyCheckModule is IModuleCheck {
+    IERC20 public immutable TOKEN;
+    uint256 public immutable TOTAL_SUPPLY_ALLOWED;
 
-    /**
-     * Process results after message execution
-     * Called by Bridge during PostExecution stage
-     * Can revert to block message completion
-     *
-     * @param messageId Unique message identifier from DA layer
-     * @param success Whether core execution succeeded
-     * @param result Execution result data
-     * @param context Execution context
-     */
-    function afterExecution(
-        bytes32 messageId,
-        bool success,
-        bytes calldata result,
-        ExecutionContext calldata context
-    ) external;
+    constructor(address _token, uint256 _totalSupplyAllowed) {
+        TOKEN = IERC20(_token);
+        TOTAL_SUPPLY_ALLOWED = _totalSupplyAllowed;
+    }
+
+    function check(
+        bytes32,
+        ProcessingStage,
+        bytes memory,
+        SequencerSignature memory
+    ) external view returns (bool) {
+        uint256 currentSupply = TOKEN.totalSupply();
+        return currentSupply <= TOTAL_SUPPLY_ALLOWED;
+    }
 }
 ```
+
+**Module Characteristics:**
+
+- Can be registered as either pre or post-execution module
+- Checks if ERC20 token supply exceeds a maximum threshold
+- Returns `false` if supply cap is violated
+- Bridge's ModuleCheckRegistry reverts with the module address on failure
+- Demonstrates simple validation pattern without state storage
 
 ## Message Format Specification
 
