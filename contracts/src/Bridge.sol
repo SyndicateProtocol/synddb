@@ -5,9 +5,8 @@ import {ModuleCheckRegistry} from "src/ModuleCheckRegistry.sol";
 
 import {IBridge} from "src/interfaces/IBridge.sol";
 import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataTypes.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
+contract Bridge is IBridge, ModuleCheckRegistry {
     mapping(bytes32 messageId => MessageState state) public messageStates;
     mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 
@@ -17,6 +16,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
     error MessageAlreadyInitialized(bytes32 messageId);
     error MessageNotInitialized(bytes32 messageId);
     error MessageAlreadyHandled(bytes32 messageId);
+    error MessageCurrentlyProcessing(bytes32 messageId, ProcessingStage currentStage);
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
     error ArrayLengthMismatch();
 
@@ -45,7 +45,17 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
         emit MessageInitialized(messageId, payload);
     }
 
-    function handleMessage(bytes32 messageId) public nonReentrant {
+    /**
+     * @notice Processes a cross-chain message by executing its payload and validating pre/post execution modules
+     * @dev This function allows reentrancy for composability but prevents re-processing the same message via stage
+     * checks.
+     *
+     * WARNING: Message handlers should be carefully designed to handle reentrant calls. Avoid relying on contract state that could change during execution.
+     * The bridge allows cross-message reentrancy to enable composable cross-chain operations, but same-message reentrancy is blocked.
+     *
+     * @param messageId The unique identifier of the message to process
+     */
+    function handleMessage(bytes32 messageId) public {
         MessageState storage state = messageStates[messageId];
 
         if (state.stage == ProcessingStage.NotStarted) {
@@ -54,6 +64,10 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
         if (isMessageHandled(messageId)) {
             revert MessageAlreadyHandled(messageId);
+        }
+
+        if (state.stage != ProcessingStage.PreExecution) {
+            revert MessageCurrentlyProcessing(messageId, state.stage);
         }
 
         SequencerSignature memory signature = sequencerSignatures[messageId];
