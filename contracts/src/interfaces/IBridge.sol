@@ -21,6 +21,10 @@ interface IBridge {
         bytes[] calldata validatorSignatures
     ) external;
 
+    function isMessageCompleted(bytes32 messageId) external view returns (bool);
+
+    function isMessageRejected(bytes32 messageId) external view returns (bool);
+
     function isMessageHandled(bytes32 messageId) external view returns (bool);
 
     function isMessageInitialized(bytes32 messageId) external view returns (bool);

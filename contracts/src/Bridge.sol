@@ -52,7 +52,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
             revert MessageNotInitialized(messageId);
         }
 
-        if (state.stage == ProcessingStage.Completed) {
+        if (isMessageHandled(messageId)) {
             revert MessageAlreadyHandled(messageId);
         }
 
@@ -94,8 +94,16 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
         handleMessage(messageId);
     }
 
-    function isMessageHandled(bytes32 messageId) external view returns (bool) {
+    function isMessageCompleted(bytes32 messageId) public view returns (bool) {
         return messageStates[messageId].stage == ProcessingStage.Completed;
+    }
+
+    function isMessageRejected(bytes32 messageId) public view returns (bool) {
+        return messageStates[messageId].stage == ProcessingStage.Rejected;
+    }
+
+    function isMessageHandled(bytes32 messageId) public view returns (bool) {
+        return isMessageCompleted(messageId) || isMessageRejected(messageId);
     }
 
     function isMessageInitialized(bytes32 messageId) public view returns (bool) {
