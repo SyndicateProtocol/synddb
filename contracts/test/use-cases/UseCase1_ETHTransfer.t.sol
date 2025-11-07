@@ -6,7 +6,8 @@ import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ERC20TotalSupplyCheckModule} from "src/modules/ERC20TotalSupplyCheckModule.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {MockWETH, ETHReceiver} from "./Mocks.sol";
+import {MockWETH} from "./mocks/MockWETH.sol";
+import {ETHReceiver} from "./mocks/ETHReceiver.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract UseCase1_ETHTransfer is Test {

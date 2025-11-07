@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {UseCaseBaseTest} from "./UseCaseBaseTest.sol";
+import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {MockERC20, MockCrossChainReceiver, MockWETH} from "./Mocks.sol";
+import {MockERC20} from "./mocks/MockERC20.sol";
+import {MockCrossChainReceiver} from "./mocks/MockCrossChainReceiver.sol";
+import {MockWETH} from "./mocks/MockWETH.sol";
 
 /**
  * @title UseCase4_CrossChainMessaging

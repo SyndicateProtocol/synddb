@@ -4,8 +4,9 @@ pragma solidity 0.8.30;
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {MockERC20, MockWETH} from "./Mocks.sol";
-import {UseCaseBaseTest} from "./UseCaseBaseTest.sol";
+import {MockERC20} from "./mocks/MockERC20.sol";
+import {MockWETH} from "./mocks/MockWETH.sol";
+import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 
 /**
  * @title UseCase3_ERC20Transfer

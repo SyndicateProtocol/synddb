@@ -5,7 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {MockWETH, MockNFT} from "./Mocks.sol";
+import {MockWETH} from "./mocks/MockWETH.sol";
+import {MockNFT} from "./mocks/MockNFT.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**

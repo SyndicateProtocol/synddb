@@ -2,13 +2,9 @@
 pragma solidity 0.8.30;
 
 import {ModuleCheckRegistry} from "src/ModuleCheckRegistry.sol";
-
 import {IBridge} from "src/interfaces/IBridge.sol";
+import {IWETH} from "src/interfaces/IWETH.sol";
 import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataTypes.sol";
-
-interface IWETH {
-    function deposit() external payable;
-}
 
 contract Bridge is IBridge, ModuleCheckRegistry {
     mapping(bytes32 messageId => MessageState state) public messageStates;
