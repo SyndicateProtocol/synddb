@@ -349,7 +349,12 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
 
         bytes memory crossChainData = abi.encode("MINT", recipient, mintAmount);
         bytes memory payload = abi.encodeWithSelector(
-            destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, mintAmount, crossChainData
+            destinationChain.receiveMintMessage.selector,
+            messageId,
+            address(token),
+            recipient,
+            mintAmount,
+            crossChainData
         );
 
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
@@ -372,7 +377,12 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
 
         bytes memory crossChainData = abi.encode("MINT", recipient, mintAmount);
         bytes memory payload = abi.encodeWithSelector(
-            destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, mintAmount, crossChainData
+            destinationChain.receiveMintMessage.selector,
+            messageId,
+            address(token),
+            recipient,
+            mintAmount,
+            crossChainData
         );
 
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
