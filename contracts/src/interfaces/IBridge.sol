@@ -22,4 +22,6 @@ interface IBridge {
     ) external;
 
     function isMessageHandled(bytes32 messageId) external view returns (bool);
+
+    function isMessageInitialized(bytes32 messageId) external view returns (bool);
 }

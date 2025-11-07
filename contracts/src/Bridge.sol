@@ -28,7 +28,7 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature
     ) public onlyRole(SEQUENCER_ROLE) {
-        if (messageStates[messageId].stage != ProcessingStage.NotStarted) {
+        if (isMessageInitialized(messageId)) {
             revert MessageAlreadyInitialized(messageId);
         }
 
@@ -96,6 +96,10 @@ contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuard {
 
     function isMessageHandled(bytes32 messageId) external view returns (bool) {
         return messageStates[messageId].stage == ProcessingStage.Completed;
+    }
+
+    function isMessageInitialized(bytes32 messageId) public view returns (bool) {
+        return messageStates[messageId].stage != ProcessingStage.NotStarted;
     }
 
     /*//////////////////////////////////////////////////////////////
