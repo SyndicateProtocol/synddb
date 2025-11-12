@@ -3,18 +3,18 @@ pragma solidity 0.8.30;
 
 import {ModuleCheckRegistry} from "src/ModuleCheckRegistry.sol";
 import {IBridge} from "src/interfaces/IBridge.sol";
-import {IWETH} from "src/interfaces/IWETH.sol";
+import {IWrappedNativeToken} from "src/interfaces/IWrappedNativeToken.sol";
 import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataTypes.sol";
 
 contract Bridge is IBridge, ModuleCheckRegistry {
     mapping(bytes32 messageId => MessageState state) public messageStates;
     mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 
-    IWETH public immutable weth;
+    IWrappedNativeToken public immutable wrappedNativeToken;
 
     event MessageInitialized(bytes32 indexed messageId, bytes payload);
     event MessageHandled(bytes32 indexed messageId, bool success);
-    event ETHWrapped(address indexed sender, uint256 amount);
+    event NativeTokenWrapped(address indexed sender, uint256 amount);
 
     error MessageAlreadyInitialized(bytes32 messageId);
     error MessageNotInitialized(bytes32 messageId);
@@ -23,13 +23,13 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
     error ArrayLengthMismatch();
 
-    constructor(address admin, address _weth) ModuleCheckRegistry(admin) {
-        weth = IWETH(_weth);
+    constructor(address admin, address _wrappedNativeToken) ModuleCheckRegistry(admin) {
+        wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
     }
 
     receive() external payable {
-        weth.deposit{value: msg.value}();
-        emit ETHWrapped(msg.sender, msg.value);
+        wrappedNativeToken.deposit{value: msg.value}();
+        emit NativeTokenWrapped(msg.sender, msg.value);
     }
 
     function initializeMessage(
