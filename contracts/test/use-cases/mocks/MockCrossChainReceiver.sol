@@ -13,12 +13,18 @@ interface ICrosschainERC20 {
     function burn(address from, uint256 amount) external;
 }
 
+interface IONFT {
+    function crosschainMint(address to, uint256 tokenId) external;
+    function crosschainBurn(address from, uint256 tokenId) external;
+}
+
 /**
  * @title MockCrossChainReceiver
  * @notice Mock cross-chain bridge target for testing cross-chain message passing
  * @dev Supports multiple common cross-chain token standards:
  *      - SuperchainERC20 (Optimism ERC-7802)
  *      - CrosschainERC20 (generic cross-chain standard)
+ *      - ONFT (LayerZero Omnichain NFT)
  *      - Standard ERC20 with mint function
  *
  * This mock simulates how a destination chain bridge would receive and process
@@ -30,6 +36,7 @@ contract MockCrossChainReceiver {
     );
     event SuperchainMintReceived(bytes32 indexed messageId, address indexed token, address indexed to, uint256 amount);
     event CrosschainMintReceived(bytes32 indexed messageId, address indexed token, address indexed to, uint256 amount);
+    event ONFTMintReceived(bytes32 indexed messageId, address indexed token, address indexed to, uint256 tokenId);
 
     /// @notice Simulates receiving a cross-chain mint message (standard ERC20)
     function receiveMintMessage(
@@ -71,5 +78,19 @@ contract MockCrossChainReceiver {
 
         // Call CrosschainERC20's mint with data
         ICrosschainERC20(token).mint(to, amount, data);
+    }
+
+    /// @notice Simulates receiving an ONFT cross-chain mint
+    /// @dev Uses LayerZero's ONFT interface
+    function receiveONFTMint(
+        bytes32 messageId,
+        address token,
+        address to,
+        uint256 tokenId
+    ) external {
+        emit ONFTMintReceived(messageId, token, to, tokenId);
+
+        // Call ONFT's crosschainMint
+        IONFT(token).crosschainMint(to, tokenId);
     }
 }
