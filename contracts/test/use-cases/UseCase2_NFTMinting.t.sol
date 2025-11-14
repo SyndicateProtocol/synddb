@@ -4,7 +4,7 @@ pragma solidity 0.8.30;
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {MockWETH} from "./mocks/MockWETH.sol";
+import {WETH9} from "./mocks/WETH9.sol";
 import {MockNFT} from "./mocks/MockNFT.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 
@@ -14,7 +14,7 @@ import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
  */
 contract UseCase2_NFTMinting is UseCaseBaseTest {
     Bridge public bridge;
-    MockWETH public weth;
+    WETH9 public weth;
     MockNFT public freeNFT;
     MockNFT public paidNFT;
     ValidatorSignatureThresholdModule public validatorModule;
@@ -30,7 +30,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         sequencer = makeAddr("sequencer");
         user = makeAddr("user");
 
-        weth = new MockWETH();
+        weth = new WETH9();
         bridge = new Bridge(admin, address(weth));
         freeNFT = new MockNFT("Free NFT", "FREE", 0);
         paidNFT = new MockNFT("Paid NFT", "PAID", NFT_PRICE);
@@ -187,6 +187,53 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
 
         vm.expectRevert();
         bridge.handleMessage(mintMessageId);
+    }
+
+    /// @notice Test minting NFT with native ETH via Bridge.withdrawAndCall
+    /// @dev This tests the harder case: Bridge holds WETH, needs to unwrap to ETH for NFT payment
+    ///      The Bridge calls itself (self-call) to execute withdrawAndCall
+    function test_MintPaidNFTWithETH_ViaWithdrawAndCall() public {
+        // User deposits ETH into bridge (gets wrapped to WETH)
+        vm.prank(user);
+        (bool success,) = address(bridge).call{value: NFT_PRICE}("");
+        assertTrue(success);
+        assertEq(weth.balanceOf(address(bridge)), NFT_PRICE);
+
+        // Bridge calls itself to unwrap WETH and mint NFT with ETH
+        bytes32 messageId = keccak256("withdraw-and-mint");
+
+        // Encode the NFT mint call that requires ETH
+        bytes memory nftMintCall = abi.encodeWithSelector(
+            paidNFT.mintWithPayment.selector,
+            user
+        );
+
+        // Encode the Bridge.withdrawAndCall to unwrap WETH and forward ETH to NFT
+        bytes memory payload = abi.encodeWithSelector(
+            bridge.withdrawAndCall.selector,
+            NFT_PRICE,
+            address(paidNFT),
+            nftMintCall
+        );
+
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+
+        // Bridge calls itself (self-call)
+        vm.prank(sequencer);
+        bridge.initializeMessage(messageId, address(bridge), payload, sig);
+        submitValidatorSignatures(bridge, messageId);
+        bridge.handleMessage(messageId);
+
+        // Verify NFT was minted to user
+        assertEq(paidNFT.ownerOf(0), user);
+        assertEq(paidNFT.balanceOf(user), 1);
+
+        // Verify NFT contract received ETH payment (not WETH)
+        assertEq(address(paidNFT).balance, NFT_PRICE);
+        assertEq(weth.balanceOf(address(paidNFT)), 0);
+
+        // Verify bridge WETH was consumed
+        assertEq(weth.balanceOf(address(bridge)), 0);
     }
 
     /*//////////////////////////////////////////////////////////////

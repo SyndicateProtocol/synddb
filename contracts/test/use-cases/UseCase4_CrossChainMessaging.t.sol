@@ -7,7 +7,7 @@ import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockCrossChainReceiver} from "./mocks/MockCrossChainReceiver.sol";
-import {MockWETH} from "./mocks/MockWETH.sol";
+import {WETH9} from "./mocks/WETH9.sol";
 
 /**
  * @title UseCase4_CrossChainMessaging
@@ -31,7 +31,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         recipient = makeAddr("recipient");
 
         token = new MockERC20("Cross Chain Token", "CCT");
-        MockWETH weth = new MockWETH();
+        WETH9 weth = new WETH9();
         bridge = new Bridge(admin, address(weth));
         setupValidators(bridge);
         validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);

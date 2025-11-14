@@ -5,7 +5,7 @@ import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockWETH} from "./mocks/MockWETH.sol";
+import {WETH9} from "./mocks/WETH9.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 
 /**
@@ -16,7 +16,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
     Bridge public bridge;
     MockERC20 public usdc;
     MockERC20 public dai;
-    MockWETH public weth;
+    WETH9 public weth;
     ValidatorSignatureThresholdModule public validatorModule;
 
     address public admin;
@@ -34,7 +34,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
 
         usdc = new MockERC20("USD Coin", "USDC");
         dai = new MockERC20("Dai Stablecoin", "DAI");
-        weth = new MockWETH();
+        weth = new WETH9();
         bridge = new Bridge(admin, address(weth));
 
         setupValidators(bridge);

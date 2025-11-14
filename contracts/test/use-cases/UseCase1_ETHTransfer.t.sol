@@ -5,7 +5,7 @@ import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ERC20TotalSupplyCheckModule} from "src/modules/ERC20TotalSupplyCheckModule.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {MockWETH} from "./mocks/MockWETH.sol";
+import {WETH9} from "./mocks/WETH9.sol";
 import {ETHReceiver} from "./mocks/ETHReceiver.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 
@@ -15,7 +15,7 @@ import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
  */
 contract UseCase1_ETHTransfer is UseCaseBaseTest {
     Bridge public bridge;
-    MockWETH public weth;
+    WETH9 public weth;
     ETHReceiver public recipient;
     ERC20TotalSupplyCheckModule public supplyCheckModule;
     ValidatorSignatureThresholdModule public validatorModule;
@@ -29,7 +29,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         sequencer = makeAddr("sequencer");
         user = makeAddr("user");
 
-        weth = new MockWETH();
+        weth = new WETH9();
         bridge = new Bridge(admin, address(weth));
         recipient = new ETHReceiver();
 

@@ -15,6 +15,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     event MessageInitialized(bytes32 indexed messageId, bytes payload);
     event MessageHandled(bytes32 indexed messageId, bool success);
     event NativeTokenWrapped(address indexed sender, uint256 amount);
+    event NativeTokenUnwrapped(uint256 amount, address indexed target);
 
     error MessageAlreadyInitialized(bytes32 messageId);
     error MessageNotInitialized(bytes32 messageId);
@@ -22,14 +23,70 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageCurrentlyProcessing(bytes32 messageId, ProcessingStage currentStage);
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
     error ArrayLengthMismatch();
+    error OnlySelfCall();
 
     constructor(address admin, address _wrappedNativeToken) ModuleCheckRegistry(admin) {
         wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
     }
 
     receive() external payable {
-        wrappedNativeToken.deposit{value: msg.value}();
-        emit NativeTokenWrapped(msg.sender, msg.value);
+        // Only wrap ETH if it's not coming from the WETH contract itself
+        // (to avoid infinite loop during withdrawAndCall)
+        if (msg.sender != address(wrappedNativeToken)) {
+            wrappedNativeToken.deposit{value: msg.value}();
+            emit NativeTokenWrapped(msg.sender, msg.value);
+        }
+    }
+
+    /**
+     * @notice Withdraws WETH to native ETH and forwards to target contract with calldata
+     * @dev Can only be called by the Bridge itself (via handleMessage)
+     *      This enables the Bridge to interact with contracts that require native ETH payment
+     *
+     * FLOW EXPLANATION:
+     * ================
+     * Problem: Bridge holds WETH, but some contracts require native ETH.
+     *
+     * Solution: This function unwraps WETH → ETH and forwards to target in one call.
+     *
+     * Example Flow:
+     * 1. User deposits ETH → Bridge wraps it to WETH (via receive())
+     * 2. Sequencer calls initializeMessage with:
+     *    - targetAddress: address(bridge) (self-call)
+     *    - payload: encoded withdrawAndCall(amount, tokenContract, mintCalldata)
+     * 3. Validators sign the message
+     * 4. handleMessage executes → Bridge calls itself → withdrawAndCall:
+     *    a. Unwraps WETH → ETH
+     *    b. Forwards ETH to token contract with mint calldata
+     * 5. Token contract receives ETH and processes the call
+     *
+     * Security: Only callable by Bridge itself to prevent unauthorized WETH withdrawals
+     *
+     * @param amount Amount of WETH to unwrap
+     * @param target Target contract to call with native ETH
+     * @param data Calldata to forward to target
+     * @return returnData Return data from the target call
+     */
+    function withdrawAndCall(
+        uint256 amount,
+        address payable target,
+        bytes calldata data
+    ) external returns (bytes memory returnData) {
+        // Only allow Bridge to call itself (via handleMessage)
+        if (msg.sender != address(this)) {
+            revert OnlySelfCall();
+        }
+
+        wrappedNativeToken.withdraw(amount);
+
+        emit NativeTokenUnwrapped(amount, target);
+
+        (bool success, bytes memory result) = target.call{value: amount}(data);
+        if (!success) {
+            revert MessageExecutionFailed(bytes32(0), result);
+        }
+
+        return result;
     }
 
     function initializeMessage(
