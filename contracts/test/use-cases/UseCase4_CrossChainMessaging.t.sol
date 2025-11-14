@@ -363,8 +363,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
 
         // Only submit 1 signature (threshold is 2)
-        bytes memory sig1 = signMessage(messageId, validator1PrivateKey);
-        bridge.signMessageWithSignature(messageId, sig1);
+        submitValidatorSignatures(bridge, messageId, 1);
 
         vm.expectRevert();
         bridge.handleMessage(messageId);
@@ -391,10 +390,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
 
         // Submit exactly 2 signatures
-        bytes memory sig1 = signMessage(messageId, validator1PrivateKey);
-        bytes memory sig2 = signMessage(messageId, validator2PrivateKey);
-        bridge.signMessageWithSignature(messageId, sig1);
-        bridge.signMessageWithSignature(messageId, sig2);
+        submitValidatorSignatures(bridge, messageId, 2);
 
         bridge.handleMessage(messageId);
 

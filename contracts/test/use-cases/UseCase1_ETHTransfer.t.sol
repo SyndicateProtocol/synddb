@@ -151,8 +151,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         bridge.initializeMessage(messageId, address(weth), payload, sig);
 
         // Only submit 1 signature (threshold is 2)
-        bytes memory sig1 = signMessage(messageId, validator1PrivateKey);
-        bridge.signMessageWithSignature(messageId, sig1);
+        submitValidatorSignatures(bridge, messageId, 1);
 
         // Should revert due to insufficient signatures
         vm.expectRevert();
@@ -200,12 +199,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         bridge.initializeMessage(messageId, address(weth), payload, sig);
 
         // Submit all 3 signatures (threshold is 2)
-        bytes memory sig1 = signMessage(messageId, validator1PrivateKey);
-        bytes memory sig2 = signMessage(messageId, validator2PrivateKey);
-        bytes memory sig3 = signMessage(messageId, validator3PrivateKey);
-        bridge.signMessageWithSignature(messageId, sig1);
-        bridge.signMessageWithSignature(messageId, sig2);
-        bridge.signMessageWithSignature(messageId, sig3);
+        submitValidatorSignatures(bridge, messageId, 3);
 
         bridge.handleMessage(messageId);
 

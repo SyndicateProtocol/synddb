@@ -10,31 +10,28 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
  * @notice Base contract for use case tests with validator signature functionality
  */
 abstract contract UseCaseBaseTest is Test {
-    // Validators
-    uint256 public validator1PrivateKey;
-    uint256 public validator2PrivateKey;
-    uint256 public validator3PrivateKey;
-    address public validator1;
-    address public validator2;
-    address public validator3;
+    // Validators stored in arrays
+    uint256[] public validatorPrivateKeys;
     address[] public validators;
 
     /// @notice Setup validators with known private keys
+    /// @param bridge The bridge contract to grant validator roles
+    /// @param validatorCount The number of validators to create (defaults to 3)
+    function setupValidators(Bridge bridge, uint256 validatorCount) internal {
+        for (uint256 i = 1; i <= validatorCount; i++) {
+            uint256 privateKey = i;
+            address validatorAddr = vm.addr(privateKey);
+
+            validatorPrivateKeys.push(privateKey);
+            validators.push(validatorAddr);
+
+            bridge.grantRole(bridge.VALIDATOR_ROLE(), validatorAddr);
+        }
+    }
+
+    /// @notice Setup validators with default count of 3
     function setupValidators(Bridge bridge) internal {
-        validator1PrivateKey = 0x1;
-        validator2PrivateKey = 0x2;
-        validator3PrivateKey = 0x3;
-        validator1 = vm.addr(validator1PrivateKey);
-        validator2 = vm.addr(validator2PrivateKey);
-        validator3 = vm.addr(validator3PrivateKey);
-
-        validators.push(validator1);
-        validators.push(validator2);
-        validators.push(validator3);
-
-        bridge.grantRole(bridge.VALIDATOR_ROLE(), validator1);
-        bridge.grantRole(bridge.VALIDATOR_ROLE(), validator2);
-        bridge.grantRole(bridge.VALIDATOR_ROLE(), validator3);
+        setupValidators(bridge, 3);
     }
 
     /// @notice Helper function to sign message with validator private key
@@ -44,11 +41,21 @@ abstract contract UseCaseBaseTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    /// @notice Helper function to submit validator signatures (2 of 3 threshold)
+    /// @notice Helper function to submit validator signatures (2 of 3 threshold by default)
+    /// @param bridge The bridge contract
+    /// @param messageId The message ID to sign
+    /// @param signatureCount The number of signatures to submit (defaults to 2)
+    function submitValidatorSignatures(Bridge bridge, bytes32 messageId, uint256 signatureCount) internal {
+        require(signatureCount <= validatorPrivateKeys.length, "Not enough validators");
+
+        for (uint256 i = 0; i < signatureCount; i++) {
+            bytes memory sig = signMessage(messageId, validatorPrivateKeys[i]);
+            bridge.signMessageWithSignature(messageId, sig);
+        }
+    }
+
+    /// @notice Helper function to submit default 2 validator signatures
     function submitValidatorSignatures(Bridge bridge, bytes32 messageId) internal {
-        bytes memory sig1 = signMessage(messageId, validator1PrivateKey);
-        bytes memory sig2 = signMessage(messageId, validator2PrivateKey);
-        bridge.signMessageWithSignature(messageId, sig1);
-        bridge.signMessageWithSignature(messageId, sig2);
+        submitValidatorSignatures(bridge, messageId, 2);
     }
 }
