@@ -203,18 +203,11 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         bytes32 messageId = keccak256("withdraw-and-mint");
 
         // Encode the NFT mint call that requires ETH
-        bytes memory nftMintCall = abi.encodeWithSelector(
-            paidNFT.mintWithPayment.selector,
-            user
-        );
+        bytes memory nftMintCall = abi.encodeWithSelector(paidNFT.mintWithPayment.selector, user);
 
         // Encode the Bridge.withdrawAndCall to unwrap WETH and forward ETH to NFT
-        bytes memory payload = abi.encodeWithSelector(
-            bridge.withdrawAndCall.selector,
-            NFT_PRICE,
-            address(paidNFT),
-            nftMintCall
-        );
+        bytes memory payload =
+            abi.encodeWithSelector(bridge.withdrawAndCall.selector, NFT_PRICE, address(paidNFT), nftMintCall);
 
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 

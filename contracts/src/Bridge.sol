@@ -67,11 +67,10 @@ contract Bridge is IBridge, ModuleCheckRegistry {
      * @param data Calldata to forward to target
      * @return returnData Return data from the target call
      */
-    function withdrawAndCall(
-        uint256 amount,
-        address payable target,
-        bytes calldata data
-    ) external returns (bytes memory returnData) {
+    function withdrawAndCall(uint256 amount, address payable target, bytes calldata data)
+        external
+        returns (bytes memory returnData)
+    {
         // Only allow Bridge to call itself (via handleMessage)
         if (msg.sender != address(this)) {
             revert OnlySelfCall();

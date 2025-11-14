@@ -25,10 +25,7 @@ abstract contract UseCaseBaseTest is Test {
     /// @param sequencer The sequencer address
     /// @return bridge The deployed bridge
     /// @return weth The deployed WETH9 contract
-    function createBridgeWithWETH(address admin, address sequencer)
-        internal
-        returns (Bridge bridge, WETH9 weth)
-    {
+    function createBridgeWithWETH(address admin, address sequencer) internal returns (Bridge bridge, WETH9 weth) {
         weth = new WETH9();
         bridge = new Bridge(admin, address(weth));
         bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);

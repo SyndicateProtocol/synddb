@@ -54,12 +54,7 @@ contract MockCrossChainReceiver {
 
     /// @notice Simulates receiving a SuperchainERC20 cross-chain mint
     /// @dev Uses Optimism's SuperchainERC20 (ERC-7802) interface
-    function receiveSuperchainMint(
-        bytes32 messageId,
-        address token,
-        address to,
-        uint256 amount
-    ) external {
+    function receiveSuperchainMint(bytes32 messageId, address token, address to, uint256 amount) external {
         emit SuperchainMintReceived(messageId, token, to, amount);
 
         // Call SuperchainERC20's crosschainMint
@@ -67,13 +62,9 @@ contract MockCrossChainReceiver {
     }
 
     /// @notice Simulates receiving a generic CrosschainERC20 mint
-    function receiveCrosschainMint(
-        bytes32 messageId,
-        address token,
-        address to,
-        uint256 amount,
-        bytes calldata data
-    ) external {
+    function receiveCrosschainMint(bytes32 messageId, address token, address to, uint256 amount, bytes calldata data)
+        external
+    {
         emit CrosschainMintReceived(messageId, token, to, amount);
 
         // Call CrosschainERC20's mint with data
@@ -82,12 +73,7 @@ contract MockCrossChainReceiver {
 
     /// @notice Simulates receiving an ONFT cross-chain mint
     /// @dev Uses LayerZero's ONFT interface
-    function receiveONFTMint(
-        bytes32 messageId,
-        address token,
-        address to,
-        uint256 tokenId
-    ) external {
+    function receiveONFTMint(bytes32 messageId, address token, address to, uint256 tokenId) external {
         emit ONFTMintReceived(messageId, token, to, tokenId);
 
         // Call ONFT's crosschainMint
