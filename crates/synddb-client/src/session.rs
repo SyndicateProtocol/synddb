@@ -42,6 +42,8 @@ struct SessionState {
     snapshot_interval: u64,
     changesets_since_snapshot: u64,
     snapshot_tx: Option<Sender<Snapshot>>,
+    schema_changed: bool,
+    last_schema_hash: Option<u64>,
 }
 
 // SAFETY: SQLite sessions are thread-safe when used with a thread-safe connection.
@@ -93,6 +95,8 @@ impl SessionMonitor {
             snapshot_interval,
             changesets_since_snapshot: 0,
             snapshot_tx,
+            schema_changed: false,
+            last_schema_hash: None,
         }));
 
         // Create channel for flush thread shutdown
@@ -140,17 +144,33 @@ impl SessionMonitor {
     }
 
     pub fn start(&self, conn: &Connection) -> Result<()> {
-        debug!("Installing update hook for automatic changeset capture");
+        debug!("Installing update hook for schema change detection");
+
+        let state = Arc::clone(&self.state);
 
         // Install update hook that gets called on INSERT, UPDATE, DELETE
         conn.update_hook(Some(
-            |action: Action, _db: &str, table: &str, rowid: i64| {
+            move |action: Action, _db: &str, table: &str, rowid: i64| {
                 trace!(
                     "Update hook: {:?} on table {} rowid {}",
                     action,
                     table,
                     rowid
                 );
+
+                // Detect schema changes by monitoring sqlite_schema table
+                // DDL operations (CREATE TABLE, ALTER TABLE, DROP TABLE) modify this table
+                if table == "sqlite_schema" || table == "sqlite_master" {
+                    info!(
+                        "Schema change detected ({:?} on {}), will trigger snapshot",
+                        action, table
+                    );
+
+                    // Mark that schema changed so next flush creates a snapshot
+                    if let Ok(mut state) = state.lock() {
+                        state.schema_changed = true;
+                    }
+                }
 
                 // Note: We can't capture changesets in the hook itself because:
                 // 1. Hooks are called during transaction
@@ -161,8 +181,28 @@ impl SessionMonitor {
             },
         ));
 
-        debug!("SessionMonitor started");
+        debug!("SessionMonitor started with schema change detection");
         Ok(())
+    }
+
+    /// Get hash of schema to detect changes
+    fn get_schema_hash(conn: &Connection) -> Result<u64> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Query sqlite_schema for all CREATE statements
+        let mut stmt =
+            conn.prepare("SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name")?;
+        let schema_statements: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Hash all schema SQL statements
+        let mut hasher = DefaultHasher::new();
+        for sql in schema_statements {
+            sql.hash(&mut hasher);
+        }
+        Ok(hasher.finish())
     }
 
     /// Internal flush implementation used by both manual and automatic flushing
@@ -170,6 +210,19 @@ impl SessionMonitor {
         trace!("Flushing session changes");
 
         let mut state = state.lock().unwrap();
+
+        // Check if schema changed by comparing hash
+        let current_schema_hash = Self::get_schema_hash(state.conn)?;
+        if let Some(last_hash) = state.last_schema_hash {
+            if current_schema_hash != last_hash {
+                info!(
+                    "Schema change detected (hash changed from {} to {})",
+                    last_hash, current_schema_hash
+                );
+                state.schema_changed = true;
+            }
+        }
+        state.last_schema_hash = Some(current_schema_hash);
 
         // Get changeset bytes from session using stream API
         let mut changeset_data = Vec::new();
@@ -201,14 +254,24 @@ impl SessionMonitor {
             .context("Failed to send changeset to background thread")?;
 
         // Check if we should create an automatic snapshot
-        if state.snapshot_interval > 0 && state.changesets_since_snapshot >= state.snapshot_interval
+        let should_snapshot = if state.schema_changed {
+            // ALWAYS snapshot on schema changes (spec requirement)
+            info!("Schema changed, creating immediate snapshot");
+            true
+        } else if state.snapshot_interval > 0
+            && state.changesets_since_snapshot >= state.snapshot_interval
         {
+            // Regular interval-based snapshot
             info!(
                 "Snapshot threshold reached ({} changesets), creating automatic snapshot",
                 state.changesets_since_snapshot
             );
+            true
+        } else {
+            false
+        };
 
-            // Create snapshot (need to unlock state temporarily to avoid deadlock)
+        if should_snapshot {
             let snapshot_result = Self::create_snapshot_internal(&state);
 
             match snapshot_result {
@@ -218,9 +281,18 @@ impl SessionMonitor {
                         if let Err(e) = snapshot_tx.send(snapshot) {
                             error!("Failed to send automatic snapshot: {}", e);
                         } else {
-                            info!("Automatic snapshot sent at sequence {}", state.sequence);
+                            if state.schema_changed {
+                                info!("Schema change snapshot sent at sequence {}", state.sequence);
+                            } else {
+                                info!("Automatic snapshot sent at sequence {}", state.sequence);
+                            }
                             state.changesets_since_snapshot = 0;
+                            state.schema_changed = false;
                         }
+                    } else {
+                        // No channel means snapshots are disabled, but we still need to
+                        // reset schema_changed flag for manual snapshots
+                        state.schema_changed = false;
                     }
                 }
                 Err(e) => {
