@@ -23,7 +23,7 @@ pub struct SessionMonitor {
 }
 
 impl SessionMonitor {
-    pub fn new(conn: &Connection, changeset_tx: Sender<Changeset>) -> Result<Self> {
+    pub fn new(_conn: &Connection, changeset_tx: Sender<Changeset>) -> Result<Self> {
         // TODO: Initialize SQLite Session Extension
         // This requires using rusqlite's session feature
 

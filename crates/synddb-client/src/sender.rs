@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::session::Changeset;
-use crossbeam_channel::{Receiver, select};
+use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -38,15 +38,12 @@ impl ChangesetSender {
         }
     }
 
-    pub async fn run(
-        mut self,
-        changeset_rx: Receiver<Changeset>,
-        shutdown_rx: Receiver<()>,
-    ) {
+    pub async fn run(mut self, changeset_rx: Receiver<Changeset>, shutdown_rx: Receiver<()>) {
         info!("ChangesetSender started");
 
-        let flush_interval = self.config.flush_interval;
-        let mut flush_timer = tokio::time::interval(flush_interval);
+        // TODO: Implement proper timer-based flushing
+        // let flush_interval = self.config.flush_interval;
+        // let _flush_timer = tokio::time::interval(flush_interval);
 
         loop {
             select! {
@@ -75,10 +72,9 @@ impl ChangesetSender {
                 }
             }
 
-            // Check timer
-            if flush_timer.poll_tick(std::task::Context::from_waker(
-                futures::task::noop_waker_ref()
-            )).is_ready() && !self.buffer.is_empty() {
+            // Check timer (simplified - just use interval)
+            // TODO: Properly integrate timer with select! macro
+            if !self.buffer.is_empty() && self.should_flush() {
                 self.flush().await;
             }
         }
@@ -102,7 +98,10 @@ impl ChangesetSender {
             batch_id: uuid::Uuid::new_v4().to_string(),
         };
 
-        debug!("Flushing {} changesets to sequencer", batch.changesets.len());
+        debug!(
+            "Flushing {} changesets to sequencer",
+            batch.changesets.len()
+        );
 
         // Send with retries
         for attempt in 0..=self.config.max_retries {
@@ -131,7 +130,10 @@ impl ChangesetSender {
 
         // If we failed, put changesets back (or drop them)
         // For now we'll drop them to avoid unbounded memory growth
-        error!("Dropping {} changesets after failed send", batch.changesets.len());
+        error!(
+            "Dropping {} changesets after failed send",
+            batch.changesets.len()
+        );
     }
 
     async fn send_batch(&self, batch: &ChangesetBatch) -> Result<(), reqwest::Error> {

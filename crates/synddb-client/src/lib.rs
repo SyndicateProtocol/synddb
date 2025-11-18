@@ -19,19 +19,18 @@
 //! ```
 
 use anyhow::Result;
+use crossbeam_channel::{bounded, Sender};
 use rusqlite::Connection;
-use std::sync::Arc;
 use std::thread;
-use crossbeam_channel::{Sender, Receiver, bounded};
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
-mod session;
-mod sender;
 mod config;
+mod sender;
+mod session;
 
 pub use config::Config;
-use session::SessionMonitor;
 use sender::ChangesetSender;
+use session::SessionMonitor;
 
 /// Main handle to SyndDB client
 ///
@@ -67,10 +66,13 @@ impl SyndDB {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn attach(conn: &Connection, sequencer_url: impl Into<String>) -> Result<Self> {
-        Self::attach_with_config(conn, Config {
-            sequencer_url: sequencer_url.into(),
-            ..Default::default()
-        })
+        Self::attach_with_config(
+            conn,
+            Config {
+                sequencer_url: sequencer_url.into(),
+                ..Default::default()
+            },
+        )
     }
 
     /// Attach with custom configuration
@@ -147,11 +149,8 @@ mod tests {
     #[test]
     fn test_attach() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute(
-            "CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)",
-            [],
-        )
-        .unwrap();
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
 
         let _synddb = SyndDB::attach(&conn, "http://localhost:8433").unwrap();
 

@@ -1,6 +1,7 @@
 //! Example Rust application using synddb-client
 
-use rusqlite::{Connection, Result};
+use anyhow::Result;
+use rusqlite::Connection;
 use synddb_client::SyndDB;
 
 fn main() -> Result<()> {
@@ -35,10 +36,15 @@ fn main() -> Result<()> {
     for i in 1..=10 {
         conn.execute(
             "INSERT INTO trades (id, price, quantity, timestamp) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![i, 100 + i, 10, std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()],
+            rusqlite::params![
+                i,
+                100 + i,
+                10,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            ],
         )?;
         println!("  Trade {} inserted", i);
 
