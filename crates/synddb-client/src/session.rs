@@ -7,8 +7,9 @@ use rusqlite::session::Session;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
-use tracing::{debug, trace};
+use std::thread;
+use std::time::{Duration, SystemTime};
+use tracing::{debug, error, trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Changeset {
@@ -20,19 +21,31 @@ pub struct Changeset {
     pub timestamp: SystemTime,
 }
 
-/// Shared state between session monitor and hook
+/// Shared state between session monitor and flush thread
 struct SessionState {
     session: Session<'static>,
     changeset_tx: Sender<Changeset>,
     sequence: u64,
 }
 
+// SAFETY: SQLite sessions are thread-safe when used with a thread-safe connection.
+// We're using a 'static Connection and protecting access with a Mutex, so this is safe.
+// The Session contains raw pointers that rusqlite doesn't mark as Send, but SQLite's
+// session extension is designed to be thread-safe when properly synchronized.
+unsafe impl Send for SessionState {}
+
 pub struct SessionMonitor {
     state: Arc<Mutex<SessionState>>,
+    flush_shutdown_tx: Sender<()>,
+    flush_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl SessionMonitor {
-    pub fn new(conn: &'static Connection, changeset_tx: Sender<Changeset>) -> Result<Self> {
+    pub fn new(
+        conn: &'static Connection,
+        changeset_tx: Sender<Changeset>,
+        flush_interval: Duration,
+    ) -> Result<Self> {
         debug!("Initializing SQLite Session Extension");
 
         // Create a session attached to the main database
@@ -51,9 +64,48 @@ impl SessionMonitor {
             sequence: 0,
         }));
 
+        // Create channel for flush thread shutdown
+        let (flush_shutdown_tx, flush_shutdown_rx) = crossbeam_channel::bounded(1);
+
+        // Start periodic flush thread
+        let state_clone = Arc::clone(&state);
+        let flush_handle = thread::spawn(move || {
+            debug!("Flush thread started with interval {:?}", flush_interval);
+
+            loop {
+                // Wait for flush interval or shutdown signal
+                match flush_shutdown_rx.recv_timeout(flush_interval) {
+                    Ok(()) => {
+                        debug!("Flush thread received shutdown signal");
+                        // Final flush before shutdown
+                        if let Err(e) = Self::flush_internal(&state_clone) {
+                            error!("Failed to flush on shutdown: {}", e);
+                        }
+                        break;
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        // Periodic flush
+                        if let Err(e) = Self::flush_internal(&state_clone) {
+                            error!("Failed to flush periodically: {}", e);
+                        }
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                        debug!("Flush thread channel disconnected");
+                        break;
+                    }
+                }
+            }
+
+            debug!("Flush thread stopped");
+        });
+
         debug!("SessionMonitor created");
 
-        Ok(Self { state })
+        Ok(Self {
+            state,
+            flush_shutdown_tx,
+            flush_handle: Some(flush_handle),
+        })
     }
 
     pub fn start(&self, conn: &Connection) -> Result<()> {
@@ -74,7 +126,7 @@ impl SessionMonitor {
                 // 2. Session::changeset() should be called after transaction commits
                 //
                 // The hook just serves as a signal that changes occurred.
-                // We'll rely on periodic flushing or explicit flush calls.
+                // We'll rely on periodic flushing (automatic via flush thread).
             },
         ));
 
@@ -82,11 +134,11 @@ impl SessionMonitor {
         Ok(())
     }
 
-    /// Capture and send all changes since last flush
-    pub fn flush(&self) -> Result<()> {
+    /// Internal flush implementation used by both manual and automatic flushing
+    fn flush_internal(state: &Arc<Mutex<SessionState>>) -> Result<()> {
         trace!("Flushing session changes");
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = state.lock().unwrap();
 
         // Get changeset bytes from session using stream API
         let mut changeset_data = Vec::new();
@@ -117,5 +169,29 @@ impl SessionMonitor {
             .context("Failed to send changeset to background thread")?;
 
         Ok(())
+    }
+
+    /// Capture and send all changes since last flush
+    ///
+    /// This is called automatically by the flush thread, but can also be called
+    /// manually to flush immediately (e.g., after critical transactions).
+    pub fn flush(&self) -> Result<()> {
+        Self::flush_internal(&self.state)
+    }
+}
+
+impl Drop for SessionMonitor {
+    fn drop(&mut self) {
+        debug!("Dropping SessionMonitor");
+
+        // Signal flush thread to stop
+        let _ = self.flush_shutdown_tx.send(());
+
+        // Wait for flush thread to finish
+        if let Some(handle) = self.flush_handle.take() {
+            if let Err(e) = handle.join() {
+                error!("Flush thread panicked: {:?}", e);
+            }
+        }
     }
 }

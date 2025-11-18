@@ -10,10 +10,11 @@
 //! use rusqlite::Connection;
 //! use synddb_client::SyndDB;
 //!
-//! let conn = Connection::open("app.db")?;
-//! let _synddb = SyndDB::attach(&conn, "https://sequencer:8433")?;
+//! // Note: Connection must have 'static lifetime
+//! let conn = Box::leak(Box::new(Connection::open("app.db")?));
+//! let _synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
 //!
-//! // Use SQLite normally - changesets are automatically captured
+//! // Use SQLite normally - changesets are automatically captured and sent every 1 second
 //! conn.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![1, 100])?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -37,11 +38,11 @@ use session::SessionMonitor;
 /// Attaches to a SQLite connection and automatically captures changesets.
 /// Dropping this handle will stop changeset capture and flush pending data.
 pub struct SyndDB {
-    /// Session monitor for capturing changesets
-    monitor: SessionMonitor,
+    /// Session monitor for capturing changesets (includes flush thread)
+    monitor: Option<SessionMonitor>,
     /// Channel to send shutdown signal
     shutdown_tx: Sender<()>,
-    /// Handle to background thread
+    /// Handle to background sender thread
     join_handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -63,13 +64,15 @@ impl SyndDB {
     /// ```rust,no_run
     /// # use rusqlite::Connection;
     /// # use synddb_client::SyndDB;
-    /// let conn = Connection::open("app.db")?;
-    /// let synddb = SyndDB::attach(&conn, "https://sequencer:8433")?;
+    /// // Note: Connection must have 'static lifetime
+    /// let conn = Box::leak(Box::new(Connection::open("app.db")?));
+    /// let synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
     ///
     /// // Perform database operations...
     /// conn.execute("INSERT INTO users VALUES (?1, ?2)", rusqlite::params![1, "Alice"])?;
     ///
-    /// // Flush changesets to sequencer
+    /// // Changesets are automatically flushed every 1 second
+    /// // You can also manually flush for critical transactions:
     /// synddb.flush()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -87,13 +90,14 @@ impl SyndDB {
     pub fn attach_with_config(conn: &'static Connection, config: Config) -> Result<Self> {
         info!("Attaching SyndDB client to SQLite connection");
         info!("Sequencer URL: {}", config.sequencer_url);
+        info!("Flush interval: {:?}", config.flush_interval);
 
         // Create channels for communication
         let (changeset_tx, changeset_rx) = bounded(config.buffer_size);
         let (shutdown_tx, shutdown_rx) = bounded(1);
 
-        // Start session monitor
-        let monitor = SessionMonitor::new(conn, changeset_tx.clone())?;
+        // Start session monitor (includes automatic flush thread)
+        let monitor = SessionMonitor::new(conn, changeset_tx.clone(), config.flush_interval)?;
         monitor.start(conn)?;
 
         // Start background sender thread
@@ -113,7 +117,7 @@ impl SyndDB {
         info!("SyndDB client attached successfully");
 
         Ok(Self {
-            monitor,
+            monitor: Some(monitor),
             shutdown_tx,
             join_handle: Some(join_handle),
         })
@@ -121,10 +125,13 @@ impl SyndDB {
 
     /// Flush all pending changesets to the sequencer
     ///
-    /// This should be called after transactions complete to capture
-    /// and send changesets to the sequencer.
+    /// This is called automatically every flush_interval (default 1 second),
+    /// but can also be called manually to flush immediately (e.g., after critical transactions).
     pub fn flush(&self) -> Result<()> {
-        self.monitor.flush()
+        self.monitor
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Monitor already shut down"))?
+            .flush()
     }
 
     /// Gracefully shutdown the client, flushing any pending changesets
@@ -147,10 +154,17 @@ impl SyndDB {
 impl Drop for SyndDB {
     fn drop(&mut self) {
         debug!("Dropping SyndDB handle");
-        // Send shutdown signal (ignore errors if already shut down)
+
+        // First, drop the monitor which will stop the flush thread
+        // This ensures no more changesets are generated
+        if let Some(monitor) = self.monitor.take() {
+            drop(monitor);
+        }
+
+        // Then send shutdown signal to sender thread
         let _ = self.shutdown_tx.send(());
 
-        // Wait for background thread
+        // Wait for background sender thread
         if let Some(handle) = self.join_handle.take() {
             if let Err(e) = handle.join() {
                 warn!("Background thread panicked during drop: {:?}", e);
@@ -165,13 +179,16 @@ mod tests {
 
     #[test]
     fn test_attach() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
         conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
             .unwrap();
 
-        let _synddb = SyndDB::attach(&conn, "http://localhost:8433").unwrap();
+        let _synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
         conn.execute("INSERT INTO test (id, value) VALUES (1, 'test')", [])
             .unwrap();
+
+        // Wait a moment for automatic flush
+        std::thread::sleep(std::time::Duration::from_secs(2));
     }
 }

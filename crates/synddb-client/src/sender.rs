@@ -41,10 +41,6 @@ impl ChangesetSender {
     pub async fn run(mut self, changeset_rx: Receiver<Changeset>, shutdown_rx: Receiver<()>) {
         info!("ChangesetSender started");
 
-        // TODO: Implement proper timer-based flushing
-        // let flush_interval = self.config.flush_interval;
-        // let _flush_timer = tokio::time::interval(flush_interval);
-
         loop {
             select! {
                 recv(changeset_rx) -> changeset => {
@@ -70,12 +66,6 @@ impl ChangesetSender {
                     self.flush().await;
                     break;
                 }
-            }
-
-            // Check timer (simplified - just use interval)
-            // TODO: Properly integrate timer with select! macro
-            if !self.buffer.is_empty() && self.should_flush() {
-                self.flush().await;
             }
         }
 

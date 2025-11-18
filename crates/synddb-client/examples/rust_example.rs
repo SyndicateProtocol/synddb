@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     println!("✓ Database opened and schema created");
 
     // INTEGRATION POINT: Single line to enable SyndDB
-    let synddb = SyndDB::attach(conn, "http://localhost:8433")?;
+    let _synddb = SyndDB::attach(conn, "http://localhost:8433")?;
     println!("✓ SyndDB client attached to connection\n");
 
     // Application code - completely unchanged from here
@@ -54,12 +54,16 @@ fn main() -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    // Flush changesets to sequencer
-    println!("\nFlushing changesets to sequencer...");
-    synddb.flush()?;
-
     println!("\n✓ All trades executed");
-    println!("✓ Changesets captured and sent to sequencer");
+    println!("✓ Changesets are automatically captured and sent to sequencer");
+    println!("  (flushed every 1 second by default)");
+
+    // Wait a moment to let automatic flush happen
+    println!("\nWaiting 2 seconds for automatic flush...");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // You can also manually flush for critical transactions:
+    // synddb.flush()?;
 
     Ok(())
 }
