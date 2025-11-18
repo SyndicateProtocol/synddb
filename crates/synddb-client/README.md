@@ -4,7 +4,17 @@ Lightweight client library for sending SQLite changesets to the SyndDB sequencer
 
 ## Purpose
 
-This library runs **in the application's TEE** and provides minimal integration to capture SQLite changesets and send them to the sequencer TEE. It does NOT contain any signing keys.
+Runs **in the application's TEE** to capture SQLite changesets and send them to the sequencer TEE (separate VM for key isolation). **Does NOT contain signing keys.**
+
+## Architecture Decision: C FFI (Not PyO3/Neon)
+
+We use **Rust compiled to C ABI** with thin language wrappers (~50 lines each). This gives:
+- ✅ Instant install (<10s vs 2-5min compilation)
+- ✅ Single binary for all languages
+- ✅ No build tools required for users
+- ✅ Same approach as SQLite, libcurl, OpenSSL
+
+See [FFI_VS_NATIVE_BINDINGS.md](./FFI_VS_NATIVE_BINDINGS.md) for why we chose C FFI over PyO3/Neon.
 
 ## Usage
 
@@ -27,17 +37,30 @@ fn main() -> Result<()> {
 }
 ```
 
-### Python (via PyO3 bindings)
+### Python (via C FFI)
 
 ```python
 import sqlite3
-from synddb import attach
+from synddb import attach  # Pure Python wrapper, no compilation
 
 conn = sqlite3.connect('app.db')
 attach(conn, sequencer_url='https://sequencer:8433')
 
 # Use SQLite normally
 conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 100))
+```
+
+### Node.js (via C FFI)
+
+```javascript
+const Database = require('better-sqlite3');
+const { attach } = require('@synddb/client');  // Pure JS wrapper
+
+const db = new Database('app.db');
+attach(db, { sequencerUrl: 'https://sequencer:8433' });
+
+// Use SQLite normally
+db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 ```
 
 ## Architecture
@@ -112,9 +135,23 @@ let _synddb = SyndDB::attach_with_config(&conn, config)?;
 - HTTPS + mTLS to sequencer TEE
 - Sequencer validates application's TEE attestation
 
-## Language Bindings
+## Cross-Language Support
 
-- **Rust**: Native (this crate)
-- **Python**: PyO3 bindings (TODO)
-- **Node.js**: Neon bindings (TODO)
-- **Go**: cgo bindings (TODO)
+| Language | Binding Type | Install Time | Status |
+|----------|--------------|--------------|--------|
+| **Rust** | Native | N/A | ✅ Core implementation |
+| **Python** | C FFI (ctypes) | <10s | 🚧 Wrapper in `bindings/python/` |
+| **Node.js** | C FFI (ffi-napi) | <10s | 🚧 Wrapper in `bindings/nodejs/` |
+| **Go** | C FFI (cgo) | <10s | 🚧 Wrapper in `bindings/go/` |
+
+All non-Rust languages use **pure wrappers** (~50 lines) over `libsynddb.so` - no compilation needed!
+
+## How It Works
+
+We compile Rust to `libsynddb.so` (C ABI), then use trivial wrappers (~50 lines) in each language. Same model as SQLite.
+
+**Why C FFI instead of PyO3/Neon?**
+- Simple API (3 functions) doesn't justify PyO3/Neon complexity
+- Users get instant install (<10s) vs 2-5min compilation
+- Single binary works for all languages
+- No build tools required
