@@ -33,7 +33,7 @@ pub struct Snapshot {
     pub sequence: u64,
 }
 
-/// Shared state between session monitor and flush thread
+/// Shared state between session monitor and sync thread
 struct SessionState {
     session: Session<'static>,
     changeset_tx: Sender<Changeset>,
@@ -54,15 +54,15 @@ unsafe impl Send for SessionState {}
 
 pub struct SessionMonitor {
     state: Arc<Mutex<SessionState>>,
-    flush_shutdown_tx: Sender<()>,
-    flush_handle: Option<thread::JoinHandle<()>>,
+    sync_shutdown_tx: Sender<()>,
+    sync_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl SessionMonitor {
     pub fn new(
         conn: &'static Connection,
         changeset_tx: Sender<Changeset>,
-        flush_interval: Duration,
+        sync_interval: Duration,
         snapshot_interval: u64,
         snapshot_tx: Option<Sender<Snapshot>>,
     ) -> Result<Self> {
@@ -99,47 +99,47 @@ impl SessionMonitor {
             last_schema_hash: None,
         }));
 
-        // Create channel for flush thread shutdown
-        let (flush_shutdown_tx, flush_shutdown_rx) = crossbeam_channel::bounded(1);
+        // Create channel for sync thread shutdown
+        let (sync_shutdown_tx, sync_shutdown_rx) = crossbeam_channel::bounded(1);
 
-        // Start periodic flush thread
+        // Start periodic sync thread
         let state_clone = Arc::clone(&state);
-        let flush_handle = thread::spawn(move || {
-            debug!("Flush thread started with interval {:?}", flush_interval);
+        let sync_handle = thread::spawn(move || {
+            debug!("Sync thread started with interval {:?}", sync_interval);
 
             loop {
-                // Wait for flush interval or shutdown signal
-                match flush_shutdown_rx.recv_timeout(flush_interval) {
+                // Wait for sync interval or shutdown signal
+                match sync_shutdown_rx.recv_timeout(sync_interval) {
                     Ok(()) => {
-                        debug!("Flush thread received shutdown signal");
-                        // Final flush before shutdown
-                        if let Err(e) = Self::flush_internal(&state_clone) {
-                            error!("Failed to flush on shutdown: {}", e);
+                        debug!("Sync thread received shutdown signal");
+                        // Final sync before shutdown
+                        if let Err(e) = Self::sync_internal(&state_clone) {
+                            error!("Failed to sync on shutdown: {}", e);
                         }
                         break;
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                        // Periodic flush
-                        if let Err(e) = Self::flush_internal(&state_clone) {
-                            error!("Failed to flush periodically: {}", e);
+                        // Periodic sync
+                        if let Err(e) = Self::sync_internal(&state_clone) {
+                            error!("Failed to sync periodically: {}", e);
                         }
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        debug!("Flush thread channel disconnected");
+                        debug!("Sync thread channel disconnected");
                         break;
                     }
                 }
             }
 
-            debug!("Flush thread stopped");
+            debug!("Sync thread stopped");
         });
 
         debug!("SessionMonitor created");
 
         Ok(Self {
             state,
-            flush_shutdown_tx,
-            flush_handle: Some(flush_handle),
+            sync_shutdown_tx,
+            sync_handle: Some(sync_handle),
         })
     }
 
@@ -177,7 +177,7 @@ impl SessionMonitor {
                 // 2. Session::changeset() should be called after transaction commits
                 //
                 // The hook just serves as a signal that changes occurred.
-                // We'll rely on periodic flushing (automatic via flush thread).
+                // We'll rely on periodic syncing (automatic via sync thread).
             },
         ));
 
@@ -205,9 +205,9 @@ impl SessionMonitor {
         Ok(hasher.finish())
     }
 
-    /// Internal flush implementation used by both manual and automatic flushing
-    fn flush_internal(state: &Arc<Mutex<SessionState>>) -> Result<()> {
-        trace!("Flushing session changes");
+    /// Internal sync implementation used by both manual and automatic syncing
+    fn sync_internal(state: &Arc<Mutex<SessionState>>) -> Result<()> {
+        trace!("Syncing session changes");
 
         let mut state = state.lock().unwrap();
 
@@ -261,7 +261,7 @@ impl SessionMonitor {
             .context("Failed to get changeset from session")?;
 
         if changeset_data.is_empty() {
-            trace!("No changes to flush");
+            trace!("No changes to sync");
             return Ok(());
         }
 
@@ -344,12 +344,12 @@ impl SessionMonitor {
         })
     }
 
-    /// Capture and send all changes since last flush
+    /// Capture and send all changes since last sync
     ///
-    /// This is called automatically by the flush thread, but can also be called
-    /// manually to flush immediately (e.g., after critical transactions).
-    pub fn flush(&self) -> Result<()> {
-        Self::flush_internal(&self.state)
+    /// This is called automatically by the sync thread, but can also be called
+    /// manually to sync immediately (e.g., after critical transactions).
+    pub fn sync(&self) -> Result<()> {
+        Self::sync_internal(&self.state)
     }
 
     /// Create a complete snapshot of the database
@@ -399,13 +399,13 @@ impl Drop for SessionMonitor {
     fn drop(&mut self) {
         debug!("Dropping SessionMonitor");
 
-        // Signal flush thread to stop
-        let _ = self.flush_shutdown_tx.send(());
+        // Signal sync thread to stop
+        let _ = self.sync_shutdown_tx.send(());
 
-        // Wait for flush thread to finish
-        if let Some(handle) = self.flush_handle.take() {
+        // Wait for sync thread to finish
+        if let Some(handle) = self.sync_handle.take() {
             if let Err(e) = handle.join() {
-                error!("Flush thread panicked: {:?}", e);
+                error!("Sync thread panicked: {:?}", e);
             }
         }
     }
