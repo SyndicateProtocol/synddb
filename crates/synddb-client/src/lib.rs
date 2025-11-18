@@ -37,6 +37,8 @@ use session::SessionMonitor;
 /// Attaches to a SQLite connection and automatically captures changesets.
 /// Dropping this handle will stop changeset capture and flush pending data.
 pub struct SyndDB {
+    /// Session monitor for capturing changesets
+    monitor: SessionMonitor,
     /// Channel to send shutdown signal
     shutdown_tx: Sender<()>,
     /// Handle to background thread
@@ -48,12 +50,12 @@ impl SyndDB {
     ///
     /// This will:
     /// 1. Enable SQLite Session Extension on the connection
-    /// 2. Register commit hooks to capture changesets
+    /// 2. Register update hooks to detect changes
     /// 3. Start a background thread to send changesets to sequencer
     ///
     /// # Arguments
     ///
-    /// * `conn` - SQLite connection to monitor (must outlive this handle)
+    /// * `conn` - SQLite connection to monitor (must have 'static lifetime)
     /// * `sequencer_url` - URL of the sequencer TEE (e.g. "https://sequencer:8433")
     ///
     /// # Example
@@ -62,10 +64,16 @@ impl SyndDB {
     /// # use rusqlite::Connection;
     /// # use synddb_client::SyndDB;
     /// let conn = Connection::open("app.db")?;
-    /// let _synddb = SyndDB::attach(&conn, "https://sequencer:8433")?;
+    /// let synddb = SyndDB::attach(&conn, "https://sequencer:8433")?;
+    ///
+    /// // Perform database operations...
+    /// conn.execute("INSERT INTO users VALUES (?1, ?2)", rusqlite::params![1, "Alice"])?;
+    ///
+    /// // Flush changesets to sequencer
+    /// synddb.flush()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn attach(conn: &Connection, sequencer_url: impl Into<String>) -> Result<Self> {
+    pub fn attach(conn: &'static Connection, sequencer_url: impl Into<String>) -> Result<Self> {
         Self::attach_with_config(
             conn,
             Config {
@@ -76,7 +84,7 @@ impl SyndDB {
     }
 
     /// Attach with custom configuration
-    pub fn attach_with_config(conn: &Connection, config: Config) -> Result<Self> {
+    pub fn attach_with_config(conn: &'static Connection, config: Config) -> Result<Self> {
         info!("Attaching SyndDB client to SQLite connection");
         info!("Sequencer URL: {}", config.sequencer_url);
 
@@ -86,7 +94,7 @@ impl SyndDB {
 
         // Start session monitor
         let monitor = SessionMonitor::new(conn, changeset_tx.clone())?;
-        monitor.start()?;
+        monitor.start(conn)?;
 
         // Start background sender thread
         let sender_config = config.clone();
@@ -105,9 +113,18 @@ impl SyndDB {
         info!("SyndDB client attached successfully");
 
         Ok(Self {
+            monitor,
             shutdown_tx,
             join_handle: Some(join_handle),
         })
+    }
+
+    /// Flush all pending changesets to the sequencer
+    ///
+    /// This should be called after transactions complete to capture
+    /// and send changesets to the sequencer.
+    pub fn flush(&self) -> Result<()> {
+        self.monitor.flush()
     }
 
     /// Gracefully shutdown the client, flushing any pending changesets

@@ -11,7 +11,9 @@ fn main() -> Result<()> {
     println!("=== SyndDB Client Example ===\n");
 
     // Open database
-    let conn = Connection::open("example.db")?;
+    // Note: We use Box::leak to get 'static lifetime for the connection
+    // In a real application, you'd manage the connection lifetime appropriately
+    let conn = Box::leak(Box::new(Connection::open("example.db")?));
 
     // Create schema
     conn.execute(
@@ -27,7 +29,7 @@ fn main() -> Result<()> {
     println!("✓ Database opened and schema created");
 
     // INTEGRATION POINT: Single line to enable SyndDB
-    let _synddb = SyndDB::attach(&conn, "http://localhost:8433")?;
+    let synddb = SyndDB::attach(conn, "http://localhost:8433")?;
     println!("✓ SyndDB client attached to connection\n");
 
     // Application code - completely unchanged from here
@@ -52,8 +54,12 @@ fn main() -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
+    // Flush changesets to sequencer
+    println!("\nFlushing changesets to sequencer...");
+    synddb.flush()?;
+
     println!("\n✓ All trades executed");
-    println!("✓ Changesets automatically captured and sent to sequencer");
+    println!("✓ Changesets captured and sent to sequencer");
 
     Ok(())
 }
