@@ -32,6 +32,7 @@ mod session;
 pub use config::Config;
 use sender::ChangesetSender;
 use session::SessionMonitor;
+pub use session::Snapshot;
 
 /// Main handle to SyndDB client
 ///
@@ -132,6 +133,49 @@ impl SyndDB {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Monitor already shut down"))?
             .flush()
+    }
+
+    /// Create a complete snapshot of the database
+    ///
+    /// This captures the full current state of the database as a portable SQLite file.
+    /// The snapshot includes the current sequence number, so replicas can know which
+    /// changesets to apply after restoring from this snapshot.
+    ///
+    /// # Use Case
+    ///
+    /// Snapshots are used when new replicas join the network and need to sync from
+    /// the current state rather than replaying all changesets from genesis.
+    ///
+    /// # Returns
+    ///
+    /// A `Snapshot` containing:
+    /// - Complete database file as bytes (cross-platform portable)
+    /// - Current sequence number (changesets with seq >= this apply after snapshot)
+    /// - Timestamp of snapshot creation
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use rusqlite::Connection;
+    /// # use synddb_client::SyndDB;
+    /// # let conn = Box::leak(Box::new(Connection::open("app.db").unwrap()));
+    /// # let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+    /// // Create snapshot for new replicas
+    /// let snapshot = synddb.snapshot()?;
+    ///
+    /// println!("Snapshot size: {} bytes", snapshot.data.len());
+    /// println!("Snapshot at sequence: {}", snapshot.sequence);
+    ///
+    /// // Replicas would:
+    /// // 1. Restore from snapshot.data
+    /// // 2. Apply changesets with sequence >= snapshot.sequence
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        self.monitor
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Monitor already shut down"))?
+            .snapshot()
     }
 
     /// Gracefully shutdown the client, flushing any pending changesets

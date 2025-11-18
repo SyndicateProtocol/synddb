@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
+use rusqlite::backup::Backup;
 use rusqlite::hooks::Action;
 use rusqlite::session::Session;
 use rusqlite::Connection;
@@ -9,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
-use tracing::{debug, error, trace};
+use tracing::{debug, error, info, trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Changeset {
@@ -21,11 +22,23 @@ pub struct Changeset {
     pub timestamp: SystemTime,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Complete database snapshot as SQLite database file bytes
+    pub data: Vec<u8>,
+    /// Timestamp when snapshot was captured
+    pub timestamp: SystemTime,
+    /// Sequence number at the time of snapshot
+    /// (changesets with sequence >= this should be applied after snapshot)
+    pub sequence: u64,
+}
+
 /// Shared state between session monitor and flush thread
 struct SessionState {
     session: Session<'static>,
     changeset_tx: Sender<Changeset>,
     sequence: u64,
+    conn: &'static Connection,
 }
 
 // SAFETY: SQLite sessions are thread-safe when used with a thread-safe connection.
@@ -62,6 +75,7 @@ impl SessionMonitor {
             session,
             changeset_tx,
             sequence: 0,
+            conn,
         }));
 
         // Create channel for flush thread shutdown
@@ -177,6 +191,80 @@ impl SessionMonitor {
     /// manually to flush immediately (e.g., after critical transactions).
     pub fn flush(&self) -> Result<()> {
         Self::flush_internal(&self.state)
+    }
+
+    /// Create a complete snapshot of the database
+    ///
+    /// This captures the full current state of the database as a portable SQLite file.
+    /// The snapshot includes the current sequence number, so replicas can know which
+    /// changesets to apply after restoring from this snapshot.
+    ///
+    /// # Returns
+    ///
+    /// A `Snapshot` containing:
+    /// - Complete database file as bytes (cross-platform portable)
+    /// - Current sequence number (changesets with seq >= this apply after snapshot)
+    /// - Timestamp of snapshot creation
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use rusqlite::Connection;
+    /// # use synddb_client::SyndDB;
+    /// # let conn = Box::leak(Box::new(Connection::open("app.db").unwrap()));
+    /// # let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+    /// // Create snapshot for new replicas
+    /// let snapshot = synddb.snapshot()?;
+    ///
+    /// // Send to sequencer or new replica
+    /// // Replicas restore from snapshot, then apply changesets with seq >= snapshot.sequence
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        info!("Creating database snapshot");
+
+        let state = self.state.lock().unwrap();
+
+        // Serialize database to bytes using a temporary file
+        // (We can't serialize in-memory db directly, so we use a temp file)
+        let snapshot_data = {
+            let temp_path =
+                std::env::temp_dir().join(format!("synddb_snapshot_{}.db", uuid::Uuid::new_v4()));
+
+            // Backup source to temporary file
+            {
+                let mut file_conn = Connection::open(&temp_path)
+                    .context("Failed to create temporary snapshot file")?;
+
+                let backup = Backup::new(state.conn, &mut file_conn)
+                    .context("Failed to initialize backup")?;
+
+                backup
+                    .run_to_completion(5, std::time::Duration::from_millis(250), None)
+                    .context("Failed to complete backup")?;
+            }
+
+            // Read file bytes
+            let snapshot_bytes =
+                std::fs::read(&temp_path).context("Failed to read snapshot file")?;
+
+            // Clean up temp file
+            let _ = std::fs::remove_file(&temp_path);
+
+            snapshot_bytes
+        };
+
+        info!(
+            "Snapshot created: {} bytes at sequence {}",
+            snapshot_data.len(),
+            state.sequence
+        );
+
+        Ok(Snapshot {
+            data: snapshot_data,
+            timestamp: SystemTime::now(),
+            sequence: state.sequence,
+        })
     }
 }
 
