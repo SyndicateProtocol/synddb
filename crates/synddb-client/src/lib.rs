@@ -97,9 +97,40 @@ impl SyndDB {
         let (changeset_tx, changeset_rx) = bounded(config.buffer_size);
         let (shutdown_tx, shutdown_rx) = bounded(1);
 
+        // Create snapshot channel if automatic snapshots are enabled
+        let snapshot_channel = if config.snapshot_interval > 0 {
+            let (snapshot_tx, snapshot_rx) = bounded(10); // Buffer up to 10 snapshots
+            Some((snapshot_tx, snapshot_rx))
+        } else {
+            None
+        };
+
         // Start session monitor (includes automatic flush thread)
-        let monitor = SessionMonitor::new(conn, changeset_tx.clone(), config.flush_interval)?;
+        let monitor = SessionMonitor::new(
+            conn,
+            changeset_tx.clone(),
+            config.flush_interval,
+            config.snapshot_interval,
+            snapshot_channel.as_ref().map(|(tx, _)| tx.clone()),
+        )?;
         monitor.start(conn)?;
+
+        // Start snapshot handler thread if enabled
+        if let Some((_, snapshot_rx)) = snapshot_channel {
+            thread::spawn(move || {
+                info!("Snapshot handler thread started");
+                while let Ok(snapshot) = snapshot_rx.recv() {
+                    info!(
+                        "Received automatic snapshot: {} bytes at sequence {}",
+                        snapshot.data.len(),
+                        snapshot.sequence
+                    );
+                    // TODO: Send snapshot to sequencer
+                    // For now, just log it. In production, this would POST to sequencer.
+                }
+                info!("Snapshot handler thread stopped");
+            });
+        }
 
         // Start background sender thread
         let sender_config = config.clone();

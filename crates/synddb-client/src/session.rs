@@ -39,6 +39,9 @@ struct SessionState {
     changeset_tx: Sender<Changeset>,
     sequence: u64,
     conn: &'static Connection,
+    snapshot_interval: u64,
+    changesets_since_snapshot: u64,
+    snapshot_tx: Option<Sender<Snapshot>>,
 }
 
 // SAFETY: SQLite sessions are thread-safe when used with a thread-safe connection.
@@ -58,8 +61,19 @@ impl SessionMonitor {
         conn: &'static Connection,
         changeset_tx: Sender<Changeset>,
         flush_interval: Duration,
+        snapshot_interval: u64,
+        snapshot_tx: Option<Sender<Snapshot>>,
     ) -> Result<Self> {
         debug!("Initializing SQLite Session Extension");
+
+        if snapshot_interval > 0 {
+            info!(
+                "Automatic snapshots enabled: every {} changesets",
+                snapshot_interval
+            );
+        } else {
+            info!("Automatic snapshots disabled");
+        }
 
         // Create a session attached to the main database
         let mut session = Session::new(conn).context("Failed to create SQLite session")?;
@@ -76,6 +90,9 @@ impl SessionMonitor {
             changeset_tx,
             sequence: 0,
             conn,
+            snapshot_interval,
+            changesets_since_snapshot: 0,
+            snapshot_tx,
         }));
 
         // Create channel for flush thread shutdown
@@ -175,6 +192,7 @@ impl SessionMonitor {
         };
 
         state.sequence += 1;
+        state.changesets_since_snapshot += 1;
 
         // Send to background thread
         state
@@ -182,7 +200,68 @@ impl SessionMonitor {
             .send(changeset)
             .context("Failed to send changeset to background thread")?;
 
+        // Check if we should create an automatic snapshot
+        if state.snapshot_interval > 0 && state.changesets_since_snapshot >= state.snapshot_interval
+        {
+            info!(
+                "Snapshot threshold reached ({} changesets), creating automatic snapshot",
+                state.changesets_since_snapshot
+            );
+
+            // Create snapshot (need to unlock state temporarily to avoid deadlock)
+            let snapshot_result = Self::create_snapshot_internal(&state);
+
+            match snapshot_result {
+                Ok(snapshot) => {
+                    // Send snapshot to channel if available
+                    if let Some(ref snapshot_tx) = state.snapshot_tx {
+                        if let Err(e) = snapshot_tx.send(snapshot) {
+                            error!("Failed to send automatic snapshot: {}", e);
+                        } else {
+                            info!("Automatic snapshot sent at sequence {}", state.sequence);
+                            state.changesets_since_snapshot = 0;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to create automatic snapshot: {}", e);
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    /// Internal method to create snapshot from locked state
+    fn create_snapshot_internal(state: &SessionState) -> Result<Snapshot> {
+        // Serialize database to bytes using a temporary file
+        let temp_path =
+            std::env::temp_dir().join(format!("synddb_snapshot_{}.db", uuid::Uuid::new_v4()));
+
+        // Backup source to temporary file
+        {
+            let mut file_conn =
+                Connection::open(&temp_path).context("Failed to create temporary snapshot file")?;
+
+            let backup =
+                Backup::new(state.conn, &mut file_conn).context("Failed to initialize backup")?;
+
+            backup
+                .run_to_completion(5, std::time::Duration::from_millis(250), None)
+                .context("Failed to complete backup")?;
+        }
+
+        // Read file bytes
+        let snapshot_bytes = std::fs::read(&temp_path).context("Failed to read snapshot file")?;
+
+        // Clean up temp file
+        let _ = std::fs::remove_file(&temp_path);
+
+        Ok(Snapshot {
+            data: snapshot_bytes,
+            timestamp: SystemTime::now(),
+            sequence: state.sequence,
+        })
     }
 
     /// Capture and send all changes since last flush
@@ -221,50 +300,18 @@ impl SessionMonitor {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn snapshot(&self) -> Result<Snapshot> {
-        info!("Creating database snapshot");
+        info!("Creating manual database snapshot");
 
         let state = self.state.lock().unwrap();
-
-        // Serialize database to bytes using a temporary file
-        // (We can't serialize in-memory db directly, so we use a temp file)
-        let snapshot_data = {
-            let temp_path =
-                std::env::temp_dir().join(format!("synddb_snapshot_{}.db", uuid::Uuid::new_v4()));
-
-            // Backup source to temporary file
-            {
-                let mut file_conn = Connection::open(&temp_path)
-                    .context("Failed to create temporary snapshot file")?;
-
-                let backup = Backup::new(state.conn, &mut file_conn)
-                    .context("Failed to initialize backup")?;
-
-                backup
-                    .run_to_completion(5, std::time::Duration::from_millis(250), None)
-                    .context("Failed to complete backup")?;
-            }
-
-            // Read file bytes
-            let snapshot_bytes =
-                std::fs::read(&temp_path).context("Failed to read snapshot file")?;
-
-            // Clean up temp file
-            let _ = std::fs::remove_file(&temp_path);
-
-            snapshot_bytes
-        };
+        let snapshot = Self::create_snapshot_internal(&state)?;
 
         info!(
-            "Snapshot created: {} bytes at sequence {}",
-            snapshot_data.len(),
-            state.sequence
+            "Manual snapshot created: {} bytes at sequence {}",
+            snapshot.data.len(),
+            snapshot.sequence
         );
 
-        Ok(Snapshot {
-            data: snapshot_data,
-            timestamp: SystemTime::now(),
-            sequence: state.sequence,
-        })
+        Ok(snapshot)
     }
 }
 

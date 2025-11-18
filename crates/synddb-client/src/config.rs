@@ -29,6 +29,11 @@ pub struct Config {
     #[serde(with = "humantime_serde")]
     #[serde(default = "default_request_timeout")]
     pub request_timeout: Duration,
+
+    /// Number of changesets between automatic snapshots
+    /// Set to 0 to disable automatic snapshots
+    #[serde(default = "default_snapshot_interval")]
+    pub snapshot_interval: u64,
 }
 
 fn default_buffer_size() -> usize {
@@ -51,6 +56,10 @@ fn default_request_timeout() -> Duration {
     Duration::from_secs(10)
 }
 
+fn default_snapshot_interval() -> u64 {
+    100 // Snapshot every 100 changesets
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -60,6 +69,7 @@ impl Default for Config {
             max_batch_size: default_max_batch_size(),
             max_retries: default_max_retries(),
             request_timeout: default_request_timeout(),
+            snapshot_interval: default_snapshot_interval(),
         }
     }
 }
