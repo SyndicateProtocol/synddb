@@ -211,7 +211,9 @@ impl SessionMonitor {
 
         let mut state = state.lock().unwrap();
 
-        // Check if schema changed by comparing hash
+        // CRITICAL: Check schema changes BEFORE capturing changesets
+        // Schema snapshots must be sent before any changesets that depend on the new schema,
+        // otherwise validators cannot apply those changesets (missing columns/tables)
         let current_schema_hash = Self::get_schema_hash(state.conn)?;
         if let Some(last_hash) = state.last_schema_hash {
             if current_schema_hash != last_hash {
@@ -224,7 +226,34 @@ impl SessionMonitor {
         }
         state.last_schema_hash = Some(current_schema_hash);
 
-        // Get changeset bytes from session using stream API
+        // If schema changed, create and send snapshot BEFORE capturing changesets
+        // This ensures validators receive schema updates before data changes that depend on them
+        if state.schema_changed {
+            info!("Creating immediate snapshot for schema change");
+            let snapshot_result = Self::create_snapshot_internal(&state);
+
+            match snapshot_result {
+                Ok(snapshot) => {
+                    if let Some(ref snapshot_tx) = state.snapshot_tx {
+                        if let Err(e) = snapshot_tx.send(snapshot) {
+                            error!("Failed to send schema change snapshot: {}", e);
+                        } else {
+                            info!("Schema change snapshot sent at sequence {}", state.sequence);
+                            state.changesets_since_snapshot = 0;
+                            state.schema_changed = false;
+                        }
+                    } else {
+                        state.schema_changed = false;
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to create schema change snapshot: {}", e);
+                    // Don't reset schema_changed flag - retry on next flush
+                }
+            }
+        }
+
+        // Now capture and send changesets (after schema snapshot if needed)
         let mut changeset_data = Vec::new();
         state
             .session
@@ -247,56 +276,35 @@ impl SessionMonitor {
         state.sequence += 1;
         state.changesets_since_snapshot += 1;
 
-        // Send to background thread
+        // Send changeset to background thread
         state
             .changeset_tx
             .send(changeset)
             .context("Failed to send changeset to background thread")?;
 
-        // Check if we should create an automatic snapshot
-        let should_snapshot = if state.schema_changed {
-            // ALWAYS snapshot on schema changes (spec requirement)
-            info!("Schema changed, creating immediate snapshot");
-            true
-        } else if state.snapshot_interval > 0
-            && state.changesets_since_snapshot >= state.snapshot_interval
+        // Check if we should create a regular interval-based snapshot
+        if state.snapshot_interval > 0 && state.changesets_since_snapshot >= state.snapshot_interval
         {
-            // Regular interval-based snapshot
             info!(
                 "Snapshot threshold reached ({} changesets), creating automatic snapshot",
                 state.changesets_since_snapshot
             );
-            true
-        } else {
-            false
-        };
 
-        if should_snapshot {
             let snapshot_result = Self::create_snapshot_internal(&state);
 
             match snapshot_result {
                 Ok(snapshot) => {
-                    // Send snapshot to channel if available
                     if let Some(ref snapshot_tx) = state.snapshot_tx {
                         if let Err(e) = snapshot_tx.send(snapshot) {
-                            error!("Failed to send automatic snapshot: {}", e);
+                            error!("Failed to send interval snapshot: {}", e);
                         } else {
-                            if state.schema_changed {
-                                info!("Schema change snapshot sent at sequence {}", state.sequence);
-                            } else {
-                                info!("Automatic snapshot sent at sequence {}", state.sequence);
-                            }
+                            info!("Automatic snapshot sent at sequence {}", state.sequence);
                             state.changesets_since_snapshot = 0;
-                            state.schema_changed = false;
                         }
-                    } else {
-                        // No channel means snapshots are disabled, but we still need to
-                        // reset schema_changed flag for manual snapshots
-                        state.schema_changed = false;
                     }
                 }
                 Err(e) => {
-                    error!("Failed to create automatic snapshot: {}", e);
+                    error!("Failed to create interval snapshot: {}", e);
                 }
             }
         }
