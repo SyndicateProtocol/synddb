@@ -24,24 +24,30 @@ pub struct DatabaseConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchConfig {
     /// Maximum batch size in bytes (default: 1MB)
-    #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 
     /// Maximum batch age before flushing (default: 1 second)
     #[serde(with = "humantime_serde")]
-    #[serde(default = "default_max_batch_age")]
     pub max_batch_age: Duration,
 
     /// Snapshot interval (default: 60 minutes)
     #[serde(with = "humantime_serde")]
-    #[serde(default = "default_snapshot_interval")]
     pub snapshot_interval: Duration,
 
     /// Number of batches before forcing snapshot (default: 1000)
-    #[serde(default = "default_snapshot_threshold")]
     pub snapshot_threshold: usize,
 }
 
+impl Default for BatchConfig {
+    fn default() -> Self {
+        BatchConfig {
+            max_batch_size: default_max_batch_size(),
+            max_batch_age: default_max_batch_age(),
+            snapshot_interval: default_snapshot_interval(),
+            snapshot_threshold: default_snapshot_threshold(),
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishConfig {
     /// Enable Celestia DA layer
