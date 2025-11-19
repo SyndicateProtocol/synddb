@@ -1,7 +1,8 @@
-//! Session monitoring module
+//! Changeset and schema change types
 //!
-//! Uses SQLite Session Extension to capture deterministic changesets
-//! and track schema changes.
+//! These types define the format for changesets and schema changes
+//! that are received from client libraries via HTTP. The changesets
+//! use SQLite Session Extension format (deterministic, auditable).
 
 pub mod changeset_reader;
 pub mod hooks;

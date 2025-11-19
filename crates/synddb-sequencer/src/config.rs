@@ -6,7 +6,7 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub database: DatabaseConfig,
+    pub receiver: ReceiverConfig,
     pub batch: BatchConfig,
     pub publish: PublishConfig,
     pub messages: MessageConfig,
@@ -14,11 +14,16 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DatabaseConfig {
-    /// Path to the SQLite database to monitor
-    pub path: PathBuf,
-    /// Whether to enable Session Extension monitoring
-    pub enable_sessions: bool,
+pub struct ReceiverConfig {
+    /// HTTP API listen address (default: 0.0.0.0:8433)
+    #[serde(default = "default_listen_addr")]
+    pub listen_addr: String,
+    /// Enable TLS for HTTPS
+    #[serde(default)]
+    pub enable_tls: bool,
+    /// Verify client TEE attestation tokens
+    #[serde(default = "default_verify_attestation")]
+    pub verify_client_attestation: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,14 +92,14 @@ pub struct MessageConfig {
     /// Enable inbound message monitoring from blockchain
     pub enable_inbound: bool,
 
-    /// Enable outbound message monitoring from SQLite tables
+    /// Enable outbound message processing (received from client libraries)
     pub enable_outbound: bool,
 
-    /// HTTP API port for message delivery to application
+    /// HTTP API port for delivering inbound messages to applications
     #[serde(default = "default_api_port")]
     pub api_port: u16,
 
-    /// Chain RPC URL for monitoring deposits
+    /// Chain RPC URL for monitoring blockchain events (deposits, etc.)
     pub chain_rpc_url: Option<String>,
 
     /// Bridge contract address
@@ -114,6 +119,14 @@ pub struct TeeConfig {
 }
 
 // Default value functions
+fn default_listen_addr() -> String {
+    "0.0.0.0:8433".to_string()
+}
+
+fn default_verify_attestation() -> bool {
+    true
+}
+
 fn default_max_batch_size() -> usize {
     1024 * 1024 // 1MB
 }
@@ -137,9 +150,10 @@ fn default_api_port() -> u16 {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            database: DatabaseConfig {
-                path: PathBuf::from("app.db"),
-                enable_sessions: true,
+            receiver: ReceiverConfig {
+                listen_addr: default_listen_addr(),
+                enable_tls: false,
+                verify_client_attestation: default_verify_attestation(),
             },
             batch: BatchConfig {
                 max_batch_size: default_max_batch_size(),
