@@ -22,7 +22,7 @@ bincode = "1.3"
 zstd = "0.13"
 
 # Configuration
-config = "0.14"
+# config = "0.14"
 humantime-serde = "1.1"
 
 # Logging and tracing
