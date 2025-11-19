@@ -58,12 +58,12 @@ fn main() -> Result<()> {
     println!("✓ Changesets are automatically captured and sent to sequencer");
     println!("  (flushed every 1 second by default)");
 
-    // Wait a moment to let automatic flush happen
-    println!("\nWaiting 2 seconds for automatic flush...");
+    // Wait a moment to let automatic publish happen
+    println!("\nWaiting 2 seconds for automatic publish...");
     std::thread::sleep(std::time::Duration::from_secs(2));
 
-    // You can also manually flush for critical transactions:
-    // synddb.flush()?;
+    // You can also manually publish for critical transactions:
+    // synddb.publish()?;
 
     Ok(())
 }

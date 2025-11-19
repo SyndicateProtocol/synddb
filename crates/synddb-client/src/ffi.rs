@@ -5,9 +5,28 @@
 
 use crate::{Config, SyndDB};
 use rusqlite::Connection;
-use std::ffi::CStr;
+use std::cell::RefCell;
+use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::time::Duration;
+
+thread_local! {
+    static LAST_ERROR: RefCell<Option<CString>> = RefCell::new(None);
+}
+
+fn set_last_error(err: impl std::fmt::Display) {
+    let error_msg = CString::new(format!("{}", err))
+        .unwrap_or_else(|_| CString::new("Failed to format error message").unwrap());
+    LAST_ERROR.with(|e| {
+        *e.borrow_mut() = Some(error_msg);
+    });
+}
+
+fn clear_last_error() {
+    LAST_ERROR.with(|e| {
+        *e.borrow_mut() = None;
+    });
+}
 
 /// Opaque handle to SyndDB client for FFI
 #[repr(C)]
@@ -56,19 +75,28 @@ pub unsafe extern "C" fn synddb_attach(
     sequencer_url: *const c_char,
     out_handle: *mut *mut SyndDBHandle,
 ) -> SyndDBError {
+    clear_last_error();
+
     if db_path.is_null() || sequencer_url.is_null() || out_handle.is_null() {
+        set_last_error("Null pointer provided");
         return SyndDBError::InvalidPointer;
     }
 
     // Convert C strings to Rust strings
     let db_path_str = match CStr::from_ptr(db_path).to_str() {
         Ok(s) => s,
-        Err(_) => return SyndDBError::InvalidUtf8,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in db_path: {}", e));
+            return SyndDBError::InvalidUtf8;
+        }
     };
 
     let sequencer_url_str = match CStr::from_ptr(sequencer_url).to_str() {
         Ok(s) => s,
-        Err(_) => return SyndDBError::InvalidUtf8,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in sequencer_url: {}", e));
+            return SyndDBError::InvalidUtf8;
+        }
     };
 
     // Open database connection
@@ -76,13 +104,19 @@ pub unsafe extern "C" fn synddb_attach(
     // This is the expected pattern for long-lived database connections
     let conn = match Connection::open(db_path_str) {
         Ok(c) => Box::leak(Box::new(c)),
-        Err(_) => return SyndDBError::DatabaseError,
+        Err(e) => {
+            set_last_error(format!("Failed to open database: {}", e));
+            return SyndDBError::DatabaseError;
+        }
     };
 
     // Attach SyndDB with default config
     let synddb = match SyndDB::attach(conn, sequencer_url_str) {
         Ok(s) => s,
-        Err(_) => return SyndDBError::AttachError,
+        Err(e) => {
+            set_last_error(format!("Failed to attach SyndDB: {}", e));
+            return SyndDBError::AttachError;
+        }
     };
 
     // Box the SyndDB and return as opaque handle
@@ -111,23 +145,35 @@ pub unsafe extern "C" fn synddb_attach_with_config(
     snapshot_interval: u64,
     out_handle: *mut *mut SyndDBHandle,
 ) -> SyndDBError {
+    clear_last_error();
+
     if db_path.is_null() || sequencer_url.is_null() || out_handle.is_null() {
+        set_last_error("Null pointer provided");
         return SyndDBError::InvalidPointer;
     }
 
     let db_path_str = match CStr::from_ptr(db_path).to_str() {
         Ok(s) => s,
-        Err(_) => return SyndDBError::InvalidUtf8,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in db_path: {}", e));
+            return SyndDBError::InvalidUtf8;
+        }
     };
 
     let sequencer_url_str = match CStr::from_ptr(sequencer_url).to_str() {
         Ok(s) => s,
-        Err(_) => return SyndDBError::InvalidUtf8,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in sequencer_url: {}", e));
+            return SyndDBError::InvalidUtf8;
+        }
     };
 
     let conn = match Connection::open(db_path_str) {
         Ok(c) => Box::leak(Box::new(c)),
-        Err(_) => return SyndDBError::DatabaseError,
+        Err(e) => {
+            set_last_error(format!("Failed to open database: {}", e));
+            return SyndDBError::DatabaseError;
+        }
     };
 
     let config = Config {
@@ -139,7 +185,10 @@ pub unsafe extern "C" fn synddb_attach_with_config(
 
     let synddb = match SyndDB::attach_with_config(conn, config) {
         Ok(s) => s,
-        Err(_) => return SyndDBError::AttachError,
+        Err(e) => {
+            set_last_error(format!("Failed to attach SyndDB: {}", e));
+            return SyndDBError::AttachError;
+        }
     };
 
     let boxed = Box::new(synddb);
@@ -160,7 +209,10 @@ pub unsafe extern "C" fn synddb_attach_with_config(
 /// - `handle` must be a valid handle from `synddb_attach()`
 #[no_mangle]
 pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBError {
+    clear_last_error();
+
     if handle.is_null() {
+        set_last_error("Null handle provided");
         return SyndDBError::InvalidPointer;
     }
 
@@ -168,7 +220,10 @@ pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBErro
 
     match synddb.publish() {
         Ok(_) => SyndDBError::Success,
-        Err(_) => SyndDBError::PublishError,
+        Err(e) => {
+            set_last_error(format!("Failed to publish: {}", e));
+            SyndDBError::PublishError
+        }
     }
 }
 
@@ -193,7 +248,10 @@ pub unsafe extern "C" fn synddb_snapshot(
     handle: *mut SyndDBHandle,
     out_size: *mut usize,
 ) -> SyndDBError {
+    clear_last_error();
+
     if handle.is_null() {
+        set_last_error("Null handle provided");
         return SyndDBError::InvalidPointer;
     }
 
@@ -206,7 +264,10 @@ pub unsafe extern "C" fn synddb_snapshot(
             }
             SyndDBError::Success
         }
-        Err(_) => SyndDBError::SnapshotError,
+        Err(e) => {
+            set_last_error(format!("Failed to create snapshot: {}", e));
+            SyndDBError::SnapshotError
+        }
     }
 }
 
@@ -234,17 +295,29 @@ pub unsafe extern "C" fn synddb_detach(handle: *mut SyndDBHandle) {
 /// Get error message for the last error
 ///
 /// # Returns
-/// Pointer to null-terminated UTF-8 string describing the error
+/// Pointer to null-terminated UTF-8 string describing the error, or null if no error.
 ///
-/// # Note
-/// The returned pointer is valid until the next FFI call.
-/// Currently returns static strings - thread-local error tracking TBD.
+/// # Safety
+/// The returned pointer is valid until the next FFI call on the same thread.
+/// The string must not be freed by the caller.
+///
+/// # Example (C)
+/// ```c
+/// if (synddb_attach(...) != 0) {
+///     const char* error = synddb_last_error();
+///     if (error) {
+///         fprintf(stderr, "Error: %s\n", error);
+///     }
+/// }
+/// ```
 #[no_mangle]
 pub extern "C" fn synddb_last_error() -> *const c_char {
-    // TODO: Implement thread-local error tracking
-    // For now, return a placeholder
-    static ERROR_MSG: &[u8] = b"Check logs for error details\0";
-    ERROR_MSG.as_ptr() as *const c_char
+    LAST_ERROR.with(|e| {
+        e.borrow()
+            .as_ref()
+            .map(|s| s.as_ptr())
+            .unwrap_or(std::ptr::null())
+    })
 }
 
 /// Get library version string

@@ -38,6 +38,7 @@ pub mod ffi;
 
 pub use attestation::{is_confidential_space, AttestationClient, TokenType};
 pub use config::Config;
+use recovery::FailedBatchRecovery;
 use sender::ChangesetSender;
 use session::SessionMonitor;
 pub use session::Snapshot;
@@ -58,6 +59,17 @@ pub struct SyndDB {
     changeset_handle: Option<thread::JoinHandle<()>>,
     /// Handle to background snapshot sender thread
     snapshot_handle: Option<thread::JoinHandle<()>>,
+    /// Optional recovery storage for failed batches
+    recovery: Option<std::sync::Arc<FailedBatchRecovery>>,
+}
+
+/// Statistics about failed batches in recovery storage
+#[derive(Debug, Clone, Copy)]
+pub struct RecoveryStats {
+    /// Number of failed changesets waiting to be retried
+    pub failed_changesets: usize,
+    /// Number of failed snapshots waiting to be retried
+    pub failed_snapshots: usize,
 }
 
 impl SyndDB {
@@ -123,9 +135,9 @@ impl SyndDB {
         )?;
         monitor.start(conn)?;
 
-        // Determine recovery database path for storing failed batches
+        // Create shared recovery storage for failed batches
         // This is optional - if None, failed batches are dropped
-        let recovery_path = if config.enable_recovery {
+        let recovery = if config.enable_recovery {
             // Use a stable path based on the sequencer URL to persist across restarts
             // Hash the sequencer URL to create a stable but unique identifier
             use std::collections::hash_map::DefaultHasher;
@@ -137,7 +149,18 @@ impl SyndDB {
 
             let temp_dir = std::env::temp_dir();
             let db_name = format!("synddb_recovery_{:x}.db", url_hash);
-            Some(temp_dir.join(db_name))
+            let recovery_path = temp_dir.join(db_name);
+
+            match FailedBatchRecovery::new(recovery_path) {
+                Ok(r) => Some(std::sync::Arc::new(r)),
+                Err(e) => {
+                    warn!(
+                        "Failed to initialize recovery storage: {}. Continuing without recovery.",
+                        e
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
@@ -170,7 +193,7 @@ impl SyndDB {
             .map(|(_, snapshot_rx)| {
                 let (shutdown_tx, shutdown_rx) = bounded(1);
                 let cfg = config.clone();
-                let rec_path = recovery_path.clone();
+                let rec = recovery.clone();
                 let att = attestation_client.clone();
 
                 let handle = thread::spawn(move || {
@@ -179,7 +202,7 @@ impl SyndDB {
                         .build()
                         .expect("Failed to create tokio runtime for snapshot sender")
                         .block_on(async {
-                            SnapshotSender::new(cfg, rec_path, att)
+                            SnapshotSender::new(cfg, rec, att)
                                 .run(snapshot_rx, shutdown_rx)
                                 .await
                         });
@@ -190,16 +213,19 @@ impl SyndDB {
             .unwrap_or_default();
 
         // Start background changeset sender thread
-        let changeset_handle = thread::spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create tokio runtime for changeset sender")
-                .block_on(async {
-                    ChangesetSender::new(config, recovery_path, attestation_client)
-                        .run(changeset_rx, changeset_shutdown_rx)
-                        .await
-                });
+        let changeset_handle = thread::spawn({
+            let recovery_clone = recovery.clone();
+            move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create tokio runtime for changeset sender")
+                    .block_on(async {
+                        ChangesetSender::new(config, recovery_clone, attestation_client)
+                            .run(changeset_rx, changeset_shutdown_rx)
+                            .await
+                    });
+            }
         });
 
         info!("SyndDB client attached successfully");
@@ -210,6 +236,7 @@ impl SyndDB {
             snapshot_shutdown_tx,
             changeset_handle: Some(changeset_handle),
             snapshot_handle,
+            recovery,
         })
     }
 
@@ -265,6 +292,37 @@ impl SyndDB {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Monitor already shut down"))?
             .snapshot()
+    }
+
+    /// Get statistics about failed batches in recovery storage
+    ///
+    /// Returns the number of failed changesets and snapshots waiting to be retried.
+    /// Returns `None` if recovery is disabled.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use rusqlite::Connection;
+    /// # use synddb_client::SyndDB;
+    /// # let conn = Box::leak(Box::new(Connection::open("app.db").unwrap()));
+    /// # let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+    /// if let Some(stats) = synddb.recovery_stats()? {
+    ///     println!("Failed changesets: {}", stats.failed_changesets);
+    ///     println!("Failed snapshots: {}", stats.failed_snapshots);
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn recovery_stats(&self) -> Result<Option<RecoveryStats>> {
+        match &self.recovery {
+            Some(recovery) => {
+                let (failed_changesets, failed_snapshots) = recovery.get_failed_counts()?;
+                Ok(Some(RecoveryStats {
+                    failed_changesets,
+                    failed_snapshots,
+                }))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Gracefully shutdown the client, publishing any pending changesets and snapshots

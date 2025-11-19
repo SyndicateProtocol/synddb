@@ -7,11 +7,14 @@ use crate::session::{Changeset, Snapshot};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tracing::{debug, info};
 
 /// Manages recovery storage for failed changesets and snapshots
+///
+/// Thread-safe via internal Mutex for cross-thread sharing
 pub struct FailedBatchRecovery {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl FailedBatchRecovery {
@@ -56,7 +59,9 @@ impl FailedBatchRecovery {
 
         debug!("Initialized failed batch recovery database");
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Save a failed changeset for later retry
@@ -68,6 +73,8 @@ impl FailedBatchRecovery {
             .as_secs() as i64;
 
         self.conn
+            .lock()
+            .unwrap()
             .execute(
                 "INSERT INTO failed_changesets (sequence, data, timestamp, last_error)
                  VALUES (?1, ?2, ?3, ?4)",
@@ -98,6 +105,8 @@ impl FailedBatchRecovery {
             .as_secs() as i64;
 
         self.conn
+            .lock()
+            .unwrap()
             .execute(
                 "INSERT INTO failed_snapshots (sequence, data, timestamp, last_error)
                  VALUES (?1, ?2, ?3, ?4)",
@@ -121,7 +130,8 @@ impl FailedBatchRecovery {
 
     /// Get all failed changesets for retry
     pub fn get_failed_changesets(&self) -> Result<Vec<(i64, Changeset)>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, sequence, data, timestamp FROM failed_changesets ORDER BY sequence",
         )?;
 
@@ -153,7 +163,8 @@ impl FailedBatchRecovery {
 
     /// Get all failed snapshots for retry
     pub fn get_failed_snapshots(&self) -> Result<Vec<(i64, Snapshot)>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, sequence, data, timestamp FROM failed_snapshots ORDER BY sequence",
         )?;
 
@@ -186,6 +197,8 @@ impl FailedBatchRecovery {
     /// Remove a changeset after successful retry
     pub fn remove_changeset(&self, id: i64) -> Result<()> {
         self.conn
+            .lock()
+            .unwrap()
             .execute("DELETE FROM failed_changesets WHERE id = ?1", params![id])?;
         debug!("Removed persisted changeset id={}", id);
         Ok(())
@@ -194,6 +207,8 @@ impl FailedBatchRecovery {
     /// Remove a snapshot after successful retry
     pub fn remove_snapshot(&self, id: i64) -> Result<()> {
         self.conn
+            .lock()
+            .unwrap()
             .execute("DELETE FROM failed_snapshots WHERE id = ?1", params![id])?;
         debug!("Removed persisted snapshot id={}", id);
         Ok(())
@@ -201,7 +216,10 @@ impl FailedBatchRecovery {
 
     /// Increment retry count for a changeset
     pub fn increment_changeset_retry(&self, id: i64, error: &str) -> Result<()> {
-        self.conn.execute(
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
             "UPDATE failed_changesets SET retry_count = retry_count + 1, last_error = ?2 WHERE id = ?1",
             params![id, error],
         )?;
@@ -210,7 +228,10 @@ impl FailedBatchRecovery {
 
     /// Increment retry count for a snapshot
     pub fn increment_snapshot_retry(&self, id: i64, error: &str) -> Result<()> {
-        self.conn.execute(
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
             "UPDATE failed_snapshots SET retry_count = retry_count + 1, last_error = ?2 WHERE id = ?1",
             params![id, error],
         )?;
@@ -219,17 +240,17 @@ impl FailedBatchRecovery {
 
     /// Get count of failed batches
     pub fn get_failed_counts(&self) -> Result<(usize, usize)> {
+        let conn = self.conn.lock().unwrap();
+
         let changesets: usize =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM failed_changesets", [], |row| {
-                    row.get(0)
-                })?;
+            conn.query_row("SELECT COUNT(*) FROM failed_changesets", [], |row| {
+                row.get(0)
+            })?;
 
         let snapshots: usize =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM failed_snapshots", [], |row| {
-                    row.get(0)
-                })?;
+            conn.query_row("SELECT COUNT(*) FROM failed_snapshots", [], |row| {
+                row.get(0)
+            })?;
 
         Ok((changesets, snapshots))
     }
@@ -243,12 +264,14 @@ impl FailedBatchRecovery {
             .unwrap()
             .as_secs() as i64;
 
-        let changesets_deleted = self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+
+        let changesets_deleted = conn.execute(
             "DELETE FROM failed_changesets WHERE failed_at < ?1",
             params![cutoff_secs],
         )?;
 
-        let snapshots_deleted = self.conn.execute(
+        let snapshots_deleted = conn.execute(
             "DELETE FROM failed_snapshots WHERE failed_at < ?1",
             params![cutoff_secs],
         )?;

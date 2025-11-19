@@ -8,7 +8,7 @@ use crate::session::Snapshot;
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,28 +23,20 @@ struct SnapshotMessage {
 pub struct SnapshotSender {
     config: Config,
     client: Client,
-    recovery: Option<FailedBatchRecovery>,
+    recovery: Option<Arc<FailedBatchRecovery>>,
     attestation: Option<AttestationClient>,
 }
 
 impl SnapshotSender {
     pub fn new(
         config: Config,
-        recovery_path: Option<PathBuf>,
+        recovery: Option<Arc<FailedBatchRecovery>>,
         attestation: Option<AttestationClient>,
     ) -> Self {
         let client = Client::builder()
             .timeout(config.request_timeout)
             .build()
             .expect("Failed to create HTTP client");
-
-        let recovery = recovery_path.and_then(|path| match FailedBatchRecovery::new(path) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                error!("Failed to initialize recovery storage: {}", e);
-                None
-            }
-        });
 
         Self {
             config,
