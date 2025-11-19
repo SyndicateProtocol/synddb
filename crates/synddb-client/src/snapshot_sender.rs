@@ -1,7 +1,7 @@
 //! Background sender for database snapshots to sequencer
 
 use crate::config::Config;
-use crate::persistence::FailedBatchPersistence;
+use crate::recovery::FailedBatchRecovery;
 use crate::session::Snapshot;
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
@@ -18,29 +18,28 @@ struct SnapshotMessage {
 pub struct SnapshotSender {
     config: Config,
     client: Client,
-    persistence: Option<FailedBatchPersistence>,
+    recovery: Option<FailedBatchRecovery>,
 }
 
 impl SnapshotSender {
-    pub fn new(config: Config, persistence_path: Option<PathBuf>) -> Self {
+    pub fn new(config: Config, recovery_path: Option<PathBuf>) -> Self {
         let client = Client::builder()
             .timeout(config.request_timeout)
             .build()
             .expect("Failed to create HTTP client");
 
-        let persistence =
-            persistence_path.and_then(|path| match FailedBatchPersistence::new(path) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    error!("Failed to initialize persistence: {}", e);
-                    None
-                }
-            });
+        let recovery = recovery_path.and_then(|path| match FailedBatchRecovery::new(path) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                error!("Failed to initialize recovery storage: {}", e);
+                None
+            }
+        });
 
         Self {
             config,
             client,
-            persistence,
+            recovery,
         }
     }
 
@@ -114,20 +113,19 @@ impl SnapshotSender {
             }
         }
 
-        // If we failed after all retries, persist for later retry
-        if let Some(ref persistence) = self.persistence {
+        // If we failed after all retries, save to recovery storage for later retry
+        if let Some(ref recovery) = self.recovery {
             warn!(
-                "Persisting snapshot at sequence {} after failed send",
+                "Saving snapshot at sequence {} to recovery storage after failed send",
                 message.snapshot.sequence
             );
-            if let Err(e) =
-                persistence.save_failed_snapshot(&message.snapshot, "Max retries exceeded")
+            if let Err(e) = recovery.save_failed_snapshot(&message.snapshot, "Max retries exceeded")
             {
-                error!("Failed to persist snapshot: {}", e);
+                error!("Failed to save snapshot to recovery storage: {}", e);
             }
         } else {
             error!(
-                "Dropping snapshot at sequence {} after failed send (persistence disabled)",
+                "Dropping snapshot at sequence {} after failed send (recovery disabled)",
                 message.snapshot.sequence
             );
         }

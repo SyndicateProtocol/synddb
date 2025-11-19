@@ -1,7 +1,7 @@
-//! Failed batch persistence for reliable changeset/snapshot delivery
+//! Failed batch recovery for reliable changeset/snapshot delivery
 //!
-//! When sending to the sequencer fails after all retries, we persist the data
-//! to a local SQLite table for retry on next startup or manual recovery.
+//! When sending to the sequencer fails after all retries, we save the data
+//! to a local SQLite recovery database for retry on next startup or manual recovery.
 
 use crate::session::{Changeset, Snapshot};
 use anyhow::{Context, Result};
@@ -9,18 +9,18 @@ use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
-/// Manages persistence of failed changesets and snapshots
-pub struct FailedBatchPersistence {
+/// Manages recovery storage for failed changesets and snapshots
+pub struct FailedBatchRecovery {
     conn: Connection,
 }
 
-impl FailedBatchPersistence {
-    /// Create or open the persistence database
+impl FailedBatchRecovery {
+    /// Create or open the recovery database
     ///
     /// Creates a separate SQLite database for storing failed batches.
     /// This database is kept separate from the main application database.
     pub fn new(db_path: PathBuf) -> Result<Self> {
-        let conn = Connection::open(db_path).context("Failed to open persistence database")?;
+        let conn = Connection::open(db_path).context("Failed to open recovery database")?;
 
         // Create tables for failed batches
         conn.execute_batch(
@@ -52,9 +52,9 @@ impl FailedBatchPersistence {
             ON failed_snapshots(sequence);
             "#,
         )
-        .context("Failed to create persistence tables")?;
+        .context("Failed to create recovery tables")?;
 
-        debug!("Initialized failed batch persistence database");
+        debug!("Initialized failed batch recovery database");
 
         Ok(Self { conn })
     }
@@ -270,11 +270,11 @@ mod tests {
     use std::time::SystemTime;
 
     #[test]
-    fn test_persistence_roundtrip() {
+    fn test_recovery_roundtrip() {
         let temp_dir = std::env::temp_dir();
-        let db_path = temp_dir.join(format!("test_persistence_{}.db", uuid::Uuid::new_v4()));
+        let db_path = temp_dir.join(format!("test_recovery_{}.db", uuid::Uuid::new_v4()));
 
-        let persistence = FailedBatchPersistence::new(db_path.clone()).unwrap();
+        let recovery = FailedBatchRecovery::new(db_path.clone()).unwrap();
 
         // Create test changeset
         let changeset = Changeset {
@@ -284,12 +284,12 @@ mod tests {
         };
 
         // Save it
-        persistence
+        recovery
             .save_failed_changeset(&changeset, "Test error")
             .unwrap();
 
         // Retrieve it
-        let failed = persistence.get_failed_changesets().unwrap();
+        let failed = recovery.get_failed_changesets().unwrap();
         assert_eq!(failed.len(), 1);
 
         let (id, retrieved) = &failed[0];
@@ -297,9 +297,9 @@ mod tests {
         assert_eq!(retrieved.data, vec![1, 2, 3, 4]);
 
         // Remove it
-        persistence.remove_changeset(*id).unwrap();
+        recovery.remove_changeset(*id).unwrap();
 
-        let failed_after = persistence.get_failed_changesets().unwrap();
+        let failed_after = recovery.get_failed_changesets().unwrap();
         assert_eq!(failed_after.len(), 0);
 
         // Cleanup
@@ -311,7 +311,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let db_path = temp_dir.join(format!("test_retry_{}.db", uuid::Uuid::new_v4()));
 
-        let persistence = FailedBatchPersistence::new(db_path.clone()).unwrap();
+        let recovery = FailedBatchRecovery::new(db_path.clone()).unwrap();
 
         let changeset = Changeset {
             data: vec![1, 2, 3],
@@ -319,23 +319,23 @@ mod tests {
             timestamp: SystemTime::now(),
         };
 
-        persistence
+        recovery
             .save_failed_changeset(&changeset, "Initial error")
             .unwrap();
 
-        let failed = persistence.get_failed_changesets().unwrap();
+        let failed = recovery.get_failed_changesets().unwrap();
         let (id, _) = failed[0];
 
         // Increment retry count
-        persistence
+        recovery
             .increment_changeset_retry(id, "Retry error 1")
             .unwrap();
-        persistence
+        recovery
             .increment_changeset_retry(id, "Retry error 2")
             .unwrap();
 
         // Check counts
-        let (changeset_count, _) = persistence.get_failed_counts().unwrap();
+        let (changeset_count, _) = recovery.get_failed_counts().unwrap();
         assert_eq!(changeset_count, 1);
 
         // Cleanup

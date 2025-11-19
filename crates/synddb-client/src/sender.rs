@@ -1,7 +1,7 @@
 //! Background sender that batches and sends changesets to sequencer
 
 use crate::config::Config;
-use crate::persistence::FailedBatchPersistence;
+use crate::recovery::FailedBatchRecovery;
 use crate::session::Changeset;
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
@@ -22,24 +22,23 @@ pub struct ChangesetSender {
     buffer: Vec<Changeset>,
     buffer_size: usize,
     last_flush: Instant,
-    persistence: Option<FailedBatchPersistence>,
+    recovery: Option<FailedBatchRecovery>,
 }
 
 impl ChangesetSender {
-    pub fn new(config: Config, persistence_path: Option<PathBuf>) -> Self {
+    pub fn new(config: Config, recovery_path: Option<PathBuf>) -> Self {
         let client = Client::builder()
             .timeout(config.request_timeout)
             .build()
             .expect("Failed to create HTTP client");
 
-        let persistence =
-            persistence_path.and_then(|path| match FailedBatchPersistence::new(path) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    error!("Failed to initialize persistence: {}", e);
-                    None
-                }
-            });
+        let recovery = recovery_path.and_then(|path| match FailedBatchRecovery::new(path) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                error!("Failed to initialize recovery storage: {}", e);
+                None
+            }
+        });
 
         Self {
             config,
@@ -47,7 +46,7 @@ impl ChangesetSender {
             buffer: Vec::new(),
             buffer_size: 0,
             last_flush: Instant::now(),
-            persistence,
+            recovery,
         }
     }
 
@@ -131,21 +130,20 @@ impl ChangesetSender {
             }
         }
 
-        // If we failed after all retries, persist for later retry
-        if let Some(ref persistence) = self.persistence {
+        // If we failed after all retries, save to recovery storage for later retry
+        if let Some(ref recovery) = self.recovery {
             warn!(
-                "Persisting {} changesets after failed send",
+                "Saving {} changesets to recovery storage after failed send",
                 batch.changesets.len()
             );
             for changeset in &batch.changesets {
-                if let Err(e) = persistence.save_failed_changeset(changeset, "Max retries exceeded")
-                {
-                    error!("Failed to persist changeset: {}", e);
+                if let Err(e) = recovery.save_failed_changeset(changeset, "Max retries exceeded") {
+                    error!("Failed to save changeset to recovery storage: {}", e);
                 }
             }
         } else {
             error!(
-                "Dropping {} changesets after failed send (persistence disabled)",
+                "Dropping {} changesets after failed send (recovery disabled)",
                 batch.changesets.len()
             );
         }

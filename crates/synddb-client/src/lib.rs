@@ -26,7 +26,7 @@ use std::thread;
 use tracing::{debug, info, warn};
 
 mod config;
-mod persistence;
+mod recovery;
 mod sender;
 mod session;
 mod snapshot_sender;
@@ -125,13 +125,12 @@ impl SyndDB {
         )?;
         monitor.start(conn)?;
 
-        // Determine persistence path (same directory as database with _failed.db suffix)
+        // Determine recovery database path for storing failed batches
         // This is optional - if None, failed batches are dropped
-        let persistence_path = if config.enable_persistence {
-            // Get database directory from the connection
-            // For simplicity, use temp dir with unique name
+        let recovery_path = if config.enable_recovery {
+            // Use temp dir with unique name for recovery storage
             let temp_dir = std::env::temp_dir();
-            let db_name = format!("synddb_failed_{}.db", uuid::Uuid::new_v4());
+            let db_name = format!("synddb_recovery_{}.db", uuid::Uuid::new_v4());
             Some(temp_dir.join(db_name))
         } else {
             None
@@ -142,7 +141,7 @@ impl SyndDB {
             if let Some((_, snapshot_rx)) = snapshot_channel {
                 let (snapshot_shutdown_tx, snapshot_shutdown_rx) = bounded(1);
                 let snapshot_config = config.clone();
-                let persistence_path_clone = persistence_path.clone();
+                let recovery_path_clone = recovery_path.clone();
 
                 let handle = thread::spawn(move || {
                     let rt = tokio::runtime::Builder::new_current_thread()
@@ -151,7 +150,7 @@ impl SyndDB {
                         .expect("Failed to create tokio runtime for snapshot sender");
 
                     rt.block_on(async {
-                        let sender = SnapshotSender::new(snapshot_config, persistence_path_clone);
+                        let sender = SnapshotSender::new(snapshot_config, recovery_path_clone);
                         sender.run(snapshot_rx, snapshot_shutdown_rx).await
                     });
                 });
@@ -170,7 +169,7 @@ impl SyndDB {
                 .expect("Failed to create tokio runtime for changeset sender");
 
             rt.block_on(async {
-                let sender = ChangesetSender::new(sender_config, persistence_path);
+                let sender = ChangesetSender::new(sender_config, recovery_path);
                 sender.run(changeset_rx, changeset_shutdown_rx).await
             });
         });
