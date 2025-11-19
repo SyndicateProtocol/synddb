@@ -9,8 +9,15 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
+
+/// Path to the GCP Confidential Space attestation socket
+const ATTESTATION_SOCKET_PATH: &str = "/run/container_launcher/teeserver.sock";
+
+/// Default token cache duration (50 minutes, as tokens expire after 1 hour)
+const DEFAULT_CACHE_DURATION: Duration = Duration::from_secs(50 * 60);
 
 /// Token type for attestation requests
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,16 +56,26 @@ struct AttestationResponse {
     token: String,
 }
 
+/// Shared state for token caching across clones
+#[derive(Debug)]
+struct TokenCache {
+    token: Option<String>,
+    expires_at: Option<Instant>,
+}
+
 /// Client for obtaining attestation tokens from GCP Confidential Space
+///
+/// This client can be safely cloned and shared across threads. All clones share
+/// the same token cache via Arc<Mutex<_>>, so tokens are only fetched when needed.
 #[derive(Clone)]
 pub struct AttestationClient {
     /// Audience for attestation tokens
     audience: String,
     /// Token type to request
     token_type: TokenType,
-    /// Cached token and expiration (Note: Clone will share the cache reference)
-    cached_token: Option<(String, Instant)>,
-    /// Token cache duration (default: 50 minutes, as tokens expire after 1 hour)
+    /// Shared token cache (synchronized across clones)
+    cache: Arc<Mutex<TokenCache>>,
+    /// Token cache duration
     cache_duration: Duration,
 }
 
@@ -76,12 +93,11 @@ impl AttestationClient {
     /// Returns `Err` if running outside GCP Confidential Space (socket not available).
     pub fn new(audience: impl Into<String>, token_type: TokenType) -> Result<Self> {
         // Check if the socket exists (only available in Confidential Space)
-        let socket_path = "/run/container_launcher/teeserver.sock";
-        if !std::path::Path::new(socket_path).exists() {
+        if !std::path::Path::new(ATTESTATION_SOCKET_PATH).exists() {
             return Err(anyhow::anyhow!(
                 "Confidential Space attestation socket not found at {}. \
                  Are you running in GCP Confidential Space?",
-                socket_path
+                ATTESTATION_SOCKET_PATH
             ));
         }
 
@@ -95,8 +111,11 @@ impl AttestationClient {
         Ok(Self {
             audience: audience_string,
             token_type,
-            cached_token: None,
-            cache_duration: Duration::from_secs(50 * 60), // 50 minutes
+            cache: Arc::new(Mutex::new(TokenCache {
+                token: None,
+                expires_at: None,
+            })),
+            cache_duration: DEFAULT_CACHE_DURATION,
         })
     }
 
@@ -104,23 +123,31 @@ impl AttestationClient {
     ///
     /// Tokens are cached for 50 minutes (they expire after 1 hour).
     /// A fresh token is fetched if the cache is empty or expired.
-    pub async fn get_token(&mut self) -> Result<String> {
+    ///
+    /// This method is thread-safe and can be called concurrently from multiple threads.
+    pub async fn get_token(&self) -> Result<String> {
         // Check if we have a valid cached token
-        if let Some((token, expires_at)) = &self.cached_token {
-            if Instant::now() < *expires_at {
-                debug!("Using cached attestation token");
-                return Ok(token.clone());
-            } else {
-                debug!("Cached attestation token expired, fetching new one");
+        {
+            let cache = self.cache.lock().unwrap();
+            if let (Some(token), Some(expires_at)) = (&cache.token, cache.expires_at) {
+                if Instant::now() < expires_at {
+                    debug!("Using cached attestation token");
+                    return Ok(token.clone());
+                }
             }
         }
+
+        debug!("Fetching new attestation token");
 
         // Fetch new token
         let token = self.fetch_token_internal(vec![]).await?;
 
         // Cache the token
-        let expires_at = Instant::now() + self.cache_duration;
-        self.cached_token = Some((token.clone(), expires_at));
+        {
+            let mut cache = self.cache.lock().unwrap();
+            cache.token = Some(token.clone());
+            cache.expires_at = Some(Instant::now() + self.cache_duration);
+        }
 
         Ok(token)
     }
@@ -172,7 +199,7 @@ impl AttestationClient {
             use hyper::{Body, Client, Request};
             use hyperlocal::{UnixClientExt, UnixConnector, Uri};
 
-            let url = Uri::new("/run/container_launcher/teeserver.sock", "/v1/token");
+            let url = Uri::new(ATTESTATION_SOCKET_PATH, "/v1/token");
 
             let client: Client<UnixConnector> = Client::unix();
 
@@ -217,9 +244,11 @@ impl AttestationClient {
     }
 
     /// Invalidate the cached token, forcing a fresh token on next request
-    pub fn invalidate_cache(&mut self) {
+    pub fn invalidate_cache(&self) {
         debug!("Invalidating cached attestation token");
-        self.cached_token = None;
+        let mut cache = self.cache.lock().unwrap();
+        cache.token = None;
+        cache.expires_at = None;
     }
 
     /// Get the audience this client is configured for
@@ -237,7 +266,7 @@ impl AttestationClient {
 ///
 /// This is a lightweight check that only verifies the attestation socket exists.
 pub fn is_confidential_space() -> bool {
-    std::path::Path::new("/run/container_launcher/teeserver.sock").exists()
+    std::path::Path::new(ATTESTATION_SOCKET_PATH).exists()
 }
 
 #[cfg(test)]

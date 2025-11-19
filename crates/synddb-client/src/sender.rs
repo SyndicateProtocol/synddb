@@ -106,7 +106,7 @@ impl ChangesetSender {
         }
 
         // Obtain attestation token if configured
-        let attestation_token = if let Some(ref mut attestation) = self.attestation {
+        let attestation_token = if let Some(ref attestation) = self.attestation {
             match attestation.get_token().await {
                 Ok(token) => {
                     debug!("Obtained attestation token for changeset batch");

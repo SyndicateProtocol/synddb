@@ -53,7 +53,7 @@ impl SnapshotSender {
         }
     }
 
-    pub async fn run(mut self, snapshot_rx: Receiver<Snapshot>, shutdown_rx: Receiver<()>) {
+    pub async fn run(self, snapshot_rx: Receiver<Snapshot>, shutdown_rx: Receiver<()>) {
         info!("SnapshotSender started");
 
         loop {
@@ -84,9 +84,9 @@ impl SnapshotSender {
         info!("SnapshotSender stopped");
     }
 
-    async fn send_snapshot(&mut self, snapshot: Snapshot) {
+    async fn send_snapshot(&self, snapshot: Snapshot) {
         // Obtain attestation token if configured
-        let attestation_token = if let Some(ref mut attestation) = self.attestation {
+        let attestation_token = if let Some(ref attestation) = self.attestation {
             match attestation.get_token().await {
                 Ok(token) => {
                     debug!("Obtained attestation token for snapshot");
