@@ -1,71 +1,91 @@
-# PLAN_SEQUENCER.md - Lightweight SQLite Monitor and Publisher
+# PLAN_SEQUENCER.md - Sequencer Service for Publishing to DA Layers
 
 ## Overview
 
-The synddb-sequencer is a zero-configuration Rust process that attaches to any SQLite database using the **SQLite Session Extension** to capture deterministic changesets. It publishes logical database changes (INSERT/UPDATE/DELETE operations) to multiple DA layers. This approach is far more robust than WAL parsing and ensures validators can deterministically re-derive state. It requires zero application code changes and works with SQLite databases from any programming language.
+The synddb-sequencer is a service that receives changesets and snapshots from application client libraries and publishes them to multiple DA layers.
 
-**Note:** The sequencer runs as a **sidecar process** - a separate process that runs alongside the application. While we call it the "sequencer" (reflecting its role in ordering and publishing transactions), it's architecturally deployed as a sidecar.
+**Architecture Note**: The original plan described the sequencer as a sidecar process that directly monitors SQLite databases. We have since evolved to a **client library architecture**:
+
+- **Client Library** (`synddb-client` crate): Embeds in applications, captures changesets/snapshots via SQLite Session Extension, sends to sequencer via HTTP
+- **Sequencer Service** (`synddb-sequencer` crate - this document): Receives from client libraries, publishes to DA layers, monitors blockchain for inbound messages
+- **Security**: Client and sequencer run in **separate TEEs** to isolate signing keys from the application
+
+This document focuses on the **sequencer service** implementation. For client library details, see `crates/synddb-client/`.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                  Application (Any Language)                  │
-│         Python/JS/Go/Rust/Java → SQLite API → app.db        │
-│                              ↑                               │
-│                    HTTP localhost:8432                       │
-│                    (Deposit Events)                          │
+│             Application + SyndDB Client Library              │
+│         (in TEE #1 - Application TEE)                        │
+│                                                              │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │  Application → SQLite + Session Extension          │     │
+│  │  (Python/JS/Go/Rust/Java)                          │     │
+│  └────────────────────────────────────────────────────┘     │
+│                          ↓                                   │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │  SyndDB Client Library (synddb-client crate)       │     │
+│  │  - Captures changesets via Session Extension       │     │
+│  │  - Creates snapshots (periodic + on schema change) │     │
+│  │  - Includes TEE attestation tokens                 │     │
+│  └────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────┘
-                                │
-                    Database Transactions (via Session Extension)
-                                ↓
+                          ↓ HTTP POST
+                    (Changesets + Snapshots)
+                          ↓
 ┌──────────────────────────────────────────────────────────────┐
-│                      synddb-sequencer                          │
-│ ┌─────────────────┐  ┌─────────────┐  ┌─────────────┐      │
-│ │ Session Monitor │→ │   Batcher   │→ │  Attestor   │      │
-│ │ (Changesets)    │  │ (+ Snapshot)│  │(Sign+Compress)     │
-│ └─────────────────┘  └─────────────┘  └─────────────┘      │
-│        ↓                                        ↓             │
-│  Logical Changes                      Signed Changesets     │
-│  (INSERT/UPDATE/DELETE)               + Periodic Snapshots  │
-│        ↓                                        ↓             │
+│               synddb-sequencer (in TEE #2)                   │
+│                                                              │
 │ ┌──────────────────────────────────────────────────┐        │
-│ │            Multi-DA Publisher                     │        │
+│ │         HTTP Receiver (Axum)                     │        │
+│ │  - Receives changesets/snapshots from clients    │        │
+│ │  - Verifies TEE attestation tokens               │        │
+│ └──────────────────────────────────────────────────┘        │
+│                          ↓                                   │
+│ ┌──────────────────────────────────────────────────┐        │
+│ │         Batcher + Attestor                       │        │
+│ │  - Batches operations                            │        │
+│ │  - Compresses (zstd)                             │        │
+│ │  - Signs with sequencer keys                     │        │
+│ └──────────────────────────────────────────────────┘        │
+│                          ↓                                   │
+│ ┌──────────────────────────────────────────────────┐        │
+│ │         Multi-DA Publisher                       │        │
 │ │  ┌─────────┐ ┌─────────┐ ┌──────┐ ┌─────────┐  │        │
 │ │  │Celestia │ │EigenDA  │ │ IPFS │ │ Arweave │  │        │
 │ │  └─────────┘ └─────────┘ └──────┘ └─────────┘  │        │
 │ └──────────────────────────────────────────────────┘        │
 │                                                              │
 │ ┌──────────────────────────────────────────────────┐        │
-│ │            Deposit Monitor                        │        │
+│ │         Deposit Monitor                          │        │
 │ │  ┌────────────────┐    ┌────────────────────┐   │        │
 │ │  │ Chain Monitor  │───▶│  Deposit HTTP API  │   │        │
-│ │  │ (Bridge Events)│    │  localhost:8432    │   │        │
+│ │  │ (Bridge Events)│    │  (to Applications) │   │        │
 │ │  └────────────────┘    └────────────────────┘   │        │
 │ └──────────────────────────────────────────────────┘        │
 └──────────────────────────────────────────────────────────────┘
-                                ↑
-                          Event Monitoring
-                                │
+                          ↑
+                    Event Monitoring
+                          │
 ┌──────────────────────────────────────────────────────────────┐
 │                    Blockchain (L1/L2)                        │
 │                 Bridge Contract (Deposits)                   │
 └──────────────────────────────────────────────────────────────┘
 
-Key Benefits:
-- Session Extension: Official SQLite API (no brittle WAL parsing)
-- Deterministic: Logical changes (not physical pages)
-- Compact: Only changed rows (not full database pages)
-- Safe: Periodic snapshots provide recovery points
+Key Changes from Original Plan:
+- Client library handles Session Extension monitoring (already implemented in `synddb-client`)
+- Sequencer receives via HTTP instead of direct database access
+- Two separate TEEs for security: application + client vs sequencer
+- Signing keys isolated in sequencer TEE
 ```
 
 ## Core Libraries
 
 ```toml
 [dependencies]
-# Core SQLite monitoring
-rusqlite = { version = "0.32", features = ["bundled", "backup", "session"] }
-# Session extension provides deterministic changesets (official SQLite API)
+# Note: SQLite Session Extension monitoring is handled by synddb-client library
+# The sequencer receives pre-captured changesets/snapshots via HTTP
 
 # Compression and serialization
 zstd = "0.13"  # Fast compression with good ratios
@@ -123,16 +143,15 @@ synddb-sequencer/
 │   ├── main.rs                    # Entry point, CLI args
 │   ├── lib.rs                     # Public API
 │   ├── config.rs                  # Configuration structures
-│   ├── monitor/
-│   │   ├── mod.rs                 # Session monitoring module
-│   │   ├── session_tracker.rs     # SQLite Session Extension wrapper
-│   │   ├── changeset_reader.rs    # Parse changeset format
-│   │   └── hooks.rs               # Commit hooks for changeset extraction
+│   ├── receiver/
+│   │   ├── mod.rs                 # HTTP receiver module
+│   │   ├── api.rs                 # Axum HTTP endpoints
+│   │   ├── attestation.rs         # Verify client TEE attestation tokens
+│   │   └── validation.rs          # Validate received changesets/snapshots
 │   ├── batch/
 │   │   ├── mod.rs                 # Batching logic
-│   │   ├── accumulator.rs         # Accumulate operations
-│   │   ├── timer.rs               # Time/size based triggers
-│   │   └── snapshot.rs            # Full database snapshot creation
+│   │   ├── accumulator.rs         # Accumulate received operations
+│   │   └── timer.rs               # Time/size based triggers for publishing
 │   ├── attestor/
 │   │   ├── mod.rs                 # Attestation and signing
 │   │   ├── key_manager.rs         # Ethereum key management in TEE
@@ -149,9 +168,8 @@ synddb-sequencer/
 │   ├── messages/
 │   │   ├── mod.rs                 # Message passing module
 │   │   ├── inbound_monitor.rs     # Blockchain event monitoring for inbound messages
-│   │   ├── outbound_monitor.rs    # SQLite table monitoring for outbound messages
 │   │   ├── queue.rs               # Message queue management
-│   │   ├── api.rs                 # HTTP API for bidirectional messaging
+│   │   ├── api.rs                 # HTTP API for delivering messages to applications
 │   │   ├── consistency.rs         # Consistency enforcement between messages
 │   │   ├── degradation.rs         # Progressive degradation management
 │   │   ├── alerts.rs              # Application alerting mechanisms
@@ -162,8 +180,7 @@ synddb-sequencer/
 │   │   └── attestation.rs         # Fetch attestation tokens from metadata service
 │   └── utils/
 │       ├── mod.rs
-│       ├── checksum.rs            # Data integrity
-│       └── sqlite_utils.rs        # SQLite helpers
+│       └── checksum.rs            # Data integrity
 ├── config/
 │   ├── default.yaml               # Default configuration
 │   └── example.yaml               # Example with all options
@@ -175,441 +192,30 @@ synddb-sequencer/
 
 ## Core Components
 
-### 1. Session Monitor (Data Changes + Schema Tracking)
-
-The Session Monitor uses SQLite's official Session Extension to capture deterministic changesets for data changes. It also tracks schema changes (DDL statements) separately to ensure validators can replicate the complete database state including schema evolution.
-
-```rust
-// src/monitor/session_tracker.rs
-use rusqlite::{Connection, hooks::Action};
-
-pub struct SessionMonitor {
-    db_path: PathBuf,
-    conn: Connection,
-    session: rusqlite::Session<'static>,
-    changeset_tx: Sender<Changeset>,
-    schema_tx: Sender<SchemaChange>,
-    last_schema_version: i32,
-}
-
-impl SessionMonitor {
-    pub async fn new(
-        db_path: PathBuf,
-        changeset_tx: Sender<Changeset>,
-        schema_tx: Sender<SchemaChange>
-    ) -> Result<Self> {
-        // Open database connection
-        let mut conn = Connection::open(&db_path)?;
-
-        // Get current schema version
-        let last_schema_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-
-        // Create session to track data changes
-        // Session extension must be enabled at compile time:
-        // RUSTFLAGS="-C link-arg=-lsqlite3" cargo build --features session
-        let session = rusqlite::Session::new(&conn)?;
-
-        // Attach to all tables (None = all tables)
-        session.attach(None)?;
-
-        // Install update hook to detect schema changes
-        // This fires BEFORE commit hook, allowing us to capture DDL
-        conn.update_hook(Some(Self::on_update));
-
-        // Install commit hook to capture changesets after each transaction
-        conn.commit_hook(Some(Self::on_commit));
-
-        Ok(Self {
-            db_path,
-            conn,
-            session,
-            changeset_tx,
-            schema_tx,
-            last_schema_version,
-        })
-    }
-
-    /// Update hook called for every INSERT/UPDATE/DELETE
-    /// We use this to detect writes to sqlite_schema (DDL changes)
-    fn on_update(&mut self, action: Action, db: &str, table: &str, rowid: i64) {
-        if table == "sqlite_schema" || table == "sqlite_master" {
-            // Schema change detected! Capture it
-            match self.capture_schema_change() {
-                Ok(schema_change) => {
-                    if let Err(e) = self.schema_tx.blocking_send(schema_change) {
-                        error!("Failed to send schema change: {}", e);
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to capture schema change: {}", e);
-                }
-            }
-        }
-    }
-
-    fn capture_schema_change(&mut self) -> Result<SchemaChange> {
-        // Get new schema version (applications should increment this on ALTER)
-        let new_version: i32 = self.conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-
-        // Get full schema DDL
-        let schema_sql: Vec<String> = self.conn
-            .prepare("SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type, name")?
-            .query_map([], |row| row.get(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        // Get schema hash for quick comparison
-        let schema_hash = blake3::hash(&schema_sql.join("\n").as_bytes());
-
-        Ok(SchemaChange {
-            old_version: self.last_schema_version,
-            new_version,
-            ddl_statements: schema_sql,
-            schema_hash: schema_hash.to_hex().to_string(),
-            timestamp: SystemTime::now(),
-        })
-    }
-
-    /// Commit hook called after each successful transaction
-    fn on_commit(&mut self) -> bool {
-        match self.extract_changeset() {
-            Ok(changeset) => {
-                // Send to batcher
-                if let Err(e) = self.tx.blocking_send(changeset) {
-                    error!("Failed to send changeset: {}", e);
-                }
-                false // Allow commit to proceed
-            }
-            Err(e) => {
-                error!("Failed to extract changeset: {}", e);
-                false // Allow commit to proceed (logging only)
-            }
-        }
-    }
-
-    fn extract_changeset(&mut self) -> Result<Changeset> {
-        // Extract changeset from session
-        // This contains all INSERT/UPDATE/DELETE operations since last extract
-        let changeset_blob = self.session.changeset()?;
-
-        // Parse changeset to understand what changed (for logging/metrics)
-        let metadata = self.parse_changeset_metadata(&changeset_blob)?;
-
-        Ok(Changeset {
-            data: changeset_blob,
-            table_changes: metadata.table_changes,
-            operation_count: metadata.operation_count,
-            timestamp: SystemTime::now(),
-        })
-    }
-
-    fn parse_changeset_metadata(&self, changeset: &[u8]) -> Result<ChangesetMetadata> {
-        // Parse changeset format to extract metadata
-        // Format: https://www.sqlite.org/sessionintro.html
-        let mut operations = Vec::new();
-        let mut offset = 0;
-
-        while offset < changeset.len() {
-            let table_name = self.read_table_name(changeset, &mut offset)?;
-            let op_type = self.read_operation_type(changeset, &mut offset)?;
-            let row_count = self.read_row_count(changeset, &mut offset)?;
-
-            operations.push(TableChange {
-                table: table_name,
-                operation: op_type,
-                rows: row_count,
-            });
-        }
-
-        Ok(ChangesetMetadata {
-            table_changes: operations,
-            operation_count: operations.iter().map(|op| op.rows).sum(),
-        })
-    }
-
-    pub async fn run(mut self) -> Result<()> {
-        // Session monitor is passive - changesets are extracted via commit hook
-        // This task just keeps the connection alive and handles shutdown
-        loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
-
-            // Periodic health check
-            self.conn.execute("SELECT 1", [])?;
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Changeset {
-    /// Binary changeset blob (SQLite Session format)
-    pub data: Vec<u8>,
-    /// Metadata about what tables changed
-    pub table_changes: Vec<TableChange>,
-    /// Total number of row operations
-    pub operation_count: usize,
-    pub timestamp: SystemTime,
-}
-
-#[derive(Debug, Clone)]
-pub struct TableChange {
-    pub table: String,
-    pub operation: OperationType,
-    pub rows: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum OperationType {
-    Insert,
-    Update,
-    Delete,
-}
-
-#[derive(Debug, Clone)]
-pub struct SchemaChange {
-    /// Previous schema version (from user_version pragma)
-    pub old_version: i32,
-    /// New schema version (applications should increment on ALTER)
-    pub new_version: i32,
-    /// Full DDL statements for all tables, indexes, triggers, views
-    pub ddl_statements: Vec<String>,
-    /// Hash of schema for quick comparison
-    pub schema_hash: String,
-    pub timestamp: SystemTime,
-}
-```
-
-**Important: Application Schema Change Pattern**
-```sql
--- Applications MUST increment user_version when changing schema
-BEGIN TRANSACTION;
-  ALTER TABLE users ADD COLUMN age INTEGER;
-  PRAGMA user_version = 2;  -- Increment version
-COMMIT;
-
--- This allows sequencer to detect and publish schema changes
-```
-
-### Why Session Extension (Changesets) is the Right Choice
-
-**Changesets vs. Patchsets:**
-- **Changesets** include original values for UPDATE/DELETE operations, making them **easier to audit** on validators
-- Validators can verify: "Was the old value really X before updating to Y?"
-- Patchsets only store new values, requiring trust that the primary had correct old values
-- Changesets support full reversibility (rollback) and better conflict detection
-
-**Changesets vs. WAL Parsing:**
-1. **Official SQLite API** - Maintained by SQLite team, stable across versions (WAL format is internal/undocumented)
-2. **Not Brittle** - SQLite handles format internally, we just consume changesets (WAL parsing breaks on format changes)
-3. **Deterministic** - Captures logical changes (INSERT/UPDATE/DELETE), not physical page changes
-4. **Compact** - Only stores changed rows with primary keys, not entire database pages (10-100x smaller)
-5. **Validator-Friendly** - Replicas apply exact same logical changes deterministically via `sqlite3changeset_apply()`
-6. **Conflict Detection** - Built-in conflict resolution when applying to replicas (WAL has none)
-7. **Auditable** - Changesets can be inspected to see what changed (WAL pages are opaque binary data)
-
-**Example: How Validators Audit Changesets**
-```rust
-// Validator receives changeset and can inspect it before applying
-for change in changeset.iter() {
-    match change.operation {
-        Update { table, pk, old_values, new_values } => {
-            // Verify: "Did users.id=1 really have name='Alice' before changing to 'Bob'?"
-            assert_eq!(old_values["name"], "Alice"); // Audit check
-            // Apply change knowing exact before/after state
-        }
-        Delete { table, pk, old_values } => {
-            // Verify: "Did the row we're deleting actually exist with these values?"
-            // With patchsets, we'd have no way to verify this
-        }
-        _ => {}
-    }
-}
-```
-
-### Schema Change Tracking: Snapshot-on-Schema-Change
-
-**The Challenge:** SQLite Session Extension changesets only capture data changes (INSERT/UPDATE/DELETE), not schema changes (CREATE TABLE, ALTER TABLE, DROP INDEX, etc.). Validators need to know about schema changes to correctly apply data changesets.
-
-**Our Solution: Automatic Snapshot on Schema Change**
-
-When the application changes the database schema, the sequencer immediately creates and publishes a full database snapshot. This is simpler and more reliable than DDL replay, and leverages our existing snapshot infrastructure.
-
-**Why Snapshot Instead of DDL Replay?**
-- **Schema changes are rare** - Acceptable overhead (happens days/weeks apart, not continuously)
-- **Simpler validators** - No DDL replay logic, no non-deterministic ALTER TABLE edge cases
-- **Natural epochs** - Schema changes create clear boundaries in database history
-- **Guaranteed consistency** - Snapshot contains exact schema + data state
-- **Audit trail preserved** - DDL still published alongside snapshot for transparency
-
-**How It Works:**
-
-1. **Application Changes Schema**
-   ```sql
-   BEGIN TRANSACTION;
-     ALTER TABLE users ADD COLUMN email TEXT;
-     PRAGMA user_version = 2;  -- MUST increment version
-   COMMIT;
-   ```
-
-2. **Sequencer Detects Schema Change**
-   - Update hook fires when `sqlite_schema` table is modified
-   - Captures full DDL via `SELECT sql FROM sqlite_schema` (for audit trail)
-   - Reads new `user_version` to track migration number
-   - **Immediately creates full database snapshot** (includes schema + all data)
-   - Publishes `SnapshotWithSchemaChange` message
-
-3. **Validators Receive Snapshot**
-   ```rust
-   // Validator processing sequence from DA layer
-   match message.payload_type {
-       PayloadType::SnapshotWithSchemaChange { snapshot, schema_change } => {
-           // Log schema change for audit trail
-           info!("Schema migration v{} -> v{}: {}",
-               schema_change.old_version,
-               schema_change.new_version,
-               schema_change.ddl_statements.join("; ")
-           );
-
-           // Replace entire database with snapshot (includes new schema)
-           validator.replace_database(snapshot)?;
-
-           // Reset changeset tracking (new epoch begins)
-           validator.reset_changeset_sequence();
-       }
-       PayloadType::ChangesetBatch => {
-           // Schema guaranteed to match (snapshot resets state)
-           validator.apply_changesets(changesets)?;
-       }
-       PayloadType::Snapshot => {
-           // Regular periodic snapshot (no schema change)
-           validator.replace_database(snapshot)?;
-       }
-   }
-   ```
-
-**Benefits:**
-- **Simplicity** - Validators don't need DDL replay logic
-- **Guaranteed Consistency** - Snapshot has exact schema + data state
-- **Natural Epochs** - Schema changes create clear boundaries in history
-- **Fast Sync** - New validators can start from latest schema snapshot
-- **Audit Trail** - DDL statements still published for transparency
-- **No Edge Cases** - Avoids ALTER TABLE determinism issues
-
-**Message Size Impact:**
-Schema changes are rare (typically days/weeks apart), so the snapshot overhead is acceptable. A 1GB database snapshot on schema change, happening weekly, is far better than complex DDL replay logic that might break.
-
-**Application Requirements:**
-- Applications SHOULD use `PRAGMA user_version` to track schema versions
-- Increment `user_version` in same transaction as schema changes (helps with debugging/audit)
-- No other requirements - snapshot captures everything
-
-## SQLite Replication Edge Cases
-
-### Edge Cases Handled Automatically ✅
-
-**1. Non-Deterministic Functions (random(), datetime('now'), etc.)**
-- **Problem:** `INSERT INTO events VALUES (random(), datetime('now'))` would produce different values on validators
-- **Solution:** Session Extension captures **actual written values**, not SQL functions
-- **Changeset contains:** `INSERT INTO events VALUES (123456, '2024-01-15 10:30:00')`
-- **Note:** `SQLITE_DETERMINISTIC` flag is for user-defined functions only and doesn't affect built-in functions
-- **Status:** ✅ Automatically handled by changesets (no configuration needed)
-
-**2. AUTOINCREMENT and ROWID**
-- **Problem:** Primary and validators might have different `sqlite_sequence` state
-- **Solution:** Changesets include explicit rowid values for all operations
-- **Changeset contains:** `INSERT INTO users (rowid=5, name='Alice')`
-- **Status:** ✅ Automatically handled by changesets
-
-**3. Transaction Rollbacks**
-- **Problem:** Failed transactions shouldn't be replicated
-- **Solution:** Session Extension only captures committed transactions
-- **Commit hook fires after COMMIT succeeds**
-- **Status:** ✅ Automatically handled by commit hook timing
-
-**4. Write Concurrency**
-- **Problem:** N/A - SQLite has single-writer model
-- **Status:** ✅ Not applicable
-
-### Edge Cases Requiring Configuration ⚠️
-
-**5. PRAGMA Settings**
-- **Problem:** Mismatched PRAGMA settings between primary and validators
-- **Solution:** Validators MUST use same settings as primary
-- **Critical PRAGMAs:**
-  ```sql
-  PRAGMA foreign_keys = ON;        -- Must match primary
-  PRAGMA recursive_triggers = OFF; -- Must match primary
-  PRAGMA secure_delete = OFF;      -- Must match primary
-  ```
-- **Implementation:** Include PRAGMA settings in snapshots
-- **Status:** ⚠️ TODO - Add PRAGMA capture to snapshots
-
-**6. Triggers**
-- **Problem:** Triggers fire on primary, generating additional writes captured in changesets
-- **Example:**
-  ```sql
-  -- Primary has trigger:
-  CREATE TRIGGER log_updates AFTER UPDATE ON users
-  BEGIN
-    INSERT INTO audit_log VALUES (NEW.id, datetime('now'));
-  END;
-
-  -- Application: UPDATE users SET name='Bob' WHERE id=1
-  -- Changeset captures BOTH:
-  --   1. UPDATE users SET name='Bob' WHERE id=1
-  --   2. INSERT INTO audit_log VALUES (1, '2024-01-15 10:30:00')
-  ```
-- **Solution:** Triggers captured in schema (DDL), effects captured in changesets
-- **Validator behavior:** Applies changeset WITHOUT re-firing triggers (they already fired on primary)
-- **Status:** ✅ Session Extension includes trigger-generated changes in changesets
-
-**7. Virtual Tables (FTS5, R*Tree, etc.)**
-- **Problem:** Virtual tables may not support Session Extension
-- **Solution:** Test each virtual table type for compatibility
-- **Known issues:**
-  - FTS5 (Full-Text Search) - May need special handling
-  - R*Tree (Spatial index) - May need special handling
-- **Status:** ⚠️ TODO - Test virtual table support
-
-**8. Database Encoding (UTF-8 vs UTF-16)**
-- **Problem:** Primary and validators must use same text encoding
-- **Solution:** Enforce `PRAGMA encoding = 'UTF-8'` everywhere
-- **Status:** ⚠️ TODO - Add encoding check to snapshot validation
-
-**9. User-Defined Functions (UDFs)**
-- **Problem:** Applications may register custom functions that don't exist on validators
-- **Examples:**
-  ```python
-  # Python app registers custom function
-  conn.create_function("my_hash", 1, my_custom_hash)
-
-  # Then uses it
-  conn.execute("INSERT INTO data VALUES (my_hash('input'))")
-  ```
-- **Solution:** Values captured in changesets (function already executed on primary)
-- **Validator requirement:** Validators don't need the UDF definition
-- **Note:** `SQLITE_DETERMINISTIC` flag only matters if UDF is used in indexes/constraints
-- **Status:** ✅ Automatically handled (values captured, not function calls)
-
-### Application Requirements for Determinism
-
-**Applications MUST:**
-1. Use `PRAGMA journal_mode = WAL` (required for Session Extension)
-2. NOT rely on `PRAGMA user_version` for application logic (only use for schema tracking)
-3. Avoid `PRAGMA foreign_keys` changes mid-operation
-
-**Applications SHOULD:**
-1. Use explicit transactions for multi-statement operations
-2. Use AUTOINCREMENT for tables that need stable IDs across replicas
-3. Avoid time-dependent DEFAULT values like `DEFAULT (datetime('now'))`
-
-**Applications CAN safely use:**
-1. Non-deterministic functions (values captured in changesets) ✅
-2. Triggers (effects captured in changesets) ✅
-3. Foreign keys (constraints checked on primary) ✅
-4. CHECK constraints (validated on primary) ✅
+### 1. HTTP Receiver (Changesets + Snapshots from Client Libraries)
+
+**Status**: ✅ **Implemented in `synddb-client` crate**
+
+The original plan included a Session Monitor component that would directly monitor SQLite databases. This functionality has been implemented as the **SyndDB Client Library** (`crates/synddb-client/`) which applications embed directly.
+
+**Client Library Implementation** (see `crates/synddb-client/src/`):
+- `session.rs` - SessionMonitor using SQLite Session Extension
+- `sender.rs` - ChangesetSender for batching and HTTP delivery
+- `snapshot_sender.rs` - SnapshotSender for periodic and schema-triggered snapshots
+- `attestation.rs` - GCP Confidential Space TEE attestation
+- `recovery.rs` - Failed batch persistence for retry
+
+**What the Sequencer Needs** (HTTP receiver - to be implemented):
+- HTTP endpoint to receive changesets and snapshots from client libraries
+- Verify TEE attestation tokens from clients
+- Validate received data (checksums, sequence numbers)
+- Queue operations for batching and DA publishing
 
 ### 2. Batcher
 
-Accumulates changesets and triggers publishing based on time/size thresholds. Also handles periodic snapshot creation.
+Accumulates received changesets and snapshots, then triggers publishing based on time/size thresholds.
+
+**Note**: Snapshot creation is now handled by the client library. The sequencer just receives and batches them for DA publishing.
 
 ```rust
 // src/batch/accumulator.rs
