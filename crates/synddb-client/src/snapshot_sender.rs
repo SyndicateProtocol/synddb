@@ -3,6 +3,7 @@
 use crate::attestation::AttestationClient;
 use crate::config::Config;
 use crate::recovery::FailedBatchRecovery;
+use crate::retry::retry_with_backoff;
 use crate::session::Snapshot;
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
@@ -115,29 +116,24 @@ impl SnapshotSender {
         );
 
         // Send with retries
-        for attempt in 0..=self.config.max_retries {
-            match self.send_snapshot_internal(&message).await {
-                Ok(_) => {
-                    info!(
-                        "Successfully sent snapshot {} (sequence {})",
-                        message.message_id, message.snapshot.sequence
-                    );
-                    return;
-                }
-                Err(e) => {
-                    if attempt < self.config.max_retries {
-                        warn!("Failed to send snapshot (attempt {}): {}", attempt + 1, e);
-                        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                    } else {
-                        error!(
-                            "Failed to send snapshot after {} attempts: {}",
-                            attempt + 1,
-                            e
-                        );
-                        // TODO: Consider persisting failed snapshots to disk
-                        // Snapshots are critical - losing them means validators may not be able to sync
-                    }
-                }
+        match retry_with_backoff(self.config.max_retries, || {
+            self.send_snapshot_internal(&message)
+        })
+        .await
+        {
+            Ok(()) => {
+                info!(
+                    "Successfully sent snapshot {} (sequence {})",
+                    message.message_id, message.snapshot.sequence
+                );
+                return;
+            }
+            Err(e) => {
+                error!(
+                    "Failed to send snapshot after {} attempts: {}",
+                    self.config.max_retries + 1,
+                    e
+                );
             }
         }
 

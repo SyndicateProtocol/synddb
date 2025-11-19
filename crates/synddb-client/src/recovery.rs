@@ -7,13 +7,14 @@ use crate::session::{Changeset, Snapshot};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 /// Manages recovery storage for failed changesets and snapshots
 pub struct FailedBatchRecovery {
     conn: Connection,
 }
 
+#[allow(dead_code)] // Methods reserved for future recovery retry logic
 impl FailedBatchRecovery {
     /// Create or open the recovery database
     ///

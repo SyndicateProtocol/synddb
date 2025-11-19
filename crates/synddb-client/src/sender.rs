@@ -3,6 +3,7 @@
 use crate::attestation::AttestationClient;
 use crate::config::Config;
 use crate::recovery::FailedBatchRecovery;
+use crate::retry::retry_with_backoff;
 use crate::session::Changeset;
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
@@ -134,27 +135,23 @@ impl ChangesetSender {
         );
 
         // Send with retries
-        for attempt in 0..=self.config.max_retries {
-            match self.send_batch(&batch).await {
-                Ok(_) => {
-                    info!(
-                        "Successfully sent batch {} ({} changesets)",
-                        batch.batch_id,
-                        batch.changesets.len()
-                    );
-                    self.buffer_size = 0;
-                    self.last_flush = Instant::now();
-                    return;
-                }
-                Err(e) => {
-                    if attempt < self.config.max_retries {
-                        warn!("Failed to send batch (attempt {}): {}", attempt + 1, e);
-                        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                    } else {
-                        error!("Failed to send batch after {} attempts: {}", attempt + 1, e);
-                        // TODO: Consider persisting failed batches to disk
-                    }
-                }
+        match retry_with_backoff(self.config.max_retries, || self.send_batch(&batch)).await {
+            Ok(()) => {
+                info!(
+                    "Successfully sent batch {} ({} changesets)",
+                    batch.batch_id,
+                    batch.changesets.len()
+                );
+                self.buffer_size = 0;
+                self.last_flush = Instant::now();
+                return;
+            }
+            Err(e) => {
+                error!(
+                    "Failed to send batch after {} attempts: {}",
+                    self.config.max_retries + 1,
+                    e
+                );
             }
         }
 

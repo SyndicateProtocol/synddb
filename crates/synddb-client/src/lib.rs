@@ -28,6 +28,7 @@ use tracing::{debug, info, warn};
 mod attestation;
 mod config;
 mod recovery;
+mod retry;
 mod sender;
 mod session;
 mod snapshot_sender;
@@ -110,12 +111,7 @@ impl SyndDB {
         let (changeset_shutdown_tx, changeset_shutdown_rx) = bounded(1);
 
         // Create snapshot channel if automatic snapshots are enabled
-        let snapshot_channel = if config.snapshot_interval > 0 {
-            let (snapshot_tx, snapshot_rx) = bounded(10); // Buffer up to 10 snapshots
-            Some((snapshot_tx, snapshot_rx))
-        } else {
-            None
-        };
+        let snapshot_channel = (config.snapshot_interval > 0).then(|| bounded(10)); // Buffer up to 10 snapshots
 
         // Start session monitor (includes automatic publish thread)
         let monitor = SessionMonitor::new(
@@ -123,7 +119,7 @@ impl SyndDB {
             changeset_tx.clone(),
             config.publish_interval,
             config.snapshot_interval,
-            snapshot_channel.as_ref().map(|(tx, _)| tx.clone()),
+            snapshot_channel.as_ref().map(|(tx, _)| tx).cloned(),
         )?;
         monitor.start(conn)?;
 
@@ -162,46 +158,40 @@ impl SyndDB {
         };
 
         // Start snapshot sender thread if enabled
-        let (snapshot_shutdown_tx, snapshot_handle) =
-            if let Some((_, snapshot_rx)) = snapshot_channel {
-                let (snapshot_shutdown_tx, snapshot_shutdown_rx) = bounded(1);
-                let snapshot_config = config.clone();
-                let recovery_path_clone = recovery_path.clone();
-                let attestation_clone = attestation_client.clone();
+        let (snapshot_shutdown_tx, snapshot_handle) = snapshot_channel
+            .map(|(_, snapshot_rx)| {
+                let (shutdown_tx, shutdown_rx) = bounded(1);
+                let cfg = config.clone();
+                let rec_path = recovery_path.clone();
+                let att = attestation_client.clone();
 
                 let handle = thread::spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
+                    tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .expect("Failed to create tokio runtime for snapshot sender");
-
-                    rt.block_on(async {
-                        let sender = SnapshotSender::new(
-                            snapshot_config,
-                            recovery_path_clone,
-                            attestation_clone,
-                        );
-                        sender.run(snapshot_rx, snapshot_shutdown_rx).await
-                    });
+                        .expect("Failed to create tokio runtime for snapshot sender")
+                        .block_on(async {
+                            SnapshotSender::new(cfg, rec_path, att)
+                                .run(snapshot_rx, shutdown_rx)
+                                .await
+                        });
                 });
 
-                (Some(snapshot_shutdown_tx), Some(handle))
-            } else {
-                (None, None)
-            };
+                (Some(shutdown_tx), Some(handle))
+            })
+            .unwrap_or_default();
 
         // Start background changeset sender thread
-        let sender_config = config.clone();
         let changeset_handle = thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("Failed to create tokio runtime for changeset sender");
-
-            rt.block_on(async {
-                let sender = ChangesetSender::new(sender_config, recovery_path, attestation_client);
-                sender.run(changeset_rx, changeset_shutdown_rx).await
-            });
+                .expect("Failed to create tokio runtime for changeset sender")
+                .block_on(async {
+                    ChangesetSender::new(config, recovery_path, attestation_client)
+                        .run(changeset_rx, changeset_shutdown_rx)
+                        .await
+                });
         });
 
         info!("SyndDB client attached successfully");

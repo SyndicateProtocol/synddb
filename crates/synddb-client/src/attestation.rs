@@ -20,21 +20,16 @@ const ATTESTATION_SOCKET_PATH: &str = "/run/container_launcher/teeserver.sock";
 const DEFAULT_CACHE_DURATION: Duration = Duration::from_secs(50 * 60);
 
 /// Token type for attestation requests
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TokenType {
     /// OpenID Connect token (default)
+    #[default]
     Oidc,
     /// PKI token with certificate chain
     Pki,
     /// AWS principal tags token
     AwsPrincipaltags,
-}
-
-impl Default for TokenType {
-    fn default() -> Self {
-        Self::Oidc
-    }
 }
 
 /// Request to the attestation service
@@ -166,7 +161,7 @@ impl AttestationClient {
 
         for (i, nonce) in nonces.iter().enumerate() {
             let len = nonce.len();
-            if len < 10 || len > 74 {
+            if !(10..=74).contains(&len) {
                 return Err(anyhow::anyhow!(
                     "Nonce {} has invalid length: {} (must be 10-74 bytes)",
                     i,
