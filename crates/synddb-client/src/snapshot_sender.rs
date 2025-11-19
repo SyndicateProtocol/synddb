@@ -1,10 +1,12 @@
 //! Background sender for database snapshots to sequencer
 
 use crate::config::Config;
+use crate::persistence::FailedBatchPersistence;
 use crate::session::Snapshot;
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,16 +18,30 @@ struct SnapshotMessage {
 pub struct SnapshotSender {
     config: Config,
     client: Client,
+    persistence: Option<FailedBatchPersistence>,
 }
 
 impl SnapshotSender {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, persistence_path: Option<PathBuf>) -> Self {
         let client = Client::builder()
             .timeout(config.request_timeout)
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { config, client }
+        let persistence =
+            persistence_path.and_then(|path| match FailedBatchPersistence::new(path) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    error!("Failed to initialize persistence: {}", e);
+                    None
+                }
+            });
+
+        Self {
+            config,
+            client,
+            persistence,
+        }
     }
 
     pub async fn run(self, snapshot_rx: Receiver<Snapshot>, shutdown_rx: Receiver<()>) {
@@ -98,10 +114,23 @@ impl SnapshotSender {
             }
         }
 
-        error!(
-            "Dropping snapshot at sequence {} after failed send",
-            message.snapshot.sequence
-        );
+        // If we failed after all retries, persist for later retry
+        if let Some(ref persistence) = self.persistence {
+            warn!(
+                "Persisting snapshot at sequence {} after failed send",
+                message.snapshot.sequence
+            );
+            if let Err(e) =
+                persistence.save_failed_snapshot(&message.snapshot, "Max retries exceeded")
+            {
+                error!("Failed to persist snapshot: {}", e);
+            }
+        } else {
+            error!(
+                "Dropping snapshot at sequence {} after failed send (persistence disabled)",
+                message.snapshot.sequence
+            );
+        }
     }
 
     async fn send_snapshot_internal(

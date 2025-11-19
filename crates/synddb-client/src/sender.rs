@@ -1,10 +1,12 @@
 //! Background sender that batches and sends changesets to sequencer
 
 use crate::config::Config;
+use crate::persistence::FailedBatchPersistence;
 use crate::session::Changeset;
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
@@ -20,14 +22,24 @@ pub struct ChangesetSender {
     buffer: Vec<Changeset>,
     buffer_size: usize,
     last_flush: Instant,
+    persistence: Option<FailedBatchPersistence>,
 }
 
 impl ChangesetSender {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, persistence_path: Option<PathBuf>) -> Self {
         let client = Client::builder()
             .timeout(config.request_timeout)
             .build()
             .expect("Failed to create HTTP client");
+
+        let persistence =
+            persistence_path.and_then(|path| match FailedBatchPersistence::new(path) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    error!("Failed to initialize persistence: {}", e);
+                    None
+                }
+            });
 
         Self {
             config,
@@ -35,6 +47,7 @@ impl ChangesetSender {
             buffer: Vec::new(),
             buffer_size: 0,
             last_flush: Instant::now(),
+            persistence,
         }
     }
 
@@ -118,12 +131,24 @@ impl ChangesetSender {
             }
         }
 
-        // If we failed, put changesets back (or drop them)
-        // For now we'll drop them to avoid unbounded memory growth
-        error!(
-            "Dropping {} changesets after failed send",
-            batch.changesets.len()
-        );
+        // If we failed after all retries, persist for later retry
+        if let Some(ref persistence) = self.persistence {
+            warn!(
+                "Persisting {} changesets after failed send",
+                batch.changesets.len()
+            );
+            for changeset in &batch.changesets {
+                if let Err(e) = persistence.save_failed_changeset(changeset, "Max retries exceeded")
+                {
+                    error!("Failed to persist changeset: {}", e);
+                }
+            }
+        } else {
+            error!(
+                "Dropping {} changesets after failed send (persistence disabled)",
+                batch.changesets.len()
+            );
+        }
     }
 
     async fn send_batch(&self, batch: &ChangesetBatch) -> Result<(), reqwest::Error> {

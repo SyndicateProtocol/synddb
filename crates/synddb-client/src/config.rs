@@ -34,6 +34,11 @@ pub struct Config {
     /// Set to 0 to disable automatic snapshots
     #[serde(default = "default_snapshot_interval")]
     pub snapshot_interval: u64,
+
+    /// Enable persistence of failed batches to disk for retry
+    /// When enabled, failed changesets and snapshots are saved to a local SQLite database
+    #[serde(default = "default_enable_persistence")]
+    pub enable_persistence: bool,
 }
 
 fn default_buffer_size() -> usize {
@@ -60,6 +65,10 @@ fn default_snapshot_interval() -> u64 {
     100 // Snapshot every 100 changesets
 }
 
+fn default_enable_persistence() -> bool {
+    true // Enable by default for production reliability
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -70,6 +79,7 @@ impl Default for Config {
             max_retries: default_max_retries(),
             request_timeout: default_request_timeout(),
             snapshot_interval: default_snapshot_interval(),
+            enable_persistence: default_enable_persistence(),
         }
     }
 }
