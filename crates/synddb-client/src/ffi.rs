@@ -11,7 +11,7 @@ use std::os::raw::c_char;
 use std::time::Duration;
 
 thread_local! {
-    static LAST_ERROR: RefCell<Option<CString>> = RefCell::new(None);
+    static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
 
 fn set_last_error(err: impl std::fmt::Display) {
@@ -137,6 +137,11 @@ pub unsafe extern "C" fn synddb_attach(
 ///
 /// # Returns
 /// 0 on success, error code otherwise
+///
+/// # Safety
+/// - `db_path` and `sequencer_url` must be valid null-terminated UTF-8 strings
+/// - `out_handle` must be a valid pointer
+/// - Caller must call `synddb_detach()` to free resources
 #[no_mangle]
 pub unsafe extern "C" fn synddb_attach_with_config(
     db_path: *const c_char,
