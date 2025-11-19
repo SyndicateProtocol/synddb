@@ -1,5 +1,6 @@
 //! Configuration for SyndDB client
 
+use crate::attestation::TokenType;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -39,6 +40,16 @@ pub struct Config {
     /// When enabled, failed changesets and snapshots are saved to a local SQLite database for retry
     #[serde(default = "default_enable_recovery")]
     pub enable_recovery: bool,
+
+    /// Enable TEE attestation tokens for GCP Confidential Space
+    /// When enabled, each changeset batch and snapshot will include an attestation token
+    #[serde(default = "default_enable_attestation")]
+    pub enable_attestation: bool,
+
+    /// Type of attestation token to request (OIDC, PKI, or AWS_PRINCIPALTAGS)
+    /// Only used if enable_attestation is true
+    #[serde(default = "default_attestation_token_type")]
+    pub attestation_token_type: TokenType,
 }
 
 fn default_buffer_size() -> usize {
@@ -69,6 +80,14 @@ fn default_enable_recovery() -> bool {
     true // Enable by default for production reliability
 }
 
+fn default_enable_attestation() -> bool {
+    false // Disabled by default (only works in GCP Confidential Space)
+}
+
+fn default_attestation_token_type() -> TokenType {
+    TokenType::Oidc // OIDC is the default and most common token type
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -80,6 +99,8 @@ impl Default for Config {
             request_timeout: default_request_timeout(),
             snapshot_interval: default_snapshot_interval(),
             enable_recovery: default_enable_recovery(),
+            enable_attestation: default_enable_attestation(),
+            attestation_token_type: default_attestation_token_type(),
         }
     }
 }

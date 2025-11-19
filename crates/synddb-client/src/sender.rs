@@ -1,5 +1,6 @@
 //! Background sender that batches and sends changesets to sequencer
 
+use crate::attestation::AttestationClient;
 use crate::config::Config;
 use crate::recovery::FailedBatchRecovery;
 use crate::session::Changeset;
@@ -14,6 +15,9 @@ use tracing::{debug, error, info, warn};
 struct ChangesetBatch {
     changesets: Vec<Changeset>,
     batch_id: String,
+    /// Optional TEE attestation token (JWT) proving workload identity
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attestation_token: Option<String>,
 }
 
 pub struct ChangesetSender {
@@ -23,10 +27,15 @@ pub struct ChangesetSender {
     buffer_size: usize,
     last_flush: Instant,
     recovery: Option<FailedBatchRecovery>,
+    attestation: Option<AttestationClient>,
 }
 
 impl ChangesetSender {
-    pub fn new(config: Config, recovery_path: Option<PathBuf>) -> Self {
+    pub fn new(
+        config: Config,
+        recovery_path: Option<PathBuf>,
+        attestation: Option<AttestationClient>,
+    ) -> Self {
         let client = Client::builder()
             .timeout(config.request_timeout)
             .build()
@@ -47,6 +56,7 @@ impl ChangesetSender {
             buffer_size: 0,
             last_flush: Instant::now(),
             recovery,
+            attestation,
         }
     }
 
@@ -95,14 +105,32 @@ impl ChangesetSender {
             return;
         }
 
+        // Obtain attestation token if configured
+        let attestation_token = if let Some(ref mut attestation) = self.attestation {
+            match attestation.get_token().await {
+                Ok(token) => {
+                    debug!("Obtained attestation token for changeset batch");
+                    Some(token)
+                }
+                Err(e) => {
+                    error!("Failed to obtain attestation token: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let batch = ChangesetBatch {
             changesets: std::mem::take(&mut self.buffer),
             batch_id: uuid::Uuid::new_v4().to_string(),
+            attestation_token,
         };
 
         debug!(
-            "Flushing {} changesets to sequencer",
-            batch.changesets.len()
+            "Flushing {} changesets to sequencer (attestation: {})",
+            batch.changesets.len(),
+            batch.attestation_token.is_some()
         );
 
         // Send with retries

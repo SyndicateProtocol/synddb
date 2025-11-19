@@ -39,6 +39,11 @@ futures = "0.3"
 # Humantime serialization
 humantime-serde = "1.1"
 
+# Unix domain socket support for Confidential Space attestation
+hyperlocal = "0.8"
+hyper = { version = "0.14", features = ["client", "http1"] }
+serde_json = "1.0"
+
 [lib]
 # Compile as both Rust library and C-compatible shared library
 crate-type = ["rlib", "cdylib"]

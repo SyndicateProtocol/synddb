@@ -1,5 +1,6 @@
 //! Background sender for database snapshots to sequencer
 
+use crate::attestation::AttestationClient;
 use crate::config::Config;
 use crate::recovery::FailedBatchRecovery;
 use crate::session::Snapshot;
@@ -13,16 +14,24 @@ use tracing::{debug, error, info, warn};
 struct SnapshotMessage {
     snapshot: Snapshot,
     message_id: String,
+    /// Optional TEE attestation token (JWT) proving workload identity
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attestation_token: Option<String>,
 }
 
 pub struct SnapshotSender {
     config: Config,
     client: Client,
     recovery: Option<FailedBatchRecovery>,
+    attestation: Option<AttestationClient>,
 }
 
 impl SnapshotSender {
-    pub fn new(config: Config, recovery_path: Option<PathBuf>) -> Self {
+    pub fn new(
+        config: Config,
+        recovery_path: Option<PathBuf>,
+        attestation: Option<AttestationClient>,
+    ) -> Self {
         let client = Client::builder()
             .timeout(config.request_timeout)
             .build()
@@ -40,10 +49,11 @@ impl SnapshotSender {
             config,
             client,
             recovery,
+            attestation,
         }
     }
 
-    pub async fn run(self, snapshot_rx: Receiver<Snapshot>, shutdown_rx: Receiver<()>) {
+    pub async fn run(mut self, snapshot_rx: Receiver<Snapshot>, shutdown_rx: Receiver<()>) {
         info!("SnapshotSender started");
 
         loop {
@@ -74,16 +84,34 @@ impl SnapshotSender {
         info!("SnapshotSender stopped");
     }
 
-    async fn send_snapshot(&self, snapshot: Snapshot) {
+    async fn send_snapshot(&mut self, snapshot: Snapshot) {
+        // Obtain attestation token if configured
+        let attestation_token = if let Some(ref mut attestation) = self.attestation {
+            match attestation.get_token().await {
+                Ok(token) => {
+                    debug!("Obtained attestation token for snapshot");
+                    Some(token)
+                }
+                Err(e) => {
+                    error!("Failed to obtain attestation token: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let message = SnapshotMessage {
             snapshot,
             message_id: uuid::Uuid::new_v4().to_string(),
+            attestation_token,
         };
 
         debug!(
-            "Sending snapshot to sequencer (seq={}, size={} bytes)",
+            "Sending snapshot to sequencer (seq={}, size={} bytes, attestation: {})",
             message.snapshot.sequence,
-            message.snapshot.data.len()
+            message.snapshot.data.len(),
+            message.attestation_token.is_some()
         );
 
         // Send with retries

@@ -25,6 +25,7 @@ use rusqlite::Connection;
 use std::thread;
 use tracing::{debug, info, warn};
 
+mod attestation;
 mod config;
 mod recovery;
 mod sender;
@@ -34,6 +35,7 @@ mod snapshot_sender;
 #[cfg(feature = "ffi")]
 pub mod ffi;
 
+pub use attestation::{is_confidential_space, AttestationClient, TokenType};
 pub use config::Config;
 use sender::ChangesetSender;
 use session::SessionMonitor;
@@ -136,12 +138,36 @@ impl SyndDB {
             None
         };
 
+        // Create attestation client if enabled (only works in GCP Confidential Space)
+        let attestation_client = if config.enable_attestation {
+            match AttestationClient::new(&config.sequencer_url, config.attestation_token_type) {
+                Ok(client) => {
+                    info!(
+                        "Attestation enabled (type: {:?})",
+                        config.attestation_token_type
+                    );
+                    Some(client)
+                }
+                Err(e) => {
+                    warn!(
+                        "Attestation requested but unavailable: {}. Continuing without attestation.",
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            info!("Attestation disabled");
+            None
+        };
+
         // Start snapshot sender thread if enabled
         let (snapshot_shutdown_tx, snapshot_handle) =
             if let Some((_, snapshot_rx)) = snapshot_channel {
                 let (snapshot_shutdown_tx, snapshot_shutdown_rx) = bounded(1);
                 let snapshot_config = config.clone();
                 let recovery_path_clone = recovery_path.clone();
+                let attestation_clone = attestation_client.clone();
 
                 let handle = thread::spawn(move || {
                     let rt = tokio::runtime::Builder::new_current_thread()
@@ -150,7 +176,11 @@ impl SyndDB {
                         .expect("Failed to create tokio runtime for snapshot sender");
 
                     rt.block_on(async {
-                        let sender = SnapshotSender::new(snapshot_config, recovery_path_clone);
+                        let sender = SnapshotSender::new(
+                            snapshot_config,
+                            recovery_path_clone,
+                            attestation_clone,
+                        );
                         sender.run(snapshot_rx, snapshot_shutdown_rx).await
                     });
                 });
@@ -169,7 +199,7 @@ impl SyndDB {
                 .expect("Failed to create tokio runtime for changeset sender");
 
             rt.block_on(async {
-                let sender = ChangesetSender::new(sender_config, recovery_path);
+                let sender = ChangesetSender::new(sender_config, recovery_path, attestation_client);
                 sender.run(changeset_rx, changeset_shutdown_rx).await
             });
         });
