@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     info!("Loading configuration from: {:?}", cli.config);
 
     // Load configuration
-    let mut config = synddb_sequencer::Config::default();
+    let mut config = synddb_sequencer::Config::from_file(&cli.config)?;
 
     // Override database path from CLI if provided
     if let Some(db_path) = cli.db {
