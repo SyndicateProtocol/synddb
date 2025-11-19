@@ -9,12 +9,12 @@ The key insight is that **SQL operations themselves become the verifiable audit 
 The architecture is simple:
 
 1. **Write applications in any language** that use SQLite for persistence
-2. **Run a sequencer** (as a sidecar process) that monitors the SQLite database for changes
-3. **Automatically publish SQL operations** to DA layers for durability and verification
+2. **Import the SyndDB client library** to automatically capture changesets and snapshots
+3. **Run a sequencer service** (in a separate TEE) that receives and publishes SQL operations to DA layers
 4. **Enable permissionless read replicas** that sync the SQL operations to serve queries
 5. **Support message passing** through application-defined tables that trigger cross-chain operations
 
-Developers don't need to change how they build applications - just ensure all state changes are persisted to SQLite. This design delivers ultra-low latency (<1ms local writes) and high throughput while maintaining verifiability at the SQL level. Applications can use any programming language, frameworks, libraries, or external services - as long as the results are persisted to SQLite, the system captures everything needed for verification.
+Developers integrate SyndDB by importing a lightweight client library (available for Rust, Python, Node.js, and any language via C FFI). The library automatically captures SQL operations and sends them to the sequencer service, which handles all DA layer publishing. This design delivers ultra-low latency (<1ms local writes) and high throughput while maintaining verifiability at the SQL level. Applications can use any programming language, frameworks, libraries, or external services - as long as the results are persisted to SQLite, the system captures everything needed for verification.
 
 ## Why SyndDB?
 
@@ -64,52 +64,69 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
 1. **Application - Any Language**
    - Written in any language (Python, Node.js, Go, Rust, Java, etc.)
    - Uses SQLite for persistence (via language-specific SQLite bindings)
+   - Imports SyndDB client library (Rust/Python/Node.js or via C FFI)
    - Runs inside a TEE for attestation and accountability
    - Can use any libraries, frameworks, or external APIs
    - All state changes must be persisted to SQLite
 
-2. **Sequencer** (runs as a sidecar process)
-   - Read-only access to SQLite database (application is the only writer)
+2. **SyndDB Client Library**
+   - Embedded in the application process (same TEE as application)
    - Attaches to the SQLite database via Session Extension (official SQLite API for capturing logical changes deterministically)
    - Captures SQL operations as changesets (INSERT/UPDATE/DELETE with values)
    - Creates periodic snapshots for recovery points
-   - Batches and publishes changesets with snapshots to DA layers
-   - Publishes to DA layers (Celestia, EigenDA) and storage layers (IPFS, Arweave)
-   - Monitors blockchain for inbound messages and delivers them to application
-   - Zero application code changes required
+   - Detects schema changes and triggers immediate snapshots
+   - Sends changesets and snapshots to sequencer service via HTTP
+   - Includes TEE attestation tokens proving application workload identity
+   - Available for Rust, Python, Node.js, and any language via C FFI
 
-3. **Read Replicas**
+3. **Sequencer Service** (runs in separate TEE)
+   - Receives changesets and snapshots from application client libraries via HTTP
+   - Verifies TEE attestation tokens from applications
+   - Batches and publishes to DA layers (Celestia, EigenDA) and storage layers (IPFS, Arweave)
+   - Monitors blockchain for inbound messages and delivers them to applications
+   - Holds signing keys for DA layer publishing (isolated from application)
+   - **Security Note**: Runs in a separate TEE from the application to prevent key extraction, as deploying multiple containers in a single TEE is complex and creates attack surface
+
+4. **Read Replicas**
    - Anyone can run a read replica permissionlessly
    - Sync SQL operations (changesets and snapshots) from DA layers
    - Replay SQL operations to maintain consistent database state
    - Serve queries with full SQL capabilities
 
-4. **Validators**
+5. **Validators**
    - Read replicas with validation logic that runs in TEEs
    - Verify SQL operations (changesets) before signing for settlement
    - Default checks: Operation validity, state consistency, balance invariants
    - Optional checks: External API verification, custom business rules
    - Process cross-chain messages from message tables
 
-5. **Bridge (Message Passing)**
+6. **Bridge (Message Passing)**
    - Smart contract for processing cross-chain messages
-   - Sequencer monitors message tables with schemas tied to contract ABI
+   - Sequencer service monitors message tables with schemas tied to contract ABI
    - Processes outbound messages (withdrawals, cross-chain calls)
    - Delivers inbound messages to application (deposits, cross-chain responses)
 
 ### Data Flow
 
 ```
-Application (Any Language) → SQLite → Sequencer  → DA Layers → Validators (TEE) → Blockchain → Bridge.sol
-       in TEE                  ↓      (sidecar)                       ↓
-                        Message Tables                          Bridge Contract
+Application (Any Language) → SQLite + SyndDB Client → Sequencer Service → DA Layers → Validators (TEE) → Blockchain → Bridge.sol
+    in TEE (Application)             in TEE (Client)    in separate TEE                     ↓
+                                            ↓                                          Bridge Contract
+                                    Message Tables
+                                    (HTTP to Sequencer)
 ```
 
-**Application Path**: App writes to SQLite → Sequencer publishes to DA layers
+**Application Path**:
+1. App writes to SQLite
+2. SyndDB client library captures changesets/snapshots (same process, same TEE)
+3. Client sends to sequencer service via HTTP with TEE attestation
+4. Sequencer publishes to DA layers
 
 **Validator Path**: Validators read from DA → Verify SQL → Post to blockchain
 
 **Message Passing**: Validators detect messages in SQL → Process via Bridge.sol
+
+**TEE Isolation**: The application (with client library) runs in one TEE, while the sequencer service runs in a separate TEE. This architectural separation prevents the application from accessing the sequencer's signing keys, which is critical for security. Deploying multiple containers in a single TEE is complex and increases attack surface, so the separation provides defense in depth.
 
 Validators can subscribe to the sequencer (with TEE attestation) for lower latency instead of waiting for DA publication. The application never touches the blockchain directly.
 
@@ -138,7 +155,7 @@ Unlike traditional rollups that require full re-execution of all logic, SyndDB u
    - User inputs and their effects
    - Message passing operations via special tables
 
-2. **Sequencer Publishes to DA Layers**: The sequencer (running as a sidecar process) captures SQL operations and publishes to censorship-resistant DA layers:
+2. **Client Library and Sequencer Publish to DA Layers**: The SyndDB client library (embedded in the application) captures SQL operations and sends them to the sequencer service, which publishes to censorship-resistant DA layers:
    - SQL operations are captured as changesets (INSERT/UPDATE/DELETE with values)
    - Sequence numbers maintaining strict ordering
    - Periodic snapshots for bootstrapping and recovery
@@ -216,9 +233,10 @@ def match_orders(buy_order, sell_order):
 The application never touches the blockchain - the sequencer publishes to DA layers:
 
 0. **Application → SQLite**: Application writes all state changes to SQLite database
-1. **Sequencer → DA**: The sequencer (running as a sidecar process) publishes SQL operations (changesets/snapshots) to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with TEE signatures
-2. **DA → Validators**: Validators sync from censorship-resistant DA layers
-3. **Validators → Blockchain**: Post verified state transitions to settlement contract. Messages in the bridge tables are processed via Bridge.sol.
+1. **Client Library → Sequencer**: SyndDB client library (running in application process) captures changesets/snapshots and sends them to the sequencer service via HTTP with TEE attestation
+2. **Sequencer → DA**: The sequencer service (running in a separate TEE) publishes SQL operations (changesets/snapshots) to DA/storage layers (Celestia, EigenDA, IPFS, Arweave) with sequencer TEE signatures
+3. **DA → Validators**: Validators sync from censorship-resistant DA layers
+4. **Validators → Blockchain**: Post verified state transitions to settlement contract. Messages in the bridge tables are processed via Bridge.sol.
 
 This keeps the application isolated from blockchain infrastructure while enabling multiple DA sources for resilience. No custom bridge code needed - just define tables that match your message schema.
 
@@ -392,16 +410,40 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
 
 ### Building a SyndDB Application
 
-1. **Write Your Application in Any Language**
+1. **Import SyndDB Client Library**
+
+   **Rust Example:**
+
+   ```rust
+   use rusqlite::Connection;
+   use synddb_client::SyndDB;
+
+   // Connection must have 'static lifetime
+   let conn = Box::leak(Box::new(Connection::open("app.db")?));
+
+   // Attach SyndDB client - automatically captures changesets
+   let synddb = SyndDB::attach(conn, "https://sequencer.example.com:8433")?;
+
+   // Use SQLite normally
+   conn.execute("INSERT INTO trades VALUES (?1, ?2)", params![1, 100])?;
+
+   // Changesets are automatically sent to sequencer every 1 second
+   // Or manually publish for critical transactions:
+   synddb.publish()?;
+   ```
 
    **Python Example:**
 
    ```python
    import sqlite3
+   from synddb import SyndDB
    from flask import Flask
 
    app = Flask(__name__)
-   db = sqlite3.connect('app.db')
+   db = sqlite3.connect('app.db', check_same_thread=False)
+
+   # Attach SyndDB client - automatically captures changesets
+   synddb = SyndDB.attach('app.db', 'https://sequencer.example.com:8433')
 
    @app.route('/trade')
    def execute_trade():
@@ -409,37 +451,27 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
        cursor = db.cursor()
        cursor.execute("INSERT INTO trades ...")
        db.commit()
+       # Changesets automatically sent to sequencer
    ```
 
    **Node.js Example:**
 
    ```javascript
    const Database = require("better-sqlite3");
+   const { SyndDB } = require("synddb");
    const express = require("express");
 
    const app = express();
    const db = new Database("app.db");
 
+   // Attach SyndDB client - automatically captures changesets
+   const synddb = SyndDB.attach("app.db", "https://sequencer.example.com:8433");
+
    app.post("/trade", (req, res) => {
      // Your business logic here
      db.prepare("INSERT INTO trades ...").run();
+     // Changesets automatically sent to sequencer
    });
-   ```
-
-   **Go Example:**
-
-   ```go
-   package main
-   import (
-       "database/sql"
-       _ "github.com/mattn/go-sqlite3"
-   )
-
-   func main() {
-       db, _ := sql.Open("sqlite3", "./app.db")
-       // Your business logic here
-       db.Exec("INSERT INTO trades ...")
-   }
    ```
 
 2. **Create Bridge Tables (if needed)**
@@ -450,25 +482,35 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
    CREATE TABLE bridge_deposits (...);
    ```
 
-3. **Deploy with Sequencer (Sidecar Process)**
+3. **Deploy Application and Sequencer (Separate TEEs)**
 
    ```yaml
    # docker-compose.yml
    services:
+     # Application with SyndDB client library (TEE #1)
      app:
        image: your-app:latest
-       volumes:
-         - ./data:/data
+       environment:
+         - SYNDDB_SEQUENCER_URL=https://sequencer:8433
+       # Deploy in TEE (GCP Confidential Space, AWS Nitro, etc.)
+       # Client library includes TEE attestation automatically
 
+     # Sequencer service (TEE #2 - separate for key isolation)
      synddb-sequencer:
        image: syndicate/synddb-sequencer:latest
-       volumes:
-         - ./data:/data
+       ports:
+         - "8433:8433"
        environment:
-         - DATABASE_PATH=/data/app.db
          - CHAIN_RPC=https://...
+         - CELESTIA_NODE=https://...
          - IPFS_GATEWAY=https://...
+       # Deploy in separate TEE to isolate signing keys from application
    ```
+
+   **Security Note**: The application and sequencer run in **separate TEEs**. This is critical because:
+   - The sequencer holds signing keys for DA layer publishing
+   - Deploying multiple containers in a single TEE is complex and increases attack surface
+   - TEE separation provides defense in depth - even if the application is compromised, signing keys remain isolated
 
 4. **Run Read Replicas**
 
@@ -480,19 +522,31 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
      --serve-port 8080
    ```
 
-5. **Optional: Deploy in TEE**
+5. **Deploy in TEEs (Required for Production)**
    ```bash
-   # Run the entire stack in a TEE for additional security
-   docker run --device /dev/sgx_enclave \
-     -v /var/run/aesmd:/var/run/aesmd \
-     your-app-tee:latest
+   # Application TEE (GCP Confidential Space example)
+   gcloud compute instances create app-tee \
+     --confidential-compute \
+     --image-project=confidential-space-images \
+     --image-family=confidential-space \
+     --container-image=your-app:latest
+
+   # Sequencer TEE (separate instance for key isolation)
+   gcloud compute instances create sequencer-tee \
+     --confidential-compute \
+     --image-project=confidential-space-images \
+     --image-family=confidential-space \
+     --container-image=syndicate/synddb-sequencer:latest
    ```
 
 ### Key Design Principles
 
 - **Language Agnostic**: Use any programming language, framework, or runtime
+- **Client Library Integration**: Import lightweight SyndDB client library (Rust/Python/Node.js or C FFI)
 - **SQL as Truth**: All state changes must go through SQLite for capture
-- **Automatic Publishing**: The sequencer (running as a sidecar process) handles all DA layer and blockchain interaction
+- **Automatic Capture**: Client library automatically captures changesets and snapshots
+- **Automatic Publishing**: Sequencer service handles all DA layer and blockchain interaction
+- **TEE Isolation**: Application and sequencer run in separate TEEs for key isolation
 - **Consistent Validation**: Validators use the same implementation for verification
 - **Permissionless Replication**: Anyone can sync and query the data
 - **Optional Message Passing**: Add message tables only if you need cross-chain operations
@@ -503,8 +557,14 @@ Converting any existing SQLite application to SyndDB is straightforward:
 
 1. Ensure all state changes go through SQLite (not just in-memory)
 2. Add message tables if you need cross-chain message passing functionality
-3. Deploy the sequencer (as a sidecar process) alongside your application
-4. No code changes required to your business logic
+3. **Import SyndDB client library** - add 2-3 lines of code to attach to your existing connection:
+   ```python
+   # Python example
+   from synddb import SyndDB
+   synddb = SyndDB.attach('app.db', 'https://sequencer.example.com:8433')
+   ```
+4. Deploy sequencer service in a separate TEE
+5. No other code changes required to your business logic
 
 This approach makes SyndDB a drop-in solution for adding blockchain verifiability to applications written in any language.
 
@@ -512,15 +572,17 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 
 ### Core Architecture Terms
 
-- **SyndDB** - Infrastructure that monitors applications (any language) using SQLite and publishes SQL operations to blockchain
-- **Sequencer** - Lightweight process (running as a sidecar) that attaches to SQLite databases via Session Extension and automatically captures/publishes SQL operations as changesets
+- **SyndDB** - Infrastructure that enables applications (any language) using SQLite to publish SQL operations to blockchain
+- **SyndDB Client Library** - Lightweight library (Rust/Python/Node.js or C FFI) that embeds in applications, captures changesets/snapshots via SQLite Session Extension, and sends them to the sequencer service
+- **Sequencer Service** - Server process (running in a separate TEE) that receives changesets/snapshots from client libraries and publishes them to DA layers and blockchain
 - **SQL Operations** - Database modifications (INSERT/UPDATE/DELETE) that form the verifiable audit trail. Captured as changesets for efficient replication.
 - **Changesets** - The technical mechanism for capturing SQL operations: deterministic logical database changes via SQLite Session Extension, more compact and auditable than physical page changes
 - **Snapshots** - Complete database state at a point in time, published periodically for recovery/bootstrapping and immediately on schema changes
 
 ### Node Types
 
-- **Application** - Your application (any language) running inside a TEE with SQLite, publishing SQL operations via sequencer to DA layers
+- **Application** - Your application (any language) running inside a TEE with SQLite and SyndDB client library, sending SQL operations to sequencer service
+- **Sequencer** - Service running in a separate TEE that receives operations from applications and publishes to DA layers (holds signing keys, isolated from application)
 - **Read Replica** - Any node that syncs published SQL operations to serve queries (anyone can run permissionlessly)
 - **Validator** - Read replica with additional validation logic that runs in a TEE and verifies SQL operations before signing for settlement
 
