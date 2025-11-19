@@ -57,6 +57,9 @@ impl SnapshotSender {
     pub async fn run(self, snapshot_rx: Receiver<Snapshot>, shutdown_rx: Receiver<()>) {
         info!("SnapshotSender started");
 
+        // Retry any failed snapshots from previous runs
+        self.retry_failed_snapshots().await;
+
         loop {
             select! {
                 recv(snapshot_rx) -> snapshot => {
@@ -169,5 +172,83 @@ impl SnapshotSender {
             .error_for_status()?;
 
         Ok(())
+    }
+
+    /// Retry failed snapshots from previous runs
+    async fn retry_failed_snapshots(&self) {
+        let Some(ref recovery) = self.recovery else {
+            return;
+        };
+
+        let failed = match recovery.get_failed_snapshots() {
+            Ok(snapshots) => snapshots,
+            Err(e) => {
+                error!("Failed to load failed snapshots from recovery: {}", e);
+                return;
+            }
+        };
+
+        if failed.is_empty() {
+            debug!("No failed snapshots to retry");
+            return;
+        }
+
+        info!(
+            "Retrying {} failed snapshots from previous runs",
+            failed.len()
+        );
+
+        for (id, snapshot) in failed {
+            // Obtain fresh attestation token if configured
+            let attestation_token = if let Some(ref attestation) = self.attestation {
+                match attestation.get_token().await {
+                    Ok(token) => Some(token),
+                    Err(e) => {
+                        warn!(
+                            "Failed to obtain attestation token for snapshot retry: {}",
+                            e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let message = SnapshotMessage {
+                snapshot: snapshot.clone(),
+                message_id: uuid::Uuid::new_v4().to_string(),
+                attestation_token,
+            };
+
+            match retry_with_backoff(self.config.max_retries, || {
+                self.send_snapshot_internal(&message)
+            })
+            .await
+            {
+                Ok(()) => {
+                    info!(
+                        "Successfully retried snapshot at sequence {}",
+                        snapshot.sequence
+                    );
+                    if let Err(e) = recovery.remove_snapshot(id) {
+                        error!("Failed to remove retried snapshot from recovery: {}", e);
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to retry snapshot at sequence {} after {} attempts: {}",
+                        snapshot.sequence,
+                        self.config.max_retries + 1,
+                        e
+                    );
+                    if let Err(e) = recovery.increment_snapshot_retry(id, &e.to_string()) {
+                        error!("Failed to update snapshot retry count: {}", e);
+                    }
+                }
+            }
+        }
+
+        info!("Completed retry of failed snapshots");
     }
 }

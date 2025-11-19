@@ -14,7 +14,6 @@ pub struct FailedBatchRecovery {
     conn: Connection,
 }
 
-#[allow(dead_code)] // Methods reserved for future recovery retry logic
 impl FailedBatchRecovery {
     /// Create or open the recovery database
     ///

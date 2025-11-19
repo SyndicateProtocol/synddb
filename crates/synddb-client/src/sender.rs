@@ -64,6 +64,9 @@ impl ChangesetSender {
     pub async fn run(mut self, changeset_rx: Receiver<Changeset>, shutdown_rx: Receiver<()>) {
         info!("ChangesetSender started");
 
+        // Retry any failed changesets from previous runs
+        self.retry_failed_changesets().await;
+
         loop {
             select! {
                 recv(changeset_rx) -> changeset => {
@@ -185,5 +188,91 @@ impl ChangesetSender {
             .error_for_status()?;
 
         Ok(())
+    }
+
+    /// Retry failed changesets from previous runs
+    async fn retry_failed_changesets(&self) {
+        let Some(ref recovery) = self.recovery else {
+            return;
+        };
+
+        // Clean up old failures (older than 7 days)
+        if let Err(e) = recovery.cleanup_old_failures(7) {
+            warn!("Failed to clean up old recovery entries: {}", e);
+        }
+
+        // Log recovery status
+        if let Ok((changeset_count, snapshot_count)) = recovery.get_failed_counts() {
+            if changeset_count > 0 || snapshot_count > 0 {
+                info!(
+                    "Recovery storage contains {} changesets and {} snapshots",
+                    changeset_count, snapshot_count
+                );
+            }
+        }
+
+        let failed = match recovery.get_failed_changesets() {
+            Ok(changesets) => changesets,
+            Err(e) => {
+                error!("Failed to load failed changesets from recovery: {}", e);
+                return;
+            }
+        };
+
+        if failed.is_empty() {
+            debug!("No failed changesets to retry");
+            return;
+        }
+
+        info!(
+            "Retrying {} failed changesets from previous runs",
+            failed.len()
+        );
+
+        for (id, changeset) in failed {
+            // Obtain fresh attestation token if configured
+            let attestation_token = if let Some(ref attestation) = self.attestation {
+                match attestation.get_token().await {
+                    Ok(token) => Some(token),
+                    Err(e) => {
+                        warn!("Failed to obtain attestation token for retry: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let batch = ChangesetBatch {
+                changesets: vec![changeset.clone()],
+                batch_id: uuid::Uuid::new_v4().to_string(),
+                attestation_token,
+            };
+
+            match retry_with_backoff(self.config.max_retries, || self.send_batch(&batch)).await {
+                Ok(()) => {
+                    info!(
+                        "Successfully retried changeset at sequence {}",
+                        changeset.sequence
+                    );
+                    if let Err(e) = recovery.remove_changeset(id) {
+                        error!("Failed to remove retried changeset from recovery: {}", e);
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to retry changeset at sequence {} after {} attempts: {}",
+                        changeset.sequence,
+                        self.config.max_retries + 1,
+                        e
+                    );
+                    if let Err(e) = recovery.increment_changeset_retry(id, &e.to_string()) {
+                        error!("Failed to update retry count: {}", e);
+                    }
+                }
+            }
+        }
+
+        info!("Completed retry of failed changesets");
     }
 }

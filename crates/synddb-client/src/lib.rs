@@ -126,9 +126,17 @@ impl SyndDB {
         // Determine recovery database path for storing failed batches
         // This is optional - if None, failed batches are dropped
         let recovery_path = if config.enable_recovery {
-            // Use temp dir with unique name for recovery storage
+            // Use a stable path based on the sequencer URL to persist across restarts
+            // Hash the sequencer URL to create a stable but unique identifier
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+
+            let mut hasher = DefaultHasher::new();
+            config.sequencer_url.hash(&mut hasher);
+            let url_hash = hasher.finish();
+
             let temp_dir = std::env::temp_dir();
-            let db_name = format!("synddb_recovery_{}.db", uuid::Uuid::new_v4());
+            let db_name = format!("synddb_recovery_{:x}.db", url_hash);
             Some(temp_dir.join(db_name))
         } else {
             None
