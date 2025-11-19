@@ -19,6 +19,7 @@ use tracing::info;
 
 /// Main sequencer runtime
 pub struct Sequencer {
+    #[allow(dead_code)] // Will be used when implementation is added
     config: Config,
 }
 
