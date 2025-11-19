@@ -9,7 +9,7 @@ pub struct KeyManager {
 
 impl KeyManager {
     /// Load key from TEE-protected storage
-    pub async fn load_key(path: &Path) -> Result<Self> {
+    pub async fn load_key(_path: &Path) -> Result<Self> {
         // TODO: Load secp256k1 private key
         // TODO: Integrate with GCP Secret Manager for Confidential Space
         Ok(Self {})
@@ -23,7 +23,7 @@ impl KeyManager {
     }
 
     /// Sign data with secp256k1
-    pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
+    pub fn sign(&self, _data: &[u8]) -> Result<Vec<u8>> {
         // TODO: Sign with ECDSA secp256k1
         Ok(vec![])
     }

@@ -1,12 +1,13 @@
 //! Configuration structures for the sequencer
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub receiver: ReceiverConfig,
+    pub database: DatabaseConfig,
     pub batch: BatchConfig,
     pub publish: PublishConfig,
     pub messages: MessageConfig,
@@ -14,39 +15,40 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReceiverConfig {
-    /// HTTP API listen address (default: 0.0.0.0:8433)
-    #[serde(default = "default_listen_addr")]
-    pub listen_addr: String,
-    /// Enable TLS for HTTPS
-    #[serde(default)]
-    pub enable_tls: bool,
-    /// Verify client TEE attestation tokens
-    #[serde(default = "default_verify_attestation")]
-    pub verify_client_attestation: bool,
+pub struct DatabaseConfig {
+    /// Path to the SQLite database to monitor
+    pub path: PathBuf,
+    /// Whether to enable Session Extension monitoring
+    pub enable_sessions: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchConfig {
     /// Maximum batch size in bytes (default: 1MB)
-    #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 
     /// Maximum batch age before flushing (default: 1 second)
     #[serde(with = "humantime_serde")]
-    #[serde(default = "default_max_batch_age")]
     pub max_batch_age: Duration,
 
     /// Snapshot interval (default: 60 minutes)
     #[serde(with = "humantime_serde")]
-    #[serde(default = "default_snapshot_interval")]
     pub snapshot_interval: Duration,
 
     /// Number of batches before forcing snapshot (default: 1000)
-    #[serde(default = "default_snapshot_threshold")]
     pub snapshot_threshold: usize,
 }
 
+impl Default for BatchConfig {
+    fn default() -> Self {
+        BatchConfig {
+            max_batch_size: default_max_batch_size(),
+            max_batch_age: default_max_batch_age(),
+            snapshot_interval: default_snapshot_interval(),
+            snapshot_threshold: default_snapshot_threshold(),
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishConfig {
     /// Enable Celestia DA layer
@@ -92,14 +94,14 @@ pub struct MessageConfig {
     /// Enable inbound message monitoring from blockchain
     pub enable_inbound: bool,
 
-    /// Enable outbound message processing (received from client libraries)
+    /// Enable outbound message monitoring from SQLite tables
     pub enable_outbound: bool,
 
-    /// HTTP API port for delivering inbound messages to applications
+    /// HTTP API port for message delivery to application
     #[serde(default = "default_api_port")]
     pub api_port: u16,
 
-    /// Chain RPC URL for monitoring blockchain events (deposits, etc.)
+    /// Chain RPC URL for monitoring deposits
     pub chain_rpc_url: Option<String>,
 
     /// Bridge contract address
@@ -119,14 +121,6 @@ pub struct TeeConfig {
 }
 
 // Default value functions
-fn default_listen_addr() -> String {
-    "0.0.0.0:8433".to_string()
-}
-
-fn default_verify_attestation() -> bool {
-    true
-}
-
 fn default_max_batch_size() -> usize {
     1024 * 1024 // 1MB
 }
@@ -150,10 +144,9 @@ fn default_api_port() -> u16 {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            receiver: ReceiverConfig {
-                listen_addr: default_listen_addr(),
-                enable_tls: false,
-                verify_client_attestation: default_verify_attestation(),
+            database: DatabaseConfig {
+                path: PathBuf::from("app.db"),
+                enable_sessions: true,
             },
             batch: BatchConfig {
                 max_batch_size: default_max_batch_size(),
@@ -180,5 +173,16 @@ impl Default for Config {
                 key_path: None,
             },
         }
+    }
+}
+
+impl Config {
+    /// Load configuration from a YAML file
+    pub fn from_file(path: &Path) -> Result<Self> {
+        let contents = std::fs::read_to_string(path)
+            .context(format!("Failed to read config file: {:?}", path))?;
+        let config: Config =
+            serde_yaml::from_str(&contents).context("Failed to parse config file")?;
+        Ok(config)
     }
 }

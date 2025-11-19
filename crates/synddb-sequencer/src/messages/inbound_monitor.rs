@@ -5,9 +5,9 @@ use anyhow::Result;
 use tokio::sync::mpsc::Sender;
 
 pub struct InboundMonitor {
-    chain_rpc_url: String,
-    bridge_contract: String,
-    message_tx: Sender<InboundMessage>,
+    _chain_rpc_url: String,
+    _bridge_contract: String,
+    _message_tx: Sender<InboundMessage>,
 }
 
 impl InboundMonitor {
@@ -17,9 +17,9 @@ impl InboundMonitor {
         message_tx: Sender<InboundMessage>,
     ) -> Self {
         Self {
-            chain_rpc_url,
-            bridge_contract,
-            message_tx,
+            _chain_rpc_url: chain_rpc_url,
+            _bridge_contract: bridge_contract,
+            _message_tx: message_tx,
         }
     }
 

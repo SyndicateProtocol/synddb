@@ -1,13 +1,19 @@
-//! Changeset and schema change types
+//! Session monitoring module
 //!
-//! These types define the format for changesets and schema changes
-//! that are received from client libraries via HTTP. The changesets
-//! use SQLite Session Extension format (deterministic, auditable).
+//! Uses SQLite Session Extension to capture deterministic changesets
+//! and track schema changes.
+
+pub mod changeset_reader;
+pub mod hooks;
+pub mod session_tracker;
+
+pub use changeset_reader::ChangesetReader;
+pub use session_tracker::SessionMonitor;
 
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
-/// A changeset received from a client library
+/// A captured changeset from the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Changeset {
     /// Raw changeset data from SQLite Session Extension
@@ -20,7 +26,7 @@ pub struct Changeset {
     pub size: usize,
 }
 
-/// Schema change received from a client library
+/// Schema change captured from DDL operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaChange {
     /// Previous schema version (from PRAGMA user_version)

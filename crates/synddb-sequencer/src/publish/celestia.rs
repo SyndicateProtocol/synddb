@@ -6,16 +6,16 @@ use crate::config::CelestiaConfig;
 use anyhow::Result;
 
 pub struct CelestiaPublisher {
-    config: CelestiaConfig,
+    _config: CelestiaConfig,
 }
 
 impl CelestiaPublisher {
     pub fn new(config: CelestiaConfig) -> Self {
-        Self { config }
+        Self { _config: config }
     }
 
     /// Publish batch to Celestia
-    pub async fn publish(&self, batch: &SignedBatch) -> Result<PublishResult> {
+    pub async fn publish(&self, _batch: &SignedBatch) -> Result<PublishResult> {
         // TODO: Use celestia-client to publish blob
         // TODO: Return blob ID as reference
 

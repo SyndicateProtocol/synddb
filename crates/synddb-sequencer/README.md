@@ -1,33 +1,31 @@
 # synddb-sequencer
 
-Sequencer service that receives changesets from SyndDB client libraries and publishes them to data availability layers.
+Lightweight SQLite monitor and publisher that runs as a sidecar process alongside your application.
 
 ## Overview
 
-The `synddb-sequencer` is a Rust service that:
+The `synddb-sequencer` is a zero-configuration Rust process that:
 
-1. **Receives changesets and snapshots** from application client libraries via HTTP
-2. **Verifies TEE attestation** tokens from client applications
-3. **Batches changesets** efficiently with configurable size and time thresholds
-4. **Compresses and signs** batches with TEE-protected keys
-5. **Publishes to multiple DA layers** (Celestia, EigenDA, IPFS, Arweave)
-6. **Handles message passing** for inbound deposits and outbound withdrawals
+1. **Monitors SQLite databases** using the SQLite Session Extension to capture deterministic changesets
+2. **Batches changesets** efficiently with configurable size and time thresholds
+3. **Compresses and signs** batches with TEE attestation support
+4. **Publishes to multiple DA layers** (Celestia, EigenDA, IPFS, Arweave)
+5. **Handles message passing** for inbound deposits and outbound withdrawals
 
 ## Status
 
-🚧 **Planned Implementation** - Directory structure and interfaces defined, implementation planned.
+🚧 **Stub Implementation** - Directory structure and interfaces defined, implementation in progress.
 
 See [PLAN_SEQUENCER.md](../../PLAN_SEQUENCER.md) for detailed architecture and implementation plan.
 
 ## Architecture
 
-The sequencer runs as a **service in a separate TEE** from the application. It receives changesets and snapshots via HTTP from client libraries embedded in applications, then publishes them to DA layers.
+The sequencer runs as a **sidecar process** - a separate process that runs alongside your application. It has read-only access to the SQLite database and automatically captures all changes without requiring any application code changes.
 
 ### Components
 
-- **HTTP Receiver**: Receives changesets/snapshots from client libraries via HTTP
-- **Attestation Verifier**: Verifies client TEE attestation tokens
-- **Batcher**: Accumulates received changesets and snapshots
+- **Session Monitor**: Attaches to SQLite via Session Extension to capture logical changes
+- **Batcher**: Accumulates changesets and creates periodic snapshots
 - **Attestor**: Compresses data with zstd and signs with secp256k1
 - **Publisher**: Publishes to configured DA/storage layers with retry logic
 - **Message Monitor**: Handles bidirectional message passing with blockchain
@@ -37,11 +35,11 @@ The sequencer runs as a **service in a separate TEE** from the application. It r
 ### Basic Usage
 
 ```bash
-# Run sequencer service with default configuration
-synddb-sequencer --config default.yaml
+# Monitor a database with default configuration
+synddb-sequencer --db /path/to/app.db
 
 # Use custom configuration
-synddb-sequencer --config custom.yaml
+synddb-sequencer --db /path/to/app.db --config custom.yaml
 ```
 
 ### Configuration
@@ -49,14 +47,15 @@ synddb-sequencer --config custom.yaml
 See `config/example.yaml` for all configuration options:
 
 ```yaml
-receiver:
-  listen_addr: "0.0.0.0:8433"
-  enable_tls: true
-  verify_client_attestation: true
+database:
+  path: "app.db"
+  enable_sessions: true
 
 batch:
   max_batch_size: 1048576  # 1MB
   max_batch_age: "1s"
+  snapshot_interval: "1h"
+  snapshot_threshold: 1000
 
 publish:
   celestia:
@@ -79,32 +78,23 @@ tee:
 
 ## Key Features
 
-### HTTP Receiver
+### SQLite Session Extension
 
-Receives changesets and snapshots from client libraries:
+Uses the official SQLite Session Extension API (not WAL parsing) for:
 
-- **TEE Attestation Verification**: Verifies client attestation tokens
-- **Changeset Validation**: Validates sequence numbers and checksums
-- **Backpressure Handling**: Manages queue depth and flow control
-- **Health Monitoring**: Tracks client connection status
-
-### Changeset Processing
-
-Processes changesets received from clients:
-
-- **Deterministic Format**: Changesets use SQLite Session Extension format (INSERT/UPDATE/DELETE with values)
-- **Compact Representation**: Only changed rows, not full database pages
+- **Deterministic capture**: Logical changes (INSERT/UPDATE/DELETE with values)
+- **Compact format**: Only changed rows, not full database pages
 - **Validator-friendly**: Exact same changes can be replayed by validators
 - **Auditable**: Changesets can be inspected to see what changed
 
-### Snapshot Handling
+### Schema Change Tracking
 
-Handles snapshots received from clients:
+Automatically creates full snapshots when schema changes are detected:
 
-- **Periodic Snapshots**: Recovery points sent by clients every hour
-- **Schema Change Snapshots**: Full snapshots triggered by DDL operations
-- **Audit Trail**: Schema changes include DDL statements
-- **Validator Bootstrapping**: Enables validators to reconstruct complete state
+- Monitors `sqlite_schema` table for DDL operations
+- Triggers immediate snapshot on ALTER TABLE, CREATE TABLE, etc.
+- Includes DDL statements in snapshot for audit trail
+- Ensures validators can always reconstruct complete state
 
 ### Multi-DA Publishing
 
@@ -119,9 +109,9 @@ Publishes to multiple DA layers in parallel:
 
 Bidirectional message passing for bridge operations:
 
-- **Inbound**: Monitors blockchain for deposit events, delivers to applications via HTTP
-- **Outbound**: Receives outbound messages from client libraries (withdrawal requests)
-- **HTTP API**: Delivers inbound messages to applications (localhost:8432)
+- **Inbound**: Monitors blockchain for deposit events
+- **Outbound**: Monitors SQLite tables for withdrawal requests
+- **HTTP API**: Delivers messages to application (localhost:8432)
 
 ## Development Status
 
@@ -135,32 +125,31 @@ Bidirectional message passing for bridge operations:
 
 ### TODO ⬜
 
-- HTTP receiver implementation (Axum endpoints)
-- Client attestation verification
+- Session Monitor implementation (SQLite Session Extension integration)
 - Changeset batching logic
 - TEE attestation and signing
 - DA layer publisher implementations
 - Message passing system
-- Integration tests with synddb-client
+- Integration tests
 
 ## Development Workflow
 
 ```bash
-# Terminal 1: Run application with synddb-client
-cargo run --package synddb-client --example basic_usage
+# Terminal 1: Run benchmark to generate database activity
+cargo run --package synddb-benchmark -- run --rate 100
 
-# Terminal 2: Run sequencer service - planned
-cargo run --package synddb-sequencer -- --config default.yaml
+# Terminal 2: Run sequencer (sidecar process) - stub for now
+cargo run --package synddb-sequencer -- --db orderbook.db
 ```
 
 ## Design Goals
 
-- **Minimal Integration**: Just import client library and attach to SQLite connection
-- **Language Agnostic**: Client library available for Rust, Python, Node.js, and C FFI
+- **Zero Code Changes**: Drop-in solution for existing SQLite applications
+- **Language Agnostic**: Works with any language that has SQLite bindings
 - **High Performance**: Minimal overhead on application performance
 - **Deterministic Replication**: Session Extension changesets for validators
 - **Automatic Publishing**: Handles all DA layer interaction
-- **Separate TEE Architecture**: Runs in separate TEE from application for key isolation
+- **Sidecar Architecture**: Runs as a separate process alongside your application
 
 ## References
 

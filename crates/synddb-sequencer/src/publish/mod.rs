@@ -25,16 +25,16 @@ pub struct PublishResult {
 
 /// Multi-layer publisher
 pub struct Publisher {
-    config: PublishConfig,
+    _config: PublishConfig,
 }
 
 impl Publisher {
     pub fn new(config: PublishConfig) -> Self {
-        Self { config }
+        Self { _config: config }
     }
 
     /// Publish batch to all configured DA layers
-    pub async fn publish(&self, batch: SignedBatch) -> Result<Vec<PublishResult>> {
+    pub async fn publish(&self, _batch: SignedBatch) -> Result<Vec<PublishResult>> {
         // TODO: Publish to all configured layers in parallel
         // 1. Celestia
         // 2. EigenDA

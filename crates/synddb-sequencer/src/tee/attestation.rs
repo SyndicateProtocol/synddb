@@ -24,7 +24,7 @@ impl AttestationProvider {
     }
 
     /// Verify attestation token
-    pub async fn verify_attestation(&self, token: &str) -> Result<bool> {
+    pub async fn verify_attestation(&self, _token: &str) -> Result<bool> {
         // TODO: Verify JWT token from GCP
         Ok(true)
     }
