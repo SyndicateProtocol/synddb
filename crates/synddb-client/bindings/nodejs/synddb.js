@@ -1,44 +1,235 @@
 /**
- * SyndDB Node.js Client - Pure JavaScript FFI wrapper
- *
- * No compilation needed! Just npm install ffi-napi and use.
+ * SyndDB Node.js Client - Pure JavaScript FFI wrapper (no compilation needed!)
  *
  * Usage:
+ *   const { SyndDB } = require('./synddb');
+ *
+ *   // Attach to database file
+ *   const synddb = SyndDB.attach('app.db', 'http://localhost:8433');
+ *
+ *   // Now use SQLite normally - changesets are automatically captured
  *   const Database = require('better-sqlite3');
- *   const { attach } = require('./synddb');
- *
  *   const db = new Database('app.db');
- *   attach(db, { sequencerUrl: 'https://sequencer:8433' });
+ *   db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
  *
- *   // Use SQLite normally
- *   db.prepare("INSERT INTO trades ...").run();
+ *   // Manually publish for critical transactions
+ *   synddb.publish();
+ *
+ *   // Create a snapshot
+ *   const size = synddb.snapshot();
+ *
+ *   // Clean up (or let Node.js garbage collector handle it)
+ *   synddb.detach();
  */
 
 const ffi = require('ffi-napi');
 const ref = require('ref-napi');
 const path = require('path');
+const os = require('os');
 
-// Find libsynddb
-const libPath = process.env.LIBSYNDDB_PATH ||
-                path.join(__dirname, '../../target/release/libsynddb.so');
+// Define types
+const VoidPtr = ref.refType(ref.types.void);
+const SizeT = ref.types.size_t;
+const SizeTPtr = ref.refType(SizeT);
+
+// Error codes (must match Rust enum)
+const SyndDBError = {
+  SUCCESS: 0,
+  INVALID_POINTER: 1,
+  INVALID_UTF8: 2,
+  DATABASE_ERROR: 3,
+  ATTACH_ERROR: 4,
+  PUBLISH_ERROR: 5,
+  SNAPSHOT_ERROR: 6,
+};
+
+// Find libsynddb shared library
+function findLibrary() {
+  const platform = os.platform();
+  let libName;
+
+  if (platform === 'darwin') {
+    libName = 'libsynddb_client.dylib';
+  } else if (platform === 'win32') {
+    libName = 'synddb_client.dll';
+  } else {
+    libName = 'libsynddb_client.so';
+  }
+
+  // Try common locations
+  const searchPaths = [
+    // Environment variable
+    process.env.LIBSYNDDB_PATH,
+    // Current directory
+    path.join('.', libName),
+    // Relative to this file
+    path.join(__dirname, '..', '..', 'target', 'release', libName),
+    path.join(__dirname, '..', '..', 'target', 'debug', libName),
+    // System paths
+    path.join('/usr', 'local', 'lib', libName),
+    path.join('/usr', 'lib', libName),
+  ].filter(Boolean);
+
+  const fs = require('fs');
+  for (const libPath of searchPaths) {
+    if (fs.existsSync(libPath)) {
+      return libPath;
+    }
+  }
+
+  throw new Error(
+    `libsynddb_client not found. Build with: cargo build --package synddb-client --features ffi --release`
+  );
+}
 
 // Load library
-const lib = ffi.Library(libPath, {
-  'synddb_attach': ['pointer', ['pointer', 'string']],
-  'synddb_detach': ['void', ['pointer']],
-  'synddb_last_error': ['string', []],
+const lib = ffi.Library(findLibrary(), {
+  synddb_attach: ['int', ['string', 'string', VoidPtr]],
+  synddb_attach_with_config: ['int', ['string', 'string', 'uint64', 'uint64', VoidPtr]],
+  synddb_publish: ['int', [VoidPtr]],
+  synddb_snapshot: ['int', [VoidPtr, SizeTPtr]],
+  synddb_detach: ['void', [VoidPtr]],
+  synddb_last_error: ['string', []],
+  synddb_version: ['string', []],
 });
 
 /**
- * SyndDB handle wrapper
+ * SyndDB client handle - automatically captures and publishes SQLite changesets
  */
-class SyndDBHandle {
+class SyndDB {
   constructor(handle) {
     this._handle = handle;
   }
 
   /**
-   * Detach and flush pending changesets
+   * Attach SyndDB to a SQLite database file
+   *
+   * @param {string} dbPath - Path to SQLite database file
+   * @param {string} sequencerUrl - URL of sequencer TEE (e.g., 'http://localhost:8433')
+   * @returns {SyndDB} SyndDB instance
+   * @throws {Error} If attachment fails
+   *
+   * @example
+   * const synddb = SyndDB.attach('app.db', 'http://localhost:8433');
+   *
+   * // Now use SQLite normally
+   * const Database = require('better-sqlite3');
+   * const db = new Database('app.db');
+   * db.prepare("INSERT INTO users VALUES (?, ?)").run(1, 'Alice');
+   */
+  static attach(dbPath, sequencerUrl) {
+    const handlePtr = ref.alloc(VoidPtr);
+    const result = lib.synddb_attach(dbPath, sequencerUrl, handlePtr);
+
+    if (result !== SyndDBError.SUCCESS) {
+      const errorMsg = lib.synddb_last_error() || 'Unknown error';
+      throw new Error(`Failed to attach SyndDB (error ${result}): ${errorMsg}`);
+    }
+
+    const handle = handlePtr.deref();
+    return new SyndDB(handle);
+  }
+
+  /**
+   * Attach SyndDB with custom configuration
+   *
+   * @param {string} dbPath - Path to SQLite database file
+   * @param {string} sequencerUrl - URL of sequencer TEE
+   * @param {Object} options - Configuration options
+   * @param {number} options.publishIntervalMs - Milliseconds between automatic publishes (default: 1000)
+   * @param {number} options.snapshotInterval - Changesets between snapshots (default: 0 = disabled)
+   * @returns {SyndDB} SyndDB instance
+   *
+   * @example
+   * const synddb = SyndDB.attachWithConfig(
+   *   'app.db',
+   *   'http://localhost:8433',
+   *   {
+   *     publishIntervalMs: 500,  // Publish every 500ms
+   *     snapshotInterval: 100     // Snapshot every 100 changesets
+   *   }
+   * );
+   */
+  static attachWithConfig(dbPath, sequencerUrl, options = {}) {
+    const publishIntervalMs = options.publishIntervalMs || 1000;
+    const snapshotInterval = options.snapshotInterval || 0;
+
+    const handlePtr = ref.alloc(VoidPtr);
+    const result = lib.synddb_attach_with_config(
+      dbPath,
+      sequencerUrl,
+      publishIntervalMs,
+      snapshotInterval,
+      handlePtr
+    );
+
+    if (result !== SyndDBError.SUCCESS) {
+      const errorMsg = lib.synddb_last_error() || 'Unknown error';
+      throw new Error(`Failed to attach SyndDB (error ${result}): ${errorMsg}`);
+    }
+
+    const handle = handlePtr.deref();
+    return new SyndDB(handle);
+  }
+
+  /**
+   * Manually publish all pending changesets
+   *
+   * This is called automatically every publishInterval,
+   * but can be called manually for critical transactions.
+   *
+   * @throws {Error} If publish fails
+   *
+   * @example
+   * synddb.publish();
+   */
+  publish() {
+    if (!this._handle) {
+      throw new Error('SyndDB handle already detached');
+    }
+
+    const result = lib.synddb_publish(this._handle);
+
+    if (result !== SyndDBError.SUCCESS) {
+      const errorMsg = lib.synddb_last_error() || 'Unknown error';
+      throw new Error(`Failed to publish (error ${result}): ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Create a manual snapshot of the database
+   *
+   * @returns {number} Size of snapshot in bytes
+   * @throws {Error} If snapshot creation fails
+   *
+   * @example
+   * const size = synddb.snapshot();
+   * console.log(`Snapshot created: ${size} bytes`);
+   */
+  snapshot() {
+    if (!this._handle) {
+      throw new Error('SyndDB handle already detached');
+    }
+
+    const sizePtr = ref.alloc(SizeT);
+    const result = lib.synddb_snapshot(this._handle, sizePtr);
+
+    if (result !== SyndDBError.SUCCESS) {
+      const errorMsg = lib.synddb_last_error() || 'Unknown error';
+      throw new Error(`Failed to create snapshot (error ${result}): ${errorMsg}`);
+    }
+
+    return sizePtr.deref();
+  }
+
+  /**
+   * Detach SyndDB and free resources
+   *
+   * This gracefully shuts down the client, publishing any pending changesets.
+   * The instance cannot be used after this call.
+   *
+   * @example
+   * synddb.detach();
    */
   detach() {
     if (this._handle) {
@@ -48,7 +239,7 @@ class SyndDBHandle {
   }
 
   /**
-   * Automatic cleanup
+   * Automatic cleanup (Node.js Disposable pattern)
    */
   [Symbol.dispose]() {
     this.detach();
@@ -56,59 +247,51 @@ class SyndDBHandle {
 }
 
 /**
- * Attach SyndDB to better-sqlite3 database
+ * Get library version string
  *
- * @param {Database} db - better-sqlite3 Database instance
- * @param {Object} options - Configuration options
- * @param {string} options.sequencerUrl - URL of sequencer
- * @returns {SyndDBHandle} Handle to SyndDB instance
+ * @returns {string} Version string (e.g., "0.1.0")
  *
  * @example
- * const Database = require('better-sqlite3');
- * const { attach } = require('./synddb');
- *
- * const db = new Database('app.db');
- * const synddb = attach(db, { sequencerUrl: 'https://sequencer:8433' });
- *
- * // Use SQLite normally
- * db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
+ * const synddb = require('./synddb');
+ * console.log(synddb.version());
  */
-function attach(db, options) {
-  const { sequencerUrl } = options;
-
-  if (!sequencerUrl) {
-    throw new Error('sequencerUrl is required');
-  }
-
-  // Get raw sqlite3* pointer from better-sqlite3
-  // This is implementation-dependent
-  const connPtr = db.handle || db._handle;
-
-  if (!connPtr) {
-    throw new Error('Unable to get sqlite3 handle from database');
-  }
-
-  // Call FFI
-  const handle = lib.synddb_attach(connPtr, sequencerUrl);
-
-  if (handle.isNull()) {
-    const error = lib.synddb_last_error();
-    throw new Error(`Failed to attach SyndDB: ${error || 'Unknown error'}`);
-  }
-
-  return new SyndDBHandle(handle);
+function version() {
+  return lib.synddb_version();
 }
 
 /**
  * Get last error message
- * @returns {string|null} Error message or null
+ *
+ * @returns {string|null} Error message string, or null if no error
  */
 function lastError() {
   return lib.synddb_last_error();
 }
 
+/**
+ * Convenience function to attach SyndDB
+ *
+ * @param {string} dbPath - Path to SQLite database file
+ * @param {string} sequencerUrl - URL of sequencer TEE
+ * @param {Object} options - Optional config (publishIntervalMs, snapshotInterval)
+ * @returns {SyndDB} SyndDB instance
+ *
+ * @example
+ * const { attach } = require('./synddb');
+ * const synddb = attach('app.db', 'http://localhost:8433');
+ */
+function attach(dbPath, sequencerUrl, options) {
+  if (options) {
+    return SyndDB.attachWithConfig(dbPath, sequencerUrl, options);
+  } else {
+    return SyndDB.attach(dbPath, sequencerUrl);
+  }
+}
+
 module.exports = {
+  SyndDB,
   attach,
+  version,
   lastError,
-  SyndDBHandle,
+  SyndDBError,
 };
