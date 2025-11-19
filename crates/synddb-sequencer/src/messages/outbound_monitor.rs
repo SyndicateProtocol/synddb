@@ -6,15 +6,15 @@ use std::path::PathBuf;
 use tokio::sync::mpsc::Sender;
 
 pub struct OutboundMonitor {
-    db_path: PathBuf,
-    message_tx: Sender<OutboundMessage>,
+    _db_path: PathBuf,
+    _message_tx: Sender<OutboundMessage>,
 }
 
 impl OutboundMonitor {
     pub fn new(db_path: PathBuf, message_tx: Sender<OutboundMessage>) -> Self {
         Self {
-            db_path,
-            message_tx,
+            _db_path: db_path,
+            _message_tx: message_tx,
         }
     }
 

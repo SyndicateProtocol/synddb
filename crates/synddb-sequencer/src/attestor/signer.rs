@@ -14,7 +14,7 @@ impl BatchSigner {
     }
 
     /// Sign a batch payload
-    pub async fn sign_batch(&self, payload: BatchPayload, sequence: u64) -> Result<SignedBatch> {
+    pub async fn sign_batch(&self, _payload: BatchPayload, sequence: u64) -> Result<SignedBatch> {
         // TODO: Serialize and sign batch
         // 1. Compress data
         // 2. Sign compressed data

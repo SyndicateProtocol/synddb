@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use tokio::sync::mpsc::Sender;
 
 pub struct SessionMonitor {
-    db_path: PathBuf,
-    changeset_tx: Sender<Changeset>,
-    schema_tx: Sender<SchemaChange>,
-    last_schema_version: i32,
+    _db_path: PathBuf,
+    _changeset_tx: Sender<Changeset>,
+    _schema_tx: Sender<SchemaChange>,
+    _last_schema_version: i32,
 }
 
 impl SessionMonitor {
@@ -23,10 +23,10 @@ impl SessionMonitor {
         // TODO: Monitor sqlite_schema table for DDL changes
 
         Ok(Self {
-            db_path,
-            changeset_tx,
-            schema_tx,
-            last_schema_version: 0,
+            _db_path: db_path,
+            _changeset_tx: changeset_tx,
+            _schema_tx: schema_tx,
+            _last_schema_version: 0,
         })
     }
 

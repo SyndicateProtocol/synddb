@@ -6,16 +6,16 @@ use crate::config::EigenDAConfig;
 use anyhow::Result;
 
 pub struct EigenDAPublisher {
-    config: EigenDAConfig,
+    _config: EigenDAConfig,
 }
 
 impl EigenDAPublisher {
     pub fn new(config: EigenDAConfig) -> Self {
-        Self { config }
+        Self { _config: config }
     }
 
     /// Publish batch to EigenDA
-    pub async fn publish(&self, batch: &SignedBatch) -> Result<PublishResult> {
+    pub async fn publish(&self, _batch: &SignedBatch) -> Result<PublishResult> {
         // TODO: Use eigenda-rust to publish blob
         // TODO: Return blob reference
 

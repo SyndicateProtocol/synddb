@@ -3,12 +3,12 @@
 use anyhow::Result;
 
 pub struct ChangesetReader {
-    data: Vec<u8>,
+    _data: Vec<u8>,
 }
 
 impl ChangesetReader {
     pub fn new(data: Vec<u8>) -> Self {
-        Self { data }
+        Self { _data: data }
     }
 
     /// Parse changeset to extract operations

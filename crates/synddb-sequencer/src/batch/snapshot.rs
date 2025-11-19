@@ -7,20 +7,26 @@ pub struct SnapshotCreator {
     // TODO: Add state
 }
 
+impl Default for SnapshotCreator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SnapshotCreator {
     pub fn new() -> Self {
         Self {}
     }
 
     /// Create a full snapshot of the database
-    pub async fn create_snapshot(&self, db_path: &Path) -> Result<Vec<u8>> {
+    pub async fn create_snapshot(&self, _db_path: &Path) -> Result<Vec<u8>> {
         // TODO: Use SQLite backup API to create snapshot
         // See https://www.sqlite.org/backup.html
         Ok(vec![])
     }
 
     /// Include PRAGMA settings in snapshot metadata
-    pub async fn capture_pragmas(&self, db_path: &Path) -> Result<PragmaSettings> {
+    pub async fn capture_pragmas(&self, _db_path: &Path) -> Result<PragmaSettings> {
         // TODO: Query important PRAGMA settings
         Ok(PragmaSettings::default())
     }

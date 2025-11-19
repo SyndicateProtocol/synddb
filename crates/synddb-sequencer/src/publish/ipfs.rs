@@ -6,16 +6,16 @@ use crate::config::IpfsConfig;
 use anyhow::Result;
 
 pub struct IpfsPublisher {
-    config: IpfsConfig,
+    _config: IpfsConfig,
 }
 
 impl IpfsPublisher {
     pub fn new(config: IpfsConfig) -> Self {
-        Self { config }
+        Self { _config: config }
     }
 
     /// Publish batch to IPFS
-    pub async fn publish(&self, batch: &SignedBatch) -> Result<PublishResult> {
+    pub async fn publish(&self, _batch: &SignedBatch) -> Result<PublishResult> {
         // TODO: Use ipfs-api to add content
         // TODO: Return CID as reference
 

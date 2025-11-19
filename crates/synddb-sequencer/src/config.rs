@@ -1,7 +1,8 @@
 //! Configuration structures for the sequencer
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,5 +173,16 @@ impl Default for Config {
                 key_path: None,
             },
         }
+    }
+}
+
+impl Config {
+    /// Load configuration from a YAML file
+    pub fn from_file(path: &Path) -> Result<Self> {
+        let contents = std::fs::read_to_string(path)
+            .context(format!("Failed to read config file: {:?}", path))?;
+        let config: Config =
+            serde_yaml::from_str(&contents).context("Failed to parse config file")?;
+        Ok(config)
     }
 }

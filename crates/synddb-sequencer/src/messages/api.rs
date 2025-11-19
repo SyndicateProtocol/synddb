@@ -8,12 +8,15 @@ use tokio::sync::mpsc::Sender;
 
 pub struct MessageApi {
     port: u16,
-    inbound_tx: Sender<InboundMessage>,
+    _inbound_tx: Sender<InboundMessage>,
 }
 
 impl MessageApi {
     pub fn new(port: u16, inbound_tx: Sender<InboundMessage>) -> Self {
-        Self { port, inbound_tx }
+        Self {
+            port,
+            _inbound_tx: inbound_tx,
+        }
     }
 
     pub async fn serve(&self) -> Result<()> {

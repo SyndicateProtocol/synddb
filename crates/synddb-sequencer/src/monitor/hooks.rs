@@ -7,6 +7,12 @@ pub struct CommitHook {
     // TODO: Add callback state
 }
 
+impl Default for CommitHook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommitHook {
     pub fn new() -> Self {
         Self {}
@@ -25,13 +31,19 @@ pub struct UpdateHook {
     // TODO: Add callback state
 }
 
+impl Default for UpdateHook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UpdateHook {
     pub fn new() -> Self {
         Self {}
     }
 
     /// Called by SQLite on data modification
-    pub fn on_update(&mut self, table: &str, rowid: i64) -> Result<()> {
+    pub fn on_update(&mut self, _table: &str, _rowid: i64) -> Result<()> {
         // TODO: Track modifications
         // TODO: Detect sqlite_schema changes for DDL tracking
         Ok(())
