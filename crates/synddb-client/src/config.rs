@@ -52,40 +52,40 @@ pub struct Config {
     pub attestation_token_type: TokenType,
 }
 
-fn default_buffer_size() -> usize {
+const fn default_buffer_size() -> usize {
     100
 }
 
-fn default_publish_interval() -> Duration {
+const fn default_publish_interval() -> Duration {
     Duration::from_secs(1)
 }
 
-fn default_max_batch_size() -> usize {
+const fn default_max_batch_size() -> usize {
     1024 * 1024 // 1MB
 }
 
-fn default_max_retries() -> usize {
+const fn default_max_retries() -> usize {
     3
 }
 
-fn default_request_timeout() -> Duration {
+const fn default_request_timeout() -> Duration {
     Duration::from_secs(10)
 }
 
-fn default_snapshot_interval() -> u64 {
-    100 // Snapshot every 100 changesets
+const fn default_snapshot_interval() -> u64 {
+    100
 }
 
-fn default_enable_recovery() -> bool {
-    true // Enable by default for production reliability
+const fn default_enable_recovery() -> bool {
+    true
 }
 
-fn default_enable_attestation() -> bool {
-    false // Disabled by default (only works in GCP Confidential Space)
+const fn default_enable_attestation() -> bool {
+    false
 }
 
-fn default_attestation_token_type() -> TokenType {
-    TokenType::Oidc // OIDC is the default and most common token type
+const fn default_attestation_token_type() -> TokenType {
+    TokenType::Oidc
 }
 
 impl Default for Config {
