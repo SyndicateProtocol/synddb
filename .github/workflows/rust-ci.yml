@@ -49,35 +49,6 @@ jobs:
       - name: Run tests
         run: cargo test --all
 
-  ffi-build:
-    name: Build FFI Library
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - run: rustup toolchain install stable --profile minimal
-
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build FFI library
-        run: cargo build --package synddb-client --features ffi --release
-
-      - name: Verify library exists
-        run: |
-          ls -lh target/release/libsynddb_client.so
-          file target/release/libsynddb_client.so
-
-      - name: Upload FFI library artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: libsynddb_client-linux-x86_64
-          path: |
-            target/release/libsynddb_client.so
-            crates/synddb-client/bindings/synddb.h
-          retention-days: 7
-
   benchmarks:
     name: Benchmarks
     runs-on: ubuntu-latest

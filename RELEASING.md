@@ -1,22 +1,26 @@
 # Release Process
 
-This document describes the development and release workflows for SyndDB FFI libraries.
+This document describes the FFI library build and release process for SyndDB.
 
 ## Overview
 
-SyndDB has two distinct workflows for FFI library management:
+SyndDB uses a single unified workflow (`build-ffi-libs.yml`) that handles both development and release builds with conditional logic:
 
-### Development Workflow
-- **Trigger**: Every commit to `main` that touches client code
+### Development Builds
+- **Trigger**: Commits to `main` that touch client code
 - **Platforms**: Linux x86_64, macOS ARM64 (common dev platforms)
 - **Output**: Libraries committed to `crates/synddb-client/libs/` in repo
-- **Purpose**: Allow Python/Node.js developers to use libraries without building
+- **Purpose**: Enable Python/Node.js development without Rust toolchain
+- **Retention**: Permanent (in git)
 
-### Release Workflow
+### Release Builds
 - **Trigger**: Git tags matching `v*.*.*` (e.g., `v0.2.0`)
-- **Platforms**: Linux x86_64, macOS x86_64, macOS ARM64, Windows x86_64
+- **Platforms**: All 4 platforms (adds macOS x86_64, Windows x86_64)
 - **Output**: GitHub Releases with downloadable artifacts
 - **Purpose**: Production binaries for end users
+- **Retention**: 90 days (artifacts)
+
+**Key Design:** One workflow file, conditional logic based on `github.ref`
 
 ## Development Libraries
 
@@ -123,18 +127,43 @@ The release workflow performs these steps:
    - Publishes `synddb-client` to crates.io
    - Only on tag pushes (not manual triggers)
 
+## Workflow Details
+
+The unified `build-ffi-libs.yml` workflow includes:
+
+### Jobs
+
+1. **build-libs** (matrix)
+   - Builds all platforms in parallel
+   - Conditional: Skips release-only platforms on dev builds
+   - Uses `build_for: both` or `build_for: release` flags
+   - Uploads artifacts with context-appropriate retention
+
+2. **commit-dev-libs**
+   - Runs only on `main` commits (not tags)
+   - Downloads dev artifacts (Linux, macOS ARM64)
+   - Commits to `crates/synddb-client/libs/` with `[skip ci]`
+
+3. **create-release**
+   - Runs only on tags
+   - Downloads all artifacts (4 platforms)
+   - Renames with platform suffixes
+   - Generates checksums
+   - Creates GitHub Release
+
+4. **publish-crates**
+   - Runs only on tags
+   - Publishes to crates.io (if token configured)
+
 ## Continuous Integration
 
-Every PR and push to `main` automatically:
+See `.github/workflows/rust-ci.yml` for testing and benchmarking:
 
-1. **Runs tests** (`cargo test --all`)
-2. **Builds FFI library** (Linux x86_64 only)
-3. **Uploads artifacts** (available for 7 days)
-4. **Runs benchmarks** with regression detection
+1. **Tests**: `cargo test --all`
+2. **Benchmarks**: Performance regression detection
+3. **Code Quality**: Clippy, rustfmt (in `rust-checks.yml`)
 
-Access build artifacts:
-- Go to Actions → Select workflow run → Scroll to "Artifacts"
-- Download `libsynddb_client-linux-x86_64.zip`
+FFI library building is handled separately by `build-ffi-libs.yml`
 
 ## Using Pre-Built Libraries
 
