@@ -1,0 +1,164 @@
+name: Build FFI Libraries
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'crates/synddb-client/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-ffi-libs.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-dev-libs:
+    name: Build Dev Libraries
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - platform: linux
+            os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            lib_name: libsynddb_client.so
+            lib_dir: linux-x64
+
+          # macOS ARM64 (M1/M2) - most common for dev
+          - platform: macos
+            os: macos-14
+            rust_target: aarch64-apple-darwin
+            lib_name: libsynddb_client.dylib
+            lib_dir: darwin-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build FFI library
+        run: |
+          cargo build \
+            --package synddb-client \
+            --features ffi \
+            --release \
+            --target ${{ matrix.rust_target }}
+
+      - name: Create libs directory structure
+        run: |
+          mkdir -p crates/synddb-client/libs/${{ matrix.lib_dir }}
+
+      - name: Copy library to libs directory
+        run: |
+          cp target/${{ matrix.rust_target }}/release/${{ matrix.lib_name }} \
+             crates/synddb-client/libs/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
+
+      - name: Verify library
+        run: |
+          ls -lh crates/synddb-client/libs/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
+          file crates/synddb-client/libs/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
+
+      - name: Upload artifact for commit job
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffi-lib-${{ matrix.platform }}-${{ matrix.rust_target }}
+          path: crates/synddb-client/libs/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
+          retention-days: 1
+
+  commit-libs:
+    name: Commit Updated Libraries
+    needs: build-dev-libs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all library artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Organize libraries
+        run: |
+          # Create libs directory structure
+          mkdir -p crates/synddb-client/libs/linux-x64
+          mkdir -p crates/synddb-client/libs/darwin-arm64
+
+          # Copy Linux library
+          if [ -f artifacts/ffi-lib-linux-x86_64-unknown-linux-gnu/libsynddb_client.so ]; then
+            cp artifacts/ffi-lib-linux-x86_64-unknown-linux-gnu/libsynddb_client.so \
+               crates/synddb-client/libs/linux-x64/
+          fi
+
+          # Copy macOS ARM64 library
+          if [ -f artifacts/ffi-lib-macos-aarch64-apple-darwin/libsynddb_client.dylib ]; then
+            cp artifacts/ffi-lib-macos-aarch64-apple-darwin/libsynddb_client.dylib \
+               crates/synddb-client/libs/darwin-arm64/
+          fi
+
+          # List what we have
+          find crates/synddb-client/libs -type f
+
+      - name: Create .gitignore exception
+        run: |
+          # Ensure libs directory is NOT ignored
+          if [ ! -f crates/synddb-client/libs/.gitignore ]; then
+            echo "# FFI libraries are committed to repo for development" > crates/synddb-client/libs/.gitignore
+            echo "# These are rebuilt automatically on every commit to main" >> crates/synddb-client/libs/.gitignore
+          fi
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          git add crates/synddb-client/libs/
+          if git diff --staged --quiet; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No library changes detected"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Library changes detected"
+            git diff --staged --stat
+          fi
+
+      - name: Commit and push libraries
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git commit -m "chore: Update FFI libraries [skip ci]
+
+Built from commit ${{ github.sha }}
+
+Updated libraries:
+$(git diff --staged --name-only | sed 's/^/- /')"
+
+          git push

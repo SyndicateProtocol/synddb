@@ -4,12 +4,6 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to release (e.g., v0.1.0)'
-        required: true
-        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -137,14 +131,11 @@ jobs:
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Get version
+      - name: Get version from tag
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          echo "Creating release for version: ${GITHUB_REF#refs/tags/}"
 
       - name: Generate release notes
         id: release_notes

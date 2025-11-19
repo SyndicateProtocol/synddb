@@ -13,30 +13,47 @@ const koffi = require('koffi');
 const path = require('path');
 const fs = require('fs');
 
-// Get platform-specific library name
-function getLibraryName() {
+// Get platform-specific library path
+function getLibraryPath() {
     const platform = process.platform;
+    const arch = process.arch;
+
+    let libDir, libName;
+
     if (platform === 'darwin') {
-        return 'libsynddb_client.dylib';
+        libDir = arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64';
+        libName = 'libsynddb_client.dylib';
     } else if (platform === 'linux') {
-        return 'libsynddb_client.so';
+        libDir = 'linux-x64';
+        libName = 'libsynddb_client.so';
     } else if (platform === 'win32') {
-        return 'synddb_client.dll';
+        libDir = 'win-x64';
+        libName = 'synddb_client.dll';
     } else {
         throw new Error(`Unsupported platform: ${platform}`);
     }
+
+    // Try committed library first (for development)
+    const committedLib = path.join(__dirname, '../../libs', libDir, libName);
+    if (fs.existsSync(committedLib)) {
+        return committedLib;
+    }
+
+    // Fall back to target/release (for local builds)
+    const releaseLib = path.join(__dirname, '../../../../target/release', libName);
+    if (fs.existsSync(releaseLib)) {
+        return releaseLib;
+    }
+
+    console.error('Error: Library not found');
+    console.error(`  Checked: ${committedLib}`);
+    console.error(`  Checked: ${releaseLib}`);
+    console.error('\nBuild the library: cargo build --release --package synddb-client --features ffi');
+    process.exit(1);
 }
 
 // Library path
-const libName = getLibraryName();
-const libPath = path.join(__dirname, '../../../../target/release', libName);
-
-// Check if library exists
-if (!fs.existsSync(libPath)) {
-    console.error(`Error: Library not found at ${libPath}`);
-    console.error('Build the library first: cargo build --release --package synddb-client');
-    process.exit(1);
-}
+const libPath = getLibraryPath();
 
 // Load the library
 const lib = koffi.load(libPath);

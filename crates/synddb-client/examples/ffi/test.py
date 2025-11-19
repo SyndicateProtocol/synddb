@@ -12,23 +12,43 @@ import platform
 from pathlib import Path
 
 # Load the shared library (platform-specific)
-def get_library_name():
+def get_library_path():
     system = platform.system()
+    machine = platform.machine().lower()
+
+    # Determine platform-specific paths
     if system == "Darwin":
-        return "libsynddb_client.dylib"
+        if machine == "arm64":
+            lib_dir = "darwin-arm64"
+        else:
+            lib_dir = "darwin-x64"
+        lib_name = "libsynddb_client.dylib"
     elif system == "Linux":
-        return "libsynddb_client.so"
+        lib_dir = "linux-x64"
+        lib_name = "libsynddb_client.so"
     elif system == "Windows":
-        return "synddb_client.dll"
+        lib_dir = "win-x64"
+        lib_name = "synddb_client.dll"
     else:
         raise RuntimeError(f"Unsupported platform: {system}")
 
-lib_name = get_library_name()
-lib_path = Path(__file__).parent / f"../../../../target/release/{lib_name}"
-if not lib_path.exists():
-    print(f"Error: Library not found at {lib_path}")
-    print(f"Build the library first: cargo build --release --package synddb-client")
+    # Try committed library first (for development)
+    committed_lib = Path(__file__).parent / f"../../libs/{lib_dir}/{lib_name}"
+    if committed_lib.exists():
+        return committed_lib
+
+    # Fall back to target/release (for local builds)
+    release_lib = Path(__file__).parent / f"../../../../target/release/{lib_name}"
+    if release_lib.exists():
+        return release_lib
+
+    print(f"Error: Library not found")
+    print(f"  Checked: {committed_lib}")
+    print(f"  Checked: {release_lib}")
+    print(f"\nBuild the library: cargo build --release --package synddb-client --features ffi")
     sys.exit(1)
+
+lib_path = get_library_path()
 
 lib = ctypes.CDLL(str(lib_path))
 

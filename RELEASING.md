@@ -1,18 +1,50 @@
 # Release Process
 
-This document describes how to create a new release of SyndDB.
+This document describes the development and release workflows for SyndDB FFI libraries.
 
 ## Overview
 
-SyndDB uses automated GitHub Actions workflows to build multi-platform binaries and publish releases. The release process includes:
+SyndDB has two distinct workflows for FFI library management:
 
-1. Building native FFI libraries for all supported platforms (Linux, macOS, Windows)
-2. Creating GitHub releases with downloadable artifacts
-3. Publishing to crates.io (Rust package registry)
+### Development Workflow
+- **Trigger**: Every commit to `main` that touches client code
+- **Platforms**: Linux x86_64, macOS ARM64 (common dev platforms)
+- **Output**: Libraries committed to `crates/synddb-client/libs/` in repo
+- **Purpose**: Allow Python/Node.js developers to use libraries without building
 
-## Supported Platforms
+### Release Workflow
+- **Trigger**: Git tags matching `v*.*.*` (e.g., `v0.2.0`)
+- **Platforms**: Linux x86_64, macOS x86_64, macOS ARM64, Windows x86_64
+- **Output**: GitHub Releases with downloadable artifacts
+- **Purpose**: Production binaries for end users
 
-The release workflow automatically builds native libraries for:
+## Development Libraries
+
+Libraries are automatically rebuilt and committed to the repository on every push to `main`:
+
+**Location**: `crates/synddb-client/libs/`
+```
+libs/
+├── linux-x64/
+│   └── libsynddb_client.so
+└── darwin-arm64/
+    └── libsynddb_client.dylib
+```
+
+**Benefits:**
+- Python/Node.js developers can use libraries without building Rust
+- Libraries are always in sync with the code
+- CI automatically updates them via `[skip ci]` commits
+
+**How it works:**
+1. Code pushed to `main`
+2. GitHub Actions builds Linux + macOS ARM64 libs
+3. Bot commits libraries back to repo with `[skip ci]`
+4. Developers pull and use updated libraries
+
+## Release Platforms
+
+Release builds support all major platforms:
 
 - **Linux x86_64**: `libsynddb_client.so`
 - **macOS x86_64** (Intel): `libsynddb_client.dylib`
@@ -65,16 +97,6 @@ We follow [Semantic Versioning](https://semver.org/):
    - Go to [Actions tab](https://github.com/Syndicate/SyndDB/actions)
    - Watch the "Release" workflow build all platforms
    - Check the "Releases" page for the new release
-
-#### Option 2: Manual Trigger
-
-You can manually trigger a release workflow without creating a tag:
-
-1. Go to [Actions](https://github.com/Syndicate/SyndDB/actions)
-2. Select "Release" workflow
-3. Click "Run workflow"
-4. Enter version (e.g., `v0.2.0`)
-5. Click "Run workflow"
 
 ### What Happens During Release
 
