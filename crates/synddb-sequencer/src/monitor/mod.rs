@@ -4,17 +4,10 @@
 //! that are received from client libraries via HTTP. The changesets
 //! use SQLite Session Extension format (deterministic, auditable).
 
-pub mod changeset_reader;
-pub mod hooks;
-pub mod session_tracker;
-
-pub use changeset_reader::ChangesetReader;
-pub use session_tracker::SessionMonitor;
-
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
-/// A captured changeset from the database
+/// A changeset received from a client library
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Changeset {
     /// Raw changeset data from SQLite Session Extension
@@ -27,7 +20,7 @@ pub struct Changeset {
     pub size: usize,
 }
 
-/// Schema change captured from DDL operations
+/// Schema change received from a client library
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaChange {
     /// Previous schema version (from PRAGMA user_version)
