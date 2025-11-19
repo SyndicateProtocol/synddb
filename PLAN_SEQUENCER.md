@@ -143,11 +143,9 @@ synddb-sequencer/
 │   ├── main.rs                    # Entry point, CLI args
 │   ├── lib.rs                     # Public API
 │   ├── config.rs                  # Configuration structures
-│   ├── receiver/
-│   │   ├── mod.rs                 # HTTP receiver module
-│   │   ├── api.rs                 # Axum HTTP endpoints
-│   │   ├── attestation.rs         # Verify client TEE attestation tokens
-│   │   └── validation.rs          # Validate received changesets/snapshots
+│   ├── http_api.rs                # HTTP receiver (Axum endpoints for receiving changesets/snapshots)
+│   ├── monitor/
+│   │   └── mod.rs                 # Changeset and SchemaChange type definitions
 │   ├── batch/
 │   │   ├── mod.rs                 # Batching logic
 │   │   ├── accumulator.rs         # Accumulate received operations
