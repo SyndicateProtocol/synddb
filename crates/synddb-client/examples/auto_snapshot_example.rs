@@ -29,13 +29,13 @@ fn main() -> Result<()> {
     // Configure SyndDB with automatic snapshots every 5 changesets
     let config = Config {
         sequencer_url: "http://localhost:8433".to_string(),
-        sync_interval: Duration::from_millis(500), // Sync every 500ms
-        snapshot_interval: 5,                      // Snapshot every 5 changesets
+        publish_interval: Duration::from_millis(500), // Publish every 500ms
+        snapshot_interval: 5,                         // Snapshot every 5 changesets
         ..Default::default()
     };
 
     println!("Config:");
-    println!("  - Sync interval: {:?}", config.sync_interval);
+    println!("  - Publish interval: {:?}", config.publish_interval);
     println!(
         "  - Snapshot interval: {} changesets\n",
         config.snapshot_interval
@@ -56,7 +56,7 @@ fn main() -> Result<()> {
         )?;
         println!("  Event {} inserted", i);
 
-        // Wait a moment for sync
+        // Wait a moment for publish
         std::thread::sleep(Duration::from_millis(600));
     }
 

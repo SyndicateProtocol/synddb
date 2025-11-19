@@ -33,7 +33,7 @@ pub struct Snapshot {
     pub sequence: u64,
 }
 
-/// Shared state between session monitor and sync thread
+/// Shared state between session monitor and publish thread
 struct SessionState {
     session: Session<'static>,
     changeset_tx: Sender<Changeset>,
@@ -54,15 +54,15 @@ unsafe impl Send for SessionState {}
 
 pub struct SessionMonitor {
     state: Arc<Mutex<SessionState>>,
-    sync_shutdown_tx: Sender<()>,
-    sync_handle: Option<thread::JoinHandle<()>>,
+    publish_shutdown_tx: Sender<()>,
+    publish_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl SessionMonitor {
     pub fn new(
         conn: &'static Connection,
         changeset_tx: Sender<Changeset>,
-        sync_interval: Duration,
+        publish_interval: Duration,
         snapshot_interval: u64,
         snapshot_tx: Option<Sender<Snapshot>>,
     ) -> Result<Self> {
@@ -99,47 +99,50 @@ impl SessionMonitor {
             last_schema_hash: None,
         }));
 
-        // Create channel for sync thread shutdown
-        let (sync_shutdown_tx, sync_shutdown_rx) = crossbeam_channel::bounded(1);
+        // Create channel for publish thread shutdown
+        let (publish_shutdown_tx, publish_shutdown_rx) = crossbeam_channel::bounded(1);
 
-        // Start periodic sync thread
+        // Start periodic publish thread
         let state_clone = Arc::clone(&state);
-        let sync_handle = thread::spawn(move || {
-            debug!("Sync thread started with interval {:?}", sync_interval);
+        let publish_handle = thread::spawn(move || {
+            debug!(
+                "Publish thread started with interval {:?}",
+                publish_interval
+            );
 
             loop {
-                // Wait for sync interval or shutdown signal
-                match sync_shutdown_rx.recv_timeout(sync_interval) {
+                // Wait for publish interval or shutdown signal
+                match publish_shutdown_rx.recv_timeout(publish_interval) {
                     Ok(()) => {
-                        debug!("Sync thread received shutdown signal");
-                        // Final sync before shutdown
-                        if let Err(e) = Self::sync_internal(&state_clone) {
-                            error!("Failed to sync on shutdown: {}", e);
+                        debug!("Publish thread received shutdown signal");
+                        // Final publish before shutdown
+                        if let Err(e) = Self::publish_internal(&state_clone) {
+                            error!("Failed to publish on shutdown: {}", e);
                         }
                         break;
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                        // Periodic sync
-                        if let Err(e) = Self::sync_internal(&state_clone) {
-                            error!("Failed to sync periodically: {}", e);
+                        // Periodic publish
+                        if let Err(e) = Self::publish_internal(&state_clone) {
+                            error!("Failed to publish periodically: {}", e);
                         }
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        debug!("Sync thread channel disconnected");
+                        debug!("Publish thread channel disconnected");
                         break;
                     }
                 }
             }
 
-            debug!("Sync thread stopped");
+            debug!("Publish thread stopped");
         });
 
         debug!("SessionMonitor created");
 
         Ok(Self {
             state,
-            sync_shutdown_tx,
-            sync_handle: Some(sync_handle),
+            publish_shutdown_tx,
+            publish_handle: Some(publish_handle),
         })
     }
 
@@ -177,7 +180,7 @@ impl SessionMonitor {
                 // 2. Session::changeset() should be called after transaction commits
                 //
                 // The hook just serves as a signal that changes occurred.
-                // We'll rely on periodic syncing (automatic via sync thread).
+                // We'll rely on periodic publishing (automatic via publish thread).
             },
         ));
 
@@ -205,9 +208,9 @@ impl SessionMonitor {
         Ok(hasher.finish())
     }
 
-    /// Internal sync implementation used by both manual and automatic syncing
-    fn sync_internal(state: &Arc<Mutex<SessionState>>) -> Result<()> {
-        trace!("Syncing session changes");
+    /// Internal publish implementation used by both manual and automatic publishing
+    fn publish_internal(state: &Arc<Mutex<SessionState>>) -> Result<()> {
+        trace!("Publishing session changes");
 
         let mut state = state.lock().unwrap();
 
@@ -261,7 +264,7 @@ impl SessionMonitor {
             .context("Failed to get changeset from session")?;
 
         if changeset_data.is_empty() {
-            trace!("No changes to sync");
+            trace!("No changes to publish");
             return Ok(());
         }
 
@@ -344,12 +347,12 @@ impl SessionMonitor {
         })
     }
 
-    /// Capture and send all changes since last sync
+    /// Capture and send all changes since last publish
     ///
-    /// This is called automatically by the sync thread, but can also be called
-    /// manually to sync immediately (e.g., after critical transactions).
-    pub fn sync(&self) -> Result<()> {
-        Self::sync_internal(&self.state)
+    /// This is called automatically by the publish thread, but can also be called
+    /// manually to publish immediately (e.g., after critical transactions).
+    pub fn publish(&self) -> Result<()> {
+        Self::publish_internal(&self.state)
     }
 
     /// Create a complete snapshot of the database
@@ -399,13 +402,13 @@ impl Drop for SessionMonitor {
     fn drop(&mut self) {
         debug!("Dropping SessionMonitor");
 
-        // Signal sync thread to stop
-        let _ = self.sync_shutdown_tx.send(());
+        // Signal publish thread to stop
+        let _ = self.publish_shutdown_tx.send(());
 
-        // Wait for sync thread to finish
-        if let Some(handle) = self.sync_handle.take() {
+        // Wait for publish thread to finish
+        if let Some(handle) = self.publish_handle.take() {
             if let Err(e) = handle.join() {
-                error!("Sync thread panicked: {:?}", e);
+                error!("Publish thread panicked: {:?}", e);
             }
         }
     }

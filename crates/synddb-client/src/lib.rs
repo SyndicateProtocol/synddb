@@ -14,7 +14,7 @@
 //! let conn = Box::leak(Box::new(Connection::open("app.db")?));
 //! let _synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
 //!
-//! // Use SQLite normally - changesets are automatically captured and synced every 1 second
+//! // Use SQLite normally - changesets are automatically captured and published every 1 second
 //! conn.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![1, 100])?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -37,9 +37,9 @@ pub use session::Snapshot;
 /// Main handle to SyndDB client
 ///
 /// Attaches to a SQLite connection and automatically captures changesets.
-/// Dropping this handle will stop changeset capture and sync pending data.
+/// Dropping this handle will stop changeset capture and publish pending data.
 pub struct SyndDB {
-    /// Session monitor for capturing changesets (includes sync thread)
+    /// Session monitor for capturing changesets (includes publish thread)
     monitor: Option<SessionMonitor>,
     /// Channel to send shutdown signal
     shutdown_tx: Sender<()>,
@@ -72,9 +72,9 @@ impl SyndDB {
     /// // Perform database operations...
     /// conn.execute("INSERT INTO users VALUES (?1, ?2)", rusqlite::params![1, "Alice"])?;
     ///
-    /// // Changesets are automatically synced every 1 second
-    /// // You can also manually sync for critical transactions:
-    /// synddb.sync()?;
+    /// // Changesets are automatically published every 1 second
+    /// // You can also manually publish for critical transactions:
+    /// synddb.publish()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn attach(conn: &'static Connection, sequencer_url: impl Into<String>) -> Result<Self> {
@@ -91,7 +91,7 @@ impl SyndDB {
     pub fn attach_with_config(conn: &'static Connection, config: Config) -> Result<Self> {
         info!("Attaching SyndDB client to SQLite connection");
         info!("Sequencer URL: {}", config.sequencer_url);
-        info!("Sync interval: {:?}", config.sync_interval);
+        info!("Publish interval: {:?}", config.publish_interval);
 
         // Create channels for communication
         let (changeset_tx, changeset_rx) = bounded(config.buffer_size);
@@ -105,11 +105,11 @@ impl SyndDB {
             None
         };
 
-        // Start session monitor (includes automatic sync thread)
+        // Start session monitor (includes automatic publish thread)
         let monitor = SessionMonitor::new(
             conn,
             changeset_tx.clone(),
-            config.sync_interval,
+            config.publish_interval,
             config.snapshot_interval,
             snapshot_channel.as_ref().map(|(tx, _)| tx.clone()),
         )?;
@@ -155,15 +155,15 @@ impl SyndDB {
         })
     }
 
-    /// Sync all pending changesets to the sequencer
+    /// Publish all pending changesets to the sequencer
     ///
-    /// This is called automatically every sync_interval (default 1 second),
-    /// but can also be called manually to sync immediately (e.g., after critical transactions).
-    pub fn sync(&self) -> Result<()> {
+    /// This is called automatically every publish_interval (default 1 second),
+    /// but can also be called manually to publish immediately (e.g., after critical transactions).
+    pub fn publish(&self) -> Result<()> {
         self.monitor
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Monitor already shut down"))?
-            .sync()
+            .publish()
     }
 
     /// Create a complete snapshot of the database
@@ -209,7 +209,7 @@ impl SyndDB {
             .snapshot()
     }
 
-    /// Gracefully shutdown the client, syncing any pending changesets
+    /// Gracefully shutdown the client, publishing any pending changesets
     pub fn shutdown(mut self) -> Result<()> {
         info!("Shutting down SyndDB client");
 
@@ -230,7 +230,7 @@ impl Drop for SyndDB {
     fn drop(&mut self) {
         debug!("Dropping SyndDB handle");
 
-        // First, drop the monitor which will stop the sync thread
+        // First, drop the monitor which will stop the publish thread
         // This ensures no more changesets are generated
         if let Some(monitor) = self.monitor.take() {
             drop(monitor);
@@ -263,7 +263,7 @@ mod tests {
         conn.execute("INSERT INTO test (id, value) VALUES (1, 'test')", [])
             .unwrap();
 
-        // Wait a moment for automatic sync
+        // Wait a moment for automatic publish
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
 }

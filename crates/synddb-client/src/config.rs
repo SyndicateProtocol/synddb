@@ -8,14 +8,14 @@ pub struct Config {
     /// URL of the sequencer TEE
     pub sequencer_url: String,
 
-    /// Maximum number of changesets to buffer before syncing
+    /// Maximum number of changesets to buffer before publishing
     #[serde(default = "default_buffer_size")]
     pub buffer_size: usize,
 
-    /// Maximum time to wait before syncing buffer
+    /// Maximum time to wait before publishing buffer
     #[serde(with = "humantime_serde")]
-    #[serde(default = "default_sync_interval")]
-    pub sync_interval: Duration,
+    #[serde(default = "default_publish_interval")]
+    pub publish_interval: Duration,
 
     /// Maximum size of a changeset batch in bytes
     #[serde(default = "default_max_batch_size")]
@@ -40,7 +40,7 @@ fn default_buffer_size() -> usize {
     100
 }
 
-fn default_sync_interval() -> Duration {
+fn default_publish_interval() -> Duration {
     Duration::from_secs(1)
 }
 
@@ -65,7 +65,7 @@ impl Default for Config {
         Self {
             sequencer_url: "http://localhost:8433".to_string(),
             buffer_size: default_buffer_size(),
-            sync_interval: default_sync_interval(),
+            publish_interval: default_publish_interval(),
             max_batch_size: default_max_batch_size(),
             max_retries: default_max_retries(),
             request_timeout: default_request_timeout(),
