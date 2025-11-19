@@ -1603,7 +1603,7 @@ Ethereum signing keys are protected by multiple layers:
 let key_manager = KeyManager::init().await?;
 
 // Application has no access to Secret Manager or sequencer memory
-// Keys remain in sidecar process memory only
+// Keys remain in sequencer service memory only (separate TEE from application)
 ```
 
 ### 4. Rate Limiting
