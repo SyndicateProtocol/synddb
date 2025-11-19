@@ -95,7 +95,7 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 3. **Buffers changesets** in memory (configurable size)
 4. **Background thread** sends batches to sequencer via HTTP
 5. **Automatic retries** with exponential backoff
-6. **Graceful shutdown** flushes pending changesets
+6. **Graceful shutdown** publishes pending changesets
 
 ## What It Does NOT Do
 
@@ -111,8 +111,8 @@ use synddb_client::{SyndDB, Config};
 
 let config = Config {
     sequencer_url: "https://sequencer:8433".to_string(),
-    buffer_size: 100,           // Max changesets before flush
-    flush_interval: Duration::from_secs(1),  // Max time before flush
+    buffer_size: 100,           // Max changesets before publish
+    publish_interval: Duration::from_secs(1),  // Max time before publish
     max_batch_size: 1024 * 1024,  // 1MB
     max_retries: 3,
     request_timeout: Duration::from_secs(10),

@@ -169,7 +169,7 @@ impl SessionMonitor {
                         action, table
                     );
 
-                    // Mark that schema changed so next flush creates a snapshot
+                    // Mark that schema changed so next publish creates a snapshot
                     if let Ok(mut state) = state.lock() {
                         state.schema_changed = true;
                     }
@@ -251,7 +251,7 @@ impl SessionMonitor {
                 }
                 Err(e) => {
                     error!("Failed to create schema change snapshot: {}", e);
-                    // Don't reset schema_changed flag - retry on next flush
+                    // Don't reset schema_changed flag - retry on next publish
                 }
             }
         }
