@@ -1,4 +1,9 @@
 //! Example demonstrating immediate snapshots on schema changes (DDL operations)
+//!
+//! **Complexity:** Advanced
+//! **Features:** Schema change detection, DDL-triggered snapshots
+//! **Prerequisites:** Sequencer running on localhost:8433
+//! **Run:** `cargo run --example schema_snapshot_example`
 
 use anyhow::Result;
 use rusqlite::Connection;

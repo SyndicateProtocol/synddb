@@ -8,12 +8,26 @@ Run with:
 
 import ctypes
 import sys
+import platform
 from pathlib import Path
 
-# Load the shared library
-lib_path = Path(__file__).parent / "../../../../target/release/libsynddb_client.dylib"
+# Load the shared library (platform-specific)
+def get_library_name():
+    system = platform.system()
+    if system == "Darwin":
+        return "libsynddb_client.dylib"
+    elif system == "Linux":
+        return "libsynddb_client.so"
+    elif system == "Windows":
+        return "synddb_client.dll"
+    else:
+        raise RuntimeError(f"Unsupported platform: {system}")
+
+lib_name = get_library_name()
+lib_path = Path(__file__).parent / f"../../../../target/release/{lib_name}"
 if not lib_path.exists():
     print(f"Error: Library not found at {lib_path}")
+    print(f"Build the library first: cargo build --release --package synddb-client")
     sys.exit(1)
 
 lib = ctypes.CDLL(str(lib_path))

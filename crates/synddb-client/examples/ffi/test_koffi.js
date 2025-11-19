@@ -11,9 +11,32 @@
 
 const koffi = require('koffi');
 const path = require('path');
+const fs = require('fs');
+
+// Get platform-specific library name
+function getLibraryName() {
+    const platform = process.platform;
+    if (platform === 'darwin') {
+        return 'libsynddb_client.dylib';
+    } else if (platform === 'linux') {
+        return 'libsynddb_client.so';
+    } else if (platform === 'win32') {
+        return 'synddb_client.dll';
+    } else {
+        throw new Error(`Unsupported platform: ${platform}`);
+    }
+}
 
 // Library path
-const libPath = path.join(__dirname, '../../../../target/release/libsynddb_client.dylib');
+const libName = getLibraryName();
+const libPath = path.join(__dirname, '../../../../target/release', libName);
+
+// Check if library exists
+if (!fs.existsSync(libPath)) {
+    console.error(`Error: Library not found at ${libPath}`);
+    console.error('Build the library first: cargo build --release --package synddb-client');
+    process.exit(1);
+}
 
 // Load the library
 const lib = koffi.load(libPath);

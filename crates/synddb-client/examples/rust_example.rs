@@ -1,7 +1,13 @@
 //! Example Rust application using synddb-client
+//!
+//! **Complexity:** Beginner
+//! **Features:** Basic attachment, automatic publishing, manual publish
+//! **Prerequisites:** Sequencer running on localhost:8433
+//! **Run:** `cargo run --example rust_example`
 
 use anyhow::Result;
 use rusqlite::Connection;
+use std::fs;
 use synddb_client::SyndDB;
 
 fn main() -> Result<()> {
@@ -64,6 +70,19 @@ fn main() -> Result<()> {
 
     // You can also manually publish for critical transactions:
     // synddb.publish()?;
+
+    println!("\n✓ Example completed successfully");
+
+    // Cleanup: Remove example database
+    drop(_synddb); // Ensure SyndDB is dropped before removing file
+                   // Note: We can't drop the leaked connection, but the example is done
+                   // In a real application, you'd manage connection lifetime properly
+    if let Err(e) = fs::remove_file("example.db") {
+        eprintln!("Warning: Could not remove example.db: {}", e);
+    }
+    // Also remove WAL files if they exist
+    let _ = fs::remove_file("example.db-wal");
+    let _ = fs::remove_file("example.db-shm");
 
     Ok(())
 }

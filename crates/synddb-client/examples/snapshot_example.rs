@@ -1,4 +1,9 @@
 //! Example demonstrating snapshot creation and restoration
+//!
+//! **Complexity:** Intermediate
+//! **Features:** Snapshot creation, verification, metadata inspection
+//! **Prerequisites:** Sequencer running on localhost:8433
+//! **Run:** `cargo run --example snapshot_example`
 
 use anyhow::Result;
 use rusqlite::Connection;

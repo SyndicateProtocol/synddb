@@ -1,4 +1,9 @@
 //! Example demonstrating automatic snapshot creation based on changeset count
+//!
+//! **Complexity:** Intermediate
+//! **Features:** Automatic snapshots, custom configuration
+//! **Prerequisites:** Sequencer running on localhost:8433
+//! **Run:** `cargo run --example auto_snapshot_example`
 
 use anyhow::Result;
 use rusqlite::Connection;

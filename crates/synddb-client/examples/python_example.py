@@ -2,7 +2,15 @@
 """
 Example Python application using synddb-client
 
-This demonstrates how lightweight the integration is:
+⚠️  WORK IN PROGRESS - NOT FUNCTIONAL ⚠️
+
+This example shows the INTENDED API for native Python bindings, which are
+not yet implemented. This code will run but SyndDB integration is disabled.
+
+For a WORKING Python example, use the FFI example:
+    examples/ffi/test.py (uses ctypes to call the C FFI)
+
+This demonstrates how lightweight the integration WILL BE:
 - Single import
 - Single function call to attach
 - Rest of the code is unchanged
