@@ -1,0 +1,66 @@
+# Example configuration for synddb-sequencer with all options
+
+database:
+  path: "app.db"
+  enable_sessions: true
+
+batch:
+  # Maximum size of a batch before flushing (bytes)
+  max_batch_size: 1048576  # 1MB
+
+  # Maximum age of a batch before flushing (duration)
+  max_batch_age: "1s"
+
+  # How often to create full snapshots (duration)
+  snapshot_interval: "1h"
+
+  # Number of batches before forcing a snapshot
+  snapshot_threshold: 1000
+
+publish:
+  # Celestia DA layer
+  celestia:
+    rpc_url: "http://localhost:26658"
+    namespace: "synddb"
+    auth_token: null  # Optional
+
+  # EigenDA layer
+  eigenda:
+    rpc_url: "http://localhost:8545"
+    disperser_url: "http://localhost:8080"
+
+  # IPFS storage
+  ipfs:
+    api_url: "http://localhost:5001"
+    gateway_url: "http://localhost:8080"
+
+  # Arweave storage
+  arweave:
+    gateway_url: "https://arweave.net"
+    wallet_path: "arweave-wallet.json"
+
+messages:
+  # Enable monitoring blockchain for inbound messages (deposits)
+  enable_inbound: true
+
+  # Enable monitoring SQLite tables for outbound messages (withdrawals)
+  enable_outbound: true
+
+  # HTTP API port for message delivery to application
+  api_port: 8432
+
+  # Chain RPC URL for monitoring deposits
+  chain_rpc_url: "http://localhost:8545"
+
+  # Bridge contract address
+  bridge_contract: "0x1234567890123456789012345678901234567890"
+
+tee:
+  # Enable TEE attestation (GCP Confidential Space)
+  enable_attestation: true
+
+  # GCP project ID
+  gcp_project_id: "my-project"
+
+  # Path to signing key (managed in TEE)
+  key_path: "/secrets/signing-key"

@@ -9,11 +9,11 @@ use tracing::info;
 struct Cli {
     /// Path to the SQLite database to monitor
     #[arg(short, long)]
-    db: PathBuf,
+    db: Option<PathBuf>,
 
     /// Configuration file path
-    #[arg(short, long)]
-    config: Option<PathBuf>,
+    #[arg(short, long, default_value = "config/default.yaml")]
+    config: PathBuf,
 }
 
 #[tokio::main]
@@ -28,17 +28,31 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     info!("SyndDB Sequencer starting...");
-    info!("Monitoring database: {:?}", cli.db);
+    info!("Loading configuration from: {:?}", cli.config);
 
-    // TODO: Implement sequencer functionality based on PLAN_SEQUENCER.md
-    // The sequencer runs as a sidecar process alongside the application
-    // 1. Session Monitor - attach to SQLite via Session Extension
-    // 2. Batcher - accumulate changesets
-    // 3. Attestor - compress and sign batches
-    // 4. Publisher - publish to DA layers
+    // Load configuration
+    let mut config = synddb_sequencer::Config::from_file(&cli.config)?;
 
-    info!("Sequencer implementation coming soon!");
-    info!("See PLAN_SEQUENCER.md for architecture details");
+    // Override database path from CLI if provided
+    if let Some(db_path) = cli.db {
+        config.database.path = db_path;
+    }
 
+    info!("Monitoring database: {:?}", config.database.path);
+
+    // Create and run sequencer
+    let sequencer = synddb_sequencer::Sequencer::new(config);
+
+    info!("Starting sequencer components...");
+    info!("  - Session Monitor: Capturing changesets via SQLite Session Extension");
+    info!("  - Batcher: Accumulating and batching changesets");
+    info!("  - Attestor: Compressing and signing batches");
+    info!("  - Publisher: Publishing to DA layers");
+    info!("  - Message Monitor: Handling inbound/outbound messages");
+
+    // Run the sequencer
+    sequencer.run().await?;
+
+    info!("Sequencer stopped");
     Ok(())
 }
