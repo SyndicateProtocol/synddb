@@ -28,11 +28,16 @@ use tracing::{debug, info, warn};
 mod config;
 mod sender;
 mod session;
+mod snapshot_sender;
+
+#[cfg(feature = "ffi")]
+pub mod ffi;
 
 pub use config::Config;
 use sender::ChangesetSender;
 use session::SessionMonitor;
 pub use session::Snapshot;
+use snapshot_sender::SnapshotSender;
 
 /// Main handle to SyndDB client
 ///
@@ -41,10 +46,14 @@ pub use session::Snapshot;
 pub struct SyndDB {
     /// Session monitor for capturing changesets (includes publish thread)
     monitor: Option<SessionMonitor>,
-    /// Channel to send shutdown signal
-    shutdown_tx: Sender<()>,
-    /// Handle to background sender thread
-    join_handle: Option<thread::JoinHandle<()>>,
+    /// Channel to send shutdown signal to changeset sender
+    changeset_shutdown_tx: Sender<()>,
+    /// Channel to send shutdown signal to snapshot sender
+    snapshot_shutdown_tx: Option<Sender<()>>,
+    /// Handle to background changeset sender thread
+    changeset_handle: Option<thread::JoinHandle<()>>,
+    /// Handle to background snapshot sender thread
+    snapshot_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl SyndDB {
@@ -95,7 +104,7 @@ impl SyndDB {
 
         // Create channels for communication
         let (changeset_tx, changeset_rx) = bounded(config.buffer_size);
-        let (shutdown_tx, shutdown_rx) = bounded(1);
+        let (changeset_shutdown_tx, changeset_shutdown_rx) = bounded(1);
 
         // Create snapshot channel if automatic snapshots are enabled
         let snapshot_channel = if config.snapshot_interval > 0 {
@@ -115,34 +124,40 @@ impl SyndDB {
         )?;
         monitor.start(conn)?;
 
-        // Start snapshot handler thread if enabled
-        if let Some((_, snapshot_rx)) = snapshot_channel {
-            thread::spawn(move || {
-                info!("Snapshot handler thread started");
-                while let Ok(snapshot) = snapshot_rx.recv() {
-                    info!(
-                        "Received automatic snapshot: {} bytes at sequence {}",
-                        snapshot.data.len(),
-                        snapshot.sequence
-                    );
-                    // TODO: Send snapshot to sequencer
-                    // For now, just log it. In production, this would POST to sequencer.
-                }
-                info!("Snapshot handler thread stopped");
-            });
-        }
+        // Start snapshot sender thread if enabled
+        let (snapshot_shutdown_tx, snapshot_handle) =
+            if let Some((_, snapshot_rx)) = snapshot_channel {
+                let (snapshot_shutdown_tx, snapshot_shutdown_rx) = bounded(1);
+                let snapshot_config = config.clone();
 
-        // Start background sender thread
+                let handle = thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("Failed to create tokio runtime for snapshot sender");
+
+                    rt.block_on(async {
+                        let sender = SnapshotSender::new(snapshot_config);
+                        sender.run(snapshot_rx, snapshot_shutdown_rx).await
+                    });
+                });
+
+                (Some(snapshot_shutdown_tx), Some(handle))
+            } else {
+                (None, None)
+            };
+
+        // Start background changeset sender thread
         let sender_config = config.clone();
-        let join_handle = thread::spawn(move || {
+        let changeset_handle = thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("Failed to create tokio runtime");
+                .expect("Failed to create tokio runtime for changeset sender");
 
             rt.block_on(async {
                 let sender = ChangesetSender::new(sender_config);
-                sender.run(changeset_rx, shutdown_rx).await
+                sender.run(changeset_rx, changeset_shutdown_rx).await
             });
         });
 
@@ -150,8 +165,10 @@ impl SyndDB {
 
         Ok(Self {
             monitor: Some(monitor),
-            shutdown_tx,
-            join_handle: Some(join_handle),
+            changeset_shutdown_tx,
+            snapshot_shutdown_tx,
+            changeset_handle: Some(changeset_handle),
+            snapshot_handle,
         })
     }
 
@@ -209,16 +226,24 @@ impl SyndDB {
             .snapshot()
     }
 
-    /// Gracefully shutdown the client, publishing any pending changesets
+    /// Gracefully shutdown the client, publishing any pending changesets and snapshots
     pub fn shutdown(mut self) -> Result<()> {
         info!("Shutting down SyndDB client");
 
-        // Send shutdown signal
-        let _ = self.shutdown_tx.send(());
+        // Send shutdown signals
+        let _ = self.changeset_shutdown_tx.send(());
+        if let Some(ref tx) = self.snapshot_shutdown_tx {
+            let _ = tx.send(());
+        }
 
-        // Wait for background thread to finish
-        if let Some(handle) = self.join_handle.take() {
-            handle.join().expect("Background thread panicked");
+        // Wait for changeset sender thread to finish
+        if let Some(handle) = self.changeset_handle.take() {
+            handle.join().expect("Changeset sender thread panicked");
+        }
+
+        // Wait for snapshot sender thread to finish
+        if let Some(handle) = self.snapshot_handle.take() {
+            handle.join().expect("Snapshot sender thread panicked");
         }
 
         info!("SyndDB client shut down successfully");
@@ -231,18 +256,28 @@ impl Drop for SyndDB {
         debug!("Dropping SyndDB handle");
 
         // First, drop the monitor which will stop the publish thread
-        // This ensures no more changesets are generated
+        // This ensures no more changesets or snapshots are generated
         if let Some(monitor) = self.monitor.take() {
             drop(monitor);
         }
 
-        // Then send shutdown signal to sender thread
-        let _ = self.shutdown_tx.send(());
+        // Then send shutdown signals to sender threads
+        let _ = self.changeset_shutdown_tx.send(());
+        if let Some(ref tx) = self.snapshot_shutdown_tx {
+            let _ = tx.send(());
+        }
 
-        // Wait for background sender thread
-        if let Some(handle) = self.join_handle.take() {
+        // Wait for changeset sender thread
+        if let Some(handle) = self.changeset_handle.take() {
             if let Err(e) = handle.join() {
-                warn!("Background thread panicked during drop: {:?}", e);
+                warn!("Changeset sender thread panicked during drop: {:?}", e);
+            }
+        }
+
+        // Wait for snapshot sender thread
+        if let Some(handle) = self.snapshot_handle.take() {
+            if let Err(e) = handle.join() {
+                warn!("Snapshot sender thread panicked during drop: {:?}", e);
             }
         }
     }
