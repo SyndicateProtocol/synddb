@@ -44,6 +44,15 @@ jobs:
             lib_dir: linux-x64
             build_for: both
 
+          # Linux ARM64 (releases only)
+          - platform: linux
+            os: ubuntu-24.04-arm
+            arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+            lib_name: libsynddb_client.so
+            lib_dir: linux-arm64
+            build_for: release
+
           # macOS ARM64 (always build - common for dev)
           - platform: darwin
             os: macos-14
@@ -69,6 +78,15 @@ jobs:
             rust_target: x86_64-pc-windows-msvc
             lib_name: synddb_client.dll
             lib_dir: win-x64
+            build_for: release
+
+          # Windows ARM64 (releases only)
+          - platform: win32
+            os: windows-latest-arm
+            arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+            lib_name: synddb_client.dll
+            lib_dir: win-arm64
             build_for: release
 
     steps:
@@ -263,10 +281,12 @@ jobs:
           mkdir -p release
 
           # Rename libraries with platform/arch suffix for clarity
-          find artifacts -name "libsynddb_client.so" -exec cp {} release/synddb_client-linux-x64.so \;
+          find artifacts -name "libsynddb_client.so" -path "*/linux-x64/*" -exec cp {} release/synddb_client-linux-x64.so \;
+          find artifacts -name "libsynddb_client.so" -path "*/linux-arm64/*" -exec cp {} release/synddb_client-linux-arm64.so \;
           find artifacts -name "*.dylib" -path "*/darwin-arm64/*" -exec cp {} release/synddb_client-darwin-arm64.dylib \;
           find artifacts -name "*.dylib" -path "*/darwin-x64/*" -exec cp {} release/synddb_client-darwin-x64.dylib \;
-          find artifacts -name "*.dll" -exec cp {} release/synddb_client-win-x64.dll \;
+          find artifacts -name "*.dll" -path "*/win-x64/*" -exec cp {} release/synddb_client-win-x64.dll \;
+          find artifacts -name "*.dll" -path "*/win-arm64/*" -exec cp {} release/synddb_client-win-arm64.dll \;
 
           # Copy header file
           cp crates/synddb-client/bindings/synddb.h release/
@@ -299,9 +319,11 @@ jobs:
           ### Supported Platforms
 
           - **Linux x86_64**: `synddb_client-linux-x64.so`
+          - **Linux ARM64**: `synddb_client-linux-arm64.so` (AWS Graviton, ARM servers)
           - **macOS x86_64**: `synddb_client-darwin-x64.dylib` (Intel Macs)
           - **macOS ARM64**: `synddb_client-darwin-arm64.dylib` (M1/M2/M3 Macs)
           - **Windows x86_64**: `synddb_client-win-x64.dll`
+          - **Windows ARM64**: `synddb_client-win-arm64.dll` (ARM Windows devices)
 
           ### Quick Start
 
