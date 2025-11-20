@@ -6,20 +6,15 @@ name: Build FFI Libraries
 # 3. Release tags: Build all platforms and create GitHub Release - production distribution
 
 on:
-  # PRs: Build and test (dry run, no commits)
-  pull_request:
-    paths:
-      - 'crates/synddb-client/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/build-ffi-libs.yml'
-
   # Main branch commits and release tags
   push:
     branches:
       - main
     tags:
       - 'v*.*.*'
+
+  # PRs: Build and test (dry run, no commits)
+  pull_request:
     paths:
       - 'crates/synddb-client/**'
       - 'Cargo.toml'
