@@ -4,23 +4,35 @@ This document describes the FFI library build and release process for SyndDB.
 
 ## Overview
 
-SyndDB uses a single unified workflow (`build-ffi-libs.yml`) that handles both development and release builds with conditional logic:
+SyndDB uses a single unified workflow (`build-ffi-libs.yml`) that handles three distinct scenarios:
 
-### Development Builds
+### 1. Pull Requests (Dry Run)
+- **Trigger**: PRs that touch client code
+- **Platforms**: Linux x86_64, macOS ARM64
+- **Builds**: Yes
+- **Commits**: No
+- **Artifacts**: Yes (7 days)
+- **Purpose**: Verify FFI builds work before merge
+
+### 2. Main Branch (Development)
 - **Trigger**: Commits to `main` that touch client code
-- **Platforms**: Linux x86_64, macOS ARM64 (common dev platforms)
-- **Output**: Libraries committed to `crates/synddb-client/libs/` in repo
-- **Purpose**: Enable Python/Node.js development without Rust toolchain
-- **Retention**: Permanent (in git)
+- **Platforms**: Linux x86_64, macOS ARM64
+- **Builds**: Yes
+- **Commits**: Yes (to `crates/synddb-client/libs/` with `[skip ci]`)
+- **Artifacts**: Yes (7 days)
+- **Purpose**: Keep libraries in sync for cross-language developers
 
-### Release Builds
+### 3. Release Tags (Production)
 - **Trigger**: Git tags matching `v*.*.*` (e.g., `v0.2.0`)
-- **Platforms**: All 4 platforms (adds macOS x86_64, Windows x86_64)
-- **Output**: GitHub Releases with downloadable artifacts
+- **Platforms**: All 4 (Linux, macOS x64, macOS ARM64, Windows)
+- **Builds**: Yes
+- **Commits**: No
+- **Artifacts**: Yes (90 days)
+- **GitHub Release**: Yes (with checksums)
+- **crates.io**: Yes (publishes package)
 - **Purpose**: Production binaries for end users
-- **Retention**: 90 days (artifacts)
 
-**Key Design:** One workflow file, conditional logic based on `github.ref`
+**Key Design:** One workflow file, conditional logic based on `github.event_name` and `github.ref`
 
 ## Development Libraries
 

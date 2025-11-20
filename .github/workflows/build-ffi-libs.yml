@@ -1,6 +1,20 @@
 name: Build FFI Libraries
 
+# This workflow handles FFI library builds for three scenarios:
+# 1. Pull Requests: Build dev platforms (dry run, no commits) - verify builds work
+# 2. Main branch: Build dev platforms and commit to repo - enable cross-language dev
+# 3. Release tags: Build all platforms and create GitHub Release - production distribution
+
 on:
+  # PRs: Build and test (dry run, no commits)
+  pull_request:
+    paths:
+      - 'crates/synddb-client/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-ffi-libs.yml'
+
+  # Main branch: Build and commit to repo
   push:
     branches:
       - main
@@ -9,6 +23,9 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/build-ffi-libs.yml'
+
+  # Release tags: Build all platforms and create GitHub Release
+  push:
     tags:
       - 'v*.*.*'
 
@@ -64,19 +81,29 @@ jobs:
         id: should_build
         run: |
           IS_TAG="${{ startsWith(github.ref, 'refs/tags/v') }}"
+          IS_PR="${{ github.event_name == 'pull_request' }}"
           BUILD_FOR="${{ matrix.build_for }}"
 
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Platform build_for: $BUILD_FOR"
+
           if [ "$IS_TAG" = "true" ]; then
-            # On tags, build everything
+            # Release tags: Build all platforms
             echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "Building for release"
+            echo "✓ Building for RELEASE (all platforms)"
           elif [ "$BUILD_FOR" = "both" ]; then
-            # On main commits, only build 'both' platforms
+            # PRs and main: Only build dev platforms (Linux, macOS ARM)
             echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "Building for development"
+            if [ "$IS_PR" = "true" ]; then
+              echo "✓ Building for PR (dry run)"
+            else
+              echo "✓ Building for DEV (will commit)"
+            fi
           else
+            # Skip release-only platforms on PRs and main
             echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "Skipping (release-only platform)"
+            echo "⊘ Skipping (release-only platform)"
           fi
         shell: bash
 
