@@ -7,36 +7,27 @@ name: Build FFI Libraries
 
 on:
   # PRs: Build and test (dry run, no commits)
-  # Note: No path filter on PR to ensure workflow always shows up for testing
   pull_request:
-
-  # Main branch: Build and commit to repo
-  push:
-    branches:
-      - main
     paths:
       - 'crates/synddb-client/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/build-ffi-libs.yml'
 
-  # Release tags: Build all platforms and create GitHub Release
+  # Main branch commits and release tags
   push:
+    branches:
+      - main
     tags:
       - 'v*.*.*'
+    paths:
+      - 'crates/synddb-client/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-ffi-libs.yml'
 
-  # Manual trigger for testing
+  # Manual trigger for testing (dry run only, no commits/releases)
   workflow_dispatch:
-    inputs:
-      scenario:
-        description: 'Test scenario to run'
-        required: true
-        type: choice
-        options:
-          - 'pr'
-          - 'dev'
-          - 'release'
-        default: 'pr'
 
 env:
   CARGO_TERM_COLOR: always
