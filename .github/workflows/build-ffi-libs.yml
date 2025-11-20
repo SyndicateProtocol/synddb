@@ -228,12 +228,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git commit -m "chore: Update FFI libraries [skip ci]
+          git commit -m "$(cat <<'EOF'
+          chore: Update FFI libraries [skip ci]
 
-Built from commit ${{ github.sha }}
+          Built from commit ${{ github.sha }}
 
-Updated libraries:
-$(git diff --staged --name-only | sed 's/^/- /')"
+          Updated libraries:
+          $(git diff --staged --name-only | sed 's/^/- /')
+          EOF
+          )"
 
           git push
 
