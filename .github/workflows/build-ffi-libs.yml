@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - main
+      - wpapper/fix-gh-actions  # Temporary: testing commit functionality
     tags:
       - 'v*.*.*'
 
@@ -180,7 +181,7 @@ jobs:
   commit-dev-libs:
     name: Commit Dev Libraries
     needs: build-libs
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/wpapper/fix-gh-actions'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -238,7 +239,9 @@ jobs:
           Updated libraries:
           ${UPDATED_FILES}"
 
-          git push origin main
+          # Push to current branch
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          git push origin "${BRANCH_NAME}"
 
   create-release:
     name: Create GitHub Release
