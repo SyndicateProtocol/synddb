@@ -13,8 +13,7 @@ pub struct ChangesetBatch {
     pub batch_id: String,
 }
 
-#[derive(Clone)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ApiState {
     pub changeset_tx: Sender<Changeset>,
 }

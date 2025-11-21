@@ -6,12 +6,12 @@
 pub mod attestor;
 pub mod batch;
 pub mod config;
+pub mod http_api;
 pub mod messages;
 pub mod monitor;
 pub mod publish;
 pub mod tee;
 pub mod utils;
-pub mod http_api;
 
 pub use config::Config;
 
