@@ -3,13 +3,14 @@
 use super::{InboundMessage, OutboundMessage};
 use std::collections::VecDeque;
 
+#[derive(Debug)]
 pub struct MessageQueue {
     inbound: VecDeque<InboundMessage>,
     outbound: VecDeque<OutboundMessage>,
 }
 
 impl MessageQueue {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             inbound: VecDeque::new(),
             outbound: VecDeque::new(),

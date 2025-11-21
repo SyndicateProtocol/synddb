@@ -2,12 +2,13 @@
 
 use anyhow::Result;
 
+#[derive(Debug)]
 pub struct AttestationProvider {
     enabled: bool,
 }
 
 impl AttestationProvider {
-    pub fn new(enabled: bool) -> Self {
+    pub const fn new(enabled: bool) -> Self {
         Self { enabled }
     }
 

@@ -21,6 +21,7 @@ struct ChangesetBatch {
     attestation_token: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct ChangesetSender {
     config: Config,
     client: Client,
@@ -32,7 +33,7 @@ pub struct ChangesetSender {
 }
 
 impl ChangesetSender {
-    pub fn new(
+    pub(crate) fn new(
         config: Config,
         recovery: Option<Arc<FailedBatchRecovery>>,
         attestation: Option<AttestationClient>,
@@ -53,7 +54,11 @@ impl ChangesetSender {
         }
     }
 
-    pub async fn run(mut self, changeset_rx: Receiver<Changeset>, shutdown_rx: Receiver<()>) {
+    pub(crate) async fn run(
+        mut self,
+        changeset_rx: Receiver<Changeset>,
+        shutdown_rx: Receiver<()>,
+    ) {
         info!("ChangesetSender started");
 
         // Retry any failed changesets from previous runs

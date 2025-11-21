@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # Core async and CLI
 tokio = { workspace = true, features = ["full"] }
@@ -13,14 +16,11 @@ clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 
 # SQLite with Session Extension support
-rusqlite = { workspace = true, features = ["bundled", "backup", "session"] }
+#rusqlite = { workspace = true, features = ["bundled", "backup", "session"] }
 
 # Serialization and compression
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 serde_yaml = "0.9"
-bincode = "1.3"
-zstd = "0.13"
 
 # Configuration
 # config = "0.14"
@@ -32,13 +32,9 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 # HTTP server for message API
 axum = { version = "0.7", features = ["json"] }
-tower = "0.4"
-hyper = { version = "1.0", features = ["full"] }
 
 # Cryptography and signing
-k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
 sha2 = "0.10"
-sha3 = "0.10"
 hex = "0.4"
 
 # DA layer clients (optional for now - will add when implementing)
@@ -56,9 +52,9 @@ hex = "0.4"
 # reqwest = { version = "0.11", features = ["json"], optional = true }
 
 # Utilities
-parking_lot = "0.12"
-crossbeam-channel = "0.5"
-backoff = "0.4"
+#parking_lot = "0.12"
+#crossbeam-channel = "0.5"
+#backoff = "0.4"
 
 [features]
 default = []

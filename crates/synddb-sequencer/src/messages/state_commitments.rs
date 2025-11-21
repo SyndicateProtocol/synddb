@@ -18,7 +18,12 @@ pub struct StateCommitment {
 }
 
 impl StateCommitment {
-    pub fn new(state_hash: String, status: SystemStatus, sequence: u64, timestamp: u64) -> Self {
+    pub const fn new(
+        state_hash: String,
+        status: SystemStatus,
+        sequence: u64,
+        timestamp: u64,
+    ) -> Self {
         Self {
             state_hash,
             status,

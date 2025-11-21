@@ -9,27 +9,28 @@ pub enum SystemStatus {
     Halted,
 }
 
+#[derive(Debug)]
 pub struct DegradationManager {
     status: SystemStatus,
 }
 
 impl DegradationManager {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             status: SystemStatus::Healthy,
         }
     }
 
-    pub fn status(&self) -> SystemStatus {
+    pub const fn status(&self) -> SystemStatus {
         self.status
     }
 
-    pub fn set_status(&mut self, status: SystemStatus) {
+    pub const fn set_status(&mut self, status: SystemStatus) {
         self.status = status;
     }
 
     /// Check if system should degrade
-    pub fn should_degrade(&self) -> bool {
+    pub const fn should_degrade(&self) -> bool {
         // TODO: Implement degradation logic
         // - Check message queue depth
         // - Check DA layer availability
@@ -38,7 +39,7 @@ impl DegradationManager {
     }
 
     /// Check if system should halt
-    pub fn should_halt(&self) -> bool {
+    pub const fn should_halt(&self) -> bool {
         // TODO: Implement halt logic
         // - Critical errors
         // - Data corruption detected

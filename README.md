@@ -145,6 +145,44 @@ cargo test --workspace
 RUST_LOG=debug cargo run --package synddb-benchmark -- run --rate 100
 ```
 
+### Run All CI Checks Locally
+
+First, install required tools:
+```bash
+cargo install taplo-cli@0.9.0 cargo-machete@0.7.0 cargo-nextest
+rustup toolchain install nightly
+```
+
+**Check all (CI equivalent - non-destructive):**
+```bash
+taplo lint "**/Cargo.toml" && taplo fmt --check "**/Cargo.toml" && cargo machete && cargo +nightly fmt --all --check && cargo clippy --workspace --all-targets --all-features && cargo nextest run --workspace --all-features && cargo test --workspace --doc
+```
+
+**Fix all issues automatically:**
+```bash
+taplo fmt "**/Cargo.toml" && cargo +nightly fmt --all && cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged
+```
+*Note: `cargo-machete` only reports unused deps - you must remove them manually from Cargo.toml files.*
+
+**Run checks individually:**
+```bash
+# Cargo.toml validation and formatting check
+taplo lint "**/Cargo.toml" && taplo fmt --check "**/Cargo.toml"
+
+# Find unused dependencies (manual removal required)
+cargo machete
+
+# Rust formatting check
+cargo +nightly fmt --all --check
+
+# Linting
+cargo clippy --workspace --all-targets --all-features
+
+# Tests
+cargo nextest run --workspace --all-features
+cargo test --workspace --doc
+```
+
 ## Architecture
 
 SyndDB uses SQLite's Session Extension to capture row-level changes deterministically. The client library:

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::mpsc::{Receiver, Sender};
 
+#[derive(Debug)]
 pub struct Batcher {
     _db_path: PathBuf,
     _changesets: Vec<Changeset>,

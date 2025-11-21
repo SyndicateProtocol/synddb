@@ -3,12 +3,13 @@
 use super::degradation::SystemStatus;
 use anyhow::Result;
 
+#[derive(Debug)]
 pub struct AlertManager {
     // TODO: Add alert state
 }
 
 impl AlertManager {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {}
     }
 

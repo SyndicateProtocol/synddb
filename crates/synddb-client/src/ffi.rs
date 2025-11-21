@@ -28,14 +28,16 @@ fn clear_last_error() {
     });
 }
 
-/// Opaque handle to SyndDB client for FFI
+/// Opaque handle to `SyndDB` client for FFI
 #[repr(C)]
+#[derive(Debug)]
 pub struct SyndDBHandle {
     _private: [u8; 0],
 }
 
 /// FFI-safe error code
 #[repr(C)]
+#[derive(Debug)]
 pub enum SyndDBError {
     Success = 0,
     InvalidPointer = 1,
@@ -46,12 +48,12 @@ pub enum SyndDBError {
     SnapshotError = 6,
 }
 
-/// Attach SyndDB to a SQLite database file
+/// Attach `SyndDB` to a `SQLite` database file
 ///
 /// # Arguments
-/// * `db_path` - Path to SQLite database file (UTF-8 C string)
+/// * `db_path` - Path to `SQLite` database file (UTF-8 C string)
 /// * `sequencer_url` - URL of sequencer TEE (UTF-8 C string)
-/// * `out_handle` - Output pointer to receive SyndDB handle
+/// * `out_handle` - Output pointer to receive `SyndDB` handle
 ///
 /// # Returns
 /// 0 on success, error code otherwise
@@ -126,14 +128,14 @@ pub unsafe extern "C" fn synddb_attach(
     SyndDBError::Success
 }
 
-/// Attach SyndDB with custom configuration
+/// Attach `SyndDB` with custom configuration
 ///
 /// # Arguments
-/// * `db_path` - Path to SQLite database file
+/// * `db_path` - Path to `SQLite` database file
 /// * `sequencer_url` - URL of sequencer TEE
 /// * `publish_interval_ms` - Milliseconds between automatic publishes
 /// * `snapshot_interval` - Number of changesets between automatic snapshots (0 = disabled)
-/// * `out_handle` - Output pointer to receive SyndDB handle
+/// * `out_handle` - Output pointer to receive `SyndDB` handle
 ///
 /// # Returns
 /// 0 on success, error code otherwise
@@ -205,7 +207,7 @@ pub unsafe extern "C" fn synddb_attach_with_config(
 /// Manually publish all pending changesets
 ///
 /// # Arguments
-/// * `handle` - SyndDB handle from `synddb_attach()`
+/// * `handle` - `SyndDB` handle from `synddb_attach()`
 ///
 /// # Returns
 /// 0 on success, error code otherwise
@@ -235,7 +237,7 @@ pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBErro
 /// Create a manual snapshot of the database
 ///
 /// # Arguments
-/// * `handle` - SyndDB handle from `synddb_attach()`
+/// * `handle` - `SyndDB` handle from `synddb_attach()`
 /// * `out_size` - Output pointer to receive snapshot size in bytes
 ///
 /// # Returns
@@ -276,12 +278,12 @@ pub unsafe extern "C" fn synddb_snapshot(
     }
 }
 
-/// Detach SyndDB and free resources
+/// Detach `SyndDB` and free resources
 ///
 /// This will gracefully shutdown the client, publishing any pending changesets.
 ///
 /// # Arguments
-/// * `handle` - SyndDB handle from `synddb_attach()`
+/// * `handle` - `SyndDB` handle from `synddb_attach()`
 ///
 /// # Safety
 /// - `handle` must be a valid handle from `synddb_attach()`
@@ -317,12 +319,7 @@ pub unsafe extern "C" fn synddb_detach(handle: *mut SyndDBHandle) {
 /// ```
 #[no_mangle]
 pub extern "C" fn synddb_last_error() -> *const c_char {
-    LAST_ERROR.with(|e| {
-        e.borrow()
-            .as_ref()
-            .map(|s| s.as_ptr())
-            .unwrap_or(std::ptr::null())
-    })
+    LAST_ERROR.with(|e| e.borrow().as_ref().map_or(std::ptr::null(), |s| s.as_ptr()))
 }
 
 /// Get library version string
@@ -354,7 +351,7 @@ mod tests {
     fn test_ffi_null_handling() {
         unsafe {
             let mut handle: *mut SyndDBHandle = ptr::null_mut();
-            let result = synddb_attach(ptr::null(), ptr::null(), &mut handle);
+            let result = synddb_attach(ptr::null(), ptr::null(), &raw mut handle);
             assert!(matches!(result, SyndDBError::InvalidPointer));
         }
     }

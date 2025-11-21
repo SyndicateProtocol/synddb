@@ -4,6 +4,7 @@ use super::InboundMessage;
 use anyhow::Result;
 use tokio::sync::mpsc::Sender;
 
+#[derive(Debug)]
 pub struct InboundMonitor {
     _chain_rpc_url: String,
     _bridge_contract: String,
@@ -11,7 +12,7 @@ pub struct InboundMonitor {
 }
 
 impl InboundMonitor {
-    pub fn new(
+    pub const fn new(
         chain_rpc_url: String,
         bridge_contract: String,
         message_tx: Sender<InboundMessage>,

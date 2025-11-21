@@ -4,12 +4,13 @@ use super::{KeyManager, SignedBatch};
 use crate::batch::BatchPayload;
 use anyhow::Result;
 
+#[derive(Debug)]
 pub struct BatchSigner {
     key_manager: KeyManager,
 }
 
 impl BatchSigner {
-    pub fn new(key_manager: KeyManager) -> Self {
+    pub const fn new(key_manager: KeyManager) -> Self {
         Self { key_manager }
     }
 

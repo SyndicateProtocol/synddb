@@ -1,4 +1,4 @@
-//! Configuration for SyndDB client
+//! Configuration for `SyndDB` client
 
 use crate::attestation::TokenType;
 use serde::{Deserialize, Serialize};
@@ -37,7 +37,7 @@ pub struct Config {
     pub snapshot_interval: u64,
 
     /// Enable recovery storage for failed batches
-    /// When enabled, failed changesets and snapshots are saved to a local SQLite database for retry
+    /// When enabled, failed changesets and snapshots are saved to a local `SQLite` database for retry
     #[serde(default = "default_enable_recovery")]
     pub enable_recovery: bool,
 
@@ -46,8 +46,8 @@ pub struct Config {
     #[serde(default = "default_enable_attestation")]
     pub enable_attestation: bool,
 
-    /// Type of attestation token to request (OIDC, PKI, or AWS_PRINCIPALTAGS)
-    /// Only used if enable_attestation is true
+    /// Type of attestation token to request (OIDC, PKI, or `AWS_PRINCIPALTAGS`)
+    /// Only used if `enable_attestation` is true
     #[serde(default = "default_attestation_token_type")]
     pub attestation_token_type: TokenType,
 }

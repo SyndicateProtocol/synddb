@@ -6,13 +6,14 @@ use axum::{routing::post, Router};
 use std::net::SocketAddr;
 use tokio::sync::mpsc::Sender;
 
+#[derive(Debug)]
 pub struct MessageApi {
     port: u16,
     _inbound_tx: Sender<InboundMessage>,
 }
 
 impl MessageApi {
-    pub fn new(port: u16, inbound_tx: Sender<InboundMessage>) -> Self {
+    pub const fn new(port: u16, inbound_tx: Sender<InboundMessage>) -> Self {
         Self {
             port,
             _inbound_tx: inbound_tx,

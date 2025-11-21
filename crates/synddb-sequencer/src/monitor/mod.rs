@@ -9,7 +9,7 @@ use std::time::SystemTime;
 /// A captured changeset from the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Changeset {
-    /// Raw changeset data from SQLite Session Extension
+    /// Raw changeset data from `SQLite` Session Extension
     pub data: Vec<u8>,
     /// Sequence number for ordering
     pub sequence: u64,
@@ -22,7 +22,7 @@ pub struct Changeset {
 /// Schema change captured from DDL operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaChange {
-    /// Previous schema version (from PRAGMA user_version)
+    /// Previous schema version (from PRAGMA `user_version`)
     pub old_version: i32,
     /// New schema version
     pub new_version: i32,

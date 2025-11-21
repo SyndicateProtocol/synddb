@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::time::Duration;
 use tokio::time::sleep;
 
+#[derive(Debug)]
 pub struct RetryPolicy {
     max_retries: usize,
     initial_backoff: Duration,
@@ -12,7 +13,7 @@ pub struct RetryPolicy {
 }
 
 impl RetryPolicy {
-    pub fn new(max_retries: usize) -> Self {
+    pub const fn new(max_retries: usize) -> Self {
         Self {
             max_retries,
             initial_backoff: Duration::from_millis(100),

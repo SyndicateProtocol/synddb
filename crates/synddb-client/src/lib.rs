@@ -1,7 +1,7 @@
-//! SyndDB Client Library - Lightweight SQLite Session Extension Wrapper
+//! `SyndDB` Client Library - Lightweight `SQLite` Session Extension Wrapper
 //!
 //! This library provides a minimal integration layer for applications to send
-//! changesets to the SyndDB sequencer. It runs in the application's TEE and
+//! changesets to the `SyndDB` sequencer. It runs in the application's TEE and
 //! does NOT contain any signing keys.
 //!
 //! # Usage
@@ -25,13 +25,13 @@ use rusqlite::Connection;
 use std::thread;
 use tracing::{debug, info, warn};
 
-mod attestation;
-mod config;
-mod recovery;
-mod retry;
-mod sender;
-mod session;
-mod snapshot_sender;
+pub mod attestation;
+pub mod config;
+pub mod recovery;
+pub mod retry;
+pub mod sender;
+pub mod session;
+pub mod snapshot_sender;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;
@@ -44,10 +44,11 @@ use session::SessionMonitor;
 pub use session::Snapshot;
 use snapshot_sender::SnapshotSender;
 
-/// Main handle to SyndDB client
+/// Main handle to `SyndDB` client
 ///
-/// Attaches to a SQLite connection and automatically captures changesets.
+/// Attaches to a `SQLite` connection and automatically captures changesets.
 /// Dropping this handle will stop changeset capture and publish pending data.
+#[derive(Debug)]
 pub struct SyndDB {
     /// Session monitor for capturing changesets (includes publish thread)
     monitor: Option<SessionMonitor>,
@@ -73,17 +74,17 @@ pub struct RecoveryStats {
 }
 
 impl SyndDB {
-    /// Attach to an existing SQLite connection
+    /// Attach to an existing `SQLite` connection
     ///
     /// This will:
-    /// 1. Enable SQLite Session Extension on the connection
+    /// 1. Enable `SQLite` Session Extension on the connection
     /// 2. Register update hooks to detect changes
     /// 3. Start a background thread to send changesets to sequencer
     ///
     /// # Arguments
     ///
-    /// * `conn` - SQLite connection to monitor (must have 'static lifetime)
-    /// * `sequencer_url` - URL of the sequencer TEE (e.g. "https://sequencer:8433")
+    /// * `conn` - `SQLite` connection to monitor (must have 'static lifetime)
+    /// * `sequencer_url` - URL of the sequencer TEE (e.g. "<https://sequencer:8433>")
     ///
     /// # Example
     ///
@@ -128,7 +129,7 @@ impl SyndDB {
         // Start session monitor (includes automatic publish thread)
         let monitor = SessionMonitor::new(
             conn,
-            changeset_tx.clone(),
+            changeset_tx,
             config.publish_interval,
             config.snapshot_interval,
             snapshot_channel.as_ref().map(|(tx, _)| tx).cloned(),
@@ -242,7 +243,7 @@ impl SyndDB {
 
     /// Publish all pending changesets to the sequencer
     ///
-    /// This is called automatically every publish_interval (default 1 second),
+    /// This is called automatically every `publish_interval` (default 1 second),
     /// but can also be called manually to publish immediately (e.g., after critical transactions).
     pub fn publish(&self) -> Result<()> {
         self.monitor
@@ -253,7 +254,7 @@ impl SyndDB {
 
     /// Create a complete snapshot of the database
     ///
-    /// This captures the full current state of the database as a portable SQLite file.
+    /// This captures the full current state of the database as a portable `SQLite` file.
     /// The snapshot includes the current sequence number, so replicas can know which
     /// changesets to apply after restoring from this snapshot.
     ///
@@ -398,6 +399,6 @@ mod tests {
             .unwrap();
 
         // Wait a moment for automatic publish
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        thread::sleep(std::time::Duration::from_secs(2));
     }
 }

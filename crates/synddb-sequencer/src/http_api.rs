@@ -9,12 +9,14 @@ use tracing::{info, warn};
 use crate::monitor::Changeset;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ChangesetBatch {
     pub changesets: Vec<Changeset>,
     pub batch_id: String,
 }
 
 #[derive(Clone)]
+#[derive(Debug)]
 pub struct ApiState {
     pub changeset_tx: Sender<Changeset>,
 }

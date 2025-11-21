@@ -3,6 +3,7 @@
 use anyhow::Result;
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct KeyManager {
     // TODO: Add key state
 }
@@ -16,14 +17,14 @@ impl KeyManager {
     }
 
     /// Get Ethereum address derived from key
-    pub fn address(&self) -> String {
+    pub const fn address(&self) -> String {
         // TODO: Derive Ethereum address from public key
         // keccak256(pubkey)[12..32]
         String::new()
     }
 
     /// Sign data with secp256k1
-    pub fn sign(&self, _data: &[u8]) -> Result<Vec<u8>> {
+    pub const fn sign(&self, _data: &[u8]) -> Result<Vec<u8>> {
         // TODO: Sign with ECDSA secp256k1
         Ok(vec![])
     }

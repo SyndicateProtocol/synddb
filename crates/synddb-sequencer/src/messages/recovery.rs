@@ -2,12 +2,13 @@
 
 use anyhow::Result;
 
+#[derive(Debug)]
 pub struct RecoveryManager {
     // TODO: Add recovery state
 }
 
 impl RecoveryManager {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {}
     }
 
@@ -21,7 +22,7 @@ impl RecoveryManager {
     }
 
     /// Validate recovery was successful
-    pub fn validate_recovery(&self) -> Result<bool> {
+    pub const fn validate_recovery(&self) -> Result<bool> {
         // TODO: Validate system is healthy
         Ok(true)
     }

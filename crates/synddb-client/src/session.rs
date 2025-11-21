@@ -1,4 +1,4 @@
-//! SQLite Session Extension integration
+//! `SQLite` Session Extension integration
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
@@ -14,7 +14,7 @@ use tracing::{debug, error, info, trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Changeset {
-    /// Raw changeset bytes from SQLite
+    /// Raw changeset bytes from `SQLite`
     pub data: Vec<u8>,
     /// Sequence number (monotonic)
     pub sequence: u64,
@@ -24,7 +24,7 @@ pub struct Changeset {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// Complete database snapshot as SQLite database file bytes
+    /// Complete database snapshot as `SQLite` database file bytes
     pub data: Vec<u8>,
     /// Timestamp when snapshot was captured
     pub timestamp: SystemTime,
@@ -46,12 +46,55 @@ struct SessionState {
     last_schema_hash: Option<u64>,
 }
 
+impl std::fmt::Debug for SessionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[derive(Debug)]
+        struct SessionState<'a> {
+            changeset_tx: &'a Sender<Changeset>,
+            sequence: &'a u64,
+            conn: &'a &'static Connection,
+            snapshot_interval: &'a u64,
+            changesets_since_snapshot: &'a u64,
+            snapshot_tx: &'a Option<Sender<Snapshot>>,
+            schema_changed: &'a bool,
+            last_schema_hash: &'a Option<u64>,
+        }
+
+        let Self {
+            session: _,
+            changeset_tx,
+            sequence,
+            conn,
+            snapshot_interval,
+            changesets_since_snapshot,
+            snapshot_tx,
+            schema_changed,
+            last_schema_hash,
+        } = self;
+
+        std::fmt::Debug::fmt(
+            &SessionState {
+                changeset_tx,
+                sequence,
+                conn,
+                snapshot_interval,
+                changesets_since_snapshot,
+                snapshot_tx,
+                schema_changed,
+                last_schema_hash,
+            },
+            f,
+        )
+    }
+}
+
 // SAFETY: SQLite sessions are thread-safe when used with a thread-safe connection.
 // We're using a 'static Connection and protecting access with a Mutex, so this is safe.
 // The Session contains raw pointers that rusqlite doesn't mark as Send, but SQLite's
 // session extension is designed to be thread-safe when properly synchronized.
 unsafe impl Send for SessionState {}
 
+#[derive(Debug)]
 pub struct SessionMonitor {
     state: Arc<Mutex<SessionState>>,
     publish_shutdown_tx: Sender<()>,
@@ -59,7 +102,7 @@ pub struct SessionMonitor {
 }
 
 impl SessionMonitor {
-    pub fn new(
+    pub(crate) fn new(
         conn: &'static Connection,
         changeset_tx: Sender<Changeset>,
         publish_interval: Duration,
@@ -146,7 +189,7 @@ impl SessionMonitor {
         })
     }
 
-    pub fn start(&self, conn: &Connection) -> Result<()> {
+    pub(crate) fn start(&self, conn: &Connection) -> Result<()> {
         debug!("Installing update hook for schema change detection");
 
         let state = Arc::clone(&self.state);
@@ -330,7 +373,7 @@ impl SessionMonitor {
                 Backup::new(state.conn, &mut file_conn).context("Failed to initialize backup")?;
 
             backup
-                .run_to_completion(5, std::time::Duration::from_millis(250), None)
+                .run_to_completion(5, Duration::from_millis(250), None)
                 .context("Failed to complete backup")?;
         }
 
@@ -351,13 +394,13 @@ impl SessionMonitor {
     ///
     /// This is called automatically by the publish thread, but can also be called
     /// manually to publish immediately (e.g., after critical transactions).
-    pub fn publish(&self) -> Result<()> {
+    pub(crate) fn publish(&self) -> Result<()> {
         Self::publish_internal(&self.state)
     }
 
     /// Create a complete snapshot of the database
     ///
-    /// This captures the full current state of the database as a portable SQLite file.
+    /// This captures the full current state of the database as a portable `SQLite` file.
     /// The snapshot includes the current sequence number, so replicas can know which
     /// changesets to apply after restoring from this snapshot.
     ///
@@ -382,7 +425,7 @@ impl SessionMonitor {
     /// // Replicas restore from snapshot, then apply changesets with seq >= snapshot.sequence
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn snapshot(&self) -> Result<Snapshot> {
+    pub(crate) fn snapshot(&self) -> Result<Snapshot> {
         info!("Creating manual database snapshot");
 
         let state = self.state.lock().unwrap();
