@@ -1,14 +1,7 @@
-//! Session monitoring module
+//! Monitoring types module
 //!
-//! Uses SQLite Session Extension to capture deterministic changesets
-//! and track schema changes.
-
-pub mod changeset_reader;
-pub mod hooks;
-pub mod session_tracker;
-
-pub use changeset_reader::ChangesetReader;
-pub use session_tracker::SessionMonitor;
+//! Defines data structures for changesets and schema changes received
+//! from synddb-client libraries.
 
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;

@@ -1,0 +1,22 @@
+{
+  "name": "@synddb/client",
+  "version": "0.1.0",
+  "description": "SyndDB Node.js client - Pure JavaScript FFI wrapper (no compilation needed!)",
+  "main": "synddb.js",
+  "keywords": [
+    "synddb",
+    "sqlite",
+    "blockchain",
+    "database",
+    "changesets"
+  ],
+  "author": "Syndicate",
+  "license": "MIT",
+  "peerDependencies": {
+    "ffi-napi": "^4.0.3",
+    "ref-napi": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

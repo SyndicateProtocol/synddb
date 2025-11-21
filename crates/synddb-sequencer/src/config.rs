@@ -7,19 +7,10 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub database: DatabaseConfig,
     pub batch: BatchConfig,
     pub publish: PublishConfig,
     pub messages: MessageConfig,
     pub tee: TeeConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DatabaseConfig {
-    /// Path to the SQLite database to monitor
-    pub path: PathBuf,
-    /// Whether to enable Session Extension monitoring
-    pub enable_sessions: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,10 +135,6 @@ fn default_api_port() -> u16 {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            database: DatabaseConfig {
-                path: PathBuf::from("app.db"),
-                enable_sessions: true,
-            },
             batch: BatchConfig {
                 max_batch_size: default_max_batch_size(),
                 max_batch_age: default_max_batch_age(),

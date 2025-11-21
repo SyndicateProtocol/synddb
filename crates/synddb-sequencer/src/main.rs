@@ -5,12 +5,8 @@ use tracing::info;
 
 #[derive(Parser)]
 #[command(name = "synddb-sequencer")]
-#[command(about = "SyndDB sequencer - monitors SQLite databases and publishes changes to DA layers (runs as a sidecar process)", long_about = None)]
+#[command(about = "SyndDB sequencer - receives changesets from client libraries and publishes to DA layers", long_about = None)]
 struct Cli {
-    /// Path to the SQLite database to monitor
-    #[arg(short, long)]
-    db: Option<PathBuf>,
-
     /// Configuration file path
     #[arg(short, long, default_value = "config/default.yaml")]
     config: PathBuf,
@@ -31,20 +27,13 @@ async fn main() -> Result<()> {
     info!("Loading configuration from: {:?}", cli.config);
 
     // Load configuration
-    let mut config = synddb_sequencer::Config::from_file(&cli.config)?;
-
-    // Override database path from CLI if provided
-    if let Some(db_path) = cli.db {
-        config.database.path = db_path;
-    }
-
-    info!("Monitoring database: {:?}", config.database.path);
+    let config = synddb_sequencer::Config::from_file(&cli.config)?;
 
     // Create and run sequencer
     let sequencer = synddb_sequencer::Sequencer::new(config);
 
     info!("Starting sequencer components...");
-    info!("  - Session Monitor: Capturing changesets via SQLite Session Extension");
+    info!("  - HTTP Receiver: Receiving changesets from client libraries");
     info!("  - Batcher: Accumulating and batching changesets");
     info!("  - Attestor: Compressing and signing batches");
     info!("  - Publisher: Publishing to DA layers");

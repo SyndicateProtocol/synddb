@@ -1,0 +1,1592 @@
+## Message Passing - Bidirectional Bridge Communication
+
+The sequencer handles bidirectional message passing between the application and blockchain while maintaining a **read-only** relationship with SQLite. It monitors message tables written by the application and enforces consistency between blockchain events and application acknowledgments. Since the sequencer and application run as separate containers on the same physical machine, we use a localhost HTTP interface for maximum developer simplicity.
+
+### Key Principle: Single Writer Model
+
+- **Application**: The ONLY writer to SQLite (maintains single-writer model)
+- **Sequencer**: Read-only monitor that enforces consistency
+- **Validators**: Can verify complete audit trail of messages and their triggers
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         Blockchain (L1/L2)                       │
+│                    Bridge Contract (Messages)                    │
+└──────────────────────────────────────────────────────────────────┘
+                     ↑                           │
+              Outbound Messages           Inbound Events
+                     │                           ↓
+┌──────────────────────────────────────────────────────────────────┐
+│              synddb-sequencer Container (READ-ONLY)             │
+│                                                                   │
+│  ┌────────────────────┐    ┌─────────────────────────┐         │
+│  │  Table Monitor     │───▶│  Consistency Enforcer   │         │
+│  │  - Read msg tables │    │  - Verify ack'd inbound │         │
+│  │  - Read ack tables │    │  - Block if missing     │         │
+│  └────────────────────┘    └─────────────────────────┘         │
+│                                         │                        │
+│                                         ▼                        │
+│                            ┌─────────────────────────┐          │
+│  ┌────────────────────┐    │   Message Publisher    │          │
+│  │  Chain Monitor     │    │   - Publish outbound    │          │
+│  │  - Watch events    │    │   - Only if consistent  │          │
+│  │  - Track confirms  │    └─────────────────────────┘          │
+│  └────────────────────┘                │                        │
+│            │                            ▼                        │
+│            │                ┌─────────────────────────┐          │
+│            └───────────────▶│   Message HTTP API      │          │
+│                            │   localhost:8432        │          │
+│                            └─────────────────────────┘          │
+└──────────────────────────────────────────────────────────────────┘
+                     ↑ READ                     │ OFFER
+            SQLite Message Tables         Inbound Messages
+                     ↑ WRITE                    ↓ PROCESS
+┌──────────────────────────────────────────────────────────────────┐
+│                  Application Container (SINGLE WRITER)           │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────┐     │
+│  │  Message Flow:                                         │     │
+│  │  1. Receive inbound via HTTP API                       │     │
+│  │  2. Process and write to inbound_message_log           │     │
+│  │  3. Write outbound to message_log with triggers        │     │
+│  │  4. Sequencer reads and enforces consistency           │     │
+│  └────────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Message API Specification
+
+The sequencer exposes a simple HTTP server on localhost port 8432 that provides bidirectional message passing for the application. This API is designed to be as simple as possible for developers familiar with REST and Server-Sent Events (SSE).
+
+#### Inbound Messages (Blockchain → Application)
+
+##### 1. Real-time Inbound Message Stream (SSE)
+
+**Endpoint:** `GET http://localhost:8432/messages/inbound/stream`
+
+Returns a Server-Sent Events stream of new inbound messages as they are confirmed on-chain.
+
+**Example Response (SSE format):**
+```
+data: {"id":1,"messageType":"deposit","payload":{"from":"0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb3","amount":"1000000","token":"USDC"},"txHash":"0xabc...","blockNumber":19234567,"confirmations":12,"timestamp":"2024-01-15T10:30:00Z"}
+
+data: {"id":2,"messageType":"call","payload":{"target":"0x5aAeb6053f3E94C9b9A09f33669435E7Ef1BeAed","method":"updatePrice","params":["ETH",3500]},"txHash":"0xdef...","blockNumber":19234568,"confirmations":12,"timestamp":"2024-01-15T10:31:00Z"}
+```
+
+**Client Example (JavaScript):**
+```javascript
+const events = new EventSource('http://localhost:8432/messages/inbound/stream');
+
+events.onmessage = async (event) => {
+  const message = JSON.parse(event.data);
+  console.log(`New message: type=${message.messageType}, id=${message.id}`);
+
+  // Process message based on type
+  switch(message.messageType) {
+    case 'deposit':
+      await processDeposit(message.payload);
+      break;
+    case 'call':
+      await processCall(message.payload);
+      break;
+    default:
+      await processGenericMessage(message);
+  }
+};
+
+events.onerror = (error) => {
+  console.error('SSE connection error:', error);
+  // EventSource will auto-reconnect
+};
+```
+
+##### 2. Inbound Message Queue (REST Polling)
+
+**Endpoint:** `GET http://localhost:8432/messages/inbound?after_id={last_processed_id}`
+
+Returns all inbound messages after the specified ID. Used for polling or recovery after disconnection.
+
+**Query Parameters:**
+- `after_id` (optional): Return only messages with ID greater than this value
+- `limit` (optional): Maximum number of messages to return (default: 100, max: 1000)
+- `type` (optional): Filter by message type (e.g., "deposit", "call")
+
+**Example Response:**
+```json
+{
+  "messages": [
+    {
+      "id": 124,
+      "messageType": "deposit",
+      "payload": {
+        "from": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb3",
+        "amount": "1000000",
+        "token": "USDC"
+      },
+      "txHash": "0xabc123...",
+      "blockNumber": 19234567,
+      "confirmations": 12,
+      "timestamp": "2024-01-15T10:30:00Z"
+    },
+    {
+      "id": 125,
+      "messageType": "withdrawal",
+      "payload": {
+        "to": "0x5aAeb6053f3E94C9b9A09f33669435E7Ef1BeAed",
+        "amount": "500000",
+        "token": "USDC"
+      },
+      "txHash": "0xdef456...",
+      "blockNumber": 19234568,
+      "confirmations": 12,
+      "timestamp": "2024-01-15T10:31:00Z"
+    }
+  ],
+  "hasMore": false,
+  "latestId": 125
+}
+```
+
+**Client Example (Python):**
+```python
+import requests
+import time
+
+last_id = 0
+
+while True:
+    response = requests.get(f'http://localhost:8432/messages/inbound?after_id={last_id}')
+    data = response.json()
+
+    for message in data['messages']:
+        if message['messageType'] == 'deposit':
+            process_deposit(message['payload'])
+        elif message['messageType'] == 'call':
+            process_call(message['payload'])
+        last_id = message['id']
+
+    time.sleep(5)  # Poll every 5 seconds
+```
+
+##### 3. Acknowledge Message (Optional)
+
+**Endpoint:** `POST http://localhost:8432/messages/inbound/{id}/ack`
+
+Optionally acknowledge that a message has been processed. This is for monitoring/debugging purposes only and doesn't affect message delivery.
+
+**Request Body:**
+```json
+{
+  "processed": true,
+  "processingNote": "Message processed successfully"  // Optional
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message_id": 124
+}
+```
+
+#### Outbound Messages (Application → Blockchain)
+
+The sequencer monitors designated SQLite tables for outbound messages. When the application writes to these tables, the sequencer automatically detects the changes and publishes them to DA layers for validator processing.
+
+##### Message Table Schemas
+
+Applications must create these tables for message passing:
+
+```sql
+-- Outbound messages (Application writes, Sequencer reads)
+CREATE TABLE message_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_type TEXT NOT NULL,      -- 'withdrawal', 'call', etc.
+    payload JSON NOT NULL,            -- Message data as JSON
+    idempotency_key TEXT UNIQUE,     -- Prevents duplicate messages
+    status TEXT DEFAULT 'pending',   -- Updated by sequencer
+    created_at INTEGER DEFAULT (unixepoch()),
+
+    -- Audit fields for validators
+    trigger_event TEXT,               -- What caused this message (e.g., 'order_match')
+    trigger_id INTEGER,               -- Reference to causing record
+
+    -- Status tracking
+    published_at INTEGER,
+    tx_hash TEXT,
+    error TEXT
+);
+
+-- Inbound message acknowledgments (Application writes, Sequencer reads)
+CREATE TABLE inbound_message_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT UNIQUE NOT NULL,  -- Message ID from blockchain
+    message_type TEXT NOT NULL,
+    payload JSON NOT NULL,
+    processed_at INTEGER DEFAULT (unixepoch()),
+
+    -- Application records what it did
+    action_taken TEXT,                -- What the app did with the message
+    action_result JSON                -- Result of processing
+);
+
+-- Example: Order match triggers withdrawal
+INSERT INTO message_log (
+    message_type,
+    payload,
+    idempotency_key,
+    trigger_event,
+    trigger_id
+) VALUES (
+    'withdrawal',
+    '{"recipient": "0x123...", "amount": "1000", "token": "USDC"}',
+    'withdrawal-order-456',  -- Prevents duplicate withdrawals
+    'order_match',
+    456  -- References orders.id = 456
+);
+
+-- Example: Application acknowledges deposit
+INSERT INTO inbound_message_log (
+    message_id,
+    message_type,
+    payload,
+    action_taken,
+    action_result
+) VALUES (
+    '0xabc123...',
+    'deposit',
+    '{"from": "0x456...", "amount": "1000", "token": "USDC"}',
+    'credit_user_balance',
+    '{"user_id": 42, "new_balance": "5000"}'
+);
+```
+
+##### Status Monitoring
+
+**Endpoint:** `GET http://localhost:8432/messages/outbound/{id}/status`
+
+Check the status of an outbound message.
+
+**Response:**
+```json
+{
+  "id": 456,
+  "status": "confirmed",  // 'pending', 'published', 'confirmed', 'failed'
+  "txHash": "0x789abc...",
+  "confirmations": 12,
+  "error": null
+}
+```
+
+### Implementation
+
+#### Consistency Enforcer
+
+The consistency enforcer ensures that all inbound messages are acknowledged before allowing outbound messages to be published. This maintains data integrity and prevents message loss.
+
+```rust
+// src/messages/consistency.rs
+use rusqlite::{Connection, OpenFlags};
+use std::collections::HashSet;
+
+pub struct ConsistencyEnforcer {
+    db_path: PathBuf,
+    blockchain_messages: Arc<Mutex<HashSet<String>>>,  // Message IDs from chain
+    halt_outbound: Arc<AtomicBool>,
+}
+
+impl ConsistencyEnforcer {
+    pub async fn new(db_path: PathBuf) -> Result<Self> {
+        Ok(Self {
+            db_path,
+            blockchain_messages: Arc::new(Mutex::new(HashSet::new())),
+            halt_outbound: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Called when blockchain monitor sees a new inbound message
+    pub async fn record_blockchain_message(&self, message_id: String) {
+        self.blockchain_messages.lock().await.insert(message_id);
+
+        // Immediately check consistency
+        self.check_consistency().await;
+    }
+
+    /// Periodically check that all blockchain messages are acknowledged
+    pub async fn check_consistency(&self) -> Result<()> {
+        // Open SQLite in read-only mode
+        let conn = Connection::open_with_flags(
+            &self.db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+        )?;
+
+        // Get all acknowledged messages from application
+        let mut stmt = conn.prepare(
+            "SELECT message_id FROM inbound_message_log"
+        )?;
+
+        let acknowledged: HashSet<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<HashSet<_>, _>>()?;
+
+        // Check for missing acknowledgments
+        let blockchain_msgs = self.blockchain_messages.lock().await;
+        let missing: Vec<_> = blockchain_msgs
+            .iter()
+            .filter(|id| !acknowledged.contains(*id))
+            .cloned()
+            .collect();
+
+        if !missing.is_empty() {
+            warn!("Missing acknowledgments for {} messages: {:?}",
+                  missing.len(), missing);
+
+            // CRITICAL: Halt outbound message processing
+            self.halt_outbound.store(true, Ordering::SeqCst);
+
+            // Alert metrics/monitoring
+            metrics::gauge!("synddb.missing_acknowledgments", missing.len() as f64);
+        } else {
+            info!("All {} blockchain messages acknowledged", blockchain_msgs.len());
+
+            // Resume outbound processing if it was halted
+            self.halt_outbound.store(false, Ordering::SeqCst);
+        }
+
+        Ok(())
+    }
+
+    /// Check if outbound messages can be processed
+    pub fn can_process_outbound(&self) -> bool {
+        !self.halt_outbound.load(Ordering::SeqCst)
+    }
+
+    /// Get detailed consistency status
+    pub async fn get_status(&self) -> ConsistencyStatus {
+        let conn = Connection::open_with_flags(
+            &self.db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+        ).ok();
+
+        let acknowledged_count = conn.and_then(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM inbound_message_log",
+                [],
+                |row| row.get::<_, i64>(0)
+            ).ok()
+        }).unwrap_or(0);
+
+        let blockchain_count = self.blockchain_messages.lock().await.len() as i64;
+
+        ConsistencyStatus {
+            blockchain_messages: blockchain_count,
+            acknowledged_messages: acknowledged_count,
+            missing_count: blockchain_count - acknowledged_count,
+            outbound_halted: self.halt_outbound.load(Ordering::SeqCst),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConsistencyStatus {
+    pub blockchain_messages: i64,
+    pub acknowledged_messages: i64,
+    pub missing_count: i64,
+    pub outbound_halted: bool,
+}
+```
+
+### Progressive Degradation and Recovery
+
+When the application fails to acknowledge inbound messages, the sequencer follows a progressive degradation strategy to maintain system integrity while attempting recovery.
+
+#### Degradation Levels and Actions
+
+```rust
+// src/messages/degradation.rs
+use std::time::Duration;
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SystemStatus {
+    Healthy,
+    Degraded(DegradedReason),
+    Halted(HaltReason),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DegradedReason {
+    PendingAcknowledgments { count: usize, oldest: DateTime<Utc> },
+    ApplicationUnresponsive { since: DateTime<Utc> },
+    ConsistencyCheckFailed { details: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HaltReason {
+    ConsistencyViolation { missing_messages: Vec<String> },
+    ApplicationTimeout { duration_mins: u64 },
+    ManualIntervention { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ErrorCode {
+    // Recoverable errors (E00x)
+    E001_MISSING_INBOUND_ACK,      // Missing inbound acknowledgments
+    E002_CONSISTENCY_VIOLATION,     // State inconsistency detected
+    E003_APPLICATION_TIMEOUT,       // App not responding
+    E004_PARTIAL_ACKNOWLEDGMENT,    // Some but not all messages ack'd
+
+    // Critical errors (E10x)
+    E101_INVALID_STATE_TRANSITION,  // App made invalid state change
+    E102_AUDIT_TRAIL_BROKEN,        // Missing trigger references
+    E103_IDEMPOTENCY_VIOLATION,     // Duplicate message detected
+    E104_IRRECOVERABLE_STATE,       // Cannot recover without intervention
+}
+
+pub struct DegradationManager {
+    status: Arc<RwLock<SystemStatus>>,
+    first_issue_detected: Option<DateTime<Utc>>,
+    missing_messages: Arc<Mutex<Vec<String>>>,
+    commitment_publisher: Arc<StateCommitmentPublisher>,
+}
+
+impl DegradationManager {
+    pub async fn evaluate_and_respond(&mut self, consistency_status: &ConsistencyStatus) {
+        let missing_count = consistency_status.missing_count;
+
+        if missing_count == 0 {
+            // All clear - ensure we're healthy
+            if !matches!(*self.status.read().await, SystemStatus::Healthy) {
+                self.recover_to_healthy().await;
+            }
+            return;
+        }
+
+        // Track when issues first appeared
+        if self.first_issue_detected.is_none() {
+            self.first_issue_detected = Some(Utc::now());
+        }
+
+        let issue_duration = Utc::now() - self.first_issue_detected.unwrap();
+
+        // Progressive degradation based on duration and severity
+        let new_status = match (issue_duration.num_seconds(), missing_count) {
+            // Level 1: Warning (< 30 seconds OR < 3 messages)
+            (d, c) if d < 30 || c < 3 => {
+                info!("Level 1: Warning - {} missing acknowledgments", c);
+                self.send_application_alert(AlertLevel::Warning).await;
+                SystemStatus::Healthy  // Still healthy, just warning
+            }
+
+            // Level 2: Degraded (< 5 minutes AND < 10 messages)
+            (d, c) if d < 300 && c < 10 => {
+                warn!("Level 2: Degraded - {} missing acknowledgments for {}s", c, d);
+                self.send_application_alert(AlertLevel::Critical).await;
+                SystemStatus::Degraded(DegradedReason::PendingAcknowledgments {
+                    count: c as usize,
+                    oldest: self.first_issue_detected.unwrap(),
+                })
+            }
+
+            // Level 3: Critical Degradation (< 30 minutes OR < 50 messages)
+            (d, c) if d < 1800 || c < 50 => {
+                error!("Level 3: Critical - {} missing acknowledgments for {}s", c, d);
+                self.send_application_alert(AlertLevel::Emergency).await;
+                SystemStatus::Degraded(DegradedReason::ApplicationUnresponsive {
+                    since: self.first_issue_detected.unwrap(),
+                })
+            }
+
+            // Level 4: Halt (> 30 minutes OR > 50 messages)
+            (d, c) => {
+                error!("Level 4: HALTING - {} missing acknowledgments for {}s", c, d);
+                self.initiate_shutdown().await;
+                SystemStatus::Halted(HaltReason::ConsistencyViolation {
+                    missing_messages: self.missing_messages.lock().await.clone(),
+                })
+            }
+        };
+
+        // Update status and publish state commitment
+        *self.status.write().await = new_status.clone();
+        self.publish_state_commitment(new_status).await;
+    }
+
+    async fn publish_state_commitment(&self, status: SystemStatus) {
+        let commitment = StateCommitment {
+            sequence_number: self.get_next_sequence(),
+            timestamp: Utc::now(),
+            system_status: status.clone(),
+            error_code: self.determine_error_code(&status),
+            committed_state: self.get_last_valid_state().await,
+            details: self.gather_commitment_details().await,
+        };
+
+        // Sign with TEE key and publish
+        self.commitment_publisher.publish(commitment).await;
+    }
+
+    async fn recover_to_healthy(&mut self) {
+        info!("System recovering to healthy state");
+
+        // Clear tracking
+        self.first_issue_detected = None;
+        self.missing_messages.lock().await.clear();
+
+        // Update status
+        *self.status.write().await = SystemStatus::Healthy;
+
+        // Publish recovery state commitment
+        self.publish_state_commitment(SystemStatus::Healthy).await;
+
+        // Resume normal operations
+        self.resume_operations().await;
+    }
+}
+```
+
+#### Application Alert Mechanism
+
+```rust
+// src/messages/alerts.rs
+
+#[derive(Debug, Clone)]
+pub enum AlertLevel {
+    Warning,    // 1-5 missing messages
+    Critical,   // 5-10 missing messages
+    Emergency,  // 10+ missing messages
+}
+
+pub struct ApplicationAlerter {
+    api_client: Arc<MessageApiClient>,
+    health_endpoint: Arc<HealthEndpoint>,
+}
+
+impl ApplicationAlerter {
+    pub async fn send_alert(&self, level: AlertLevel, details: AlertDetails) {
+        match level {
+            AlertLevel::Warning => {
+                // Add warning headers to API responses
+                self.api_client.set_response_headers(vec![
+                    ("X-Sequencer-Warning", "Missing acknowledgments"),
+                    ("X-Missing-Count", &details.missing_count.to_string()),
+                ]).await;
+
+                // Increase retry frequency for message delivery
+                self.api_client.set_retry_interval(Duration::from_secs(1)).await;
+            }
+
+            AlertLevel::Critical => {
+                // Return errors on non-essential endpoints
+                self.api_client.set_global_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({
+                        "error": "Critical: Must acknowledge inbound messages",
+                        "missing_count": details.missing_count,
+                        "oldest_missing": details.oldest_missing,
+                    })
+                ).await;
+
+                // Only allow message acknowledgment endpoints
+                self.api_client.restrict_to_essential_only().await;
+            }
+
+            AlertLevel::Emergency => {
+                // Fail health checks to trigger container restart
+                self.health_endpoint.set_status(HealthStatus::Failing).await;
+
+                // Return errors on ALL endpoints including health
+                self.api_client.set_global_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({
+                        "error": "Emergency: System halted due to consistency violation",
+                        "action_required": "Acknowledge all pending messages",
+                        "missing_messages": details.missing_messages,
+                    })
+                ).await;
+
+                // Log critical event for monitoring systems
+                error!("EMERGENCY: Application unresponsive - {} messages unacknowledged",
+                       details.missing_count);
+            }
+        }
+    }
+}
+```
+
+#### State Commitments for Validators
+
+```rust
+// src/messages/state_commitments.rs
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateCommitment {
+    pub sequence_number: u64,
+    pub timestamp: DateTime<Utc>,
+    pub system_status: SystemStatus,
+    pub error_code: Option<ErrorCode>,
+    pub committed_state: StateReference,
+    pub details: CommitmentDetails,
+    pub signature: Signature,  // Signed by sequencer's TEE-protected key
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateReference {
+    pub sequence: u64,
+    pub state_update_hash: H256,  // Hash of the state update (changeset or snapshot)
+    pub da_reference: String,  // CID or transaction hash
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitmentDetails {
+    pub missing_acknowledgments: Vec<String>,
+    pub pending_outbound: usize,
+    pub last_successful_publish: DateTime<Utc>,
+    pub health_metrics: HealthMetrics,
+}
+
+pub struct StateCommitmentPublisher {
+    da_publisher: Arc<DaPublisher>,
+    tee_signer: Arc<TeeSigner>,
+    commitment_log: Arc<Mutex<Vec<StateCommitment>>>,
+}
+
+impl StateCommitmentPublisher {
+    pub async fn publish(&self, mut commitment: StateCommitment) -> Result<()> {
+        // Sign with TEE-protected key (not to be confused with TEE attestation)
+        let signature = self.tee_signer.sign(&commitment)?;
+        commitment.signature = signature;
+
+        // Publish to DA layer even when halted
+        // This ensures validators always know system state
+        let receipt = self.da_publisher
+            .publish_state_commitment(&commitment)
+            .await?;
+
+        // Log locally
+        self.commitment_log.lock().await.push(commitment.clone());
+
+        info!("Published state commitment #{} with status {:?}",
+              commitment.sequence_number, commitment.system_status);
+
+        // Emit metrics
+        metrics::counter!("synddb.state_commitments.published", 1,
+            "status" => format!("{:?}", commitment.system_status));
+
+        Ok(())
+    }
+}
+```
+
+#### Recovery Protocol
+
+```rust
+// src/messages/recovery.rs
+
+pub struct RecoveryManager {
+    consistency_enforcer: Arc<ConsistencyEnforcer>,
+    degradation_manager: Arc<Mutex<DegradationManager>>,
+    da_publisher: Arc<DaPublisher>,
+}
+
+impl RecoveryManager {
+    /// Called when application starts acknowledging messages again
+    pub async fn attempt_recovery(&self) -> Result<RecoveryStatus> {
+        info!("Attempting system recovery");
+
+        // Step 1: Verify all missing messages are now acknowledged
+        let consistency = self.consistency_enforcer.check_consistency().await?;
+
+        if consistency.missing_count > 0 {
+            warn!("Cannot recover - still {} messages unacknowledged",
+                  consistency.missing_count);
+            return Ok(RecoveryStatus::Incomplete {
+                remaining: consistency.missing_count as usize,
+            });
+        }
+
+        // Step 2: Validate database consistency
+        if let Err(e) = self.validate_database_state().await {
+            error!("Cannot recover - database validation failed: {}", e);
+            return Ok(RecoveryStatus::Failed {
+                reason: format!("Database validation failed: {}", e),
+            });
+        }
+
+        // Step 3: Clear degradation state
+        self.degradation_manager.lock().await
+            .recover_to_healthy().await;
+
+        // Step 4: Publish recovery state commitment
+        let recovery_commitment = StateCommitment {
+            sequence_number: self.get_next_sequence(),
+            timestamp: Utc::now(),
+            system_status: SystemStatus::Healthy,
+            error_code: None,
+            committed_state: self.get_current_state().await,
+            details: CommitmentDetails {
+                missing_acknowledgments: vec![],
+                pending_outbound: 0,
+                last_successful_publish: Utc::now(),
+                health_metrics: self.gather_health_metrics().await,
+            },
+            signature: Signature::default(),  // Will be signed by publisher
+        };
+
+        self.publish_state_commitment(recovery_commitment).await?;
+
+        // Step 5: Resume operations
+        self.resume_all_operations().await?;
+
+        info!("System successfully recovered");
+        Ok(RecoveryStatus::Success)
+    }
+
+    async fn validate_database_state(&self) -> Result<()> {
+        // Verify critical tables exist and have valid schema
+        // Check foreign key constraints
+        // Validate sequence numbers are continuous
+        // Ensure no orphaned records
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum RecoveryStatus {
+    Success,
+    Incomplete { remaining: usize },
+    Failed { reason: String },
+}
+```
+
+#### Inbound Message Monitor
+
+```rust
+// src/messages/inbound_monitor.rs
+use alloy::{
+    primitives::{Address, U256, B256},
+    providers::{Provider, ProviderBuilder, WsConnect},
+    rpc::types::{Filter, Log},
+    sol,
+    sol_types::SolEvent,
+};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use chrono::Utc;
+
+// Define Bridge events using alloy's sol! macro
+sol! {
+    // Generic message event from Bridge contract
+    event MessageReceived(
+        bytes32 indexed messageId,
+        bytes4 indexed messageType,
+        bytes payload,
+        address sender
+    );
+}
+
+pub struct InboundMonitor {
+    provider: Arc<dyn Provider>,
+    bridge_contract: Address,
+    message_queue: Arc<Mutex<MessageQueue>>,
+    confirmation_blocks: u64,
+}
+
+impl InboundMonitor {
+    pub async fn new(
+        rpc_url: &str,
+        bridge_address: &str,
+        message_queue: Arc<Mutex<MessageQueue>>,
+        confirmation_blocks: u64,
+    ) -> Result<Self> {
+        // Connect to WebSocket provider
+        let ws = WsConnect::new(rpc_url);
+        let provider = ProviderBuilder::new()
+            .on_ws(ws)
+            .await?;
+
+        let bridge_contract = bridge_address.parse::<Address>()?;
+
+        Ok(Self {
+            provider: Arc::new(provider),
+            bridge_contract,
+            message_queue,
+            confirmation_blocks,
+        })
+    }
+
+    pub async fn start_monitoring(self) -> Result<()> {
+        // Create filter for MessageReceived events
+        let filter = Filter::new()
+            .address(self.bridge_contract)
+            .event_signature(MessageReceived::SIGNATURE_HASH);
+
+        // Subscribe to logs
+        let subscription = self.provider.subscribe_logs(&filter).await?;
+        let mut stream = subscription.into_stream();
+
+        // Process events as they arrive
+        while let Some(log) = stream.next().await {
+            match self.process_message_event(log).await {
+                Ok(_) => {},
+                Err(e) => error!("Failed to process message: {}", e),
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn process_message_event(&self, log: Log) -> Result<()> {
+        // Wait for confirmations
+        let current_block = self.provider.get_block_number().await?;
+        let log_block = log.block_number.unwrap_or_default();
+        let confirmations = current_block.saturating_sub(log_block);
+
+        if confirmations < self.confirmation_blocks {
+            // Not enough confirmations yet, re-queue for later
+            tokio::time::sleep(Duration::from_secs(12)).await;
+            return self.process_message_event(log).await;
+        }
+
+        // Decode the MessageReceived event
+        let message_event = log.log_decode::<MessageReceived>()?.inner;
+
+        // Decode message type
+        let message_type = match &message_event.messageType[..] {
+            b"\x12\x34\x56\x78" => "deposit",  // Example type signatures
+            b"\x87\x65\x43\x21" => "withdrawal",
+            b"\xab\xcd\xef\x00" => "call",
+            _ => "unknown",
+        };
+
+        // Create message record
+        let payload_json = serde_json::from_slice(&message_event.payload)
+            .unwrap_or_else(|_| json!({ "raw": hex::encode(&message_event.payload) }));
+
+        let message = InboundMessage {
+            id: self.message_queue.lock().await.next_id(),
+            message_id: format!("{:?}", message_event.messageId),
+            message_type: message_type.to_string(),
+            payload: payload_json,
+            sender: format!("{:?}", message_event.sender),
+            tx_hash: format!("{:?}", log.transaction_hash.unwrap_or_default()),
+            block_number: log_block,
+            confirmations,
+            timestamp: Utc::now(),
+        };
+
+        // Add to queue
+        self.message_queue.lock().await.add_message(message)?;
+
+        info!("Processed inbound message: type={}, id={}, tx={}",
+              message_type, message.message_id, message.tx_hash);
+
+        Ok(())
+    }
+
+}
+```
+
+#### Message Queue
+
+```rust
+// src/messages/queue.rs
+use std::collections::VecDeque;
+use chrono::{DateTime, Utc};
+use serde::{Serialize, Deserialize};
+use serde_json::Value;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboundMessage {
+    pub id: u64,
+    pub message_id: String,
+    pub message_type: String,
+    pub payload: Value,  // Generic JSON payload
+    pub sender: String,
+    pub tx_hash: String,
+    pub block_number: u64,
+    pub confirmations: u64,
+    pub timestamp: DateTime<Utc>,
+}
+
+pub struct MessageQueue {
+    messages: VecDeque<InboundMessage>,
+    next_id: AtomicU64,
+    max_queue_size: usize,
+    retention_period: Duration,
+}
+
+impl MessageQueue {
+    pub fn new(max_queue_size: usize, retention_period: Duration) -> Self {
+        Self {
+            messages: VecDeque::new(),
+            next_id: AtomicU64::new(1),
+            max_queue_size,
+            retention_period,
+        }
+    }
+
+    pub fn add_message(&mut self, mut message: InboundMessage) -> Result<()> {
+        message.id = self.next_id.fetch_add(1, Ordering::SeqCst);
+
+        // Remove old messages beyond retention period
+        let cutoff = Utc::now() - self.retention_period;
+        self.messages.retain(|m| m.timestamp > cutoff);
+
+        // Ensure queue doesn't grow unbounded
+        if self.messages.len() >= self.max_queue_size {
+            self.messages.pop_front();
+        }
+
+        self.messages.push_back(message.clone());
+
+        info!("New message queued: type={}, id={}, from={}",
+              message.message_type, message.id, message.sender);
+
+        Ok(())
+    }
+
+    pub fn get_messages_after(&self, after_id: u64, limit: usize, message_type: Option<&str>) -> Vec<InboundMessage> {
+        self.messages
+            .iter()
+            .filter(|m| m.id > after_id)
+            .filter(|m| message_type.map_or(true, |t| m.message_type == t))
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_latest_messages(&self, count: usize) -> Vec<InboundMessage> {
+        self.messages
+            .iter()
+            .rev()
+            .take(count)
+            .rev()
+            .cloned()
+            .collect()
+    }
+
+    pub fn next_id(&self) -> u64 {
+        self.next_id.load(Ordering::SeqCst)
+    }
+}
+```
+
+#### Outbound Message Monitor
+
+```rust
+// src/messages/outbound_monitor.rs
+use rusqlite::{Connection, OpenFlags};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct OutboundMonitor {
+    db_path: PathBuf,
+    consistency: Arc<ConsistencyEnforcer>,
+    outbound_tx: Sender<OutboundMessage>,
+    last_processed_id: Arc<AtomicU64>,
+}
+
+impl OutboundMonitor {
+    pub async fn new(
+        db_path: PathBuf,
+        consistency: Arc<ConsistencyEnforcer>,
+        outbound_tx: Sender<OutboundMessage>,
+    ) -> Result<Self> {
+        Ok(Self {
+            db_path,
+            consistency,
+            outbound_tx,
+            last_processed_id: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
+    pub async fn run(self) -> Result<()> {
+        loop {
+            // Only process if consistency check passes
+            if !self.consistency.can_process_outbound() {
+                warn!("Outbound processing halted: waiting for inbound acknowledgments");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+
+            // Poll for new outbound messages (read-only)
+            self.poll_outbound_messages().await?;
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn poll_outbound_messages(&self) -> Result<()> {
+        // Open connection in read-only mode
+        let conn = Connection::open_with_flags(
+            &self.db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+        )?;
+
+        // Query for new messages since last check
+        let last_id = self.last_processed_id.load(Ordering::SeqCst);
+        let mut stmt = conn.prepare(
+            "SELECT 'message_log' as table, id, message_type, payload,
+                    status, created_at
+             FROM message_log
+             WHERE id > ? AND status = 'pending'
+             ORDER BY id
+             LIMIT 100"
+        )?;
+
+        let messages = stmt.query_map([last_id], |row| {
+            Ok(OutboundMessage {
+                table: row.get(0)?,
+                id: row.get(1)?,
+                message_type: row.get(2)?,
+                payload: row.get(3)?,
+                status: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+
+        for msg_result in messages {
+            let msg = msg_result?;
+
+            // Validate message has proper audit trail
+            if let Err(e) = self.validate_message_context(&conn, &msg) {
+                error!("Invalid message context for {}: {}", msg.id, e);
+                continue;
+            }
+
+            // Update last processed ID
+            self.last_processed_id.store(msg.id, Ordering::SeqCst);
+
+            // Send to publisher
+            if let Err(e) = self.outbound_tx.send(msg).await {
+                error!("Failed to queue outbound message: {}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate that the message has proper audit trail
+    fn validate_message_context(&self, conn: &Connection, msg: &OutboundMessage) -> Result<()> {
+        // Ensure trigger references exist
+        if let (Some(event), Some(id)) = (&msg.trigger_event, msg.trigger_id) {
+            // Verify the trigger record exists
+            let query = format!(
+                "SELECT COUNT(*) FROM {} WHERE id = ?",
+                self.get_trigger_table(event)?
+            );
+
+            let count: i64 = conn.query_row(&query, [id], |row| row.get(0))?;
+
+            if count == 0 {
+                return Err(anyhow!("Trigger record not found: {} id={}", event, id));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_trigger_table(&self, event: &str) -> Result<&str> {
+        match event {
+            "order_match" => Ok("orders"),
+            "user_withdrawal" => Ok("users"),
+            _ => Err(anyhow!("Unknown trigger event: {}", event))
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OutboundMessage {
+    pub table: String,
+    pub id: u64,
+    pub message_type: String,
+    pub payload: Vec<u8>,
+    pub status: String,
+    pub created_at: i64,
+}
+```
+
+#### HTTP API Server
+
+```rust
+// src/messages/api.rs
+use axum::{
+    extract::{Query, Path, State},
+    response::sse::{Event, Sse},
+    Json, Router,
+};
+use tokio_stream::StreamExt;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct MessageApi {
+    inbound_queue: Arc<Mutex<MessageQueue>>,
+    outbound_status: Arc<Mutex<OutboundStatus>>,
+    sse_broadcaster: Arc<Mutex<SseBroadcaster>>,
+}
+
+impl MessageApi {
+    pub fn router(
+        inbound_queue: Arc<Mutex<MessageQueue>>,
+        outbound_status: Arc<Mutex<OutboundStatus>>,
+    ) -> Router {
+        let sse_broadcaster = Arc::new(Mutex::new(SseBroadcaster::new()));
+
+        let api = Arc::new(Self {
+            inbound_queue,
+            outbound_status,
+            sse_broadcaster,
+        });
+
+        Router::new()
+            // Inbound message endpoints
+            .route("/messages/inbound/stream", get(Self::inbound_stream))
+            .route("/messages/inbound", get(Self::get_inbound_messages))
+            .route("/messages/inbound/:id/ack", post(Self::acknowledge_message))
+            // Outbound message endpoints
+            .route("/messages/outbound/:id/status", get(Self::get_outbound_status))
+            .with_state(api)
+    }
+
+    // SSE endpoint for real-time inbound messages
+    async fn inbound_stream(
+        State(api): State<Arc<MessageApi>>,
+    ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+        let receiver = api.sse_broadcaster.lock().await.subscribe();
+
+        let stream = BroadcastStream::new(receiver).map(|msg| {
+            match msg {
+                Ok(message) => {
+                    let data = serde_json::to_string(&message).unwrap_or_default();
+                    Ok(Event::default().data(data))
+                }
+                Err(_) => Ok(Event::default().comment("error")),
+            }
+        });
+
+        Sse::new(stream)
+            .keep_alive(Duration::from_secs(30))
+    }
+
+    // REST endpoint for polling/recovery
+    async fn get_inbound_messages(
+        State(api): State<Arc<MessageApi>>,
+        Query(params): Query<GetMessagesParams>,
+    ) -> Json<GetMessagesResponse> {
+        let queue = api.inbound_queue.lock().await;
+
+        let after_id = params.after_id.unwrap_or(0);
+        let limit = params.limit.unwrap_or(100).min(1000);
+
+        let messages = queue.get_messages_after(after_id, limit, params.message_type.as_deref());
+        let has_more = messages.len() >= limit;
+        let latest_id = messages.last().map(|m| m.id).unwrap_or(after_id);
+
+        Json(GetMessagesResponse {
+            messages,
+            has_more,
+            latest_id,
+        })
+    }
+
+    // Optional acknowledgment endpoint
+    async fn acknowledge_message(
+        State(api): State<Arc<MessageApi>>,
+        Path(id): Path<u64>,
+        Json(body): Json<AckRequest>,
+    ) -> Json<AckResponse> {
+        info!("Message {} acknowledged: processed={}, note={:?}",
+              id, body.processed, body.processing_note);
+
+        Json(AckResponse {
+            success: true,
+            message_id: id,
+        })
+    }
+
+    // Get status of outbound message
+    async fn get_outbound_status(
+        State(api): State<Arc<MessageApi>>,
+        Path(id): Path<u64>,
+    ) -> Json<OutboundStatusResponse> {
+        let status = api.outbound_status.lock().await.get_status(id);
+
+        Json(OutboundStatusResponse {
+            id,
+            status: status.status,
+            tx_hash: status.tx_hash,
+            confirmations: status.confirmations,
+            error: status.error,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct GetDepositsParams {
+    after_id: Option<u64>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct GetDepositsResponse {
+    deposits: Vec<Deposit>,
+    has_more: bool,
+    latest_id: u64,
+}
+
+#[derive(Deserialize)]
+struct AckRequest {
+    processed: bool,
+    processing_note: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AckResponse {
+    success: bool,
+    deposit_id: u64,
+}
+
+// SSE broadcaster for pushing deposits to all connected clients
+struct SseBroadcaster {
+    clients: Vec<tokio::sync::broadcast::Sender<Deposit>>,
+}
+
+impl SseBroadcaster {
+    fn new() -> Self {
+        Self {
+            clients: Vec::new(),
+        }
+    }
+
+    fn subscribe(&mut self) -> tokio::sync::broadcast::Receiver<Deposit> {
+        let (tx, rx) = tokio::sync::broadcast::channel(100);
+        self.clients.push(tx);
+        rx
+    }
+
+    async fn broadcast(&self, deposit: Deposit) {
+        for client in &self.clients {
+            let _ = client.send(deposit.clone());
+        }
+    }
+}
+```
+
+### Configuration
+
+Add to the sequencer configuration file:
+
+```yaml
+# Message passing configuration
+messages:
+  # Inbound messages from blockchain
+  inbound:
+    enabled: true
+    rpc_url: "wss://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+    bridge_contract: "0x..."  # Bridge contract address
+    confirmation_blocks: 12    # Wait for 12 confirmations
+    poll_interval_secs: 12     # Check every 12 seconds (1 block)
+
+  # Outbound messages from application
+  outbound:
+    enabled: true
+    monitor_tables:            # Tables to monitor for outbound messages
+      - "outbound_messages"
+      - "outbound_withdrawals"
+      - "outbound_calls"
+    batch_interval_ms: 1000    # Batch messages for 1 second before publishing
+
+  # HTTP API for applications
+  api:
+    enabled: true
+    host: "127.0.0.1"         # localhost only (same machine)
+    port: 8432                # Message API port
+
+  # Queue management
+  queue:
+    max_size: 10000           # Maximum messages in queue
+    retention_hours: 24       # Keep messages for 24 hours
+
+  # Monitoring
+  monitoring:
+    log_level: "info"
+    metrics: true
+```
+
+### Integration Examples
+
+#### Node.js Application
+
+```javascript
+// Simple deposit handler for Node.js applications
+class DepositHandler {
+  constructor() {
+    this.lastProcessedId = this.loadLastProcessedId();
+    this.eventSource = null;
+  }
+
+  async start() {
+    // Try SSE first for real-time updates
+    this.connectSSE();
+
+    // Also poll periodically as backup
+    setInterval(() => this.pollDeposits(), 30000);
+  }
+
+  connectSSE() {
+    this.eventSource = new EventSource('http://localhost:8432/deposits/stream');
+
+    this.eventSource.onmessage = async (event) => {
+      const deposit = JSON.parse(event.data);
+      await this.processDeposit(deposit);
+    };
+
+    this.eventSource.onerror = (error) => {
+      console.error('SSE error, will reconnect:', error);
+      // EventSource auto-reconnects
+    };
+  }
+
+  async pollDeposits() {
+    try {
+      const response = await fetch(
+        `http://localhost:8432/deposits?after_id=${this.lastProcessedId}`
+      );
+      const data = await response.json();
+
+      for (const deposit of data.deposits) {
+        await this.processDeposit(deposit);
+      }
+    } catch (error) {
+      console.error('Polling error:', error);
+    }
+  }
+
+  async processDeposit(deposit) {
+    console.log(`Processing deposit ${deposit.id}: ${deposit.amount} ${deposit.token}`);
+
+    // Update user balance in database
+    await db.query(
+      'UPDATE user_balances SET amount = amount + ? WHERE address = ? AND token = ?',
+      [deposit.amount, deposit.from, deposit.token]
+    );
+
+    this.lastProcessedId = deposit.id;
+    this.saveLastProcessedId(deposit.id);
+
+    // Optional: acknowledge processing
+    await fetch(`http://localhost:8432/deposits/${deposit.id}/ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ processed: true })
+    });
+  }
+}
+```
+
+#### Python Application
+
+```python
+import asyncio
+import aiohttp
+import json
+from aiohttp_sse_client import client as sse_client
+
+class DepositHandler:
+    def __init__(self):
+        self.base_url = "http://localhost:8432"
+        self.last_processed_id = self.load_last_processed_id()
+
+    async def start(self):
+        # Start both SSE and polling concurrently
+        await asyncio.gather(
+            self.listen_sse(),
+            self.poll_periodically()
+        )
+
+    async def listen_sse(self):
+        async with sse_client.EventSource(
+            f'{self.base_url}/deposits/stream'
+        ) as event_source:
+            async for event in event_source:
+                if event.data:
+                    deposit = json.loads(event.data)
+                    await self.process_deposit(deposit)
+
+    async def poll_periodically(self):
+        while True:
+            await asyncio.sleep(30)  # Poll every 30 seconds
+            await self.poll_deposits()
+
+    async def poll_deposits(self):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f'{self.base_url}/deposits',
+                params={'after_id': self.last_processed_id}
+            ) as response:
+                data = await response.json()
+                for deposit in data['deposits']:
+                    await self.process_deposit(deposit)
+
+    async def process_deposit(self, deposit):
+        print(f"Processing deposit {deposit['id']}: "
+              f"{deposit['amount']} {deposit['token']} from {deposit['from']}")
+
+        # Update application state
+        # ...
+
+        self.last_processed_id = deposit['id']
+        self.save_last_processed_id(deposit['id'])
+```
+
+### Validator Verification
+
+Validators can verify the complete audit trail of messages, ensuring that:
+1. All inbound messages were properly acknowledged
+2. Outbound messages have valid triggers
+3. Message ordering is consistent
+
+```rust
+// In validator implementation
+impl Validator {
+    /// Verify a withdrawal message has proper preconditions
+    fn validate_withdrawal(&self, msg: &OutboundMessage, sql_history: &SqlHistory) -> Result<()> {
+        // 1. Check the trigger exists and is valid
+        if msg.trigger_event == "order_match" {
+            let order = sql_history.get_record("orders", msg.trigger_id)?;
+
+            // Verify order was actually matched
+            assert_eq!(order.get("status"), "matched");
+
+            // Verify amounts match
+            let withdrawal_amount: u64 = serde_json::from_str(&msg.payload)?
+                .get("amount")
+                .ok_or("Missing amount")?
+                .parse()?;
+
+            assert_eq!(withdrawal_amount, order.get("matched_amount"));
+        }
+
+        // 2. Verify user has sufficient balance
+        let user_id = self.get_user_from_trigger(msg.trigger_id)?;
+        let balance = sql_history.query_one(
+            "SELECT balance FROM users WHERE id = ?",
+            &[user_id]
+        )?;
+
+        assert!(balance >= withdrawal_amount, "Insufficient balance");
+
+        // 3. Verify all related deposits were acknowledged
+        let deposits = sql_history.query(
+            "SELECT * FROM inbound_message_log
+             WHERE message_type = 'deposit'
+             AND action_result LIKE ?",
+            &[format!("%user_id: {}%", user_id)]
+        )?;
+
+        assert!(!deposits.is_empty(), "No deposits found for user");
+
+        // 4. Check idempotency - no duplicate withdrawals
+        let duplicate = sql_history.query(
+            "SELECT COUNT(*) FROM message_log
+             WHERE idempotency_key = ? AND id < ?",
+            &[&msg.idempotency_key, &msg.id]
+        )?;
+
+        assert_eq!(duplicate, 0, "Duplicate withdrawal detected");
+
+        Ok(())
+    }
+
+    /// Verify consistency between inbound and outbound messages
+    fn validate_message_consistency(&self, sql_history: &SqlHistory) -> Result<()> {
+        // Get all blockchain messages from changeset history
+        let blockchain_messages = sql_history.query(
+            "SELECT DISTINCT message_id FROM inbound_message_log",
+            &[]
+        )?;
+
+        // Get all outbound messages
+        let outbound_messages = sql_history.query(
+            "SELECT * FROM message_log WHERE status != 'pending'",
+            &[]
+        )?;
+
+        // Verify no outbound messages were processed while inbound were missing
+        for outbound in outbound_messages {
+            let created_at = outbound.get("created_at");
+
+            // Check if any inbound messages were unacknowledged at this time
+            let unacked = sql_history.query(
+                "SELECT message_id FROM blockchain_events
+                 WHERE timestamp < ?
+                 AND message_id NOT IN (
+                     SELECT message_id FROM inbound_message_log
+                     WHERE processed_at < ?
+                 )",
+                &[created_at, created_at]
+            )?;
+
+            assert!(
+                unacked.is_empty(),
+                "Outbound message {} processed while inbound messages pending",
+                outbound.get("id")
+            );
+        }
+
+        Ok(())
+    }
+}
+```
+
+### Progressive Degradation Strategy Summary
+
+The sequencer's progressive degradation strategy ensures system integrity while maximizing availability:
+
+#### Degradation Levels
+
+| Level | Duration | Missing Messages | Status | Actions |
+|-------|----------|-----------------|--------|---------|
+| **L1: Warning** | < 30s | < 3 | Healthy (with warnings) | Alert app, increase retry frequency |
+| **L2: Degraded** | < 5min | < 10 | Degraded | Halt outbound, restrict API, alert critical |
+| **L3: Critical** | < 30min | < 50 | Critical Degraded | Fail health checks, emergency alerts |
+| **L4: Halt** | > 30min | > 50 | Halted | Full shutdown, final state commitment |
+
+#### Key Principles
+
+1. **Transparency First**: Always publish signed state commitments about system state, even when halted
+2. **Progressive Response**: Start with warnings, escalate only as needed
+3. **Recovery Enabled**: All actions are reversible when consistency is restored
+4. **Validator Protection**: Provide clear signals about system health via state commitments
+5. **Application Communication**: Multiple channels (HTTP headers, errors, health checks) to alert the application
+
+#### State Commitment Publishing
+
+The sequencer publishes signed state commitments to DA layers that include:
+- Current system status (Healthy/Degraded/Halted)
+- Error codes for specific issues
+- Reference to committed state with state update hash
+- Details about missing acknowledgments
+- Health metrics
+- Cryptographic signature from TEE-protected key
+
+This ensures validators always have complete visibility into the sequencer's committed state, even during degradation or halt conditions. These state commitments allow validators to verify the sequencer's view of the system state and detect any inconsistencies.
+
+### Benefits of This Architecture
+
+1. **Single Writer Preserved**: Only the application writes to SQLite - maintains data consistency
+2. **Full Auditability**: Validators see complete message history with triggers and acknowledgments
+3. **Consistency Guaranteed**: Sequencer enforces that all inbound messages are acknowledged
+4. **No Blockchain Complexity**: Applications don't need web3 libraries or blockchain knowledge
+5. **Idempotency Built-in**: Database constraints prevent duplicate messages
+6. **Natural Causality**: Message triggers create auditable chains of events
+7. **Fast and Reliable**: Localhost HTTP with SSE for real-time updates
+8. **Language Agnostic**: Works with any programming language that supports SQLite and HTTP
+
+The sequencer acts as a **read-only consistency enforcer**, ensuring data integrity while the application maintains full control over the database. This design enables validators to verify not just that messages were sent, but WHY they were sent, creating a complete audit trail from trigger to execution.
+

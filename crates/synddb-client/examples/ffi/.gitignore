@@ -1,0 +1,76 @@
+# Compiled binaries
+test_c
+test_cpp
+test_go
+*.exe
+*.out
+*.app
+
+# C/C++ build artifacts
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+package-lock.json
+yarn.lock
+
+# Go
+*.test
+vendor/
+go.sum
+
+# Ruby
+*.gem
+.bundle/
+vendor/bundle/
+
+# Rust (if building native extensions)
+target/
+Cargo.lock
+
+# Test databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

@@ -1,0 +1,138 @@
+# SyndDB Python Client
+
+Pure Python FFI wrapper for SyndDB - **no compilation needed!**
+
+## Installation
+
+1. Build the Rust library:
+```bash
+cargo build --package synddb-client --features ffi --release
+```
+
+2. Copy `synddb.py` to your project:
+```bash
+cp bindings/python/synddb.py /path/to/your/project/
+```
+
+That's it! No pip install, no build tools required.
+
+## Usage
+
+### Basic Example
+
+```python
+from synddb import SyndDB
+import sqlite3
+
+# Attach to database
+synddb = SyndDB.attach('app.db', 'http://localhost:8433')
+
+# Now use SQLite normally - changesets are automatically captured!
+conn = sqlite3.connect('app.db')
+conn.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER, name TEXT)")
+conn.execute("INSERT INTO users VALUES (?, ?)", (1, 'Alice'))
+conn.commit()
+
+# Changes are automatically published every 1 second
+
+# Clean up when done (optional - Python GC will handle it)
+synddb.detach()
+```
+
+### With Configuration
+
+```python
+from synddb import SyndDB
+
+# Custom publish interval and snapshots
+synddb = SyndDB.attach_with_config(
+    'app.db',
+    'http://localhost:8433',
+    publish_interval_ms=500,   # Publish every 500ms
+    snapshot_interval=100       # Snapshot every 100 changesets
+)
+```
+
+### Manual Publishing
+
+```python
+from synddb import attach
+
+synddb = attach('app.db', 'http://localhost:8433')
+
+# Critical transaction - publish immediately
+import sqlite3
+conn = sqlite3.connect('app.db')
+conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 1000000))
+conn.commit()
+synddb.publish()  # Don't wait for automatic publish
+```
+
+### Context Manager
+
+```python
+from synddb import SyndDB
+
+with SyndDB.attach('app.db', 'http://localhost:8433') as synddb:
+    import sqlite3
+    conn = sqlite3.connect('app.db')
+    conn.execute("INSERT INTO users VALUES (?, ?)", (2, 'Bob'))
+    conn.commit()
+# Automatically detaches and publishes on exit
+```
+
+## API Reference
+
+### `SyndDB.attach(db_path, sequencer_url)`
+
+Attach to a SQLite database with default configuration.
+
+**Parameters:**
+- `db_path` (str): Path to SQLite database file
+- `sequencer_url` (str): URL of sequencer TEE
+
+**Returns:** SyndDB instance
+
+### `SyndDB.attach_with_config(db_path, sequencer_url, publish_interval_ms=1000, snapshot_interval=0)`
+
+Attach with custom configuration.
+
+**Parameters:**
+- `db_path` (str): Path to SQLite database file
+- `sequencer_url` (str): URL of sequencer TEE
+- `publish_interval_ms` (int): Milliseconds between automatic publishes (default: 1000)
+- `snapshot_interval` (int): Number of changesets between snapshots (default: 0 = disabled)
+
+**Returns:** SyndDB instance
+
+### `synddb.publish()`
+
+Manually publish all pending changesets immediately.
+
+### `synddb.snapshot()`
+
+Create a manual snapshot of the database.
+
+**Returns:** Size of snapshot in bytes (int)
+
+### `synddb.detach()`
+
+Gracefully shutdown and free resources. Publishes any pending changesets.
+
+### `synddb.version()`
+
+Get library version string.
+
+**Returns:** Version string (e.g., "0.1.0")
+
+## Requirements
+
+- Python 3.7+
+- SQLite (included with Python)
+- libsynddb_client shared library (built from Rust)
+
+## How It Works
+
+This wrapper uses Python's `ctypes` to call the C FFI functions exported by the Rust library. No compilation or build tools required on the Python side - just drop in the `.py` file and go!
+
+The Rust library is compiled once to a shared library (`.so`, `.dylib`, or `.dll`), then all language bindings use the same binary.

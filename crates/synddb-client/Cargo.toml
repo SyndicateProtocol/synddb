@@ -1,0 +1,57 @@
+[package]
+name = "synddb-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# SQLite with Session Extension support
+rusqlite = { workspace = true, features = ["bundled", "session", "hooks"] }
+
+# Async runtime for background sending
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+
+# HTTP client for sending to sequencer
+reqwest = { version = "0.11", features = ["json"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = "1.0"
+
+# Logging
+tracing = { workspace = true }
+
+# Channels for background thread
+crossbeam-channel = "0.5"
+
+# UUID for batch IDs
+uuid = { version = "1.0", features = ["v4"] }
+
+# Async utilities (for sender)
+futures = "0.3"
+
+# Humantime serialization
+humantime-serde = "1.1"
+
+# Unix domain socket support for Confidential Space attestation
+hyperlocal = "0.8"
+hyper = { version = "0.14", features = ["client", "http1"] }
+serde_json = "1.0"
+
+[lib]
+# Compile as both Rust library and C-compatible shared library
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+# Enable C FFI exports (for cross-language support via ctypes/ffi-napi/cgo)
+ffi = []
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }

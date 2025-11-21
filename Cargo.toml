@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/synddb-benchmark",
     "crates/synddb-sequencer",
+    "crates/synddb-client",
 ]
 
 [workspace.package]

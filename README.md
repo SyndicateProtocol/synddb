@@ -1,15 +1,16 @@
 # SyndDB - High-Performance Blockchain Database
 
-SyndDB enables developers to build high-performance blockchain applications using **any programming language** with SQLite bindings. The sequencer (running as a sidecar process) automatically captures and publishes SQL operations for verification and replication.
+SyndDB enables developers to build high-performance blockchain applications using **any programming language** with SQLite bindings. Applications import a lightweight client library that automatically captures and sends SQL operations to a sequencer service for publishing.
 
 ## Overview
 
-SyndDB consists of two main components:
+SyndDB consists of three main components:
 
 1. **Your Application** - Uses SQLite as normal (any language, any framework)
-2. **SyndDB Sequencer** - Monitors changes and publishes to data availability layers (runs as a sidecar process)
+2. **SyndDB Client Library** - Embedded in your application, captures changesets and sends them to the sequencer
+3. **SyndDB Sequencer Service** - Receives changesets from client libraries and publishes to data availability layers
 
-No code changes required - just run your app with the sequencer.
+Minimal integration required - just import the client library and attach to your SQLite connection.
 
 ## Documentation
 
@@ -21,10 +22,11 @@ No code changes required - just run your app with the sequencer.
 ```
 SyndDB/
 ├── crates/
+│   ├── synddb-client/       # Client library (Rust, Python, Node.js, C FFI)
 │   ├── synddb-benchmark/    # Orderbook benchmark tool for sequencer development
-│   └── synddb-sequencer/    # Sequencer (coming soon)
+│   └── synddb-sequencer/    # Sequencer service (planned)
 ├── SPEC.md                  # Full specification
-├── PLAN_SEQUENCER.md       # Sequencer architecture plan
+├── PLAN_SEQUENCER.md       # Sequencer service implementation plan
 └── README.md               # This file
 ```
 
@@ -55,23 +57,25 @@ cargo run --package synddb-benchmark --release -- stats
 
 See [crates/synddb-benchmark/README.md](crates/synddb-benchmark/README.md) for full documentation.
 
-### 3. Run the Sequencer (Coming Soon)
+### 3. Try the Client Library
 
 ```bash
-# Terminal 1: Run your application (or benchmark)
-cargo run --package synddb-benchmark -- run --rate 100
+# Run example that demonstrates client library integration
+cargo run --package synddb-client --example basic_usage
 
-# Terminal 2: Run sequencer (sidecar process)
-cargo run --package synddb-sequencer -- --db orderbook.db
+# Run example with schema change detection
+cargo run --package synddb-client --example schema_snapshot_example
 ```
+
+See [crates/synddb-client/README.md](crates/synddb-client/README.md) for integration guide.
 
 ## Key Features
 
 - **Language Agnostic**: Works with any language that has SQLite bindings (Python, JavaScript, Go, Rust, etc.)
 - **High Performance**: Sub-millisecond writes, 50,000-100,000+ ops/sec throughput
 - **Deterministic Replication**: Session Extension changesets for validators
-- **Automatic Publishing**: Sequencer (sidecar process) handles all DA layer interaction
-- **Zero Code Changes**: Drop-in solution for existing SQLite applications
+- **Automatic Publishing**: Client library automatically sends changesets to sequencer service for DA layer publishing
+- **Minimal Integration**: Just import the client library and attach to your SQLite connection
 
 ## Components
 
@@ -86,16 +90,29 @@ A high-performance orderbook simulator for testing and developing the sequencer:
 
 [Full Documentation →](crates/synddb-benchmark/README.md)
 
-### Sequencer (Coming Soon)
+### Client Library (Implemented)
 
-The sequencer (running as a sidecar process) monitors SQLite changes and publishes them to data availability layers:
+The client library embeds in applications and captures SQL changes:
 
-- **Session Monitor**: Attach to SQLite via Session Extension
-- **Batcher**: Accumulate changesets and create periodic snapshots
-- **Attestor**: Compress and sign batches with TEE-protected keys
-- **Publisher**: Publish to multiple DA layers (Celestia, EigenDA, IPFS, Arweave)
+- **Session Monitor**: Captures changesets via SQLite Session Extension
+- **Changeset Sender**: Batches and sends changesets to sequencer service via HTTP
+- **Snapshot Sender**: Creates and sends periodic snapshots and schema-triggered snapshots
+- **TEE Attestation**: Includes GCP Confidential Space attestation tokens
+- **Recovery**: Persists failed batches for retry after network issues
 
-[Implementation Plan →](PLAN_SEQUENCER.md)
+[Client Library Documentation →](crates/synddb-client/README.md)
+
+### Sequencer Service (Planned)
+
+The sequencer service receives changesets from clients and publishes to DA layers:
+
+- **HTTP Receiver**: Receives changesets/snapshots from client libraries
+- **Batcher**: Accumulates and batches received changesets
+- **Attestor**: Compresses and signs batches with TEE-protected keys
+- **Publisher**: Publishes to multiple DA layers (Celestia, EigenDA, IPFS, Arweave)
+- **Message Monitor**: Handles bidirectional bridge message passing
+
+[Sequencer Implementation Plan →](PLAN_SEQUENCER.md)
 
 ## Use Cases
 
@@ -130,15 +147,17 @@ RUST_LOG=debug cargo run --package synddb-benchmark -- run --rate 100
 
 ## Architecture
 
-SyndDB uses SQLite's Session Extension to capture row-level changes deterministically. The sequencer:
+SyndDB uses SQLite's Session Extension to capture row-level changes deterministically. The client library:
 
-1. Attaches to your SQLite database
-2. Captures changesets using Session Extension
-3. Batches changes with periodic snapshots
-4. Compresses and signs batches
-5. Publishes to configured DA layers
+1. Attaches to your SQLite database via Session Extension
+2. Captures changesets automatically on commit
+3. Batches changesets and sends to sequencer service via HTTP
+4. Creates periodic snapshots and snapshots on schema changes
+5. Includes TEE attestation tokens with all data
 
-Applications continue using SQLite normally - the sequencer operates transparently in the background as a sidecar process.
+The sequencer service receives changesets from clients, compresses and signs them, then publishes to configured DA layers.
+
+Applications continue using SQLite normally - the client library operates transparently in the background.
 
 ## Requirements
 
