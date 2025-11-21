@@ -2,14 +2,12 @@
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
 
 use crate::monitor::Changeset;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Debug)]
 pub struct ChangesetBatch {
     pub changesets: Vec<Changeset>,
     pub batch_id: String,
