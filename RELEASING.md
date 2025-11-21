@@ -63,11 +63,9 @@ libs/
 Release builds support all major platforms:
 
 - **Linux x86_64**: `libsynddb_client.so`
-- **Linux ARM64**: `libsynddb_client.so` (AWS Graviton, ARM servers)
 - **macOS x86_64** (Intel): `libsynddb_client.dylib`
 - **macOS ARM64** (M1/M2/M3): `libsynddb_client.dylib`
 - **Windows x86_64**: `synddb_client.dll`
-- **Windows ARM64**: `synddb_client.dll` (ARM Windows devices)
 
 ## Creating a Release
 
@@ -122,11 +120,9 @@ The release workflow performs these steps:
 
 1. **Multi-platform builds** (parallel):
    - Linux x86_64: Builds on `ubuntu-latest`
-   - Linux ARM64: Builds on `ubuntu-24.04-arm`
    - macOS x86_64: Builds on `macos-13`
    - macOS ARM64: Builds on `macos-14`
    - Windows x86_64: Builds on `windows-latest`
-   - Windows ARM64: Builds on `windows-11-arm`
 
 2. **Artifact preparation**:
    - Renames libraries with platform suffixes
