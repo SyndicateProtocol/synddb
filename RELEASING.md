@@ -126,7 +126,7 @@ The release workflow performs these steps:
    - macOS x86_64: Builds on `macos-13`
    - macOS ARM64: Builds on `macos-14`
    - Windows x86_64: Builds on `windows-latest`
-   - Windows ARM64: Builds on `windows-latest-arm`
+   - Windows ARM64: Builds on `windows-11-arm`
 
 2. **Artifact preparation**:
    - Renames libraries with platform suffixes

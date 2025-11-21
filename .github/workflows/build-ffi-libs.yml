@@ -82,7 +82,7 @@ jobs:
 
           # Windows ARM64 (releases only)
           - platform: win32
-            os: windows-latest-arm
+            os: windows-11-arm
             arch: arm64
             rust_target: aarch64-pc-windows-msvc
             lib_name: synddb_client.dll
