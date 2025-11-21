@@ -1,9 +1,8 @@
 name: Rust CI
 
 on:
-  # Run on all PRs
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review] # Run on all non-draft PRs
     paths:
       - "crates/**"
       - "Cargo.toml"
