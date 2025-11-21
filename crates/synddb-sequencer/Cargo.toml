@@ -22,32 +22,29 @@ anyhow = { workspace = true }
 #rusqlite = { workspace = true, features = ["bundled", "backup", "session"] }
 
 # Serialization and compression
-serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.9"
+serde = { workspace = true }
+serde_yaml = { workspace = true }
 
 # Configuration
 # config = "0.14"
-humantime-serde = "1.1"
+humantime-serde = { workspace = true }
 
 # Logging and tracing
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 # HTTP server for message API
-axum = { version = "0.7", features = ["json"] }
+axum = { workspace = true }
 
 # Cryptography and signing
-sha2 = "0.10"
-hex = "0.4"
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 # DA layer clients (optional for now - will add when implementing)
 # celestia-client = { version = "0.2", optional = true }
 # eigenda-rust = { version = "0.1", optional = true }
 # ipfs-api = { version = "0.11", optional = true }
 # arweave-rs = { version = "0.1", optional = true }
-
-# Blockchain monitoring
-# alloy = { version = "0.1", features = ["full"], optional = true }
 
 # GCP TEE support (optional)
 # gcp-auth = { version = "0.10", optional = true }

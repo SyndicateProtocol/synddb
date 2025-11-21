@@ -23,6 +23,7 @@ rusqlite = { version = "0.32", features = ["bundled", "backup", "session"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 
 # Error handling
 anyhow = "1.0"
@@ -34,8 +35,23 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # CLI
 clap = { version = "4.5", features = ["derive"] }
 
+# HTTP
+reqwest = { version = "0.11", features = ["json"] }
+axum = { version = "0.7", features = ["json"] }
+
+# Unix domain socket support
+hyperlocal = "0.8"
+hyper = { version = "0.14", features = ["client", "http1"] }
+
+# Channels and concurrency
+crossbeam-channel = "0.5"
+
 # Utils
 rand = "0.8"
+uuid = { version = "1.0", features = ["v4"] }
+humantime-serde = "1.1"
+sha2 = "0.10"
+hex = "0.4"
 
 [workspace.lints.rust]
 # TEMPORARY allowances, remove before prod
@@ -54,7 +70,6 @@ unused_qualifications = "warn"
 expect_used = "allow"  # TEMPORARY
 map_unwrap_or = "deny"
 unwrap_used = "allow"  # TEMPORARY
-
 
 # TEMPORARY allowances. Revisit these if necessary
 cognitive_complexity = "allow"
