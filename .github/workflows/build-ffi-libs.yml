@@ -228,17 +228,17 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git commit -m "$(cat <<'EOF'
-          chore: Update FFI libraries [skip ci]
+          # Generate commit message with updated file list
+          UPDATED_FILES=$(git diff --staged --name-only | sed 's/^/- /')
+
+          git commit -m "chore: Update FFI libraries [skip ci]
 
           Built from commit ${{ github.sha }}
 
           Updated libraries:
-          $(git diff --staged --name-only | sed 's/^/- /')
-          EOF
-          )"
+          ${UPDATED_FILES}"
 
-          git push
+          git push origin main
 
   create-release:
     name: Create GitHub Release
