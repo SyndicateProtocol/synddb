@@ -32,7 +32,7 @@ pub struct BatchConfig {
 
 impl Default for BatchConfig {
     fn default() -> Self {
-        BatchConfig {
+        Self {
             max_batch_size: default_max_batch_size(),
             max_batch_age: default_max_batch_age(),
             snapshot_interval: default_snapshot_interval(),
@@ -45,7 +45,7 @@ pub struct PublishConfig {
     /// Enable Celestia DA layer
     pub celestia: Option<CelestiaConfig>,
 
-    /// Enable EigenDA layer
+    /// Enable `EigenDA` layer
     pub eigenda: Option<EigenDAConfig>,
 
     /// Enable IPFS storage
@@ -85,7 +85,7 @@ pub struct MessageConfig {
     /// Enable inbound message monitoring from blockchain
     pub enable_inbound: bool,
 
-    /// Enable outbound message monitoring from SQLite tables
+    /// Enable outbound message monitoring from `SQLite` tables
     pub enable_outbound: bool,
 
     /// HTTP API port for message delivery to application
@@ -112,23 +112,23 @@ pub struct TeeConfig {
 }
 
 // Default value functions
-fn default_max_batch_size() -> usize {
+const fn default_max_batch_size() -> usize {
     1024 * 1024 // 1MB
 }
 
-fn default_max_batch_age() -> Duration {
+const fn default_max_batch_age() -> Duration {
     Duration::from_secs(1)
 }
 
-fn default_snapshot_interval() -> Duration {
+const fn default_snapshot_interval() -> Duration {
     Duration::from_secs(60 * 60) // 60 minutes
 }
 
-fn default_snapshot_threshold() -> usize {
+const fn default_snapshot_threshold() -> usize {
     1000
 }
 
-fn default_api_port() -> u16 {
+const fn default_api_port() -> u16 {
     8432
 }
 
@@ -168,7 +168,7 @@ impl Config {
     pub fn from_file(path: &Path) -> Result<Self> {
         let contents = std::fs::read_to_string(path)
             .context(format!("Failed to read config file: {:?}", path))?;
-        let config: Config =
+        let config: Self =
             serde_yaml::from_str(&contents).context("Failed to parse config file")?;
         Ok(config)
     }

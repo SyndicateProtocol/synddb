@@ -9,6 +9,7 @@ use crate::load_patterns::{LoadConfig, LoadPattern};
 const SYMBOLS: &[&str] = &["BTC-USD", "ETH-USD", "SOL-USD", "ARB-USD"];
 const INITIAL_USERS: usize = 100;
 
+#[derive(Debug)]
 pub struct OrderbookSimulator {
     conn: Connection,
     user_ids: Vec<i64>,
@@ -17,7 +18,7 @@ pub struct OrderbookSimulator {
 }
 
 impl OrderbookSimulator {
-    pub fn new(conn: Connection) -> Self {
+    pub const fn new(conn: Connection) -> Self {
         Self {
             conn,
             user_ids: Vec::new(),
@@ -190,12 +191,14 @@ impl OrderbookSimulator {
 
             self.log_stats();
 
-            if end_time.is_none()
-                || Instant::now() + Duration::from_secs(pause_seconds) < end_time.unwrap()
-            {
-                info!("Pausing for {} seconds...", pause_seconds);
-                tokio::time::sleep(Duration::from_secs(pause_seconds)).await;
+            if let Some(end) = end_time {
+                if Instant::now() + Duration::from_secs(pause_seconds) >= end {
+                    break;
+                }
             }
+
+            info!("Pausing for {} seconds...", pause_seconds);
+            tokio::time::sleep(Duration::from_secs(pause_seconds)).await;
         }
 
         Ok(())
@@ -476,7 +479,7 @@ impl OrderbookSimulator {
 
     fn execute_random_operation_in_tx_static(
         user_ids: &[i64],
-        tx: &rusqlite::Transaction,
+        tx: &rusqlite::Transaction<'_>,
     ) -> Result<()> {
         let mut rng = rand::thread_rng();
         let operation_type = rng.gen_range(0..100);
@@ -493,10 +496,10 @@ impl OrderbookSimulator {
     }
 
     /// Execute a simple operation (just insert an order) - for maximum throughput testing
-    /// This bypasses all the complex queries (ORDER BY RANDOM(), joins, etc.)
+    /// This bypasses all the complex queries (ORDER BY `RANDOM()`, joins, etc.)
     fn execute_simple_operation_in_tx_static(
         user_ids: &[i64],
-        tx: &rusqlite::Transaction,
+        tx: &rusqlite::Transaction<'_>,
     ) -> Result<()> {
         let mut rng = rand::thread_rng();
 
@@ -564,7 +567,7 @@ impl OrderbookSimulator {
     }
 
     // Transaction-based versions for batching
-    fn place_order_in_tx(user_ids: &[i64], tx: &rusqlite::Transaction) -> Result<()> {
+    fn place_order_in_tx(user_ids: &[i64], tx: &rusqlite::Transaction<'_>) -> Result<()> {
         let mut rng = rand::thread_rng();
         let user_id = user_ids[rng.gen_range(0..user_ids.len())];
         let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];
@@ -580,7 +583,7 @@ impl OrderbookSimulator {
         Ok(())
     }
 
-    fn cancel_order_in_tx(tx: &rusqlite::Transaction) -> Result<()> {
+    fn cancel_order_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         let order_id: Option<i64> = tx
             .query_row(
                 "SELECT id FROM orders WHERE status = 'active' ORDER BY RANDOM() LIMIT 1",
@@ -598,7 +601,7 @@ impl OrderbookSimulator {
         Ok(())
     }
 
-    fn execute_trade_in_tx(tx: &rusqlite::Transaction) -> Result<()> {
+    fn execute_trade_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         let mut rng = rand::thread_rng();
 
         let buy_order: Option<(i64, i64, String, i64)> = tx
@@ -652,7 +655,7 @@ impl OrderbookSimulator {
         Ok(())
     }
 
-    fn update_balance_in_tx(user_ids: &[i64], tx: &rusqlite::Transaction) -> Result<()> {
+    fn update_balance_in_tx(user_ids: &[i64], tx: &rusqlite::Transaction<'_>) -> Result<()> {
         let mut rng = rand::thread_rng();
         let user_id = user_ids[rng.gen_range(0..user_ids.len())];
         let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];

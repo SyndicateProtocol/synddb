@@ -1,287 +1,129 @@
 name: Rust CI
 
 on:
-  # Run workflow on every push to main (always run to ensure cross-service compatibility)
-  push:
-    branches:
-      - main
-  # Only run on pull requests when Rust code is modified
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review] # Run on all non-draft PRs
     paths:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/rust-ci.yml"
 
+  # Run on main pushes
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
-
-  # Benchmark batch sizes: Controls the tradeoff between throughput and latency
-  # - Larger batches (5000+): Higher throughput, higher latency per operation
-  #   Use case: Bulk data ingestion, ETL pipelines, batch processing systems
-  # - Smaller batches (100-1000): Lower latency, lower throughput
-  #   Use case: Real-time trading systems, interactive applications, low-latency requirements
-  # - Medium batches (1000-2000): Balanced approach
-  #   Use case: General-purpose applications, mixed workloads
-  BENCHMARK_SIMPLE_BATCH_SIZE: 5000  # Simple mode benefits from larger batches (insert-only workload)
-  BENCHMARK_FULL_BATCH_SIZE: 1000    # Full mode uses smaller batches (mixed operations have more contention)
-
-  # Regression threshold: Fail the build if sustained performance decreases by more than this percentage
-  # Set to -20 (meaning -20% or worse triggers a failure)
-  REGRESSION_THRESHOLD: -20
+  # Make sure CI fails on all warnings, including Clippy lints
+  RUSTFLAGS: "-Dwarnings"
+  # Rust version for consistency across jobs
+  RUST_VERSION: "1.83.0"
 
 jobs:
-  tests:
+  taplo:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Cargo.toml Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Taplo
+        uses: clechasseur/rs-cargo@v2
+        with:
+          command: install
+          args: taplo-cli@0.9.0
+
+      - name: Validate Cargo.toml files
+        run: taplo lint "**/Cargo.toml" --verbose
+
+      - name: Check Cargo.toml formatting
+        run: taplo fmt --check "**/Cargo.toml" --verbose
+
+  machete:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Unused Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-machete
+        uses: clechasseur/rs-cargo@v2
+        with:
+          command: install
+          args: cargo-machete@0.7.0
+
+      - name: Check for unused dependencies
+        uses: clechasseur/rs-cargo@v2
+        with:
+          command: machete
+
+  fmt:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Rust Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add --toolchain nightly rustfmt
+
+      - name: Check Rust formatting
+        run: cargo +nightly fmt --all --check
+
+  clippy:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Clippy Lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy-${{ hashFiles('**/Cargo.lock') }}
+          save-if: false
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features
+
+  test:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Tests
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      # GitHub Actions supports rustup by default, so we can install the toolchain directly
-      # selecting a toolchain either by action or manual `rustup` calls should happen
-      # before the plugin, as the cache uses the current rustc version as its cache key
-      - run: rustup toolchain install stable --profile minimal
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
-
-      - name: Run tests
-        run: cargo test --all
-
-  benchmarks:
-    name: Benchmarks
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history to compare with main
+          shared-key: test-${{ hashFiles('**/Cargo.lock') }}
 
-      - run: rustup toolchain install stable --profile minimal
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
 
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@v2
+      - name: Run tests with nextest
+        run: cargo nextest run --workspace --all-features
 
-      - name: Build benchmark tool (release mode)
-        run: cargo build --package synddb-benchmark --release
-
-      - name: Create helper functions
-        run: |
-          cat > /tmp/benchmark-helpers.sh << 'EOF'
-          # Extract peak and sustained rates from benchmark log file
-          extract_rates() {
-            local log_file=$1
-            local peak=$(grep "Peak achieved rate:" "$log_file" | tail -1 | sed -E 's/.*Peak achieved rate: ([0-9]+).*/\1/')
-            local sustained=$(grep "Sustained stable rate:" "$log_file" | tail -1 | sed -E 's/.*Sustained stable rate: ([0-9]+).*/\1/')
-            echo "$peak $sustained"
-          }
-
-          # Run a benchmark and handle errors
-          # Usage: run_benchmark <db_name> <log_file> <mode_label> <mode_flags> <batch_size>
-          run_benchmark() {
-            local db_name=$1
-            local log_file=$2
-            local mode_label=$3
-            local mode_flags=$4
-            local batch_size=$5
-
-            echo "Starting $mode_label benchmark..."
-            cargo run --package synddb-benchmark --release -- init --db "$db_name"
-
-            # Run benchmark with tee to capture output to file AND show progress
-            if ! cargo run --package synddb-benchmark --release -- run --db "$db_name" --clean --rate 0 $mode_flags --batch-size $batch_size 2>&1 | tee "$log_file"; then
-              echo "❌ $mode_label benchmark failed! Output:"
-              cat "$log_file"
-              exit 1
-            fi
-            echo "✅ $mode_label benchmark completed"
-          }
-
-          # Extract rates and output to GitHub Actions
-          # Usage: output_rates <log_file> <output_prefix> <display_label>
-          output_rates() {
-            local log_file=$1
-            local output_prefix=$2
-            local display_label=$3
-
-            read peak sustained <<< $(extract_rates "$log_file")
-            echo "${output_prefix}_peak=$peak" >> $GITHUB_OUTPUT
-            echo "${output_prefix}_sustained=$sustained" >> $GITHUB_OUTPUT
-            echo "$display_label - Peak: $peak ops/sec, Sustained: $sustained ops/sec"
-          }
-          EOF
-          chmod +x /tmp/benchmark-helpers.sh
-
-      # Cache key based on the baseline commit SHA
-      - name: Get baseline commit SHA
-        id: baseline-sha
-        run: |
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            # For PRs, compare against main branch
-            BASELINE_SHA=$(git rev-parse origin/main)
-            echo "Baseline: main branch ($BASELINE_SHA)"
-          else
-            # For pushes to main, compare against previous commit
-            BASELINE_SHA=$(git rev-parse HEAD~1)
-            echo "Baseline: previous commit ($BASELINE_SHA)"
-          fi
-          echo "sha=$BASELINE_SHA" >> $GITHUB_OUTPUT
-
-      - name: Restore cached baseline benchmarks
-        id: cache-baseline
-        uses: actions/cache@v4
-        with:
-          path: |
-            bench-baseline-simple.log
-            bench-baseline-full.log
-          key: benchmark-baseline-${{ steps.baseline-sha.outputs.sha }}
-
-      - name: Run benchmarks on current commit
-        id: current-bench
-        run: |
-          source /tmp/benchmark-helpers.sh
-
-          # Run simple benchmark
-          run_benchmark bench-current-simple.db bench-current-simple.log "Simple" "--simple" ${{ env.BENCHMARK_SIMPLE_BATCH_SIZE }}
-          output_rates bench-current-simple.log simple "Current simple"
-
-          # Run full benchmark
-          run_benchmark bench-current-full.db bench-current-full.log "Full" "" ${{ env.BENCHMARK_FULL_BATCH_SIZE }}
-          output_rates bench-current-full.log full "Current full"
-
-      - name: Run baseline benchmarks
-        if: steps.cache-baseline.outputs.cache-hit != 'true'
-        run: |
-          source /tmp/benchmark-helpers.sh
-
-          # Checkout baseline commit
-          BASELINE_SHA=${{ steps.baseline-sha.outputs.sha }}
-          git fetch origin
-          git checkout $BASELINE_SHA
-          cargo build --package synddb-benchmark --release
-
-          # Run simple benchmark
-          run_benchmark bench-baseline-simple.db bench-baseline-simple.log "Baseline simple" "--simple" ${{ env.BENCHMARK_SIMPLE_BATCH_SIZE }}
-
-          # Run full benchmark
-          run_benchmark bench-baseline-full.db bench-baseline-full.log "Baseline full" "" ${{ env.BENCHMARK_FULL_BATCH_SIZE }}
-
-          git checkout -
-
-      - name: Extract baseline rates
-        id: baseline-rates
-        run: |
-          source /tmp/benchmark-helpers.sh
-
-          # Extract from logs (either cached or freshly generated)
-          if [ "${{ steps.cache-baseline.outputs.cache-hit }}" == "true" ]; then
-            echo "📦 Using cached baseline"
-          else
-            echo "🆕 Using fresh baseline"
-          fi
-
-          # Extract and output rates
-          output_rates bench-baseline-simple.log simple "Baseline simple"
-          output_rates bench-baseline-full.log full "Baseline full"
-
-      - name: Compare performance and check for regressions
-        run: |
-          # Get baseline rates
-          BASELINE_SIMPLE_PEAK=${{ steps.baseline-rates.outputs.simple_peak }}
-          BASELINE_SIMPLE_SUSTAINED=${{ steps.baseline-rates.outputs.simple_sustained }}
-          BASELINE_FULL_PEAK=${{ steps.baseline-rates.outputs.full_peak }}
-          BASELINE_FULL_SUSTAINED=${{ steps.baseline-rates.outputs.full_sustained }}
-
-          # Get current rates
-          CURRENT_SIMPLE_PEAK=${{ steps.current-bench.outputs.simple_peak }}
-          CURRENT_SIMPLE_SUSTAINED=${{ steps.current-bench.outputs.simple_sustained }}
-          CURRENT_FULL_PEAK=${{ steps.current-bench.outputs.full_peak }}
-          CURRENT_FULL_SUSTAINED=${{ steps.current-bench.outputs.full_sustained }}
-
-          # Determine comparison label based on event type
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            BASELINE_LABEL="Baseline (main)"
-            CURRENT_LABEL="Current (PR)"
-          else
-            BASELINE_LABEL="Previous commit"
-            CURRENT_LABEL="Current commit"
-          fi
-
-          echo "=== Performance Comparison ==="
-          echo "Simple mode:"
-          echo "  $BASELINE_LABEL - Peak: $BASELINE_SIMPLE_PEAK ops/sec, Sustained: $BASELINE_SIMPLE_SUSTAINED ops/sec"
-          echo "  $CURRENT_LABEL - Peak: $CURRENT_SIMPLE_PEAK ops/sec, Sustained: $CURRENT_SIMPLE_SUSTAINED ops/sec"
-          echo "Full mode:"
-          echo "  $BASELINE_LABEL - Peak: $BASELINE_FULL_PEAK ops/sec, Sustained: $BASELINE_FULL_SUSTAINED ops/sec"
-          echo "  $CURRENT_LABEL - Peak: $CURRENT_FULL_PEAK ops/sec, Sustained: $CURRENT_FULL_SUSTAINED ops/sec"
-
-          # Calculate percentage changes (using sustained rates for regression detection)
-          CHANGE_SIMPLE=$(echo "scale=2; (($CURRENT_SIMPLE_SUSTAINED - $BASELINE_SIMPLE_SUSTAINED) / $BASELINE_SIMPLE_SUSTAINED) * 100" | bc)
-          CHANGE_FULL=$(echo "scale=2; (($CURRENT_FULL_SUSTAINED - $BASELINE_FULL_SUSTAINED) / $BASELINE_FULL_SUSTAINED) * 100" | bc)
-          echo "Simple mode sustained change: $CHANGE_SIMPLE%"
-          echo "Full mode sustained change: $CHANGE_FULL%"
-
-          # Write summary for GitHub Actions
-          echo "## 📊 Benchmark Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Simple Mode (Insert-Only)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | $BASELINE_LABEL | $CURRENT_LABEL | Change |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|------------------|----------------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Peak achieved | $BASELINE_SIMPLE_PEAK ops/sec | $CURRENT_SIMPLE_PEAK ops/sec | - |" >> $GITHUB_STEP_SUMMARY
-          echo "| Sustained stable | $BASELINE_SIMPLE_SUSTAINED ops/sec | $CURRENT_SIMPLE_SUSTAINED ops/sec | $CHANGE_SIMPLE% |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Full Mode (Mixed Operations)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | $BASELINE_LABEL | $CURRENT_LABEL | Change |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|------------------|----------------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Peak achieved | $BASELINE_FULL_PEAK ops/sec | $CURRENT_FULL_PEAK ops/sec | - |" >> $GITHUB_STEP_SUMMARY
-          echo "| Sustained stable | $BASELINE_FULL_SUSTAINED ops/sec | $CURRENT_FULL_SUSTAINED ops/sec | $CHANGE_FULL% |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          # Check for regression (based on sustained rates)
-          THRESHOLD=${{ env.REGRESSION_THRESHOLD }}
-          IS_REGRESSION_SIMPLE=$(echo "$CHANGE_SIMPLE < $THRESHOLD" | bc)
-          IS_REGRESSION_FULL=$(echo "$CHANGE_FULL < $THRESHOLD" | bc)
-
-          if [ "$IS_REGRESSION_SIMPLE" -eq 1 ] || [ "$IS_REGRESSION_FULL" -eq 1 ]; then
-            echo "❌ PERFORMANCE REGRESSION DETECTED!"
-            if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
-              echo "Simple mode: ${CHANGE_SIMPLE}% (exceeds ${THRESHOLD}% threshold)"
-            fi
-            if [ "$IS_REGRESSION_FULL" -eq 1 ]; then
-              echo "Full mode: ${CHANGE_FULL}% (exceeds ${THRESHOLD}% threshold)"
-            fi
-            echo "### ❌ Performance Regression Detected" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
-              echo "**Simple mode** sustained rate decreased by **${CHANGE_SIMPLE}%** (threshold: ${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
-            fi
-            if [ "$IS_REGRESSION_FULL" -eq 1 ]; then
-              echo "**Full mode** sustained rate decreased by **${CHANGE_FULL}%** (threshold: ${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
-            fi
-            exit 1
-          elif [ $(echo "$CHANGE_SIMPLE < 0" | bc) -eq 1 ] || [ $(echo "$CHANGE_FULL < 0" | bc) -eq 1 ]; then
-            echo "⚠️  Minor performance decrease detected"
-            echo "This is within acceptable range (< ${THRESHOLD}%)."
-            echo "### ⚠️ Minor Performance Decrease" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Changes are within acceptable range." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ Performance improved or neutral!"
-            echo "### ✅ Performance Improvement" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Both benchmarks show improvement or neutral performance!" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Upload benchmark results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-results
-          path: |
-            bench-current-*.log
-            bench-current-*.db
-            bench-baseline-*.log
-            bench-baseline-*.db
+      # Fallback to standard cargo test for doctests (nextest doesn't support them)
+      - name: Run doctests
+        run: cargo test --workspace --doc

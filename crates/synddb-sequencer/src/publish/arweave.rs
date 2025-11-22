@@ -5,12 +5,13 @@ use crate::attestor::SignedBatch;
 use crate::config::ArweaveConfig;
 use anyhow::Result;
 
+#[derive(Debug)]
 pub struct ArweavePublisher {
     _config: ArweaveConfig,
 }
 
 impl ArweavePublisher {
-    pub fn new(config: ArweaveConfig) -> Self {
+    pub const fn new(config: ArweaveConfig) -> Self {
         Self { _config: config }
     }
 

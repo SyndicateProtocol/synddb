@@ -6,6 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["humantime-serde"] # used in annotations
+
+[lints]
+workspace = true
+
 [dependencies]
 # Core async and CLI
 tokio = { workspace = true, features = ["full"] }
@@ -13,33 +19,26 @@ clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 
 # SQLite with Session Extension support
-rusqlite = { workspace = true, features = ["bundled", "backup", "session"] }
+#rusqlite = { workspace = true, features = ["bundled", "backup", "session"] }
 
 # Serialization and compression
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml = "0.9"
-bincode = "1.3"
-zstd = "0.13"
+serde = { workspace = true }
+serde_yaml = { workspace = true }
 
 # Configuration
 # config = "0.14"
-humantime-serde = "1.1"
+humantime-serde = { workspace = true }
 
 # Logging and tracing
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 # HTTP server for message API
-axum = { version = "0.7", features = ["json"] }
-tower = "0.4"
-hyper = { version = "1.0", features = ["full"] }
+axum = { workspace = true }
 
 # Cryptography and signing
-k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
-sha2 = "0.10"
-sha3 = "0.10"
-hex = "0.4"
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 # DA layer clients (optional for now - will add when implementing)
 # celestia-client = { version = "0.2", optional = true }
@@ -47,18 +46,15 @@ hex = "0.4"
 # ipfs-api = { version = "0.11", optional = true }
 # arweave-rs = { version = "0.1", optional = true }
 
-# Blockchain monitoring
-# alloy = { version = "0.1", features = ["full"], optional = true }
-
 # GCP TEE support (optional)
 # gcp-auth = { version = "0.10", optional = true }
 # google-cloud-secretmanager = { version = "0.6", optional = true }
 # reqwest = { version = "0.11", features = ["json"], optional = true }
 
 # Utilities
-parking_lot = "0.12"
-crossbeam-channel = "0.5"
-backoff = "0.4"
+#parking_lot = "0.12"
+#crossbeam-channel = "0.5"
+#backoff = "0.4"
 
 [features]
 default = []

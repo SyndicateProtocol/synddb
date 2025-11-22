@@ -24,12 +24,13 @@ pub struct PublishResult {
 }
 
 /// Multi-layer publisher
+#[derive(Debug)]
 pub struct Publisher {
     _config: PublishConfig,
 }
 
 impl Publisher {
-    pub fn new(config: PublishConfig) -> Self {
+    pub const fn new(config: PublishConfig) -> Self {
         Self { _config: config }
     }
 

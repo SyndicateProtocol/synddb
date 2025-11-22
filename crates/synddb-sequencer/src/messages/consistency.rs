@@ -2,17 +2,18 @@
 
 use anyhow::Result;
 
+#[derive(Debug)]
 pub struct ConsistencyChecker {
     // TODO: Add state for tracking message consistency
 }
 
 impl ConsistencyChecker {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {}
     }
 
     /// Check if messages are consistent with database state
-    pub fn check_consistency(&self) -> Result<bool> {
+    pub const fn check_consistency(&self) -> Result<bool> {
         // TODO: Verify message consistency
         // - Check withdrawal amounts match balances
         // - Verify message ordering

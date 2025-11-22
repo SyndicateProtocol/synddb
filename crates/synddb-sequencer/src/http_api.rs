@@ -2,7 +2,6 @@
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
 
@@ -14,7 +13,7 @@ pub struct ChangesetBatch {
     pub batch_id: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ApiState {
     pub changeset_tx: Sender<Changeset>,
 }

@@ -5,12 +5,13 @@ use crate::attestor::SignedBatch;
 use crate::config::CelestiaConfig;
 use anyhow::Result;
 
+#[derive(Debug)]
 pub struct CelestiaPublisher {
     _config: CelestiaConfig,
 }
 
 impl CelestiaPublisher {
-    pub fn new(config: CelestiaConfig) -> Self {
+    pub const fn new(config: CelestiaConfig) -> Self {
         Self { _config: config }
     }
 

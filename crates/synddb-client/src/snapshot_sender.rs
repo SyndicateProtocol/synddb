@@ -20,6 +20,7 @@ struct SnapshotMessage {
     attestation_token: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct SnapshotSender {
     config: Config,
     client: Client,
@@ -28,7 +29,7 @@ pub struct SnapshotSender {
 }
 
 impl SnapshotSender {
-    pub fn new(
+    pub(crate) fn new(
         config: Config,
         recovery: Option<Arc<FailedBatchRecovery>>,
         attestation: Option<AttestationClient>,
@@ -46,7 +47,7 @@ impl SnapshotSender {
         }
     }
 
-    pub async fn run(self, snapshot_rx: Receiver<Snapshot>, shutdown_rx: Receiver<()>) {
+    pub(crate) async fn run(self, snapshot_rx: Receiver<Snapshot>, shutdown_rx: Receiver<()>) {
         info!("SnapshotSender started");
 
         // Retry any failed snapshots from previous runs

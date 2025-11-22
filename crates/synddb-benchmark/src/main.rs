@@ -20,13 +20,13 @@ struct Cli {
 enum Commands {
     /// Initialize the database with orderbook schema
     Init {
-        /// Path to the SQLite database
+        /// Path to the `SQLite` database
         #[arg(short, long, default_value = "orderbook.db")]
         db: PathBuf,
     },
     /// Run the orderbook simulation
     Run {
-        /// Path to the SQLite database
+        /// Path to the `SQLite` database
         #[arg(short, long, default_value = "orderbook.db")]
         db: PathBuf,
 
@@ -64,13 +64,13 @@ enum Commands {
     },
     /// Show statistics about the database
     Stats {
-        /// Path to the SQLite database
+        /// Path to the `SQLite` database
         #[arg(short, long, default_value = "orderbook.db")]
         db: PathBuf,
     },
     /// Clear all data from the database
     Clear {
-        /// Path to the SQLite database
+        /// Path to the `SQLite` database
         #[arg(short, long, default_value = "orderbook.db")]
         db: PathBuf,
     },

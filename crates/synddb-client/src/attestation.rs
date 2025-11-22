@@ -23,7 +23,7 @@ const DEFAULT_CACHE_DURATION: Duration = Duration::from_secs(50 * 60);
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TokenType {
-    /// OpenID Connect token (default)
+    /// `OpenID` Connect token (default)
     #[default]
     Oidc,
     /// PKI token with certificate chain
@@ -62,7 +62,7 @@ struct TokenCache {
 ///
 /// This client can be safely cloned and shared across threads. All clones share
 /// the same token cache via Arc<Mutex<_>>, so tokens are only fetched when needed.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AttestationClient {
     /// Audience for attestation tokens
     audience: String,
@@ -80,7 +80,7 @@ impl AttestationClient {
     /// # Arguments
     ///
     /// * `audience` - The audience for attestation tokens (typically the sequencer URL)
-    /// * `token_type` - The type of token to request (OIDC, PKI, or AWS_PRINCIPALTAGS)
+    /// * `token_type` - The type of token to request (OIDC, PKI, or `AWS_PRINCIPALTAGS`)
     ///
     /// # Returns
     ///
@@ -252,7 +252,7 @@ impl AttestationClient {
     }
 
     /// Get the token type this client is configured for
-    pub fn token_type(&self) -> TokenType {
+    pub const fn token_type(&self) -> TokenType {
         self.token_type
     }
 }

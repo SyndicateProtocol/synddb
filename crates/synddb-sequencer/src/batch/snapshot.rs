@@ -3,6 +3,7 @@
 use anyhow::Result;
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct SnapshotCreator {
     // TODO: Add state
 }
@@ -14,7 +15,7 @@ impl Default for SnapshotCreator {
 }
 
 impl SnapshotCreator {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {}
     }
 

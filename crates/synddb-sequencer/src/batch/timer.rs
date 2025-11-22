@@ -3,6 +3,7 @@
 use std::time::Duration;
 use tokio::time::{interval, Interval};
 
+#[derive(Debug)]
 pub struct BatchTimer {
     flush_interval: Interval,
     snapshot_interval: Interval,

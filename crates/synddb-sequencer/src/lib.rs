@@ -1,4 +1,4 @@
-//! SyndDB Sequencer - Changeset Receiver and Publisher
+//! `SyndDB` Sequencer - Changeset Receiver and Publisher
 //!
 //! The sequencer receives changesets from synddb-client libraries via HTTP
 //! and publishes them to multiple DA layers.
@@ -6,6 +6,7 @@
 pub mod attestor;
 pub mod batch;
 pub mod config;
+pub mod http_api;
 pub mod messages;
 pub mod monitor;
 pub mod publish;
@@ -18,13 +19,14 @@ use anyhow::Result;
 use tracing::info;
 
 /// Main sequencer runtime
+#[derive(Debug)]
 pub struct Sequencer {
     #[allow(dead_code)] // Will be used when implementation is added
     config: Config,
 }
 
 impl Sequencer {
-    pub fn new(config: Config) -> Self {
+    pub const fn new(config: Config) -> Self {
         Self { config }
     }
 

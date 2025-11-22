@@ -5,12 +5,13 @@ use crate::attestor::SignedBatch;
 use crate::config::IpfsConfig;
 use anyhow::Result;
 
+#[derive(Debug)]
 pub struct IpfsPublisher {
     _config: IpfsConfig,
 }
 
 impl IpfsPublisher {
-    pub fn new(config: IpfsConfig) -> Self {
+    pub const fn new(config: IpfsConfig) -> Self {
         Self { _config: config }
     }
 

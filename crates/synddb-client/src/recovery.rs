@@ -1,7 +1,7 @@
 //! Failed batch recovery for reliable changeset/snapshot delivery
 //!
 //! When sending to the sequencer fails after all retries, we save the data
-//! to a local SQLite recovery database for retry on next startup or manual recovery.
+//! to a local `SQLite` recovery database for retry on next startup or manual recovery.
 
 use crate::session::{Changeset, Snapshot};
 use anyhow::{Context, Result};
@@ -13,6 +13,7 @@ use tracing::{debug, info};
 /// Manages recovery storage for failed changesets and snapshots
 ///
 /// Thread-safe via internal Mutex for cross-thread sharing
+#[derive(Debug)]
 pub struct FailedBatchRecovery {
     conn: Mutex<Connection>,
 }
@@ -20,9 +21,9 @@ pub struct FailedBatchRecovery {
 impl FailedBatchRecovery {
     /// Create or open the recovery database
     ///
-    /// Creates a separate SQLite database for storing failed batches.
+    /// Creates a separate `SQLite` database for storing failed batches.
     /// This database is kept separate from the main application database.
-    pub fn new(db_path: PathBuf) -> Result<Self> {
+    pub(crate) fn new(db_path: PathBuf) -> Result<Self> {
         let conn = Connection::open(db_path).context("Failed to open recovery database")?;
 
         // Create tables for failed batches
@@ -65,7 +66,7 @@ impl FailedBatchRecovery {
     }
 
     /// Save a failed changeset for later retry
-    pub fn save_failed_changeset(&self, changeset: &Changeset, error: &str) -> Result<()> {
+    pub(crate) fn save_failed_changeset(&self, changeset: &Changeset, error: &str) -> Result<()> {
         let timestamp_secs = changeset
             .timestamp
             .duration_since(std::time::UNIX_EPOCH)
@@ -97,7 +98,7 @@ impl FailedBatchRecovery {
     }
 
     /// Save a failed snapshot for later retry
-    pub fn save_failed_snapshot(&self, snapshot: &Snapshot, error: &str) -> Result<()> {
+    pub(crate) fn save_failed_snapshot(&self, snapshot: &Snapshot, error: &str) -> Result<()> {
         let timestamp_secs = snapshot
             .timestamp
             .duration_since(std::time::UNIX_EPOCH)
@@ -129,7 +130,7 @@ impl FailedBatchRecovery {
     }
 
     /// Get all failed changesets for retry
-    pub fn get_failed_changesets(&self) -> Result<Vec<(i64, Changeset)>> {
+    pub(crate) fn get_failed_changesets(&self) -> Result<Vec<(i64, Changeset)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, sequence, data, timestamp FROM failed_changesets ORDER BY sequence",
@@ -162,7 +163,7 @@ impl FailedBatchRecovery {
     }
 
     /// Get all failed snapshots for retry
-    pub fn get_failed_snapshots(&self) -> Result<Vec<(i64, Snapshot)>> {
+    pub(crate) fn get_failed_snapshots(&self) -> Result<Vec<(i64, Snapshot)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, sequence, data, timestamp FROM failed_snapshots ORDER BY sequence",
@@ -195,7 +196,7 @@ impl FailedBatchRecovery {
     }
 
     /// Remove a changeset after successful retry
-    pub fn remove_changeset(&self, id: i64) -> Result<()> {
+    pub(crate) fn remove_changeset(&self, id: i64) -> Result<()> {
         self.conn
             .lock()
             .unwrap()
@@ -205,7 +206,7 @@ impl FailedBatchRecovery {
     }
 
     /// Remove a snapshot after successful retry
-    pub fn remove_snapshot(&self, id: i64) -> Result<()> {
+    pub(crate) fn remove_snapshot(&self, id: i64) -> Result<()> {
         self.conn
             .lock()
             .unwrap()
@@ -215,7 +216,7 @@ impl FailedBatchRecovery {
     }
 
     /// Increment retry count for a changeset
-    pub fn increment_changeset_retry(&self, id: i64, error: &str) -> Result<()> {
+    pub(crate) fn increment_changeset_retry(&self, id: i64, error: &str) -> Result<()> {
         self.conn
             .lock()
             .unwrap()
@@ -227,7 +228,7 @@ impl FailedBatchRecovery {
     }
 
     /// Increment retry count for a snapshot
-    pub fn increment_snapshot_retry(&self, id: i64, error: &str) -> Result<()> {
+    pub(crate) fn increment_snapshot_retry(&self, id: i64, error: &str) -> Result<()> {
         self.conn
             .lock()
             .unwrap()
@@ -239,7 +240,7 @@ impl FailedBatchRecovery {
     }
 
     /// Get count of failed batches
-    pub fn get_failed_counts(&self) -> Result<(usize, usize)> {
+    pub(crate) fn get_failed_counts(&self) -> Result<(usize, usize)> {
         let conn = self.conn.lock().unwrap();
 
         let changesets: usize =
@@ -256,7 +257,7 @@ impl FailedBatchRecovery {
     }
 
     /// Clean up old failed batches (older than specified days)
-    pub fn cleanup_old_failures(&self, days: u32) -> Result<(usize, usize)> {
+    pub(crate) fn cleanup_old_failures(&self, days: u32) -> Result<(usize, usize)> {
         let cutoff_time = std::time::SystemTime::now()
             - std::time::Duration::from_secs(days as u64 * 24 * 60 * 60);
         let cutoff_secs = cutoff_time
