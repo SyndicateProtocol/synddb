@@ -55,7 +55,11 @@ sha2 = "0.10"
 hex = "0.4"
 
 # Blockchain monitoring
-alloy = { version = "1.0.25", features = ["provider-ws", "rpc-types", "sol-types"] }
+alloy = { version = "1.0.25", features = [
+  "provider-ws",
+  "rpc-types",
+  "sol-types",
+] }
 url = "2.5"
 async-trait = "0.1"
 

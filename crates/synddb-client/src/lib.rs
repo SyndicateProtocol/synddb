@@ -23,7 +23,10 @@ use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
 use rusqlite::Connection;
 use std::thread;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
+
+#[cfg(feature = "chain-monitor")]
+use tracing::error;
 
 pub mod attestation;
 pub mod config;
