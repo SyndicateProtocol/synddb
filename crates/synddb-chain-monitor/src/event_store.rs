@@ -26,7 +26,7 @@ impl EventStore {
     ///
     /// # Arguments
     ///
-    /// * `db_path` - Path to the SQLite database file
+    /// * `db_path` - Path to the `SQLite` database file
     ///
     /// # Examples
     ///
@@ -103,7 +103,11 @@ impl EventStore {
         self.conn.execute(
             "INSERT OR IGNORE INTO processed_events (tx_hash, block_number, log_index)
              VALUES (?1, ?2, ?3)",
-            params![tx_hash_str, block_number as i64, log_index.map(|i| i as i64)],
+            params![
+                tx_hash_str,
+                block_number as i64,
+                log_index.map(|i| i as i64)
+            ],
         )?;
 
         debug!(
@@ -157,11 +161,11 @@ impl EventStore {
     ///
     /// Useful for monitoring and debugging.
     pub fn count_processed_events(&self) -> Result<u64> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM processed_events",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM processed_events", [], |row| {
+                    row.get(0)
+                })?;
         Ok(count as u64)
     }
 

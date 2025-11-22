@@ -11,12 +11,13 @@
 
 use alloy::{primitives::B256, rpc::types::Log};
 use anyhow::Result;
-use synddb_chain_monitor::{ChainMonitor, ChainMonitorConfig, MessageHandler};
 use std::sync::Arc;
+use synddb_chain_monitor::{ChainMonitor, ChainMonitorConfig, MessageHandler};
 use tracing::info;
 use url::Url;
 
 /// A simple handler that just logs all events it receives.
+#[derive(Debug)]
 struct SimpleHandler;
 
 #[async_trait::async_trait]
@@ -54,8 +55,9 @@ async fn main() -> Result<()> {
     info!("Simple Chain Monitor Example");
 
     // Read configuration from environment
-    let ws_url = std::env::var("WS_URL")
-        .expect("WS_URL environment variable required (e.g., wss://base-mainnet.g.alchemy.com/v2/KEY)");
+    let ws_url = std::env::var("WS_URL").expect(
+        "WS_URL environment variable required (e.g., wss://base-mainnet.g.alchemy.com/v2/KEY)",
+    );
     let contract_address = std::env::var("CONTRACT_ADDRESS")
         .expect("CONTRACT_ADDRESS environment variable required (e.g., 0x...)");
     let start_block: u64 = std::env::var("START_BLOCK")

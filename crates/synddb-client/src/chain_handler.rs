@@ -2,9 +2,9 @@
 //!
 //! This module implements a `MessageHandler` that listens to blockchain events
 //! (deposits) from a Bridge contract and sends them via a channel to be inserted
-//! into the local SQLite database.
+//! into the local `SQLite` database.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tracing::{error, info, warn};
 
 #[cfg(feature = "chain-monitor")]
@@ -32,6 +32,7 @@ pub struct DepositData {
 /// This handler receives deposit events from the chain monitor and sends them
 /// via a channel to be inserted into the database by the main thread.
 #[cfg(feature = "chain-monitor")]
+#[derive(Debug)]
 pub struct DepositHandler {
     /// Channel to send deposit data to main thread
     tx: Sender<DepositData>,
@@ -46,7 +47,7 @@ impl DepositHandler {
     /// # Arguments
     ///
     /// * `tx` - Channel to send deposit data to main thread for database insertion
-    pub fn new(tx: Sender<DepositData>) -> Self {
+    pub const fn new(tx: Sender<DepositData>) -> Self {
         Self {
             tx,
             processed_count: std::sync::atomic::AtomicU64::new(0),
@@ -76,8 +77,7 @@ impl MessageHandler for DepositHandler {
         // Extract transaction hash and block info
         let tx_hash = log
             .transaction_hash
-            .map(|h| format!("{:#x}", h))
-            .unwrap_or_else(|| "unknown".to_string());
+            .map_or_else(|| "unknown".to_string(), |h| format!("{:#x}", h));
         let block_number = log.block_number.unwrap_or(0);
         let log_index = log.log_index;
 

@@ -10,10 +10,8 @@
 
 use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
 use anyhow::Result;
-use synddb_chain_monitor::{
-    events::Deposit, ChainMonitor, ChainMonitorConfig, MessageHandler,
-};
 use std::sync::Arc;
+use synddb_chain_monitor::{events::Deposit, ChainMonitor, ChainMonitorConfig, MessageHandler};
 use tracing::{error, info};
 use url::Url;
 
@@ -24,13 +22,20 @@ use url::Url;
 /// - Credit user accounts
 /// - Emit notifications
 /// - Update application state
+#[derive(Debug)]
 pub struct DepositHandler {
     // In a real app, you'd have database connections, etc.
     processed_count: std::sync::atomic::AtomicU64,
 }
 
+impl Default for DepositHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DepositHandler {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             processed_count: std::sync::atomic::AtomicU64::new(0),
         }

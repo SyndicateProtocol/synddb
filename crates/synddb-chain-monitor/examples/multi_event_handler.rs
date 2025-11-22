@@ -15,13 +15,13 @@
 
 use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
 use anyhow::{Context, Result};
-use synddb_chain_monitor::{
-    events::{Deposit, Withdrawal, StateSync},
-    ChainMonitor, ChainMonitorConfig, MessageHandler,
-};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
+};
+use synddb_chain_monitor::{
+    events::{Deposit, StateSync, Withdrawal},
+    ChainMonitor, ChainMonitorConfig, MessageHandler,
 };
 use tracing::{error, info, warn};
 use url::Url;
@@ -48,6 +48,7 @@ impl EventStats {
 }
 
 /// Multi-event handler that routes events to appropriate processors.
+#[derive(Debug)]
 struct MultiEventHandler {
     stats: Arc<EventStats>,
 }
@@ -64,8 +65,7 @@ impl MultiEventHandler {
     }
 
     async fn handle_deposit(&self, log: &Log) -> Result<bool> {
-        let deposit = Deposit::decode_log(&log.inner)
-            .context("Failed to decode Deposit event")?;
+        let deposit = Deposit::decode_log(&log.inner).context("Failed to decode Deposit event")?;
 
         info!(
             from = %format!("{:#x}", deposit.from),
@@ -92,8 +92,8 @@ impl MultiEventHandler {
     }
 
     async fn handle_withdrawal(&self, log: &Log) -> Result<bool> {
-        let withdrawal = Withdrawal::decode_log(&log.inner)
-            .context("Failed to decode Withdrawal event")?;
+        let withdrawal =
+            Withdrawal::decode_log(&log.inner).context("Failed to decode Withdrawal event")?;
 
         info!(
             from = %format!("{:#x}", withdrawal.from),
@@ -119,8 +119,8 @@ impl MultiEventHandler {
     }
 
     async fn handle_state_sync(&self, log: &Log) -> Result<bool> {
-        let state_sync = StateSync::decode_log(&log.inner)
-            .context("Failed to decode StateSync event")?;
+        let state_sync =
+            StateSync::decode_log(&log.inner).context("Failed to decode StateSync event")?;
 
         info!(
             block_number = %state_sync.blockNumber,
@@ -146,15 +146,9 @@ impl MessageHandler for MultiEventHandler {
         let event_sig = log.topics().first().copied();
 
         let result = match event_sig {
-            Some(sig) if sig == Deposit::SIGNATURE_HASH => {
-                self.handle_deposit(log).await
-            }
-            Some(sig) if sig == Withdrawal::SIGNATURE_HASH => {
-                self.handle_withdrawal(log).await
-            }
-            Some(sig) if sig == StateSync::SIGNATURE_HASH => {
-                self.handle_state_sync(log).await
-            }
+            Some(sig) if sig == Deposit::SIGNATURE_HASH => self.handle_deposit(log).await,
+            Some(sig) if sig == Withdrawal::SIGNATURE_HASH => self.handle_withdrawal(log).await,
+            Some(sig) if sig == StateSync::SIGNATURE_HASH => self.handle_state_sync(log).await,
             Some(sig) => {
                 warn!(signature = %format!("{:#x}", sig), "Unknown event signature");
                 Ok(false) // Don't mark as processed
@@ -207,10 +201,9 @@ async fn main() -> Result<()> {
     info!("Multi-Event Handler Example");
 
     // Read configuration from environment
-    let ws_url = std::env::var("WS_URL")
-        .expect("WS_URL environment variable required");
-    let contract_address = std::env::var("CONTRACT_ADDRESS")
-        .expect("CONTRACT_ADDRESS environment variable required");
+    let ws_url = std::env::var("WS_URL").expect("WS_URL environment variable required");
+    let contract_address =
+        std::env::var("CONTRACT_ADDRESS").expect("CONTRACT_ADDRESS environment variable required");
     let start_block: u64 = std::env::var("START_BLOCK")
         .expect("START_BLOCK environment variable required")
         .parse()?;

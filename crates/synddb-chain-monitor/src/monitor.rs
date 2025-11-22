@@ -7,8 +7,12 @@ use crate::{
     config::ChainMonitorConfig, eth_client::EthClient, event_store::EventStore,
     handler::MessageHandler,
 };
-use alloy::{primitives::Address, rpc::types::{Filter, Log}};
+use alloy::{
+    primitives::Address,
+    rpc::types::{Filter, Log},
+};
 use anyhow::Result;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -43,6 +47,7 @@ use tracing::{debug, error, info, warn};
 ///     Ok(())
 /// }
 /// ```
+#[derive(Debug)]
 pub struct ChainMonitor {
     eth_client: EthClient,
     contract_address: Address,
@@ -62,10 +67,7 @@ impl ChainMonitor {
     /// # Returns
     ///
     /// A configured `ChainMonitor` ready to run.
-    pub async fn new(
-        config: ChainMonitorConfig,
-        handler: Arc<dyn MessageHandler>,
-    ) -> Result<Self> {
+    pub async fn new(config: ChainMonitorConfig, handler: Arc<dyn MessageHandler>) -> Result<Self> {
         info!(
             contract = %format!("{:#x}", config.contract_address),
             start_block = config.start_block,
@@ -83,9 +85,7 @@ impl ChainMonitor {
         .await;
 
         // Build filter - use handler's event signature if available
-        let event_sig = config
-            .event_signature
-            .or_else(|| handler.event_signature());
+        let event_sig = config.event_signature.or_else(|| handler.event_signature());
 
         let mut filter = Filter::new()
             .address(config.contract_address)
@@ -217,11 +217,7 @@ impl ChainMonitor {
     }
 
     /// Poll for events in a specific block range.
-    async fn poll_for_events(
-        &self,
-        start_block: u64,
-        window: u64,
-    ) -> Result<(Vec<Log>, u64)> {
+    async fn poll_for_events(&self, start_block: u64, window: u64) -> Result<(Vec<Log>, u64)> {
         let latest_block = self
             .eth_client
             .get_latest_block()
@@ -309,6 +305,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[derive(Debug)]
     struct TestHandler {
         count: Arc<AtomicU64>,
     }
@@ -335,7 +332,7 @@ mod tests {
         let log = Log::default();
         let result = handler.handle_event(&log).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
         assert_eq!(handler.count.load(Ordering::SeqCst), 1);
     }
 

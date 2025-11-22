@@ -70,8 +70,11 @@ pub struct SyndDB {
     chain_monitor_handle: Option<thread::JoinHandle<()>>,
     /// Optional deposit receiver channel and table name (for processing deposits)
     #[cfg(feature = "chain-monitor")]
-    deposit_rx: Option<(crossbeam_channel::Receiver<chain_handler::DepositData>, String)>,
-    /// SQLite connection reference (needed for deposit processing)
+    deposit_rx: Option<(
+        crossbeam_channel::Receiver<chain_handler::DepositData>,
+        String,
+    )>,
+    /// `SQLite` connection reference (needed for deposit processing)
     #[cfg(feature = "chain-monitor")]
     conn: Option<&'static Connection>,
 }
@@ -90,7 +93,10 @@ impl SyndDB {
     #[cfg(feature = "chain-monitor")]
     fn start_chain_monitor(
         chain_config: config::ChainMonitorConfig,
-    ) -> Result<(thread::JoinHandle<()>, crossbeam_channel::Receiver<chain_handler::DepositData>)> {
+    ) -> Result<(
+        thread::JoinHandle<()>,
+        crossbeam_channel::Receiver<chain_handler::DepositData>,
+    )> {
         use chain_handler::{DepositData, DepositHandler};
         use synddb_chain_monitor::{ChainMonitor, ChainMonitorConfig};
         use url::Url;
@@ -315,14 +321,18 @@ impl SyndDB {
 
         // Start chain monitor if configured
         #[cfg(feature = "chain-monitor")]
-        let (chain_monitor_handle, deposit_rx_opt, table_name_opt) = if let Some(chain_config) = chain_config_opt {
-            info!("Starting chain monitor for contract {}", chain_config.contract_address);
-            let table_name = chain_config.deposit_table.clone();
-            let (handle, rx) = Self::start_chain_monitor(chain_config)?;
+        let (chain_monitor_handle, deposit_rx_opt, table_name_opt) =
+            if let Some(chain_config) = chain_config_opt {
+                info!(
+                    "Starting chain monitor for contract {}",
+                    chain_config.contract_address
+                );
+                let table_name = chain_config.deposit_table.clone();
+                let (handle, rx) = Self::start_chain_monitor(chain_config)?;
 
-            // Ensure deposits table exists
-            let create_table_sql = format!(
-                "CREATE TABLE IF NOT EXISTS {} (
+                // Ensure deposits table exists
+                let create_table_sql = format!(
+                    "CREATE TABLE IF NOT EXISTS {} (
                     tx_hash TEXT PRIMARY KEY,
                     block_number INTEGER NOT NULL,
                     log_index INTEGER,
@@ -332,15 +342,19 @@ impl SyndDB {
                     data BLOB,
                     processed_at INTEGER NOT NULL
                 )",
-                table_name
-            );
-            conn.execute(&create_table_sql, [])?;
-            info!("Deposits table '{}' ready", table_name);
+                    table_name
+                );
+                conn.execute(&create_table_sql, [])?;
+                info!("Deposits table '{}' ready", table_name);
 
-            (Some(handle), Some((rx, table_name.clone())), Some(table_name))
-        } else {
-            (None, None, None)
-        };
+                (
+                    Some(handle),
+                    Some((rx, table_name.clone())),
+                    Some(table_name),
+                )
+            } else {
+                (None, None, None)
+            };
 
         info!("SyndDB client attached successfully");
 
@@ -356,7 +370,7 @@ impl SyndDB {
             #[cfg(feature = "chain-monitor")]
             deposit_rx: deposit_rx_opt,
             #[cfg(feature = "chain-monitor")]
-            conn: if table_name_opt.is_some() { Some(conn) } else { None },
+            conn: table_name_opt.is_some().then_some(conn),
         })
     }
 
@@ -424,9 +438,12 @@ impl SyndDB {
     /// The number of deposits processed
     #[cfg(feature = "chain-monitor")]
     pub fn process_deposits(&self) -> Result<usize> {
-        let (rx, table_name) = self.deposit_rx.as_ref()
+        let (rx, table_name) = self
+            .deposit_rx
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Chain monitor not enabled"))?;
-        let conn = self.conn
+        let conn = self
+            .conn
             .ok_or_else(|| anyhow::anyhow!("Connection not available"))?;
 
         let mut count = 0;

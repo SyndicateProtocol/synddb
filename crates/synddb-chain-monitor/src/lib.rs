@@ -1,4 +1,4 @@
-//! Generic blockchain event monitoring for SyndDB
+//! Generic blockchain event monitoring for `SyndDB`
 //!
 //! This crate provides a generic chain monitoring service that can listen to
 //! any blockchain contract events via WebSocket subscriptions or RPC polling.
@@ -58,4 +58,4 @@ pub use alloy::{
 };
 
 // Re-export example events for convenience
-pub use events::{Deposit, Withdrawal, StateSync, OwnershipTransferred};
+pub use events::{Deposit, OwnershipTransferred, StateSync, Withdrawal};

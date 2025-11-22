@@ -39,7 +39,13 @@ pub struct EthClient {
 fn handle_rpc_error(name: &str, err: &RpcError<TransportErrorKind>) {
     error!("{}: {}", name, err);
     if let RpcError::Transport(err) = err {
-        assert!(err.is_retry_err(), "{}: {}: {}", name, "fatal transport error", err);
+        assert!(
+            err.is_retry_err(),
+            "{}: {}: {}",
+            name,
+            "fatal transport error",
+            err
+        );
     }
 }
 
@@ -50,7 +56,7 @@ impl EthClient {
     ///
     /// * `ws_urls` - List of WebSocket RPC URLs to try (will fallback through list)
     /// * `timeout` - Timeout for individual RPC requests
-    /// * `get_logs_timeout` - Timeout specifically for eth_getLogs requests
+    /// * `get_logs_timeout` - Timeout specifically for `eth_getLogs` requests
     /// * `channel_size` - Size of the subscription channel buffer
     /// * `retry_interval` - Duration to wait between retry attempts
     ///
@@ -70,9 +76,13 @@ impl EthClient {
             for ws_url in ws_urls.clone() {
                 match tokio::time::timeout(
                     timeout,
-                    ProviderBuilder::default().connect_ws(WsConnect::new(ws_url).with_config(
-                        WebSocketConfig::default().max_message_size(None).max_frame_size(None),
-                    )),
+                    ProviderBuilder::default().connect_ws(
+                        WsConnect::new(ws_url).with_config(
+                            WebSocketConfig::default()
+                                .max_message_size(None)
+                                .max_frame_size(None),
+                        ),
+                    ),
                 )
                 .await
                 {
@@ -83,8 +93,16 @@ impl EthClient {
                         handle_rpc_error("failed to connect to websocket", &err);
                     }
                     Ok(Ok(client)) => {
-                        client.client().expect_pubsub_frontend().set_channel_size(channel_size);
-                        return Self { client, timeout, get_logs_timeout, retry_interval };
+                        client
+                            .client()
+                            .expect_pubsub_frontend()
+                            .set_channel_size(channel_size);
+                        return Self {
+                            client,
+                            timeout,
+                            get_logs_timeout,
+                            retry_interval,
+                        };
                     }
                 }
             }
@@ -114,8 +132,11 @@ impl EthClient {
     /// succeeds.
     pub async fn get_block(&self, block_identifier: BlockNumberOrTag) -> Option<Block> {
         loop {
-            match timeout(self.timeout, self.client.get_block(BlockId::Number(block_identifier)))
-                .await
+            match timeout(
+                self.timeout,
+                self.client.get_block(BlockId::Number(block_identifier)),
+            )
+            .await
             {
                 Err(_) => {
                     warn!(%block_identifier, "get_block request timed out");
@@ -202,7 +223,10 @@ impl EthClient {
     ) -> Result<Vec<Log>, RpcError<TransportErrorKind>> {
         match timeout(self.get_logs_timeout, self.client.get_logs(filter)).await {
             Err(_) => {
-                warn!("eth_getLogs request timed out. Attempting to split range: {:?}", filter);
+                warn!(
+                    "eth_getLogs request timed out. Attempting to split range: {:?}",
+                    filter
+                );
                 self.handle_split_range(
                     filter,
                     TransportErrorKind::Custom("request timed out".into()).into(),
@@ -211,8 +235,12 @@ impl EthClient {
             }
             Ok(Ok(x)) => Ok(x),
             Ok(Err(RpcError::ErrorResp(err))) => {
-                warn!("eth_getLogs request failed. Attempting to split range: {:?}", filter);
-                self.handle_split_range(filter, RpcError::ErrorResp(err)).await
+                warn!(
+                    "eth_getLogs request failed. Attempting to split range: {:?}",
+                    filter
+                );
+                self.handle_split_range(filter, RpcError::ErrorResp(err))
+                    .await
             }
             Ok(Err(err)) => {
                 handle_rpc_error("failed to get logs", &err);
@@ -242,7 +270,10 @@ impl EthClient {
         }
 
         // Split range in half and recursively fetch logs
-        info!("splitting eth_getLogs range ({} to {})", from_block, to_block);
+        info!(
+            "splitting eth_getLogs range ({} to {})",
+            from_block, to_block
+        );
         let mid = (from_block + to_block) / 2;
         let lower_range =
             Box::pin(self.get_logs(&filter.clone().from_block(from_block).to_block(mid))).await?;

@@ -91,7 +91,12 @@ mod tests {
         let amount = U256::from(1000);
         let data = Bytes::from(vec![0x42, 0x43]);
 
-        let deposit = Deposit { from, to, amount, data };
+        let deposit = Deposit {
+            from,
+            to,
+            amount,
+            data,
+        };
 
         assert_eq!(deposit.from, from);
         assert_eq!(deposit.to, to);

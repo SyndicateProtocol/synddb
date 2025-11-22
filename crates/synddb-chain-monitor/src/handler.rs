@@ -5,6 +5,7 @@
 
 use alloy::{primitives::B256, rpc::types::Log};
 use anyhow::Result;
+use std::fmt::Debug;
 
 /// Generic trait for processing blockchain events.
 ///
@@ -38,7 +39,7 @@ use anyhow::Result;
 /// }
 /// ```
 #[async_trait::async_trait]
-pub trait MessageHandler: Send + Sync {
+pub trait MessageHandler: Send + Sync + Debug {
     /// Process a raw log from the blockchain.
     ///
     /// This method is called for each event that matches the filter criteria.
@@ -98,6 +99,7 @@ pub trait MessageHandler: Send + Sync {
 mod tests {
     use super::*;
 
+    #[derive(Debug)]
     struct TestHandler {
         event_count: std::sync::Arc<std::sync::atomic::AtomicU64>,
     }
@@ -127,11 +129,13 @@ mod tests {
         // Process event
         let result = handler.handle_event(&log).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
 
         // Verify count incremented
         assert_eq!(
-            handler.event_count.load(std::sync::atomic::Ordering::SeqCst),
+            handler
+                .event_count
+                .load(std::sync::atomic::Ordering::SeqCst),
             1
         );
     }

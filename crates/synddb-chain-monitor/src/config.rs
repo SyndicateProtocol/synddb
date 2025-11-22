@@ -44,7 +44,7 @@ pub struct ChainMonitorConfig {
     #[serde(with = "humantime_serde")]
     pub request_timeout: Duration,
 
-    /// Timeout specifically for eth_getLogs requests (default: 5 minutes).
+    /// Timeout specifically for `eth_getLogs` requests (default: 5 minutes).
     ///
     /// This is typically longer than regular requests because getLogs
     /// can take a long time for large block ranges.
@@ -61,7 +61,7 @@ pub struct ChainMonitorConfig {
     #[serde(with = "humantime_serde")]
     pub retry_interval: Duration,
 
-    /// Path to the SQLite database for event persistence.
+    /// Path to the `SQLite` database for event persistence.
     ///
     /// This database is used to track processed events and maintain
     /// idempotency across restarts.
@@ -88,7 +88,7 @@ impl ChainMonitorConfig {
     }
 
     /// Set the event signature filter.
-    pub fn with_event_signature(mut self, signature: B256) -> Self {
+    pub const fn with_event_signature(mut self, signature: B256) -> Self {
         self.event_signature = Some(signature);
         self
     }
@@ -100,43 +100,43 @@ impl ChainMonitorConfig {
     }
 
     /// Set the request timeout.
-    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
         self
     }
 
-    /// Set the get_logs timeout.
-    pub fn with_get_logs_timeout(mut self, timeout: Duration) -> Self {
+    /// Set the `get_logs` timeout.
+    pub const fn with_get_logs_timeout(mut self, timeout: Duration) -> Self {
         self.get_logs_timeout = timeout;
         self
     }
 
     /// Set the channel size for WebSocket subscriptions.
-    pub fn with_channel_size(mut self, size: usize) -> Self {
+    pub const fn with_channel_size(mut self, size: usize) -> Self {
         self.channel_size = size;
         self
     }
 
     /// Set the retry interval.
-    pub fn with_retry_interval(mut self, interval: Duration) -> Self {
+    pub const fn with_retry_interval(mut self, interval: Duration) -> Self {
         self.retry_interval = interval;
         self
     }
 }
 
-fn default_request_timeout() -> Duration {
+const fn default_request_timeout() -> Duration {
     Duration::from_secs(10)
 }
 
-fn default_get_logs_timeout() -> Duration {
+const fn default_get_logs_timeout() -> Duration {
     Duration::from_secs(300) // 5 minutes
 }
 
-fn default_channel_size() -> usize {
+const fn default_channel_size() -> usize {
     1024
 }
 
-fn default_retry_interval() -> Duration {
+const fn default_retry_interval() -> Duration {
     Duration::from_secs(1)
 }
 
@@ -234,11 +234,7 @@ mod tests {
         let url2 = Url::parse("wss://backup.example.com").unwrap();
         let contract_addr = Address::from([0xEF; 20]);
 
-        let config = ChainMonitorConfig::new(
-            vec![url1.clone(), url2.clone()],
-            contract_addr,
-            1000,
-        );
+        let config = ChainMonitorConfig::new(vec![url1.clone(), url2.clone()], contract_addr, 1000);
 
         assert_eq!(config.ws_urls.len(), 2);
         assert_eq!(config.ws_urls[0], url1);

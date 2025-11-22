@@ -1,8 +1,8 @@
-//! Example: SyndDB Client with Chain Monitor
+//! Example: `SyndDB` Client with Chain Monitor
 //!
-//! This example demonstrates how to use the SyndDB client with blockchain chain monitoring.
+//! This example demonstrates how to use the `SyndDB` client with blockchain chain monitoring.
 //! It shows the complete integration:
-//! 1. SQLite database captures local changes
+//! 1. `SQLite` database captures local changes
 //! 2. Chain monitor listens for blockchain deposit events
 //! 3. Deposits are inserted into the local database
 //! 4. All changes are automatically published to the sequencer
@@ -18,11 +18,11 @@
 #[cfg(feature = "chain-monitor")]
 use rusqlite::Connection;
 #[cfg(feature = "chain-monitor")]
-use synddb_client::{Config, SyndDB};
-#[cfg(feature = "chain-monitor")]
 use std::thread;
 #[cfg(feature = "chain-monitor")]
 use std::time::Duration;
+#[cfg(feature = "chain-monitor")]
+use synddb_client::{Config, SyndDB};
 
 #[cfg(feature = "chain-monitor")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -133,11 +133,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Check deposits table
-    let deposit_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM deposits",
-        [],
-        |row| row.get(0),
-    )?;
+    let deposit_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM deposits", [], |row| row.get(0))?;
     println!("  - {} total deposits in database", deposit_count);
 
     // Show some stats
@@ -148,8 +145,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n📊 Summary:");
-    println!("  1. Application created {} trades in local SQLite", trade_id - 1);
-    println!("  2. Chain monitor detected {} deposits from blockchain", deposit_count);
+    println!(
+        "  1. Application created {} trades in local SQLite",
+        trade_id - 1
+    );
+    println!(
+        "  2. Chain monitor detected {} deposits from blockchain",
+        deposit_count
+    );
     println!("  3. All changes are being published to sequencer every 5s");
     println!("  4. Sequencer will replicate everything to other replicas\n");
 
