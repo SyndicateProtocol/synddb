@@ -50,6 +50,46 @@ pub struct Config {
     /// Only used if `enable_attestation` is true
     #[serde(default = "default_attestation_token_type")]
     pub attestation_token_type: TokenType,
+
+    /// Chain monitor configuration (optional, only enabled with "chain-monitor" feature)
+    #[cfg(feature = "chain-monitor")]
+    #[serde(default)]
+    pub chain_monitor: Option<ChainMonitorConfig>,
+}
+
+/// Configuration for blockchain chain monitoring
+#[cfg(feature = "chain-monitor")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainMonitorConfig {
+    /// WebSocket RPC URLs for blockchain connection (multiple for redundancy)
+    pub ws_urls: Vec<String>,
+
+    /// Contract address to monitor for events
+    pub contract_address: String,
+
+    /// Block number to start monitoring from
+    pub start_block: u64,
+
+    /// Optional specific event signature to filter (leave None for all events)
+    pub event_signature: Option<String>,
+
+    /// Path to store event processing state
+    #[serde(default = "default_event_store_path")]
+    pub event_store_path: String,
+
+    /// Database table name to insert deposit events into
+    #[serde(default = "default_deposit_table")]
+    pub deposit_table: String,
+}
+
+#[cfg(feature = "chain-monitor")]
+fn default_event_store_path() -> String {
+    "./chain_events.db".to_string()
+}
+
+#[cfg(feature = "chain-monitor")]
+fn default_deposit_table() -> String {
+    "deposits".to_string()
 }
 
 const fn default_buffer_size() -> usize {
@@ -101,6 +141,8 @@ impl Default for Config {
             enable_recovery: default_enable_recovery(),
             enable_attestation: default_enable_attestation(),
             attestation_token_type: default_attestation_token_type(),
+            #[cfg(feature = "chain-monitor")]
+            chain_monitor: None,
         }
     }
 }

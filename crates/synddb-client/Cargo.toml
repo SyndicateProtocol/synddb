@@ -45,6 +45,12 @@ hyperlocal = { workspace = true }
 hyper = { workspace = true }
 serde_json = { workspace = true }
 
+# Chain monitor for blockchain event listening
+synddb-chain-monitor = { path = "../synddb-chain-monitor", optional = true }
+url = { workspace = true, optional = true }
+alloy = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+
 [lib]
 # Compile as both Rust library and C-compatible shared library
 crate-type = ["rlib", "cdylib"]
@@ -53,6 +59,8 @@ crate-type = ["rlib", "cdylib"]
 default = []
 # Enable C FFI exports (for cross-language support via ctypes/ffi-napi/cgo)
 ffi = []
+# Enable blockchain chain monitoring
+chain-monitor = ["synddb-chain-monitor", "url", "alloy", "async-trait"]
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

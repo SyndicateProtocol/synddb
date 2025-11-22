@@ -23,7 +23,7 @@ use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
 use rusqlite::Connection;
 use std::thread;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub mod attestation;
 pub mod config;
@@ -35,6 +35,9 @@ pub mod snapshot_sender;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;
+
+#[cfg(feature = "chain-monitor")]
+pub mod chain_handler;
 
 pub use attestation::{is_confidential_space, AttestationClient, TokenType};
 pub use config::Config;
@@ -62,6 +65,15 @@ pub struct SyndDB {
     snapshot_handle: Option<thread::JoinHandle<()>>,
     /// Optional recovery storage for failed batches
     recovery: Option<std::sync::Arc<FailedBatchRecovery>>,
+    /// Optional chain monitor handle
+    #[cfg(feature = "chain-monitor")]
+    chain_monitor_handle: Option<thread::JoinHandle<()>>,
+    /// Optional deposit receiver channel and table name (for processing deposits)
+    #[cfg(feature = "chain-monitor")]
+    deposit_rx: Option<(crossbeam_channel::Receiver<chain_handler::DepositData>, String)>,
+    /// SQLite connection reference (needed for deposit processing)
+    #[cfg(feature = "chain-monitor")]
+    conn: Option<&'static Connection>,
 }
 
 /// Statistics about failed batches in recovery storage
@@ -74,6 +86,74 @@ pub struct RecoveryStats {
 }
 
 impl SyndDB {
+    /// Start the chain monitor in a background thread
+    #[cfg(feature = "chain-monitor")]
+    fn start_chain_monitor(
+        chain_config: config::ChainMonitorConfig,
+    ) -> Result<(thread::JoinHandle<()>, crossbeam_channel::Receiver<chain_handler::DepositData>)> {
+        use chain_handler::{DepositData, DepositHandler};
+        use synddb_chain_monitor::{ChainMonitor, ChainMonitorConfig};
+        use url::Url;
+
+        // Create channel for deposit data
+        let (deposit_tx, deposit_rx) = bounded::<DepositData>(100);
+
+        // Start chain monitor thread
+        let monitor_handle = thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime for chain monitor")
+                .block_on(async {
+                    // Parse WebSocket URLs
+                    let ws_urls: Vec<Url> = chain_config
+                        .ws_urls
+                        .iter()
+                        .map(|s| Url::parse(s).expect("Invalid WebSocket URL"))
+                        .collect();
+
+                    // Parse contract address
+                    let contract_address = chain_config
+                        .contract_address
+                        .parse()
+                        .expect("Invalid contract address");
+
+                    // Parse optional event signature
+                    let event_signature = chain_config.event_signature.and_then(|s| s.parse().ok());
+
+                    // Create chain monitor configuration
+                    let mut monitor_config = ChainMonitorConfig::new(
+                        ws_urls,
+                        contract_address,
+                        chain_config.start_block,
+                    )
+                    .with_event_store_path(chain_config.event_store_path);
+
+                    if let Some(sig) = event_signature {
+                        monitor_config = monitor_config.with_event_signature(sig);
+                    }
+
+                    // Create deposit handler
+                    let handler = std::sync::Arc::new(DepositHandler::new(deposit_tx));
+
+                    // Create and run chain monitor
+                    match ChainMonitor::new(monitor_config, handler).await {
+                        Ok(mut monitor) => {
+                            info!("Chain monitor started successfully");
+                            if let Err(e) = monitor.run().await {
+                                error!("Chain monitor error: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to start chain monitor: {}", e);
+                        }
+                    }
+                });
+        });
+
+        Ok((monitor_handle, deposit_rx))
+    }
+
     /// Attach to an existing `SQLite` connection
     ///
     /// This will:
@@ -213,6 +293,10 @@ impl SyndDB {
             })
             .unwrap_or_default();
 
+        // Clone config before moving it
+        #[cfg(feature = "chain-monitor")]
+        let chain_config_opt = config.chain_monitor.clone();
+
         // Start background changeset sender thread
         let changeset_handle = thread::spawn({
             let recovery_clone = recovery.clone();
@@ -229,6 +313,35 @@ impl SyndDB {
             }
         });
 
+        // Start chain monitor if configured
+        #[cfg(feature = "chain-monitor")]
+        let (chain_monitor_handle, deposit_rx_opt, table_name_opt) = if let Some(chain_config) = chain_config_opt {
+            info!("Starting chain monitor for contract {}", chain_config.contract_address);
+            let table_name = chain_config.deposit_table.clone();
+            let (handle, rx) = Self::start_chain_monitor(chain_config)?;
+
+            // Ensure deposits table exists
+            let create_table_sql = format!(
+                "CREATE TABLE IF NOT EXISTS {} (
+                    tx_hash TEXT PRIMARY KEY,
+                    block_number INTEGER NOT NULL,
+                    log_index INTEGER,
+                    from_address TEXT NOT NULL,
+                    to_address TEXT NOT NULL,
+                    amount TEXT NOT NULL,
+                    data BLOB,
+                    processed_at INTEGER NOT NULL
+                )",
+                table_name
+            );
+            conn.execute(&create_table_sql, [])?;
+            info!("Deposits table '{}' ready", table_name);
+
+            (Some(handle), Some((rx, table_name.clone())), Some(table_name))
+        } else {
+            (None, None, None)
+        };
+
         info!("SyndDB client attached successfully");
 
         Ok(Self {
@@ -238,6 +351,12 @@ impl SyndDB {
             changeset_handle: Some(changeset_handle),
             snapshot_handle,
             recovery,
+            #[cfg(feature = "chain-monitor")]
+            chain_monitor_handle,
+            #[cfg(feature = "chain-monitor")]
+            deposit_rx: deposit_rx_opt,
+            #[cfg(feature = "chain-monitor")]
+            conn: if table_name_opt.is_some() { Some(conn) } else { None },
         })
     }
 
@@ -295,6 +414,58 @@ impl SyndDB {
             .snapshot()
     }
 
+    /// Process pending deposits from the blockchain (only with "chain-monitor" feature)
+    ///
+    /// This method should be called periodically to process incoming deposit events
+    /// from the blockchain and insert them into the local database.
+    ///
+    /// # Returns
+    ///
+    /// The number of deposits processed
+    #[cfg(feature = "chain-monitor")]
+    pub fn process_deposits(&self) -> Result<usize> {
+        let (rx, table_name) = self.deposit_rx.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Chain monitor not enabled"))?;
+        let conn = self.conn
+            .ok_or_else(|| anyhow::anyhow!("Connection not available"))?;
+
+        let mut count = 0;
+        // Process all pending deposits (non-blocking)
+        while let Ok(deposit) = rx.try_recv() {
+            let insert_sql = format!(
+                "INSERT OR IGNORE INTO {} (tx_hash, block_number, log_index, from_address, to_address, amount, data, processed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                table_name
+            );
+
+            let processed_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+
+            conn.execute(
+                &insert_sql,
+                rusqlite::params![
+                    deposit.tx_hash,
+                    deposit.block_number as i64,
+                    deposit.log_index.map(|i| i as i64),
+                    deposit.from,
+                    deposit.to,
+                    deposit.amount,
+                    deposit.data,
+                    processed_at,
+                ],
+            )?;
+            count += 1;
+        }
+
+        if count > 0 {
+            debug!("Processed {} deposits", count);
+        }
+
+        Ok(count)
+    }
+
     /// Get statistics about failed batches in recovery storage
     ///
     /// Returns the number of failed changesets and snapshots waiting to be retried.
@@ -346,6 +517,9 @@ impl SyndDB {
             handle.join().expect("Snapshot sender thread panicked");
         }
 
+        // Note: Chain monitor thread runs indefinitely and will be aborted on Drop
+        // This is expected behavior as the monitor should run as long as the client is active
+
         info!("SyndDB client shut down successfully");
         Ok(())
     }
@@ -379,6 +553,13 @@ impl Drop for SyndDB {
             if let Err(e) = handle.join() {
                 warn!("Snapshot sender thread panicked during drop: {:?}", e);
             }
+        }
+
+        // Note: Chain monitor thread is not joined here as it runs indefinitely
+        // It will be terminated when the process exits
+        #[cfg(feature = "chain-monitor")]
+        if self.chain_monitor_handle.is_some() {
+            debug!("Chain monitor thread will be terminated on process exit");
         }
     }
 }
