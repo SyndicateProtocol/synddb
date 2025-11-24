@@ -31,7 +31,7 @@ impl EventStore {
     /// # Examples
     ///
     /// ```no_run
-    /// use synddb_chain_monitor::EventStore;
+    /// use synddb_chain_monitor::event_store::EventStore;
     ///
     /// let store = EventStore::new("./events.db").unwrap();
     /// ```
@@ -41,17 +41,14 @@ impl EventStore {
         // Create tables if they don't exist
         conn.execute_batch(
             r#"
-            CREATE TABLE IF NOT EXISTS processed_events (
-                tx_hash TEXT PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS processed_events (tx_hash TEXT PRIMARY KEY,
                 block_number INTEGER NOT NULL,
                 log_index INTEGER,
                 processed_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
 
-            CREATE TABLE IF NOT EXISTS monitor_state (
-                key TEXT PRIMARY KEY,
-                value INTEGER NOT NULL
-            );
+            CREATE TABLE IF NOT EXISTS monitor_state (key TEXT PRIMARY KEY,
+                value INTEGER NOT NULL);
 
             CREATE INDEX IF NOT EXISTS idx_processed_events_block
             ON processed_events(block_number);

@@ -10,7 +10,7 @@ use url::Url;
 ///
 /// This configuration specifies which blockchain to monitor, which contract
 /// to watch, and how to connect to the RPC endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
+#[derive(Debug, Clone, Serialize, Deserialize, Parser, Default)]
 #[command(author, version, about, long_about = None)]
 pub struct ChainMonitorConfig {
     /// WebSocket RPC URL (can be specified multiple times for failover)
@@ -58,22 +58,6 @@ pub struct ChainMonitorConfig {
     /// NOTE: This database is separate from the application's `SQLite` database
     #[arg(long, env = "EVENT_STORE_PATH", default_value = "./chain_events.db")]
     pub event_store_path: String,
-}
-
-impl Default for ChainMonitorConfig {
-    fn default() -> Self {
-        Self {
-            ws_urls: Vec::new(),
-            contract_address: Address::ZERO,
-            start_block: 0,
-            event_signature: None,
-            request_timeout: default_request_timeout(),
-            get_logs_timeout: default_get_logs_timeout(),
-            channel_size: default_channel_size(),
-            retry_interval: default_retry_interval(),
-            event_store_path: default_event_store_path(),
-        }
-    }
 }
 
 impl ChainMonitorConfig {

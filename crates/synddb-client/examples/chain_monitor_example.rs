@@ -16,13 +16,13 @@
 //! ```
 
 #[cfg(feature = "chain-monitor")]
-use rusqlite::Connection;
-#[cfg(feature = "chain-monitor")]
-use std::thread;
-#[cfg(feature = "chain-monitor")]
-use std::time::Duration;
-#[cfg(feature = "chain-monitor")]
-use synddb_client::{Config, SyndDB};
+use {
+    rusqlite::Connection,
+    std::thread,
+    std::time::Duration,
+    synddb_client::{Config, SyndDB},
+    synddb_chain_monitor::config::ChainMonitorConfig
+};
 
 #[cfg(feature = "chain-monitor")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,42 +42,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create application tables
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY,
+        "CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY,
             amount INTEGER NOT NULL,
-            timestamp INTEGER NOT NULL
-        )",
+            timestamp INTEGER NOT NULL)",
         [],
     )?;
     println!("✓ Created application tables");
 
     // Configure SyndDB with chain monitor
-    let ws_url = std::env::var("WS_URL")
+    let ws_url_str = std::env::var("WS_URL")
         .unwrap_or_else(|_| "wss://base-mainnet.g.alchemy.com/v2/YOUR_KEY".to_string());
-    let contract_address = std::env::var("CONTRACT_ADDRESS")
+    let contract_address_str = std::env::var("CONTRACT_ADDRESS")
         .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string());
     let start_block: u64 = std::env::var("START_BLOCK")
         .unwrap_or_else(|_| "0".to_string())
         .parse()?;
 
+    // Parse URL and Address using proper types
+    use alloy::primitives::Address;
+    use url::Url;
+
+    let ws_url = Url::parse(&ws_url_str)?;
+    let contract_address: Address = contract_address_str
+        .parse()
+        .map_err(|e| format!("Invalid contract address: {}", e))?;
+
+    // Create chain monitor config using builder pattern
+    let chain_monitor_config = ChainMonitorConfig::new(
+        vec![ws_url.clone()],
+        contract_address,
+        start_block,
+    )
+    .with_event_store_path("./chain_events.db");
+
     let config = Config {
         sequencer_url: "http://localhost:8433".to_string(),
         publish_interval: Duration::from_secs(5),
-        chain_monitor: Some(synddb_client::config::ChainMonitorConfig {
-            ws_urls: vec![ws_url.clone()],
-            contract_address: contract_address.clone(),
-            start_block,
-            event_signature: None, // Monitor all events
-            event_store_path: "./chain_events.db".to_string(),
-            deposit_table: "deposits".to_string(),
-        }),
+        chain_monitor: Some(chain_monitor_config),
         ..Default::default()
     };
 
     println!("✓ Configuration:");
     println!("  - Sequencer: {}", config.sequencer_url);
     println!("  - Chain WS: {}", ws_url);
-    println!("  - Contract: {}", contract_address);
+    println!("  - Contract: {:#x}", contract_address);
     println!("  - Start block: {}\n", start_block);
 
     // Attach SyndDB client

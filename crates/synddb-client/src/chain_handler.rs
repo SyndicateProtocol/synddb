@@ -4,18 +4,13 @@
 //! (deposits) from a Bridge contract and sends them via a channel to be inserted
 //! into the local `SQLite` database.
 
+use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
 use anyhow::Result;
+use crossbeam_channel::Sender;
+use synddb_chain_monitor::{events::Deposit, handler::MessageHandler};
 use tracing::{error, info, warn};
 
-#[cfg(feature = "chain-monitor")]
-use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
-#[cfg(feature = "chain-monitor")]
-use crossbeam_channel::Sender;
-#[cfg(feature = "chain-monitor")]
-use synddb_chain_monitor::{events::Deposit, handler::MessageHandler};
-
 /// Deposit data extracted from blockchain events
-#[cfg(feature = "chain-monitor")]
 #[derive(Debug, Clone)]
 pub struct DepositData {
     pub tx_hash: String,
@@ -31,7 +26,6 @@ pub struct DepositData {
 ///
 /// This handler receives deposit events from the chain monitor and sends them
 /// via a channel to be inserted into the database by the main thread.
-#[cfg(feature = "chain-monitor")]
 #[derive(Debug)]
 pub struct DepositHandler {
     /// Channel to send deposit data to main thread
@@ -40,7 +34,6 @@ pub struct DepositHandler {
     processed_count: std::sync::atomic::AtomicU64,
 }
 
-#[cfg(feature = "chain-monitor")]
 impl DepositHandler {
     /// Create a new deposit handler
     ///
@@ -61,7 +54,6 @@ impl DepositHandler {
     }
 }
 
-#[cfg(feature = "chain-monitor")]
 #[async_trait::async_trait]
 impl MessageHandler for DepositHandler {
     async fn handle_event(&self, log: &Log) -> Result<bool> {

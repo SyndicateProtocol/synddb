@@ -16,7 +16,7 @@ use std::fmt::Debug;
 /// # Example
 ///
 /// ```
-/// use synddb_chain_monitor::MessageHandler;
+/// use synddb_chain_monitor::handler::MessageHandler;
 /// use alloy::{rpc::types::Log, primitives::B256};
 /// use anyhow::Result;
 ///
