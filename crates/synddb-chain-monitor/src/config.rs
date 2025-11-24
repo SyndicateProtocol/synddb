@@ -10,7 +10,7 @@ use url::Url;
 ///
 /// This configuration specifies which blockchain to monitor, which contract
 /// to watch, and how to connect to the RPC endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize, Parser, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct ChainMonitorConfig {
     /// WebSocket RPC URL (can be specified multiple times for failover)
@@ -64,14 +64,23 @@ pub struct ChainMonitorConfig {
 impl ChainMonitorConfig {
     /// Create a new configuration with the minimum required fields.
     ///
-    /// Other fields will be set to sensible defaults.
+    /// Other fields will be set to sensible defaults from clap's `default_value` attributes.
     pub fn new(ws_urls: Vec<Url>, contract_address: Address, start_block: u64) -> Self {
-        Self {
-            ws_urls,
-            contract_address,
-            start_block,
-            ..Default::default()
-        }
+        // Use parse_from with minimal args to get defaults from clap's `default_value`
+        let mut config = Self::parse_from([
+            "chain-monitor",
+            "--ws-urls",
+            "wss://placeholder.invalid",
+            "--contract-address",
+            "0x0000000000000000000000000000000000000000",
+            "--start-block",
+            "0",
+        ]);
+        // Override with actual values
+        config.ws_urls = ws_urls;
+        config.contract_address = contract_address;
+        config.start_block = start_block;
+        config
     }
 
     /// Set the event signature filter.

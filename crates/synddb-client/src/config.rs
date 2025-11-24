@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use synddb_chain_monitor::config::ChainMonitorConfig;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Parser, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Config {
     /// URL of the sequencer TEE
@@ -55,6 +55,13 @@ pub struct Config {
     #[arg(skip)]
     #[serde(default)]
     pub chain_monitor: Option<ChainMonitorConfig>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        // Parse empty args to get default values from clap's `default_value` attributes
+        Self::parse_from::<[&str; 0], &str>([])
+    }
 }
 
 // Custom parsers for clap
