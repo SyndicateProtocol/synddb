@@ -52,7 +52,7 @@ pub struct Config {
     pub attestation_token_type: TokenType,
 
     /// Chain monitor configuration (optional, only enabled with "chain-monitor" feature)
-    #[arg(skip)]
+    #[command(flatten)]
     #[serde(default)]
     pub chain_monitor: Option<ChainMonitorConfig>,
 }
