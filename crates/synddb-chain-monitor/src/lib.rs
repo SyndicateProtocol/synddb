@@ -21,19 +21,3 @@ pub mod event_store;
 pub mod events;
 pub mod handler;
 pub mod monitor;
-
-// Re-export main types for convenient public API
-pub use config::ChainMonitorConfig;
-pub use eth_client::EthClient;
-pub use event_store::EventStore;
-pub use handler::MessageHandler;
-pub use monitor::ChainMonitor;
-
-// Re-export commonly used Alloy types for convenience
-pub use alloy::{
-    primitives::{Address, B256},
-    rpc::types::{Filter, Log},
-};
-
-// Re-export example events for convenience
-pub use events::{Deposit, OwnershipTransferred, StateSync, Withdrawal};

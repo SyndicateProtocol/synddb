@@ -95,13 +95,14 @@ impl SyndDB {
     /// Start the chain monitor in a background thread
     #[cfg(feature = "chain-monitor")]
     fn start_chain_monitor(
-        chain_config: config::ChainMonitorConfig,
+        chain_config: synddb_chain_monitor::config::ChainMonitorConfig,
     ) -> Result<(
         thread::JoinHandle<()>,
         crossbeam_channel::Receiver<chain_handler::DepositData>,
     )> {
         use chain_handler::{DepositData, DepositHandler};
-        use synddb_chain_monitor::{ChainMonitor, ChainMonitorConfig};
+        use synddb_chain_monitor::config::ChainMonitorConfig;
+        use synddb_chain_monitor::monitor::ChainMonitor;
         use url::Url;
 
         // Create channel for deposit data
@@ -172,7 +173,7 @@ impl SyndDB {
     ///
     /// # Arguments
     ///
-    /// * `conn` - `SQLite` connection to monitor (must have 'static lifetime)
+    /// * `conn` - `SQLite` connection to monitor (must have `'static` lifetime)
     /// * `sequencer_url` - URL of the sequencer TEE (e.g. "<https://sequencer:8433>")
     ///
     /// # Example

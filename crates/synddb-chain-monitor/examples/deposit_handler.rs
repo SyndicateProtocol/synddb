@@ -12,7 +12,9 @@ use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
-use synddb_chain_monitor::{events::Deposit, ChainMonitor, ChainMonitorConfig, MessageHandler};
+use synddb_chain_monitor::{
+    config::ChainMonitorConfig, events::Deposit, handler::MessageHandler, monitor::ChainMonitor,
+};
 use tracing::{error, info};
 
 /// Example deposit handler that processes deposit events.

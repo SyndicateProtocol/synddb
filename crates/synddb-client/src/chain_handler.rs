@@ -12,7 +12,7 @@ use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
 #[cfg(feature = "chain-monitor")]
 use crossbeam_channel::Sender;
 #[cfg(feature = "chain-monitor")]
-use synddb_chain_monitor::{events::Deposit, MessageHandler};
+use synddb_chain_monitor::{events::Deposit, handler::MessageHandler};
 
 /// Deposit data extracted from blockchain events
 #[cfg(feature = "chain-monitor")]

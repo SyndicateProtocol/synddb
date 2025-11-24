@@ -359,7 +359,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify it matches the expected signature hash
-        let expected = alloy::primitives::keccak256("Deposit(address,address,uint256)".as_bytes());
+        let expected = alloy::primitives::keccak256(b"Deposit(address,address,uint256)");
         assert_eq!(result.unwrap(), expected);
     }
 
@@ -370,7 +370,7 @@ mod tests {
         let result = parse_b256(canonical);
         assert!(result.is_ok());
 
-        let expected = alloy::primitives::keccak256("Deposit(address,uint256)".as_bytes());
+        let expected = alloy::primitives::keccak256(b"Deposit(address,uint256)");
         assert_eq!(result.unwrap(), expected);
     }
 
@@ -394,7 +394,7 @@ mod tests {
         let result = parse_b256(event_def);
         assert!(result.is_ok());
 
-        let expected = alloy::primitives::keccak256("StateSync(uint256,bytes)".as_bytes());
+        let expected = alloy::primitives::keccak256(b"StateSync(uint256,bytes)");
         assert_eq!(result.unwrap(), expected);
     }
 
