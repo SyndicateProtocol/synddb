@@ -20,8 +20,8 @@ use {
     rusqlite::Connection,
     std::thread,
     std::time::Duration,
+    synddb_chain_monitor::config::ChainMonitorConfig,
     synddb_client::{Config, SyndDB},
-    synddb_chain_monitor::config::ChainMonitorConfig
 };
 
 #[cfg(feature = "chain-monitor")]
@@ -68,12 +68,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Invalid contract address: {}", e))?;
 
     // Create chain monitor config using builder pattern
-    let chain_monitor_config = ChainMonitorConfig::new(
-        vec![ws_url.clone()],
-        contract_address,
-        start_block,
-    )
-    .with_event_store_path("./chain_events.db");
+    let chain_monitor_config =
+        ChainMonitorConfig::new(vec![ws_url.clone()], contract_address, start_block)
+            .with_event_store_path("./chain_events.db");
 
     let config = Config {
         sequencer_url: "http://localhost:8433".to_string(),
