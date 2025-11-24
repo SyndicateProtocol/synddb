@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     )
     .with_event_store_path("./chain-monitor-state.db"); // Separate from your app DB!
 
-    let monitor = ChainMonitor::new(config, std::sync::Arc::new(MyHandler)).await?;
+    let mut monitor = ChainMonitor::new(config, std::sync::Arc::new(MyHandler)).await?;
     monitor.run().await?;
     Ok(())
 }

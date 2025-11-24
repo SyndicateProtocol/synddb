@@ -23,7 +23,6 @@ use tracing::{debug, error, info, warn};
 /// The monitor supports two modes:
 /// - **WebSocket mode**: Real-time event streaming (preferred)
 /// - **RPC polling mode**: Periodic polling for events (fallback)
-/// ```
 #[derive(Debug)]
 pub struct ChainMonitor {
     eth_client: EthClient,

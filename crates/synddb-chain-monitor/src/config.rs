@@ -21,7 +21,8 @@ pub struct ChainMonitorConfig {
     #[arg(long, env = "CONTRACT_ADDRESS", value_parser = parse_address, required = true)]
     pub contract_address: Address,
 
-    /// Block number to start monitoring from
+    // TODO - automatically get this from Bridge deployment metadata
+    /// Block number to start monitoring from. This should be the block of the Bridge contract deployment.
     #[arg(long, env = "START_BLOCK", required = true)]
     pub start_block: u64,
 
