@@ -5,7 +5,9 @@
 
 use alloy::sol;
 
-// Example Bridge contract events
+// SAMPLE Bridge contract events
+// TODO: Update with finalized Bridge contract events
+// TODO: Test what happens if Bridge interacts with multiple contracts and which events are/aren't recorded
 sol! {
     /// Emitted when a user deposits tokens into the bridge.
     ///

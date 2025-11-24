@@ -10,10 +10,10 @@
 
 use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
 use anyhow::Result;
+use clap::Parser;
 use std::sync::Arc;
 use synddb_chain_monitor::{events::Deposit, ChainMonitor, ChainMonitorConfig, MessageHandler};
 use tracing::{error, info};
-use url::Url;
 
 /// Example deposit handler that processes deposit events.
 ///
@@ -22,25 +22,13 @@ use url::Url;
 /// - Credit user accounts
 /// - Emit notifications
 /// - Update application state
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DepositHandler {
     // In a real app, you'd have database connections, etc.
     processed_count: std::sync::atomic::AtomicU64,
 }
 
-impl Default for DepositHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DepositHandler {
-    pub const fn new() -> Self {
-        Self {
-            processed_count: std::sync::atomic::AtomicU64::new(0),
-        }
-    }
-
     pub fn get_processed_count(&self) -> u64 {
         self.processed_count
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -117,34 +105,24 @@ async fn main() -> Result<()> {
 
     info!("Starting deposit handler example");
 
-    // Example configuration - replace with your actual values
-    // NOTE: This example will fail if you don't provide a real RPC URL and contract address
-    let ws_url = std::env::var("WS_URL")
-        .unwrap_or_else(|_| "wss://base-mainnet.g.alchemy.com/v2/YOUR_KEY".to_string());
-    let contract_address = std::env::var("CONTRACT_ADDRESS")
-        .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string());
-    let start_block: u64 = std::env::var("START_BLOCK")
-        .unwrap_or_else(|_| "0".to_string())
-        .parse()?;
+    // Parse configuration from environment variables or CLI args
+    let mut config = ChainMonitorConfig::parse();
+
+    // Override event signature to only monitor Deposit events
+    config.event_signature = Some(Deposit::SIGNATURE_HASH);
+
+    // Override event store path for this example
+    config.event_store_path = "./deposit_events.db".to_string();
 
     info!(
-        ws_url = %ws_url,
-        contract_address = %contract_address,
-        start_block = start_block,
+        ws_urls = ?config.ws_urls,
+        contract_address = %format!("{:#x}", config.contract_address),
+        start_block = config.start_block,
         "Configuration loaded"
     );
 
-    // Create configuration
-    let config = ChainMonitorConfig::new(
-        vec![Url::parse(&ws_url)?],
-        contract_address.parse()?,
-        start_block,
-    )
-    .with_event_signature(Deposit::SIGNATURE_HASH)
-    .with_event_store_path("./deposit_events.db".to_string());
-
     // Create handler
-    let handler = Arc::new(DepositHandler::new());
+    let handler = Arc::new(DepositHandler::default());
 
     // Create and run monitor
     let mut monitor = ChainMonitor::new(config, handler).await?;

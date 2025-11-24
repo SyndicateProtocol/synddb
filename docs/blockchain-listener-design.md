@@ -357,7 +357,7 @@ impl ChainMonitor {
 ### 2.6 EventStore Implementation
 
 **Implementation** (`synddb-chain-monitor/src/event_store.rs`):
-```rust,no_run
+```rust
 pub struct EventStore {
     conn: Connection,
 }
@@ -366,24 +366,20 @@ impl EventStore {
     pub fn new(db_path: &str) -> Result<Self> {
         let conn = Connection::open(db_path)?;
         conn.execute_batch(r#"
-            CREATE TABLE IF NOT EXISTS processed_events (
-                tx_hash TEXT PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS processed_events (tx_hash TEXT PRIMARY KEY,
                 block_number INTEGER NOT NULL,
                 log_index INTEGER,
-                processed_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS monitor_state (
-                key TEXT PRIMARY KEY,
-                value INTEGER NOT NULL
-            );
+                processed_at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS monitor_state (key TEXT PRIMARY KEY,
+                value INTEGER NOT NULL);
         "#)?;
         Ok(Self { conn })
     }
 
-    pub fn is_processed(&self, tx_hash: &B256) -> Result<bool>
-    pub fn mark_processed(&self, tx_hash: &B256, block: u64, log_index: Option<u64>) -> Result<()>
-    pub fn get_last_processed_block(&self) -> Result<Option<u64>>
-    pub fn set_last_processed_block(&self, block: u64) -> Result<()>
+    pub fn is_processed(&self, tx_hash: &B256) -> Result<bool>{}
+    pub fn mark_processed(&self, tx_hash: &B256, block: u64, log_index: Option<u64>) -> Result<()>{}
+    pub fn get_last_processed_block(&self) -> Result<Option<u64>>{}
+    pub fn set_last_processed_block(&self, block: u64) -> Result<()>{}
 }
 ```
 

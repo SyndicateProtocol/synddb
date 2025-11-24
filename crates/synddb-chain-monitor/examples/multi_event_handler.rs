@@ -15,6 +15,7 @@
 
 use alloy::{primitives::B256, rpc::types::Log, sol_types::SolEvent};
 use anyhow::{Context, Result};
+use clap::Parser;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -24,7 +25,6 @@ use synddb_chain_monitor::{
     ChainMonitor, ChainMonitorConfig, MessageHandler,
 };
 use tracing::{error, info, warn};
-use url::Url;
 
 /// Shared statistics for all event handlers.
 #[derive(Debug, Default)]
@@ -48,18 +48,12 @@ impl EventStats {
 }
 
 /// Multi-event handler that routes events to appropriate processors.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct MultiEventHandler {
     stats: Arc<EventStats>,
 }
 
 impl MultiEventHandler {
-    fn new() -> Self {
-        Self {
-            stats: Arc::new(EventStats::default()),
-        }
-    }
-
     fn get_stats(&self) -> Arc<EventStats> {
         self.stats.clone()
     }
@@ -200,31 +194,21 @@ async fn main() -> Result<()> {
 
     info!("Multi-Event Handler Example");
 
-    // Read configuration from environment
-    let ws_url = std::env::var("WS_URL").expect("WS_URL environment variable required");
-    let contract_address =
-        std::env::var("CONTRACT_ADDRESS").expect("CONTRACT_ADDRESS environment variable required");
-    let start_block: u64 = std::env::var("START_BLOCK")
-        .expect("START_BLOCK environment variable required")
-        .parse()?;
+    // Parse configuration from environment variables or CLI args
+    let mut config = ChainMonitorConfig::parse();
+
+    // Override event store path for this example
+    config.event_store_path = "./bridge_events.db".to_string();
 
     info!(
-        ws_url = %ws_url,
-        contract = %contract_address,
-        start_block = start_block,
+        ws_urls = ?config.ws_urls,
+        contract = %format!("{:#x}", config.contract_address),
+        start_block = config.start_block,
         "Configuration loaded"
     );
 
-    // Create configuration
-    let config = ChainMonitorConfig::new(
-        vec![Url::parse(&ws_url)?],
-        contract_address.parse()?,
-        start_block,
-    )
-    .with_event_store_path("./bridge_events.db".to_string());
-
     // Create handler
-    let handler = Arc::new(MultiEventHandler::new());
+    let handler = Arc::new(MultiEventHandler::default());
     let stats = handler.get_stats();
 
     // Spawn a task to periodically log statistics

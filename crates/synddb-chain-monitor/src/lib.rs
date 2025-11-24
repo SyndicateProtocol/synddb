@@ -9,33 +9,11 @@
 //!
 //! - `ChainMonitor`: Main service that orchestrates blockchain listening
 //! - `EthClient`: Robust Ethereum client wrapper with retry logic
-//! - `MultiRpcProvider`: Automatic failover between multiple RPC endpoints
 //! - `MessageHandler`: Trait for custom event processing logic
 //! - `EventStore`: SQLite-based persistence for idempotency and crash recovery
 //!
-//! # Example
-//!
-//! ```ignore
-//! // Full example will be available after Phase 3+ implementation
-//! use synddb_chain_monitor::{ChainMonitor, ChainMonitorConfig, MessageHandler};
-//! use alloy::rpc::types::Log;
-//! use anyhow::Result;
-//!
-//! struct MyHandler;
-//!
-//! #[async_trait::async_trait]
-//! impl MessageHandler for MyHandler {
-//!     async fn handle_event(&self, log: &Log) -> Result<bool> {
-//!         // Custom event processing logic
-//!         println!("Received event: {:?}", log);
-//!         Ok(true)
-//!     }
-//!
-//!     fn event_signature(&self) -> Option<alloy::primitives::B256> {
-//!         None // Process all events
-//!     }
-//! }
-//! ```
+//! See the [examples directory](https://github.com/SyndicateProtocol/SyndDB/tree/main/crates/synddb-chain-monitor/examples)
+//! for detailed usage patterns including deposit handling, multi-event routing, and production configurations.
 
 pub mod config;
 pub mod eth_client;
@@ -44,7 +22,7 @@ pub mod events;
 pub mod handler;
 pub mod monitor;
 
-// Re-export main types
+// Re-export main types for convenient public API
 pub use config::ChainMonitorConfig;
 pub use eth_client::EthClient;
 pub use event_store::EventStore;

@@ -11,10 +11,10 @@
 
 use alloy::{primitives::B256, rpc::types::Log};
 use anyhow::Result;
+use clap::Parser;
 use std::sync::Arc;
 use synddb_chain_monitor::{ChainMonitor, ChainMonitorConfig, MessageHandler};
 use tracing::info;
-use url::Url;
 
 /// A simple handler that just logs all events it receives.
 #[derive(Debug)]
@@ -54,28 +54,14 @@ async fn main() -> Result<()> {
 
     info!("Simple Chain Monitor Example");
 
-    // Read configuration from environment
-    let ws_url = std::env::var("WS_URL").expect(
-        "WS_URL environment variable required (e.g., wss://base-mainnet.g.alchemy.com/v2/KEY)",
-    );
-    let contract_address = std::env::var("CONTRACT_ADDRESS")
-        .expect("CONTRACT_ADDRESS environment variable required (e.g., 0x...)");
-    let start_block: u64 = std::env::var("START_BLOCK")
-        .expect("START_BLOCK environment variable required (e.g., 10000000)")
-        .parse()?;
+    // Parse configuration from environment variables or CLI args
+    let config = ChainMonitorConfig::parse();
 
     info!(
-        ws_url = %ws_url,
-        contract = %contract_address,
-        start_block = start_block,
+        ws_urls = ?config.ws_urls,
+        contract = %format!("{:#x}", config.contract_address),
+        start_block = config.start_block,
         "Starting monitor"
-    );
-
-    // Create configuration
-    let config = ChainMonitorConfig::new(
-        vec![Url::parse(&ws_url)?],
-        contract_address.parse()?,
-        start_block,
     );
 
     // Create handler

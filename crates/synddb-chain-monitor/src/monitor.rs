@@ -23,29 +23,6 @@ use tracing::{debug, error, info, warn};
 /// The monitor supports two modes:
 /// - **WebSocket mode**: Real-time event streaming (preferred)
 /// - **RPC polling mode**: Periodic polling for events (fallback)
-///
-/// # Example
-///
-/// ```ignore
-/// use synddb_chain_monitor::{ChainMonitor, ChainMonitorConfig, MessageHandler};
-/// use alloy::primitives::Address;
-/// use std::sync::Arc;
-/// use url::Url;
-///
-/// #[tokio::main]
-/// async fn main() -> anyhow::Result<()> {
-///     let config = ChainMonitorConfig::new(
-///         vec![Url::parse("wss://base-mainnet.g.alchemy.com/v2/KEY")?],
-///         Address::from([0x42; 20]),
-///         10_000_000,
-///     );
-///
-///     let handler = Arc::new(MyHandler::new());
-///     let mut monitor = ChainMonitor::new(config, handler).await?;
-///
-///     monitor.run().await?;
-///     Ok(())
-/// }
 /// ```
 #[derive(Debug)]
 pub struct ChainMonitor {

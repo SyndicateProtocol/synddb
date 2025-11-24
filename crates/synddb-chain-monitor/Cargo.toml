@@ -35,6 +35,10 @@ async-trait = { workspace = true }
 # Serialization
 serde = { workspace = true }
 humantime-serde = { workspace = true }
+humantime = "2.1"
+
+# CLI parsing
+clap = { version = "4.5.53", features = ["derive", "env"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

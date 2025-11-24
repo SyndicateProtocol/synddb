@@ -20,6 +20,7 @@ use std::fmt::Debug;
 /// use alloy::{rpc::types::Log, primitives::B256};
 /// use anyhow::Result;
 ///
+/// #[derive(Debug)]
 /// struct MyHandler {
 ///     // Your application state
 /// }
