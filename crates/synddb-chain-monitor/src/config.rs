@@ -301,7 +301,10 @@ mod tests {
         assert_eq!(config.ws_urls, deserialized.ws_urls);
         assert_eq!(config.contract_address, deserialized.contract_address);
         assert_eq!(config.start_block, deserialized.start_block);
-        assert_eq!(config.monitor_request_timeout, deserialized.monitor_request_timeout);
+        assert_eq!(
+            config.monitor_request_timeout,
+            deserialized.monitor_request_timeout
+        );
         assert_eq!(config.get_logs_timeout, deserialized.get_logs_timeout);
     }
 
