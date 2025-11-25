@@ -53,7 +53,7 @@ impl ChainMonitor {
         // Create EthClient with configured parameters
         let eth_client = EthClient::new(
             config.ws_urls.clone(),
-            config.request_timeout,
+            config.monitor_request_timeout,
             config.get_logs_timeout,
             config.channel_size,
             config.retry_interval,

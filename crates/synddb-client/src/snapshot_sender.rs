@@ -35,7 +35,7 @@ impl SnapshotSender {
         attestation: Option<AttestationClient>,
     ) -> Self {
         let client = Client::builder()
-            .timeout(config.request_timeout)
+            .timeout(config.snapshot_request_timeout)
             .build()
             .expect("Failed to create HTTP client");
 

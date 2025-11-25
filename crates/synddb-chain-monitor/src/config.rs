@@ -14,16 +14,16 @@ use url::Url;
 #[command(author, version, about, long_about = None)]
 pub struct ChainMonitorConfig {
     /// WebSocket RPC URL (can be specified multiple times for failover)
-    #[arg(long, env = "WS_URL", value_parser = parse_url, required = true)]
+    #[arg(long, env = "WS_URL", value_parser = parse_url, default_value = "wss://localhost:8546")]
     pub ws_urls: Vec<Url>,
 
     /// Contract address to monitor
-    #[arg(long, env = "CONTRACT_ADDRESS", value_parser = parse_address, required = true)]
+    #[arg(long, env = "CONTRACT_ADDRESS", value_parser = parse_address, default_value = "0x0000000000000000000000000000000000000000")]
     pub contract_address: Address,
 
     // TODO - automatically get this from Bridge deployment metadata
     /// Block number to start monitoring from. This should be the block of the Bridge contract deployment.
-    #[arg(long, env = "START_BLOCK", required = true)]
+    #[arg(long, env = "START_BLOCK", default_value_t = 1)]
     pub start_block: u64,
 
     /// Optional event signature to filter for
@@ -37,9 +37,9 @@ pub struct ChainMonitorConfig {
     pub event_signature: Option<B256>,
 
     /// Timeout for individual RPC requests (e.g., "10s")
-    #[arg(long, env = "REQUEST_TIMEOUT", default_value = "10s", value_parser = parse_duration)]
+    #[arg(long, env = "MONITOR_REQUEST_TIMEOUT", default_value = "10s", value_parser = parse_duration)]
     #[serde(with = "humantime_serde")]
-    pub request_timeout: Duration,
+    pub monitor_request_timeout: Duration,
 
     /// Timeout for `eth_getLogs` requests (e.g., "5m")
     #[arg(long, env = "GET_LOGS_TIMEOUT", default_value = "300s", value_parser = parse_duration)]
@@ -97,7 +97,7 @@ impl ChainMonitorConfig {
 
     /// Set the request timeout.
     pub const fn with_request_timeout(mut self, timeout: Duration) -> Self {
-        self.request_timeout = timeout;
+        self.monitor_request_timeout = timeout;
         self
     }
 
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(config.contract_address, contract_addr);
         assert_eq!(config.start_block, start_block);
         assert_eq!(config.event_signature, None);
-        assert_eq!(config.request_timeout, Duration::from_secs(10));
+        assert_eq!(config.monitor_request_timeout, Duration::from_secs(10));
         assert_eq!(config.get_logs_timeout, Duration::from_secs(300));
         assert_eq!(config.channel_size, 1024);
         assert_eq!(config.retry_interval, Duration::from_secs(1));
@@ -279,7 +279,7 @@ mod tests {
 
         assert_eq!(config.event_signature, Some(event_sig));
         assert_eq!(config.event_store_path, "/custom/path.db");
-        assert_eq!(config.request_timeout, Duration::from_secs(20));
+        assert_eq!(config.monitor_request_timeout, Duration::from_secs(20));
         assert_eq!(config.get_logs_timeout, Duration::from_secs(600));
         assert_eq!(config.channel_size, 2048);
         assert_eq!(config.retry_interval, Duration::from_secs(5));
@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(config.ws_urls, deserialized.ws_urls);
         assert_eq!(config.contract_address, deserialized.contract_address);
         assert_eq!(config.start_block, deserialized.start_block);
-        assert_eq!(config.request_timeout, deserialized.request_timeout);
+        assert_eq!(config.monitor_request_timeout, deserialized.monitor_request_timeout);
         assert_eq!(config.get_logs_timeout, deserialized.get_logs_timeout);
     }
 

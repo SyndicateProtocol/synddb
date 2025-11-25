@@ -31,9 +31,9 @@ pub struct Config {
     pub max_retries: usize,
 
     /// Timeout for HTTP requests (e.g., "10s")
-    #[arg(long, env = "REQUEST_TIMEOUT", default_value = "10s", value_parser = parse_duration)]
+    #[arg(long, env = "SNAPSHOT_REQUEST_TIMEOUT", default_value = "10s", value_parser = parse_duration)]
     #[serde(with = "humantime_serde")]
-    pub request_timeout: Duration,
+    pub snapshot_request_timeout: Duration,
 
     /// Number of changesets between automatic snapshots (0 to disable)
     #[arg(long, env = "SNAPSHOT_INTERVAL", default_value = "100")]
