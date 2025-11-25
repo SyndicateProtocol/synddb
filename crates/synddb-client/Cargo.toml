@@ -39,11 +39,21 @@ uuid = { workspace = true }
 
 # Humantime serialization
 humantime-serde = { workspace = true }
+humantime = "2.1"
+
+# CLI parsing
+clap = { version = "4.5.53", features = ["derive", "env"] }
 
 # Unix domain socket support for Confidential Space attestation
 hyperlocal = { workspace = true }
 hyper = { workspace = true }
 serde_json = { workspace = true }
+
+# Chain monitor for blockchain event listening
+synddb-chain-monitor = { path = "../synddb-chain-monitor" }
+url = { workspace = true, optional = true }
+alloy = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
 
 [lib]
 # Compile as both Rust library and C-compatible shared library
@@ -53,6 +63,8 @@ crate-type = ["rlib", "cdylib"]
 default = []
 # Enable C FFI exports (for cross-language support via ctypes/ffi-napi/cgo)
 ffi = []
+# Enable blockchain chain monitoring
+chain-monitor = ["url", "alloy", "async-trait"]
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

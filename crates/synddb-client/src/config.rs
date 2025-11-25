@@ -1,106 +1,84 @@
 //! Configuration for `SyndDB` client
 
 use crate::attestation::TokenType;
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use synddb_chain_monitor::config::ChainMonitorConfig;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
+#[command(author, version, about, long_about = None)]
 pub struct Config {
     /// URL of the sequencer TEE
+    #[arg(long, env = "SEQUENCER_URL", default_value = "http://localhost:8433")]
     pub sequencer_url: String,
 
     /// Maximum number of changesets to buffer before publishing
-    #[serde(default = "default_buffer_size")]
+    #[arg(long, env = "BUFFER_SIZE", default_value = "100")]
     pub buffer_size: usize,
 
-    /// Maximum time to wait before publishing buffer
+    /// Maximum time to wait before publishing buffer (e.g., "1s")
+    #[arg(long, env = "PUBLISH_INTERVAL", default_value = "1s", value_parser = parse_duration)]
     #[serde(with = "humantime_serde")]
-    #[serde(default = "default_publish_interval")]
     pub publish_interval: Duration,
 
     /// Maximum size of a changeset batch in bytes
-    #[serde(default = "default_max_batch_size")]
+    #[arg(long, env = "MAX_BATCH_SIZE", default_value = "1048576")]
     pub max_batch_size: usize,
 
     /// Number of retries for failed sends
-    #[serde(default = "default_max_retries")]
+    #[arg(long, env = "MAX_RETRIES", default_value = "3")]
     pub max_retries: usize,
 
-    /// Timeout for HTTP requests
+    /// Timeout for HTTP requests (e.g., "10s")
+    #[arg(long, env = "SNAPSHOT_REQUEST_TIMEOUT", default_value = "10s", value_parser = parse_duration)]
     #[serde(with = "humantime_serde")]
-    #[serde(default = "default_request_timeout")]
-    pub request_timeout: Duration,
+    pub snapshot_request_timeout: Duration,
 
-    /// Number of changesets between automatic snapshots
-    /// Set to 0 to disable automatic snapshots
-    #[serde(default = "default_snapshot_interval")]
+    /// Number of changesets between automatic snapshots (0 to disable)
+    #[arg(long, env = "SNAPSHOT_INTERVAL", default_value = "100")]
     pub snapshot_interval: u64,
 
     /// Enable recovery storage for failed batches
-    /// When enabled, failed changesets and snapshots are saved to a local `SQLite` database for retry
-    #[serde(default = "default_enable_recovery")]
+    #[arg(long, env = "ENABLE_RECOVERY", default_value = "true")]
     pub enable_recovery: bool,
 
     /// Enable TEE attestation tokens for GCP Confidential Space
-    /// When enabled, each changeset batch and snapshot will include an attestation token
-    #[serde(default = "default_enable_attestation")]
+    #[arg(long, env = "ENABLE_ATTESTATION", default_value = "false")]
     pub enable_attestation: bool,
 
-    /// Type of attestation token to request (OIDC, PKI, or `AWS_PRINCIPALTAGS`)
-    /// Only used if `enable_attestation` is true
-    #[serde(default = "default_attestation_token_type")]
+    /// Type of attestation token (oidc, pki, or aws-principal-tags)
+    #[arg(long, env = "ATTESTATION_TOKEN_TYPE", default_value = "oidc", value_parser = parse_token_type)]
     pub attestation_token_type: TokenType,
-}
 
-const fn default_buffer_size() -> usize {
-    100
-}
-
-const fn default_publish_interval() -> Duration {
-    Duration::from_secs(1)
-}
-
-const fn default_max_batch_size() -> usize {
-    1024 * 1024 // 1MB
-}
-
-const fn default_max_retries() -> usize {
-    3
-}
-
-const fn default_request_timeout() -> Duration {
-    Duration::from_secs(10)
-}
-
-const fn default_snapshot_interval() -> u64 {
-    100
-}
-
-const fn default_enable_recovery() -> bool {
-    true
-}
-
-const fn default_enable_attestation() -> bool {
-    false
-}
-
-const fn default_attestation_token_type() -> TokenType {
-    TokenType::Oidc
+    /// Chain monitor configuration (optional, only enabled with "chain-monitor" feature)
+    #[command(flatten)]
+    #[serde(default)]
+    pub chain_monitor: Option<ChainMonitorConfig>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            sequencer_url: "http://localhost:8433".to_string(),
-            buffer_size: default_buffer_size(),
-            publish_interval: default_publish_interval(),
-            max_batch_size: default_max_batch_size(),
-            max_retries: default_max_retries(),
-            request_timeout: default_request_timeout(),
-            snapshot_interval: default_snapshot_interval(),
-            enable_recovery: default_enable_recovery(),
-            enable_attestation: default_enable_attestation(),
-            attestation_token_type: default_attestation_token_type(),
+        // Parse empty args to get default values from clap's `default_value` attributes
+        Self::parse_from::<[&str; 0], &str>([])
+    }
+}
+
+// Custom parsers for clap
+fn parse_duration(s: &str) -> Result<Duration, String> {
+    humantime::parse_duration(s).map_err(|e| format!("Invalid duration: {}", e))
+}
+
+fn parse_token_type(s: &str) -> Result<TokenType, String> {
+    match s.to_lowercase().as_str() {
+        "oidc" => Ok(TokenType::Oidc),
+        "pki" => Ok(TokenType::Pki),
+        "aws-principal-tags" | "aws_principaltags" | "awsprincipaltags" => {
+            Ok(TokenType::AwsPrincipaltags)
         }
+        _ => Err(format!(
+            "Invalid token type '{}'. Expected: oidc, pki, or aws-principal-tags",
+            s
+        )),
     }
 }

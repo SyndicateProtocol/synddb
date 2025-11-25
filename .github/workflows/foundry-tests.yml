@@ -16,6 +16,10 @@ on:
       - "contracts/**"
       - ".github/workflows/foundry-tests.yml"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 env:
   FOUNDRY_PROFILE: ci
 

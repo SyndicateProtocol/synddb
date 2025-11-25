@@ -36,6 +36,12 @@ pub mod snapshot_sender;
 #[cfg(feature = "ffi")]
 pub mod ffi;
 
+#[cfg(feature = "chain-monitor")]
+pub mod chain_handler;
+
+pub mod chain_monitor_integration;
+use chain_monitor_integration::ChainMonitorHandle;
+
 pub use attestation::{is_confidential_space, AttestationClient, TokenType};
 pub use config::Config;
 use recovery::FailedBatchRecovery;
@@ -62,6 +68,8 @@ pub struct SyndDB {
     snapshot_handle: Option<thread::JoinHandle<()>>,
     /// Optional recovery storage for failed batches
     recovery: Option<std::sync::Arc<FailedBatchRecovery>>,
+    /// Optional chain monitor handle (enabled with `chain-monitor` feature)
+    chain_monitor: Option<ChainMonitorHandle>,
 }
 
 /// Statistics about failed batches in recovery storage
@@ -83,7 +91,7 @@ impl SyndDB {
     ///
     /// # Arguments
     ///
-    /// * `conn` - `SQLite` connection to monitor (must have 'static lifetime)
+    /// * `conn` - `SQLite` connection to monitor (must have `'static` lifetime)
     /// * `sequencer_url` - URL of the sequencer TEE (e.g. "<https://sequencer:8433>")
     ///
     /// # Example
@@ -216,16 +224,34 @@ impl SyndDB {
         // Start background changeset sender thread
         let changeset_handle = thread::spawn({
             let recovery_clone = recovery.clone();
+            let config_clone = config.clone();
             move || {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .expect("Failed to create tokio runtime for changeset sender")
                     .block_on(async {
-                        ChangesetSender::new(config, recovery_clone, attestation_client)
+                        ChangesetSender::new(config_clone, recovery_clone, attestation_client)
                             .run(changeset_rx, changeset_shutdown_rx)
                             .await
                     });
+            }
+        });
+
+        // Start chain monitor if configured
+        let chain_monitor = config.chain_monitor.and_then(|chain_config| {
+            match ChainMonitorHandle::new(chain_config, conn) {
+                Ok(handle) => {
+                    info!("Chain monitor started successfully");
+                    Some(handle)
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to start chain monitor: {}. Continuing without it.",
+                        e
+                    );
+                    None
+                }
             }
         });
 
@@ -238,6 +264,7 @@ impl SyndDB {
             changeset_handle: Some(changeset_handle),
             snapshot_handle,
             recovery,
+            chain_monitor,
         })
     }
 
@@ -295,6 +322,26 @@ impl SyndDB {
             .snapshot()
     }
 
+    /// Process pending deposits from the blockchain
+    ///
+    /// This method should be called periodically to process incoming deposit events
+    /// from the blockchain and insert them into the local database.
+    ///
+    /// # Returns
+    ///
+    /// The number of deposits processed, or an error if the chain monitor is not enabled
+    ///
+    /// # Note
+    ///
+    /// This method requires the "chain-monitor" feature to be enabled at compile time.
+    /// If the feature is not enabled, this will return an error.
+    pub fn process_deposits(&self) -> Result<usize> {
+        self.chain_monitor
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Chain monitor not enabled or failed to start"))?
+            .process_deposits()
+    }
+
     /// Get statistics about failed batches in recovery storage
     ///
     /// Returns the number of failed changesets and snapshots waiting to be retried.
@@ -346,6 +393,9 @@ impl SyndDB {
             handle.join().expect("Snapshot sender thread panicked");
         }
 
+        // Note: Chain monitor thread runs indefinitely and will be aborted on Drop
+        // This is expected behavior as the monitor should run as long as the client is active
+
         info!("SyndDB client shut down successfully");
         Ok(())
     }
@@ -379,6 +429,12 @@ impl Drop for SyndDB {
             if let Err(e) = handle.join() {
                 warn!("Snapshot sender thread panicked during drop: {:?}", e);
             }
+        }
+
+        // Drop chain monitor if present
+        // Note: Chain monitor thread runs indefinitely and will be terminated on process exit
+        if self.chain_monitor.is_some() {
+            debug!("Chain monitor will be terminated on process exit");
         }
     }
 }
