@@ -25,6 +25,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error ArrayLengthMismatch();
     error OnlySelfCall();
     error InsufficientWETHBalance(uint256 required, uint256 available);
+    error InvalidETHAmount(uint256 sent, uint256 required);
 
     constructor(address admin, address _wrappedNativeToken) ModuleCheckRegistry(admin) {
         wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
@@ -45,6 +46,20 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         SequencerSignature calldata sequencerSignature,
         uint256 ethAmount
     ) public payable onlyRole(SEQUENCER_ROLE) {
+        if (msg.value != ethAmount) {
+            revert InvalidETHAmount(msg.value, ethAmount);
+        }
+
+        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, ethAmount);
+    }
+
+    function _initializeMessage(
+        bytes32 messageId,
+        address targetAddress,
+        bytes calldata payload,
+        SequencerSignature calldata sequencerSignature,
+        uint256 ethAmount
+    ) internal {
         if (isMessageInitialized(messageId)) {
             revert MessageAlreadyInitialized(messageId);
         }
@@ -132,7 +147,11 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes[] calldata validatorSignatures,
         uint256 ethAmount
     ) external payable {
-        initializeMessage(messageId, targetAddress, payload, sequencerSignature, ethAmount);
+        if (msg.value != ethAmount) {
+            revert InvalidETHAmount(msg.value, ethAmount);
+        }
+
+        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, ethAmount);
 
         // collect validator signatures and verify them
         for (uint256 i = 0; i < validatorSignatures.length; i++) {
@@ -176,8 +195,17 @@ contract Bridge is IBridge, ModuleCheckRegistry {
             revert ArrayLengthMismatch();
         }
 
+        uint256 totalEthAmount = 0;
+        for (uint256 i = 0; i < ethAmounts.length; i++) {
+            totalEthAmount += ethAmounts[i];
+        }
+
+        if (msg.value != totalEthAmount) {
+            revert InvalidETHAmount(msg.value, totalEthAmount);
+        }
+
         for (uint256 i = 0; i < messageIds.length; i++) {
-            initializeMessage(messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i], ethAmounts[i]);
+            _initializeMessage(messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i], ethAmounts[i]);
         }
     }
 
