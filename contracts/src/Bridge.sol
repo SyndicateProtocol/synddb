@@ -23,7 +23,6 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageCurrentlyProcessing(bytes32 messageId, ProcessingStage currentStage);
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
     error ArrayLengthMismatch();
-    error OnlySelfCall();
     error InsufficientWETHBalance(uint256 required, uint256 available);
     error InvalidETHAmount(uint256 sent, uint256 required);
 

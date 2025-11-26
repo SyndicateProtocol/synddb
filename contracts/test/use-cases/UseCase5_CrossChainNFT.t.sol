@@ -77,9 +77,12 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
             receiver.receiveONFTMint.selector, mintMessageId, address(destOnft), destinationUser, tokenId
         );
 
+        // Sequencer signature for mint (different from burn)
+        SequencerSignature memory mintSig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+
         // Execute mint on destination chain (no validators needed for this simple test)
         vm.prank(sequencer);
-        destBridge.initializeMessage(mintMessageId, address(receiver), mintPayload, burnSig, 0);
+        destBridge.initializeMessage(mintMessageId, address(receiver), mintPayload, mintSig, 0);
         destBridge.handleMessage(mintMessageId);
 
         // Verify NFT was minted on destination chain

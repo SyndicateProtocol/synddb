@@ -357,7 +357,7 @@ contract ModuleAddingAndRemovingTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-                        EDGE CASE TESTS
+                        ERROR HANDLING TESTS
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Test removing a module that doesn't exist
