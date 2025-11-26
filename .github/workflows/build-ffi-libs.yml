@@ -39,7 +39,9 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  # Don't cancel in-progress runs - this workflow commits to the repo and
+  # cancellation could leave libraries out of sync with source code
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
