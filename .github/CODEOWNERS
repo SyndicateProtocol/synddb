@@ -2,13 +2,20 @@
 # Each line is a file pattern followed by one or more owners
 
 # Global owners - apply to everything in the repo unless overridden
-* @WillPapper @tsite
+* @WillPapper
 
-# Rust core package
-/synddb-core/ @WillPapper @tsite
+# Rust crates
+/crates/ @WillPapper @daniilrrr
+/crates/synddb-chain-monitor/ @daniilrrr @WillPapper
+/crates/synddb-sequencer/ @daniilrrr @WillPapper
+/crates/synddb-client/ @WillPapper @daniilrrr
+/crates/synddb-benchmark/ @WillPapper
+
+# Solidity contracts
+/contracts/ @gustavoguimaraes @WillPapper
 
 # Documentation
-*.md @WillPapper @tsite
+*.md @WillPapper
 
 # CI/CD
-/.github/ @WillPapper @tsite
+/.github/ @WillPapper
