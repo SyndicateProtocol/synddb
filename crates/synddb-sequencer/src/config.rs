@@ -8,15 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::time::Duration;
 
-/// Parse duration from humantime format (e.g., "10s", "5m")
-fn parse_duration(s: &str) -> Result<Duration, String> {
-    humantime::parse_duration(s).map_err(|e| format!("Invalid duration: {e}"))
-}
-
 /// Sequencer node configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[command(name = "synddb-sequencer")]
-#[command(about = "SyndDB Sequencer - orders and signs changesets from client applications")]
+#[command(about = "SyndDB Sequencer - orders and signs messages from client applications")]
 pub struct SequencerConfig {
     /// HTTP server bind address
     #[arg(long, env = "BIND_ADDRESS", default_value = "0.0.0.0:8433")]
@@ -30,7 +25,7 @@ pub struct SequencerConfig {
     pub signing_key: String,
 
     /// Request timeout for HTTP operations
-    #[arg(long, env = "REQUEST_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
+    #[arg(long, env = "REQUEST_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub request_timeout: Duration,
 
@@ -51,19 +46,15 @@ pub struct SequencerConfig {
     pub gcs_prefix: String,
 
     /// Output logs in JSON format (for production log aggregation)
-    #[arg(long, env = "LOG_JSON", default_value = "false")]
+    #[arg(long, env = "RUST_LOG_JSON", default_value = "false")]
     pub log_json: bool,
-
-    /// Log level (trace, debug, info, warn, error)
-    #[arg(long, env = "LOG_LEVEL", default_value = "info")]
-    pub log_level: String,
 
     /// Attestation service URL for TEE token verification
     #[arg(long, env = "ATTESTATION_SERVICE_URL")]
     pub attestation_service_url: Option<String>,
 
     /// Graceful shutdown timeout
-    #[arg(long, env = "SHUTDOWN_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
+    #[arg(long, env = "SHUTDOWN_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
 }
@@ -100,18 +91,5 @@ mod tests {
         assert_eq!(config.request_timeout, Duration::from_secs(30));
         assert_eq!(config.max_message_size, 10_485_760);
         assert!(!config.verify_attestation);
-    }
-
-    #[test]
-    fn test_parse_duration_valid() {
-        assert_eq!(parse_duration("10s").unwrap(), Duration::from_secs(10));
-        assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
-        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
-    }
-
-    #[test]
-    fn test_parse_duration_invalid() {
-        assert!(parse_duration("invalid").is_err());
-        assert!(parse_duration("").is_err());
     }
 }

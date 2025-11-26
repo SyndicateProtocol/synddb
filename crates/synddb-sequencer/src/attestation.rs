@@ -12,6 +12,7 @@
 //! 4. Validate standard claims (iss, aud, exp, iat)
 //! 5. Optionally validate TEE-specific claims (hardware, software, image digest)
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
@@ -207,8 +208,6 @@ impl AttestationVerifier {
 
 /// Decode base64url-encoded data (used in JWTs)
 fn base64_decode_url_safe(input: &str) -> Result<Vec<u8>, AttestationError> {
-    use base64::Engine;
-
     // Add padding if needed
     let padded = match input.len() % 4 {
         2 => format!("{}==", input),
@@ -270,7 +269,6 @@ mod tests {
             "iat": 900,
         });
 
-        use base64::Engine;
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_string(&claims).unwrap());
         let token = format!("eyJhbGciOiJSUzI1NiJ9.{}.signature", payload);
@@ -296,7 +294,6 @@ mod tests {
             "iat": now,
         });
 
-        use base64::Engine;
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_string(&claims).unwrap());
         let token = format!("eyJhbGciOiJSUzI1NiJ9.{}.signature", payload);
@@ -326,7 +323,6 @@ mod tests {
             "secboot": true,
         });
 
-        use base64::Engine;
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_string(&claims).unwrap());
         let token = format!("eyJhbGciOiJSUzI1NiJ9.{}.signature", payload);

@@ -5,6 +5,7 @@ members = [
   "crates/synddb-sequencer",
   "crates/synddb-client",
   "crates/synddb-chain-monitor",
+  "crates/synddb-shared",
 ]
 
 [workspace.package]

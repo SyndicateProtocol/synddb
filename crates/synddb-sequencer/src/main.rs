@@ -10,6 +10,7 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tracing::{error, info, warn};
 
+use synddb_sequencer::attestation::{AttestationConfig, AttestationVerifier};
 use synddb_sequencer::publish::traits::DAPublisher;
 use synddb_sequencer::{
     config::SequencerConfig,
@@ -20,11 +21,11 @@ use synddb_sequencer::{
 
 /// Initialize logging based on configuration
 fn init_logging(config: &SequencerConfig) {
-    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::{filter, prelude::*, EnvFilter};
 
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new(format!("synddb_sequencer={}", config.log_level))
-    });
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(filter::LevelFilter::INFO.into())
+        .from_env_lossy();
 
     if config.log_json {
         // JSON format for production
@@ -96,8 +97,6 @@ async fn main() -> Result<()> {
 
     // Initialize attestation verifier if configured
     let attestation_verifier = if config.verify_attestation {
-        use synddb_sequencer::attestation::{AttestationConfig, AttestationVerifier};
-
         let attestation_config = AttestationConfig {
             expected_audience: config
                 .attestation_service_url
@@ -125,18 +124,10 @@ async fn main() -> Result<()> {
     let app = create_router(state);
 
     // Bind and serve
+    info!(address = %config.bind_address, "Sequencer listening");
     let listener = TcpListener::bind(&config.bind_address)
         .await
         .context(format!("Failed to bind to {}", config.bind_address))?;
-
-    info!(address = %config.bind_address, "Sequencer listening");
-    info!("Endpoints:");
-    info!("  POST /changesets       - Submit changeset batch");
-    info!("  POST /withdrawals      - Submit withdrawal request");
-    info!("  GET  /messages/:seq    - Retrieve message by sequence");
-    info!("  GET  /health           - Health check (liveness)");
-    info!("  GET  /ready            - Readiness check");
-    info!("  GET  /status           - Sequencer status");
 
     // Run server with graceful shutdown
     let shutdown_timeout = config.shutdown_timeout;

@@ -4205,6 +4205,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "synddb-shared",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4258,6 +4259,14 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "synddb-shared"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "url",
 ]
 
 [[package]]

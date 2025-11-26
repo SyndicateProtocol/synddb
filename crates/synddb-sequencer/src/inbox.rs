@@ -19,6 +19,8 @@ pub enum MessageType {
     Changeset,
     /// Withdrawal request to be processed on L1
     Withdrawal,
+    /// Database snapshot from `synddb-client`
+    Snapshot,
 }
 
 /// A message that has been sequenced and signed
@@ -67,10 +69,7 @@ pub struct Inbox {
 impl Inbox {
     /// Create a new inbox with the given signer, starting from sequence 0
     pub fn new(signer: MessageSigner) -> Self {
-        Self {
-            sequence: AtomicU64::new(0),
-            signer: Arc::new(signer),
-        }
+        Self::with_start_sequence(signer, 0)
     }
 
     /// Create a new inbox starting from a specific sequence number (for recovery)

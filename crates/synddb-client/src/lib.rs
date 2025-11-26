@@ -22,6 +22,8 @@
 use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
 use rusqlite::Connection;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::thread;
 use tracing::{debug, info, warn};
 
@@ -147,11 +149,6 @@ impl SyndDB {
         // Create shared recovery storage for failed batches
         // This is optional - if None, failed batches are dropped
         let recovery = if config.enable_recovery {
-            // Use a stable path based on the sequencer URL to persist across restarts
-            // Hash the sequencer URL to create a stable but unique identifier
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-
             let mut hasher = DefaultHasher::new();
             config.sequencer_url.hash(&mut hasher);
             let url_hash = hasher.finish();
@@ -174,8 +171,11 @@ impl SyndDB {
             None
         };
 
-        // Create attestation client if enabled (only works in GCP Confidential Space)
-        let attestation_client = if config.enable_attestation {
+        // Create attestation client unless explicitly disabled (enabled by default for production)
+        let attestation_client = if config.disable_attestation {
+            info!("Attestation disabled");
+            None
+        } else {
             match AttestationClient::new(&config.sequencer_url, config.attestation_token_type) {
                 Ok(client) => {
                     info!(
@@ -192,9 +192,6 @@ impl SyndDB {
                     None
                 }
             }
-        } else {
-            info!("Attestation disabled");
-            None
         };
 
         // Start snapshot sender thread if enabled

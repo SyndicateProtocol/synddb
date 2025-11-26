@@ -1,158 +1,147 @@
 # synddb-sequencer
 
-Lightweight SQLite monitor and publisher that runs as a sidecar process alongside your application.
-
-## Overview
-
-The `synddb-sequencer` is a zero-configuration Rust process that:
-
-1. **Monitors SQLite databases** using the SQLite Session Extension to capture deterministic changesets
-2. **Batches changesets** efficiently with configurable size and time thresholds
-3. **Compresses and signs** batches with TEE attestation support
-4. **Publishes to multiple DA layers** (Celestia, EigenDA, IPFS, Arweave)
-5. **Handles message passing** for inbound deposits and outbound withdrawals
-
-## Status
-
-🚧 **Stub Implementation** - Directory structure and interfaces defined, implementation in progress.
-
-See [PLAN_SEQUENCER.md](../../PLAN_SEQUENCER.md) for detailed architecture and implementation plan.
+Message ordering and signing service for SyndDB. Receives messages from `synddb-client` applications, assigns monotonic sequence numbers, signs them with `secp256k1`, and optionally persists to storage backends.
 
 ## Architecture
 
-The sequencer runs as a **sidecar process** - a separate process that runs alongside your application. It has read-only access to the SQLite database and automatically captures all changes without requiring any application code changes.
-
-### Components
-
-- **Session Monitor**: Attaches to SQLite via Session Extension to capture logical changes
-- **Batcher**: Accumulates changesets and creates periodic snapshots
-- **Attestor**: Compresses data with zstd and signs with secp256k1
-- **Publisher**: Publishes to configured DA/storage layers with retry logic
-- **Message Monitor**: Handles bidirectional message passing with blockchain
+```
+synddb-client (App TEE)
+       │
+       │ HTTP POST /changesets, /withdrawals
+       ▼
+┌─────────────────────────┐
+│   synddb-sequencer      │
+│   (Sequencer TEE)       │
+│                         │
+│  ┌─────────────────┐    │
+│  │   HTTP API      │    │
+│  └────────┬────────┘    │
+│           │             │
+│  ┌────────▼────────┐    │
+│  │     Inbox       │    │
+│  │  (Sequencing)   │    │
+│  └────────┬────────┘    │
+│           │             │
+│  ┌────────▼────────┐    │
+│  │    Signer       │    │
+│  │  (secp256k1)    │    │
+│  └────────┬────────┘    │
+│           │             │
+│  ┌────────▼────────┐    │
+│  │   Publisher     │    │
+│  │  (GCS, etc.)    │    │
+│  └─────────────────┘    │
+└─────────────────────────┘
+```
 
 ## Usage
 
 ### Basic Usage
 
 ```bash
-# Monitor a database with default configuration
-synddb-sequencer --db /path/to/app.db
+# Run with a signing key (required)
+SIGNING_KEY=<hex-private-key> cargo run -p synddb-sequencer
 
-# Use custom configuration
-synddb-sequencer --db /path/to/app.db --config custom.yaml
+# With GCS persistence
+SIGNING_KEY=<key> GCS_BUCKET=my-bucket cargo run -p synddb-sequencer --features gcs
+
+# With JSON logging
+SIGNING_KEY=<key> RUST_LOG=debug RUST_LOG_JSON=true cargo run -p synddb-sequencer
 ```
 
-### Configuration
+### Environment Variables
 
-See `config/example.yaml` for all configuration options:
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SIGNING_KEY` | Yes | - | Hex-encoded secp256k1 private key |
+| `HOST` | No | `0.0.0.0` | HTTP server bind address |
+| `PORT` | No | `8080` | HTTP server port |
+| `GCS_BUCKET` | No | - | GCS bucket for persistence (requires `gcs` feature) |
+| `GCS_PREFIX` | No | `sequencer` | Path prefix within GCS bucket |
+| `RUST_LOG` | No | `info` | Log level/filter (e.g., `debug`, `synddb_sequencer=trace`) |
+| `RUST_LOG_JSON` | No | `false` | Enable JSON-formatted logs |
+| `SHUTDOWN_TIMEOUT` | No | `30s` | Graceful shutdown timeout |
 
-```yaml
-database:
-  path: "app.db"
-  enable_sessions: true
+## API Endpoints
 
-batch:
-  max_batch_size: 1048576  # 1MB
-  max_batch_age: "1s"
-  snapshot_interval: "1h"
-  snapshot_threshold: 1000
+### Health & Status
 
-publish:
-  celestia:
-    rpc_url: "http://localhost:26658"
-    namespace: "synddb"
-  # ... other DA layers
+- `GET /health` - Liveness check (always returns 200)
+- `GET /ready` - Readiness check (verifies publisher connectivity)
+- `GET /status` - Sequencer status (current sequence, signer address)
 
-messages:
-  enable_inbound: true
-  enable_outbound: true
-  api_port: 8432
-  chain_rpc_url: "http://localhost:8545"
-  bridge_contract: "0x..."
+### Message Submission
 
-tee:
-  enable_attestation: true
-  gcp_project_id: "my-project"
-  key_path: "/secrets/signing-key"
-```
+- `POST /changesets` - Submit a changeset for sequencing
+- `POST /withdrawals` - Submit a withdrawal request for sequencing
+- `GET /messages/:sequence` - Retrieve a signed message by sequence number
 
-## Key Features
-
-### SQLite Session Extension
-
-Uses the official SQLite Session Extension API (not WAL parsing) for:
-
-- **Deterministic capture**: Logical changes (INSERT/UPDATE/DELETE with values)
-- **Compact format**: Only changed rows, not full database pages
-- **Validator-friendly**: Exact same changes can be replayed by validators
-- **Auditable**: Changesets can be inspected to see what changed
-
-### Schema Change Tracking
-
-Automatically creates full snapshots when schema changes are detected:
-
-- Monitors `sqlite_schema` table for DDL operations
-- Triggers immediate snapshot on ALTER TABLE, CREATE TABLE, etc.
-- Includes DDL statements in snapshot for audit trail
-- Ensures validators can always reconstruct complete state
-
-### Multi-DA Publishing
-
-Publishes to multiple DA layers in parallel:
-
-- **Celestia**: Modular DA layer
-- **EigenDA**: Ethereum-based DA
-- **IPFS**: Content-addressed storage
-- **Arweave**: Permanent storage
-
-### Message Passing
-
-Bidirectional message passing for bridge operations:
-
-- **Inbound**: Monitors blockchain for deposit events
-- **Outbound**: Monitors SQLite tables for withdrawal requests
-- **HTTP API**: Delivers messages to application (localhost:8432)
-
-## Development Status
-
-### Implemented ✅
-
-- Directory structure with all modules stubbed out
-- Module interfaces and types defined
-- Configuration system with YAML support
-- CLI argument parsing
-- Cargo.toml with all dependencies
-
-### TODO ⬜
-
-- Session Monitor implementation (SQLite Session Extension integration)
-- Changeset batching logic
-- TEE attestation and signing
-- DA layer publisher implementations
-- Message passing system
-- Integration tests
-
-## Development Workflow
+### Request/Response Examples
 
 ```bash
-# Terminal 1: Run benchmark to generate database activity
-cargo run --package synddb-benchmark -- run --rate 100
+# Submit a changeset
+curl -X POST http://localhost:8080/changesets \
+  -H "Content-Type: application/json" \
+  -d '{"data": "base64-encoded-changeset"}'
 
-# Terminal 2: Run sequencer (sidecar process) - stub for now
-cargo run --package synddb-sequencer -- --db orderbook.db
+# Response
+{
+  "sequence": 1,
+  "signature": "0x...",
+  "signer": "0x...",
+  "timestamp": 1234567890,
+  "data_hash": "0x..."
+}
+
+# Submit a withdrawal
+curl -X POST http://localhost:8080/withdrawals \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "unique-id",
+    "recipient": "0x1234567890123456789012345678901234567890",
+    "amount": "1000000000000000000",
+    "token": "0x..."
+  }'
 ```
 
-## Design Goals
+## Modules
 
-- **Zero Code Changes**: Drop-in solution for existing SQLite applications
-- **Language Agnostic**: Works with any language that has SQLite bindings
-- **High Performance**: Minimal overhead on application performance
-- **Deterministic Replication**: Session Extension changesets for validators
-- **Automatic Publishing**: Handles all DA layer interaction
-- **Sidecar Architecture**: Runs as a separate process alongside your application
+| Module | Description |
+|--------|-------------|
+| `config` | Configuration from environment variables |
+| `http_api` | Axum HTTP server and route handlers |
+| `inbox` | Message sequencing with atomic counter |
+| `signer` | secp256k1 signing via alloy |
+| `attestation` | TEE attestation token verification (GCP Confidential Space) |
+| `publish` | Pluggable storage backends (GCS, mock) |
 
-## References
+## Features
 
-- [PLAN_SEQUENCER.md](../../PLAN_SEQUENCER.md) - Detailed architecture and implementation plan
-- [SPEC.md](../../SPEC.md) - Overall SyndDB specification
-- [SQLite Session Extension](https://www.sqlite.org/sessionintro.html) - Official documentation
+| Feature | Description |
+|---------|-------------|
+| `gcs` | Enable Google Cloud Storage publisher |
+| `tee` | Enable TEE attestation verification |
+| `celestia` | Celestia DA publisher (stub) |
+| `eigenda` | EigenDA publisher (stub) |
+| `ipfs` | IPFS publisher (stub) |
+| `arweave` | Arweave publisher (stub) |
+
+## Development
+
+```bash
+# Run tests
+cargo test -p synddb-sequencer
+
+# Run with test key (DO NOT use in production)
+SIGNING_KEY=ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  cargo run -p synddb-sequencer
+
+# Build release binary
+cargo build -p synddb-sequencer --release --features gcs
+```
+
+## Security
+
+- The `SIGNING_KEY` must be kept secret - it signs all sequenced messages
+- In production, run in a TEE (GCP Confidential Space) with attestation enabled
+- The sequencer verifies client attestation tokens when `tee` feature is enabled

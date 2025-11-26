@@ -42,9 +42,19 @@ impl std::fmt::Debug for AppState {
 
 /// Create the HTTP router with all endpoints
 pub fn create_router(state: AppState) -> Router {
+    info!("Endpoints:");
+    info!("  POST /changesets       - Submit changeset batch");
+    info!("  POST /withdrawals      - Submit withdrawal request");
+    info!("  POST /snapshots        - Submit database snapshot");
+    info!("  GET  /messages/:seq    - Retrieve message by sequence");
+    info!("  GET  /health           - Health check (liveness)");
+    info!("  GET  /ready            - Readiness check");
+    info!("  GET  /status           - Sequencer status");
+
     Router::new()
         .route("/changesets", post(receive_changesets))
         .route("/withdrawals", post(receive_withdrawal))
+        .route("/snapshots", post(receive_snapshot))
         .route("/messages/:sequence", get(get_message))
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
@@ -92,6 +102,30 @@ pub struct WithdrawalRequest {
     /// Optional calldata
     #[serde(default, with = "base64_serde")]
     pub data: Vec<u8>,
+}
+
+/// Snapshot data from synddb-client
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotData {
+    /// Complete `SQLite` database file bytes (base64 encoded in JSON)
+    #[serde(with = "base64_serde")]
+    pub data: Vec<u8>,
+    /// Client-side timestamp (Unix timestamp in seconds)
+    pub timestamp: u64,
+    /// Client-side sequence number (which changesets are included)
+    pub sequence: u64,
+}
+
+/// Snapshot request from synddb-client
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotRequest {
+    /// Snapshot data
+    pub snapshot: SnapshotData,
+    /// Message identifier for tracking
+    pub message_id: String,
+    /// Optional TEE attestation token
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation_token: Option<String>,
 }
 
 /// Response for successful sequencing
@@ -185,6 +219,7 @@ impl From<SignedMessage> for MessageResponse {
             message_type: match msg.message_type {
                 MessageType::Changeset => "changeset".to_string(),
                 MessageType::Withdrawal => "withdrawal".to_string(),
+                MessageType::Snapshot => "snapshot".to_string(),
             },
             payload: msg.payload,
             message_hash: msg.message_hash,
@@ -383,6 +418,93 @@ async fn receive_withdrawal(
     Ok((StatusCode::CREATED, Json(SequenceResponse::from(receipt))))
 }
 
+/// Receive and sequence a database snapshot
+async fn receive_snapshot(
+    State(state): State<AppState>,
+    Json(request): Json<SnapshotRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        message_id = %request.message_id,
+        snapshot_size = request.snapshot.data.len(),
+        client_sequence = request.snapshot.sequence,
+        "Received snapshot"
+    );
+
+    // Verify attestation token if verifier is configured
+    if let Some(verifier) = &state.attestation_verifier {
+        match &request.attestation_token {
+            Some(token) => {
+                verifier.verify(token).await.map_err(|e| {
+                    warn!(message_id = %request.message_id, error = %e, "Attestation verification failed");
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(ErrorResponse {
+                            error: format!("Attestation verification failed: {e}"),
+                        }),
+                    )
+                })?;
+                info!(message_id = %request.message_id, "Attestation token verified");
+            }
+            None => {
+                warn!(message_id = %request.message_id, "Missing attestation token");
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        error: "Attestation token required but not provided".to_string(),
+                    }),
+                ));
+            }
+        }
+    }
+
+    // Serialize the snapshot request as the payload
+    let payload = serde_json::to_vec(&request).map_err(|e| {
+        warn!("Failed to serialize snapshot: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Serialization failed".to_string(),
+            }),
+        )
+    })?;
+
+    // Sequence and sign the message
+    let (signed_message, receipt) = state
+        .inbox
+        .sequence_message(MessageType::Snapshot, payload)
+        .await
+        .map_err(|e| {
+            warn!("Failed to sequence snapshot: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Signing failed: {e}"),
+                }),
+            )
+        })?;
+
+    // Publish to DA layer if configured
+    if let Some(publisher) = &state.publisher {
+        let publish_result = publisher.publish(&signed_message).await;
+        if !publish_result.success {
+            warn!(
+                sequence = receipt.sequence,
+                error = ?publish_result.error,
+                "Failed to publish snapshot (sequencing succeeded)"
+            );
+        }
+    }
+
+    info!(
+        sequence = receipt.sequence,
+        message_id = %request.message_id,
+        client_sequence = request.snapshot.sequence,
+        "Snapshot sequenced"
+    );
+
+    Ok((StatusCode::CREATED, Json(SequenceResponse::from(receipt))))
+}
+
 /// Health check endpoint (liveness probe)
 ///
 /// Returns OK if the server is running. This is a simple liveness check
@@ -522,6 +644,9 @@ mod tests {
     use crate::signer::MessageSigner;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use axum::response::Response;
+    use base64::Engine;
+    use serde_json::Value;
     use tower::ServiceExt;
 
     const TEST_PRIVATE_KEY: &str =
@@ -595,17 +720,8 @@ mod tests {
             ]
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/changesets")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let uri = "/changesets";
+        let response = server_response(app, &request_body, uri).await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -619,6 +735,21 @@ mod tests {
         assert!(receipt.message_hash.starts_with("0x"));
     }
 
+    async fn server_response(app: Router, request_body: &Value, uri: &str) -> Response {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        response
+    }
+
     #[tokio::test]
     async fn test_receive_withdrawal() {
         let app = test_app();
@@ -630,17 +761,7 @@ mod tests {
             "data": ""
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/withdrawals")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app, &request_body, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
     }
@@ -655,17 +776,7 @@ mod tests {
             "amount": "1000000000000000000"
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/withdrawals")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app, &request_body, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -687,18 +798,7 @@ mod tests {
             "changesets": []
         });
 
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/changesets")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app.clone(), &request_body, "/changesets").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -712,17 +812,7 @@ mod tests {
             "changesets": []
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/changesets")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app, &request_body, "/changesets").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -752,17 +842,7 @@ mod tests {
             "changesets": []
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/changesets")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app, &request_body, "/changesets").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -783,17 +863,7 @@ mod tests {
             "data": "SGVsbG8gV29ybGQ="  // "Hello World" in base64
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/withdrawals")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app, &request_body, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -817,17 +887,7 @@ mod tests {
             "amount": "1000000000000000000"
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/withdrawals")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app, &request_body, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -843,18 +903,7 @@ mod tests {
             "amount": ""
         });
 
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/withdrawals")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app.clone(), &request_body, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
@@ -865,18 +914,7 @@ mod tests {
             "amount": "abc123"
         });
 
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/withdrawals")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app.clone(), &request_body, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
@@ -887,17 +925,7 @@ mod tests {
             "amount": "0123"
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/withdrawals")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app, &request_body, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -912,17 +940,7 @@ mod tests {
             "amount": "1000"
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/withdrawals")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app, &request_body, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -938,17 +956,7 @@ mod tests {
             "amount": "0"
         });
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/withdrawals")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app, &request_body, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
     }
@@ -972,18 +980,7 @@ mod tests {
             "changesets": []
         });
 
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/changesets")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = server_response(app.clone(), &request_body, "/changesets").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -1121,5 +1118,129 @@ mod tests {
             .checks
             .iter()
             .any(|c| c.name == "publisher" && c.status == "ok"));
+    }
+
+    #[tokio::test]
+    async fn test_receive_snapshot() {
+        let app = test_app();
+
+        // Create a minimal SQLite database as snapshot data
+        let snapshot_data = b"SQLite format 3\x00"; // Minimal SQLite header
+
+        let request_body = serde_json::json!({
+            "message_id": "snapshot-test-1",
+            "snapshot": {
+                "data": base64::engine::general_purpose::STANDARD.encode(snapshot_data),
+                "timestamp": 1704067200,
+                "sequence": 100
+            }
+        });
+
+        let response = server_response(app, &request_body, "/snapshots").await;
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let receipt: SequenceResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(receipt.sequence, 0);
+        assert!(receipt.signature.starts_with("0x"));
+        assert!(receipt.message_hash.starts_with("0x"));
+    }
+
+    #[tokio::test]
+    async fn test_receive_snapshot_with_publisher() {
+        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
+        let inbox = Arc::new(Inbox::new(signer));
+        let publisher = Arc::new(MockPublisher::new());
+
+        let state = AppState {
+            inbox: inbox.clone(),
+            publisher: Some(publisher.clone()),
+            attestation_verifier: None,
+        };
+        let app = create_router(state);
+
+        let snapshot_data = b"SQLite format 3\x00";
+
+        let request_body = serde_json::json!({
+            "message_id": "snapshot-with-publisher",
+            "snapshot": {
+                "data": base64::engine::general_purpose::STANDARD.encode(snapshot_data),
+                "timestamp": 1704067200,
+                "sequence": 50
+            }
+        });
+
+        let response = server_response(app, &request_body, "/snapshots").await;
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Verify message was published
+        let published = publisher.get(0).await.unwrap();
+        assert!(published.is_some());
+        let msg = published.unwrap();
+        assert_eq!(msg.sequence, 0);
+
+        // Verify the payload contains the snapshot data
+        let stored_request: SnapshotRequest = serde_json::from_slice(&msg.payload).unwrap();
+        assert_eq!(stored_request.message_id, "snapshot-with-publisher");
+        assert_eq!(stored_request.snapshot.sequence, 50);
+        assert_eq!(stored_request.snapshot.data, snapshot_data);
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_sequence_independence() {
+        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
+        let inbox = Arc::new(Inbox::new(signer));
+        let state = AppState {
+            inbox: inbox.clone(),
+            publisher: None,
+            attestation_verifier: None,
+        };
+        let app = create_router(state);
+
+        // Send a snapshot with client sequence 100
+        let request_body = serde_json::json!({
+            "message_id": "snap-1",
+            "snapshot": {
+                "data": base64::engine::general_purpose::STANDARD.encode(b"data1"),
+                "timestamp": 1704067200,
+                "sequence": 100
+            }
+        });
+
+        let response = server_response(app.clone(), &request_body, "/snapshots").await;
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let receipt1: SequenceResponse = serde_json::from_slice(&body).unwrap();
+
+        // Send another snapshot with client sequence 200
+        let request_body = serde_json::json!({
+            "message_id": "snap-2",
+            "snapshot": {
+                "data": base64::engine::general_purpose::STANDARD.encode(b"data2"),
+                "timestamp": 1704067300,
+                "sequence": 200
+            }
+        });
+
+        let response = server_response(app, &request_body, "/snapshots").await;
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let receipt2: SequenceResponse = serde_json::from_slice(&body).unwrap();
+
+        // Sequencer assigns independent sequence numbers
+        assert_eq!(receipt1.sequence, 0);
+        assert_eq!(receipt2.sequence, 1);
+
+        // Verify inbox sequence
+        assert_eq!(inbox.current_sequence(), 2);
     }
 }

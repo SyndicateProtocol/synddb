@@ -29,25 +29,21 @@ impl FailedBatchRecovery {
         // Create tables for failed batches
         conn.execute_batch(
             r#"
-            CREATE TABLE IF NOT EXISTS failed_changesets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+            CREATE TABLE IF NOT EXISTS failed_changesets (id INTEGER PRIMARY KEY AUTOINCREMENT,
                 sequence INTEGER NOT NULL,
                 data BLOB NOT NULL,
                 timestamp INTEGER NOT NULL,
                 failed_at INTEGER NOT NULL DEFAULT (unixepoch()),
                 retry_count INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT
-            );
+                last_error TEXT);
 
-            CREATE TABLE IF NOT EXISTS failed_snapshots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+            CREATE TABLE IF NOT EXISTS failed_snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT,
                 sequence INTEGER NOT NULL,
                 data BLOB NOT NULL,
                 timestamp INTEGER NOT NULL,
                 failed_at INTEGER NOT NULL DEFAULT (unixepoch()),
                 retry_count INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT
-            );
+                last_error TEXT);
 
             CREATE INDEX IF NOT EXISTS idx_failed_changesets_sequence
             ON failed_changesets(sequence);
@@ -69,8 +65,7 @@ impl FailedBatchRecovery {
     pub(crate) fn save_failed_changeset(&self, changeset: &Changeset, error: &str) -> Result<()> {
         let timestamp_secs = changeset
             .timestamp
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
 
         self.conn
@@ -101,8 +96,7 @@ impl FailedBatchRecovery {
     pub(crate) fn save_failed_snapshot(&self, snapshot: &Snapshot, error: &str) -> Result<()> {
         let timestamp_secs = snapshot
             .timestamp
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
 
         self.conn
