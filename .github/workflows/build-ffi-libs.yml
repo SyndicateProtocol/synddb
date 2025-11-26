@@ -11,6 +11,8 @@ on:
       - main
     tags:
       - 'v*.*.*'
+    # NOTE: paths filter only applies to branch pushes, not tags.
+    # Tag pushes (releases) always run regardless of paths - this is intentional.
     paths:
       - 'crates/synddb-client/**'
       - 'crates/synddb-chain-monitor/**'  # dependency of synddb-client
