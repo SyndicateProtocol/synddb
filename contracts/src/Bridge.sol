@@ -30,6 +30,19 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
     }
 
+    /**
+     * @notice Receives native ETH and wraps it to WETH for internal accounting
+     * @dev This function is intentionally public and allows anyone to send ETH to the bridge.
+     * The ETH is immediately wrapped to WETH for consistent accounting and balance tracking.
+     *
+     * When msg.sender is the WETH contract itself (during unwrapping in handleMessage),
+     * the ETH is NOT re-wrapped to prevent infinite loops.
+     *
+     * ETH sent directly to this contract (outside of initializeMessage) will be wrapped
+     * to WETH and will remain in the bridge. There is no public withdrawal function. While this
+     * WETH becomes part of the bridge's balance pool and can be used for legitimate message operations,
+     * deliberately sending ETH should be avoided unless intended as a donation to the bridge's liquidity.
+     */
     receive() external payable {
         // Only wrap ETH if it's not coming from WETH unwrapping
         if (msg.sender != address(wrappedNativeToken)) {
