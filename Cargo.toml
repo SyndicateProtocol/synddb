@@ -28,6 +28,7 @@ serde_yaml = "0.9"
 
 # Error handling
 anyhow = "1.0"
+thiserror = "1"
 
 # Logging
 tracing = "0.1"
@@ -37,8 +38,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.5", features = ["derive"] }
 
 # HTTP
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.12", features = ["json"] }
 axum = { version = "0.7", features = ["json"] }
+tower = "0.5"
 
 # Unix domain socket support
 hyperlocal = "0.8"
@@ -51,10 +53,12 @@ crossbeam-channel = "0.5"
 rand = "0.8"
 uuid = { version = "1.0", features = ["v4"] }
 humantime-serde = "1.1"
+humantime = "2"
 sha2 = "0.10"
 hex = "0.4"
+base64 = "0.22"
 
-# Blockchain monitoring
+# Blockchain / Cryptography
 alloy = { version = "1.0.25", features = [
   "provider-ws",
   "rpc-types",
@@ -62,6 +66,9 @@ alloy = { version = "1.0.25", features = [
 ] }
 url = "2.5"
 async-trait = "0.1"
+
+# Google Cloud
+google-cloud-storage = "0.22"
 
 [workspace.lints.rust]
 # TEMPORARY allowances, remove before prod

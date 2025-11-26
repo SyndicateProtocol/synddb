@@ -1,175 +1,117 @@
-//! Configuration structures for the sequencer
+//! Configuration for the sequencer node
+//!
+//! Supports both CLI arguments and environment variables following the
+//! same pattern as synddb-client.
 
-use anyhow::{Context, Result};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::net::SocketAddr;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    pub batch: BatchConfig,
-    pub publish: PublishConfig,
-    pub messages: MessageConfig,
-    pub tee: TeeConfig,
+/// Parse duration from humantime format (e.g., "10s", "5m")
+fn parse_duration(s: &str) -> Result<Duration, String> {
+    humantime::parse_duration(s).map_err(|e| format!("Invalid duration: {e}"))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BatchConfig {
-    /// Maximum batch size in bytes (default: 1MB)
-    pub max_batch_size: usize,
+/// Sequencer node configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
+#[command(name = "synddb-sequencer")]
+#[command(about = "SyndDB Sequencer - orders and signs changesets from client applications")]
+pub struct SequencerConfig {
+    /// HTTP server bind address
+    #[arg(long, env = "BIND_ADDRESS", default_value = "0.0.0.0:8433")]
+    pub bind_address: SocketAddr,
 
-    /// Maximum batch age before flushing (default: 1 second)
+    /// Private key for signing messages (hex-encoded, without 0x prefix)
+    ///
+    /// This key is used to sign all sequenced messages. The corresponding
+    /// public address can be verified by clients and on-chain contracts.
+    #[arg(long, env = "SIGNING_KEY")]
+    pub signing_key: String,
+
+    /// Request timeout for HTTP operations
+    #[arg(long, env = "REQUEST_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     #[serde(with = "humantime_serde")]
-    pub max_batch_age: Duration,
+    pub request_timeout: Duration,
 
-    /// Snapshot interval (default: 60 minutes)
+    /// Maximum message size in bytes (default: 10MB)
+    #[arg(long, env = "MAX_MESSAGE_SIZE", default_value = "10485760")]
+    pub max_message_size: usize,
+
+    /// Enable TEE attestation verification for incoming requests
+    #[arg(long, env = "VERIFY_ATTESTATION", default_value = "false")]
+    pub verify_attestation: bool,
+
+    /// GCS bucket for message persistence (enables GCS publisher)
+    #[arg(long, env = "GCS_BUCKET")]
+    pub gcs_bucket: Option<String>,
+
+    /// GCS path prefix for messages
+    #[arg(long, env = "GCS_PREFIX", default_value = "sequencer")]
+    pub gcs_prefix: String,
+
+    /// Output logs in JSON format (for production log aggregation)
+    #[arg(long, env = "LOG_JSON", default_value = "false")]
+    pub log_json: bool,
+
+    /// Log level (trace, debug, info, warn, error)
+    #[arg(long, env = "LOG_LEVEL", default_value = "info")]
+    pub log_level: String,
+
+    /// Attestation service URL for TEE token verification
+    #[arg(long, env = "ATTESTATION_SERVICE_URL")]
+    pub attestation_service_url: Option<String>,
+
+    /// Graceful shutdown timeout
+    #[arg(long, env = "SHUTDOWN_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     #[serde(with = "humantime_serde")]
-    pub snapshot_interval: Duration,
-
-    /// Number of batches before forcing snapshot (default: 1000)
-    pub snapshot_threshold: usize,
+    pub shutdown_timeout: Duration,
 }
 
-impl Default for BatchConfig {
-    fn default() -> Self {
-        Self {
-            max_batch_size: default_max_batch_size(),
-            max_batch_age: default_max_batch_age(),
-            snapshot_interval: default_snapshot_interval(),
-            snapshot_threshold: default_snapshot_threshold(),
-        }
-    }
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublishConfig {
-    /// Enable Celestia DA layer
-    pub celestia: Option<CelestiaConfig>,
-
-    /// Enable `EigenDA` layer
-    pub eigenda: Option<EigenDAConfig>,
-
-    /// Enable IPFS storage
-    pub ipfs: Option<IpfsConfig>,
-
-    /// Enable Arweave storage
-    pub arweave: Option<ArweaveConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CelestiaConfig {
-    pub rpc_url: String,
-    pub namespace: String,
-    pub auth_token: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EigenDAConfig {
-    pub rpc_url: String,
-    pub disperser_url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IpfsConfig {
-    pub api_url: String,
-    pub gateway_url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArweaveConfig {
-    pub gateway_url: String,
-    pub wallet_path: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageConfig {
-    /// Enable inbound message monitoring from blockchain
-    pub enable_inbound: bool,
-
-    /// Enable outbound message monitoring from `SQLite` tables
-    pub enable_outbound: bool,
-
-    /// HTTP API port for message delivery to application
-    #[serde(default = "default_api_port")]
-    pub api_port: u16,
-
-    /// Chain RPC URL for monitoring deposits
-    pub chain_rpc_url: Option<String>,
-
-    /// Bridge contract address
-    pub bridge_contract: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TeeConfig {
-    /// Enable TEE attestation
-    pub enable_attestation: bool,
-
-    /// GCP project ID (for Confidential Space)
-    pub gcp_project_id: Option<String>,
-
-    /// Path to signing key (managed in TEE)
-    pub key_path: Option<PathBuf>,
-}
-
-// Default value functions
-const fn default_max_batch_size() -> usize {
-    1024 * 1024 // 1MB
-}
-
-const fn default_max_batch_age() -> Duration {
-    Duration::from_secs(1)
-}
-
-const fn default_snapshot_interval() -> Duration {
-    Duration::from_secs(60 * 60) // 60 minutes
-}
-
-const fn default_snapshot_threshold() -> usize {
-    1000
-}
-
-const fn default_api_port() -> u16 {
-    8432
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            batch: BatchConfig {
-                max_batch_size: default_max_batch_size(),
-                max_batch_age: default_max_batch_age(),
-                snapshot_interval: default_snapshot_interval(),
-                snapshot_threshold: default_snapshot_threshold(),
-            },
-            publish: PublishConfig {
-                celestia: None,
-                eigenda: None,
-                ipfs: None,
-                arweave: None,
-            },
-            messages: MessageConfig {
-                enable_inbound: false,
-                enable_outbound: false,
-                api_port: default_api_port(),
-                chain_rpc_url: None,
-                bridge_contract: None,
-            },
-            tee: TeeConfig {
-                enable_attestation: false,
-                gcp_project_id: None,
-                key_path: None,
-            },
-        }
+impl SequencerConfig {
+    /// Create config with defaults for testing
+    ///
+    /// Uses `parse_from` with a dummy signing key to get clap defaults,
+    /// then replaces with the provided key.
+    pub fn with_signing_key(signing_key: String) -> Self {
+        // We need to provide the required --signing-key arg
+        let mut config = Self::parse_from([
+            "synddb-sequencer",
+            "--signing-key",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+        ]);
+        config.signing_key = signing_key;
+        config
     }
 }
 
-impl Config {
-    /// Load configuration from a YAML file
-    pub fn from_file(path: &Path) -> Result<Self> {
-        let contents = std::fs::read_to_string(path)
-            .context(format!("Failed to read config file: {:?}", path))?;
-        let config: Self =
-            serde_yaml::from_str(&contents).context("Failed to parse config file")?;
-        Ok(config)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_defaults() {
+        let config = SequencerConfig::with_signing_key("a".repeat(64));
+
+        assert_eq!(
+            config.bind_address,
+            "0.0.0.0:8433".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(config.request_timeout, Duration::from_secs(30));
+        assert_eq!(config.max_message_size, 10_485_760);
+        assert!(!config.verify_attestation);
+    }
+
+    #[test]
+    fn test_parse_duration_valid() {
+        assert_eq!(parse_duration("10s").unwrap(), Duration::from_secs(10));
+        assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
+        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_parse_duration_invalid() {
+        assert!(parse_duration("invalid").is_err());
+        assert!(parse_duration("").is_err());
     }
 }

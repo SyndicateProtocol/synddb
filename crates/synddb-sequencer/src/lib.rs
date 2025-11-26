@@ -1,45 +1,58 @@
-//! `SyndDB` Sequencer - Changeset Receiver and Publisher
+//! `SyndDB` Sequencer - Message Ordering and Signing Service
 //!
-//! The sequencer receives changesets from synddb-client libraries via HTTP
-//! and publishes them to multiple DA layers.
+//! The sequencer receives messages (changesets, withdrawals) from synddb-client
+//! applications, assigns monotonic sequence numbers, and signs them with a
+//! private key.
+//!
+//! # Architecture
+//!
+//! ```text
+//! synddb-client (App TEE)
+//!        │
+//!        │ HTTP POST /changesets
+//!        ▼
+//! ┌─────────────────────────┐
+//! │   synddb-sequencer      │
+//! │   (Sequencer TEE)       │
+//! │                         │
+//! │  ┌─────────────────┐    │
+//! │  │   HTTP API      │    │
+//! │  └────────┬────────┘    │
+//! │           │             │
+//! │  ┌────────▼────────┐    │
+//! │  │     Inbox       │    │
+//! │  │  (Sequencing)   │    │
+//! │  └────────┬────────┘    │
+//! │           │             │
+//! │  ┌────────▼────────┐    │
+//! │  │    Signer       │    │
+//! │  │  (secp256k1)    │    │
+//! │  └────────┬────────┘    │
+//! │           │             │
+//! │  ┌────────▼────────┐    │
+//! │  │   Publisher     │    │
+//! │  │  (GCS, etc.)    │    │
+//! │  └─────────────────┘    │
+//! └─────────────────────────┘
+//! ```
+//!
+//! # Usage
+//!
+//! Run the sequencer with a signing key:
+//!
+//! ```bash
+//! SIGNING_KEY=<hex-private-key> synddb-sequencer
+//! ```
+//!
+//! With GCS persistence:
+//!
+//! ```bash
+//! SIGNING_KEY=<key> GCS_BUCKET=my-bucket synddb-sequencer
+//! ```
 
-pub mod attestor;
-pub mod batch;
+pub mod attestation;
 pub mod config;
 pub mod http_api;
-pub mod messages;
-pub mod monitor;
+pub mod inbox;
 pub mod publish;
-pub mod tee;
-pub mod utils;
-
-pub use config::Config;
-
-use anyhow::Result;
-use tracing::info;
-
-/// Main sequencer runtime
-#[derive(Debug)]
-pub struct Sequencer {
-    #[allow(dead_code)] // Will be used when implementation is added
-    config: Config,
-}
-
-impl Sequencer {
-    pub const fn new(config: Config) -> Self {
-        Self { config }
-    }
-
-    pub async fn run(&self) -> Result<()> {
-        info!("SyndDB Sequencer running...");
-
-        // TODO: Initialize components:
-        // 1. HTTP Receiver - receive changesets from client libraries
-        // 2. Batcher - accumulate changesets
-        // 3. Attestor - compress and sign batches
-        // 4. Publisher - publish to DA layers
-        // 5. Message Monitor - inbound/outbound message handling
-
-        Ok(())
-    }
-}
+pub mod signer;
