@@ -14,10 +14,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::attestation::AttestationVerifier;
-use crate::http_errors::{bad_request, internal_error, not_found, unauthorized, HttpError};
+use crate::http_errors::{HttpError, SequencerError};
 use crate::inbox::{Inbox, MessageType, SequenceReceipt, SignedMessage};
 use crate::publish::traits::DAPublisher;
 
@@ -243,23 +243,26 @@ async fn receive_changesets(
     if let Some(verifier) = &state.attestation_verifier {
         match &request.attestation_token {
             Some(token) => {
-                verifier.verify(token).await.map_err(|e| {
-                    warn!(batch_id = %request.batch_id, error = %e, "Attestation verification failed");
-                    unauthorized(format!("Attestation verification failed: {e}"))
-                })?;
+                verifier
+                    .verify(token)
+                    .await
+                    .map_err(|e| {
+                        error!(batch_id = %request.batch_id, error = %e, "Attestation verification failed");
+                        SequencerError::from(e)
+                    })?;
                 info!(batch_id = %request.batch_id, "Attestation token verified");
             }
             None => {
-                warn!(batch_id = %request.batch_id, "Missing attestation token");
-                return Err(unauthorized("Attestation token required but not provided"));
+                error!(batch_id = %request.batch_id, "Missing attestation token");
+                return Err(SequencerError::MissingAttestationToken.into());
             }
         }
     }
 
     // Serialize the batch as the payload
     let payload = serde_json::to_vec(&request).map_err(|e| {
-        warn!("Failed to serialize changeset batch: {}", e);
-        internal_error("Serialization failed")
+        error!("Failed to serialize changeset batch: {}", e);
+        SequencerError::from(e)
     })?;
 
     // Sequence and sign the message
@@ -268,8 +271,8 @@ async fn receive_changesets(
         .sequence_message(MessageType::Changeset, payload)
         .await
         .map_err(|e| {
-            warn!("Failed to sequence message: {}", e);
-            internal_error(format!("Signing failed: {e}"))
+            error!("Failed to sequence message: {}", e);
+            SequencerError::from(e)
         })?;
 
     // Publish to DA layer if configured
@@ -314,9 +317,7 @@ async fn receive_withdrawal(
             .chars()
             .all(|c| c.is_ascii_hexdigit())
     {
-        return Err(bad_request(
-            "Invalid recipient address format: must be 0x followed by 40 hex characters",
-        ));
+        return Err(SequencerError::InvalidRecipientAddress.into());
     }
 
     // Validate amount is a valid decimal number (can be parsed as u128 or larger)
@@ -324,20 +325,18 @@ async fn receive_withdrawal(
         || !request.amount.chars().all(|c| c.is_ascii_digit())
         || (request.amount.len() > 1 && request.amount.starts_with('0'))
     {
-        return Err(bad_request(
-            "Invalid amount format: must be a non-negative decimal number without leading zeros",
-        ));
+        return Err(SequencerError::InvalidAmount.into());
     }
 
     // Validate request_id is not empty
     if request.request_id.is_empty() {
-        return Err(bad_request("request_id cannot be empty"));
+        return Err(SequencerError::EmptyRequestId.into());
     }
 
     // Serialize the request as the payload
     let payload = serde_json::to_vec(&request).map_err(|e| {
-        warn!("Failed to serialize withdrawal request: {}", e);
-        internal_error("Serialization failed")
+        error!("Failed to serialize withdrawal request: {}", e);
+        SequencerError::from(e)
     })?;
 
     // Sequence and sign the message
@@ -346,8 +345,8 @@ async fn receive_withdrawal(
         .sequence_message(MessageType::Withdrawal, payload)
         .await
         .map_err(|e| {
-            warn!("Failed to sequence withdrawal: {}", e);
-            internal_error(format!("Signing failed: {e}"))
+            error!("Failed to sequence withdrawal: {}", e);
+            SequencerError::from(e)
         })?;
 
     // Publish to DA layer if configured
@@ -387,23 +386,26 @@ async fn receive_snapshot(
     if let Some(verifier) = &state.attestation_verifier {
         match &request.attestation_token {
             Some(token) => {
-                verifier.verify(token).await.map_err(|e| {
-                    warn!(message_id = %request.message_id, error = %e, "Attestation verification failed");
-                    unauthorized(format!("Attestation verification failed: {e}"))
-                })?;
+                verifier
+                    .verify(token)
+                    .await
+                    .map_err(|e| {
+                        error!(message_id = %request.message_id, error = %e, "Attestation verification failed");
+                        SequencerError::from(e)
+                    })?;
                 info!(message_id = %request.message_id, "Attestation token verified");
             }
             None => {
-                warn!(message_id = %request.message_id, "Missing attestation token");
-                return Err(unauthorized("Attestation token required but not provided"));
+                error!(message_id = %request.message_id, "Missing attestation token");
+                return Err(SequencerError::MissingAttestationToken.into());
             }
         }
     }
 
     // Serialize the snapshot request as the payload
     let payload = serde_json::to_vec(&request).map_err(|e| {
-        warn!("Failed to serialize snapshot: {}", e);
-        internal_error("Serialization failed")
+        error!("Failed to serialize snapshot: {}", e);
+        SequencerError::from(e)
     })?;
 
     // Sequence and sign the message
@@ -412,8 +414,8 @@ async fn receive_snapshot(
         .sequence_message(MessageType::Snapshot, payload)
         .await
         .map_err(|e| {
-            warn!("Failed to sequence snapshot: {}", e);
-            internal_error(format!("Signing failed: {e}"))
+            error!("Failed to sequence snapshot: {}", e);
+            SequencerError::from(e)
         })?;
 
     // Publish to DA layer if configured
@@ -513,24 +515,17 @@ async fn get_message(
     State(state): State<AppState>,
     Path(sequence): Path<u64>,
 ) -> Result<impl IntoResponse, HttpError> {
-    let publisher = state.publisher.as_ref().ok_or_else(|| {
-        (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(crate::http_errors::ErrorResponse {
-                error: "No publisher configured - message retrieval unavailable".to_string(),
-            }),
-        )
-    })?;
+    let publisher = state
+        .publisher
+        .as_ref()
+        .ok_or(SequencerError::NoPublisher)?;
 
     match publisher.get(sequence).await {
         Ok(Some(message)) => Ok(Json(MessageResponse::from(message))),
-        Ok(None) => Err(not_found(format!(
-            "Message with sequence {} not found",
-            sequence
-        ))),
+        Ok(None) => Err(SequencerError::MessageNotFound(sequence).into()),
         Err(e) => {
-            warn!(sequence, error = %e, "Failed to retrieve message");
-            Err(internal_error(format!("Failed to retrieve message: {e}")))
+            error!(sequence, error = %e, "Failed to retrieve message");
+            Err(SequencerError::MessageRetrievalFailed(e.to_string()).into())
         }
     }
 }
