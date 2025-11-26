@@ -145,7 +145,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes[] calldata validatorSignatures,
         uint256 nativeTokenAmount
     ) external {
-        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
+        initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
 
         // collect validator signatures and verify them
         for (uint256 i = 0; i < validatorSignatures.length; i++) {
