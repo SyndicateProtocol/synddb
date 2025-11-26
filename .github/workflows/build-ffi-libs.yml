@@ -77,15 +77,6 @@ jobs:
             lib_dir: darwin-x64
             build_for: release
 
-          # Linux ARM64 (releases only - requires Team/Enterprise plan)
-          - platform: linux
-            os: ubuntu-24.04-arm
-            arch: arm64
-            rust_target: aarch64-unknown-linux-gnu
-            lib_name: libsynddb_client.so
-            lib_dir: linux-arm64
-            build_for: release
-
           # Windows x86_64 (releases only)
           - platform: win32
             os: windows-latest
@@ -280,7 +271,6 @@ $UPDATED_FILES"
 
           # Rename libraries with platform/arch suffix for clarity
           find artifacts -name "libsynddb_client.so" -path "*/linux-x64/*" -exec cp {} release/synddb_client-linux-x64.so \;
-          find artifacts -name "libsynddb_client.so" -path "*/linux-arm64/*" -exec cp {} release/synddb_client-linux-arm64.so \;
           find artifacts -name "*.dylib" -path "*/darwin-arm64/*" -exec cp {} release/synddb_client-darwin-arm64.dylib \;
           find artifacts -name "*.dylib" -path "*/darwin-x64/*" -exec cp {} release/synddb_client-darwin-x64.dylib \;
           find artifacts -name "*.dll" -path "*/win-x64/*" -exec cp {} release/synddb_client-win-x64.dll \;
@@ -316,7 +306,6 @@ $UPDATED_FILES"
           ### Supported Platforms
 
           - **Linux x86_64**: `synddb_client-linux-x64.so`
-          - **Linux ARM64**: `synddb_client-linux-arm64.so` (AWS Graviton, etc.)
           - **macOS x86_64**: `synddb_client-darwin-x64.dylib` (Intel Macs)
           - **macOS ARM64**: `synddb_client-darwin-arm64.dylib` (M1/M2/M3 Macs)
           - **Windows x86_64**: `synddb_client-win-x64.dll`
