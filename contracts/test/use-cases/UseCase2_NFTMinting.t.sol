@@ -155,7 +155,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         assertEq(weth.balanceOf(address(paidNFT)), NFT_PRICE);
     }
 
-    function test_MintPaidNFTWithInsufficientWETH_Reverts() public {
+    function test_MintPaidNFTWithInsufficientWrappedNativeToken_Reverts() public {
         uint256 insufficientAmount = NFT_PRICE - 0.01 ether;
 
         vm.startPrank(user);
@@ -206,12 +206,9 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
 
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
-        // Give sequencer some ETH to pay for the transaction
-        vm.deal(sequencer, NFT_PRICE);
-
         // Bridge calls paidNFT with ETH payment
         vm.prank(sequencer);
-        bridge.initializeMessage{value: NFT_PRICE}(messageId, address(paidNFT), payload, sig, NFT_PRICE);
+        bridge.initializeMessage(messageId, address(paidNFT), payload, sig, NFT_PRICE);
         submitValidatorSignatures(bridge, messageId);
         bridge.handleMessage(messageId);
 
@@ -223,9 +220,8 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         assertEq(address(paidNFT).balance, NFT_PRICE);
         assertEq(weth.balanceOf(address(paidNFT)), 0);
 
-        // Verify bridge still has the user's original WETH deposit
-        // (User's deposit + Sequencer's deposit - unwrapped amount = NFT_PRICE)
-        assertEq(weth.balanceOf(address(bridge)), NFT_PRICE);
+        // Verify bridge unwrapped all WETH (User deposited NFT_PRICE, bridge unwrapped NFT_PRICE)
+        assertEq(weth.balanceOf(address(bridge)), 0);
     }
 
     /*//////////////////////////////////////////////////////////////

@@ -23,28 +23,22 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageCurrentlyProcessing(bytes32 messageId, ProcessingStage currentStage);
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
     error ArrayLengthMismatch();
-    error InsufficientWETHBalance(uint256 required, uint256 available);
-    error InvalidETHAmount(uint256 sent, uint256 required);
+    error InsufficientWrappedNativeTokenBalance(uint256 required, uint256 available);
 
     constructor(address admin, address _wrappedNativeToken) ModuleCheckRegistry(admin) {
         wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
     }
 
     /**
-     * @notice Receives native ETH and wraps it to WETH for internal accounting
-     * @dev This function is intentionally public and allows anyone to send ETH to the bridge.
-     * The ETH is immediately wrapped to WETH for consistent accounting and balance tracking.
+     * @notice Receives native native token and wraps it to wrappedNativeToken for internal accounting
+     * @dev This function is intentionally public and allows anyone to send native token to the bridge.
+     * The native token is immediately wrapped to wrappedNativeToken for consistent accounting and balance tracking.
      *
-     * When msg.sender is the WETH contract itself (during unwrapping in handleMessage),
-     * the ETH is NOT re-wrapped to prevent infinite loops.
-     *
-     * ETH sent directly to this contract (outside of initializeMessage) will be wrapped
-     * to WETH and will remain in the bridge. There is no public withdrawal function. While this
-     * WETH becomes part of the bridge's balance pool and can be used for legitimate message operations,
-     * deliberately sending ETH should be avoided unless intended as a donation to the bridge's liquidity.
+     * When msg.sender is the WrappedNativeToken contract itself (during unwrapping in handleMessage),
+     * the native token is NOT re-wrapped to prevent infinite loops.
      */
     receive() external payable {
-        // Only wrap ETH if it's not coming from WETH unwrapping
+        // Only wrap native token if it's not coming from WrappedNativeToken unwrapping
         if (msg.sender != address(wrappedNativeToken)) {
             wrappedNativeToken.deposit{value: msg.value}();
             emit NativeTokenWrapped(msg.sender, msg.value);
@@ -56,13 +50,9 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
-        uint256 ethAmount
-    ) public payable onlyRole(SEQUENCER_ROLE) {
-        if (msg.value != ethAmount) {
-            revert InvalidETHAmount(msg.value, ethAmount);
-        }
-
-        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, ethAmount);
+        uint256 nativeTokenAmount
+    ) public onlyRole(SEQUENCER_ROLE) {
+        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
     }
 
     function _initializeMessage(
@@ -70,15 +60,10 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
-        uint256 ethAmount
+        uint256 nativeTokenAmount
     ) internal {
         if (isMessageInitialized(messageId)) {
             revert MessageAlreadyInitialized(messageId);
-        }
-
-        if (ethAmount > 0) {
-            wrappedNativeToken.deposit{value: ethAmount}();
-            emit NativeTokenWrapped(msg.sender, ethAmount);
         }
 
         messageStates[messageId] = MessageState({
@@ -87,7 +72,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
             stage: ProcessingStage.PreExecution,
             payload: payload,
             createdAt: block.timestamp,
-            ethAmount: ethAmount
+            nativeTokenAmount: nativeTokenAmount
         });
 
         sequencerSignatures[messageId] = sequencerSignature;
@@ -126,17 +111,18 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
         state.stage = ProcessingStage.Executing;
 
-        if (state.ethAmount > 0) {
-            uint256 wethBalance = wrappedNativeToken.balanceOf(address(this));
-            if (wethBalance < state.ethAmount) {
-                revert InsufficientWETHBalance(state.ethAmount, wethBalance);
+        if (state.nativeTokenAmount > 0) {
+            uint256 wrappedNativeTokenBalance = wrappedNativeToken.balanceOf(address(this));
+            if (wrappedNativeTokenBalance < state.nativeTokenAmount) {
+                revert InsufficientWrappedNativeTokenBalance(state.nativeTokenAmount, wrappedNativeTokenBalance);
             }
 
-            wrappedNativeToken.withdraw(state.ethAmount);
-            emit NativeTokenUnwrapped(state.ethAmount, state.targetAddress);
+            wrappedNativeToken.withdraw(state.nativeTokenAmount);
+            emit NativeTokenUnwrapped(state.nativeTokenAmount, state.targetAddress);
         }
 
-        (bool success, bytes memory returnData) = state.targetAddress.call{value: state.ethAmount}(state.payload);
+        (bool success, bytes memory returnData) =
+            state.targetAddress.call{value: state.nativeTokenAmount}(state.payload);
 
         if (!success) {
             revert MessageExecutionFailed(messageId, returnData);
@@ -157,13 +143,9 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
         bytes[] calldata validatorSignatures,
-        uint256 ethAmount
-    ) external payable {
-        if (msg.value != ethAmount) {
-            revert InvalidETHAmount(msg.value, ethAmount);
-        }
-
-        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, ethAmount);
+        uint256 nativeTokenAmount
+    ) external {
+        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
 
         // collect validator signatures and verify them
         for (uint256 i = 0; i < validatorSignatures.length; i++) {
@@ -198,26 +180,19 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         address[] calldata targetAddresses,
         bytes[] calldata payloads,
         SequencerSignature[] calldata _sequencerSignatures,
-        uint256[] calldata ethAmounts
-    ) external payable onlyRole(SEQUENCER_ROLE) {
+        uint256[] calldata nativeTokenAmounts
+    ) external onlyRole(SEQUENCER_ROLE) {
         if (
             messageIds.length != targetAddresses.length || messageIds.length != payloads.length
-                || messageIds.length != _sequencerSignatures.length || messageIds.length != ethAmounts.length
+                || messageIds.length != _sequencerSignatures.length || messageIds.length != nativeTokenAmounts.length
         ) {
             revert ArrayLengthMismatch();
         }
 
-        uint256 totalEthAmount = 0;
-        for (uint256 i = 0; i < ethAmounts.length; i++) {
-            totalEthAmount += ethAmounts[i];
-        }
-
-        if (msg.value != totalEthAmount) {
-            revert InvalidETHAmount(msg.value, totalEthAmount);
-        }
-
         for (uint256 i = 0; i < messageIds.length; i++) {
-            _initializeMessage(messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i], ethAmounts[i]);
+            _initializeMessage(
+                messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i], nativeTokenAmounts[i]
+            );
         }
     }
 
