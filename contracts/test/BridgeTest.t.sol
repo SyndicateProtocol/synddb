@@ -601,11 +601,57 @@ contract BridgeTest is Test {
         assertEq(weth.balanceOf(address(bridge)), bridgeWethAfterInit - ethAmount);
     }
 
+    /// @notice Test that ETH returned from external call is automatically re-wrapped
+    function test_HandleMessage_ReturnsETH_AutoReWraps() public {
+        // Deploy a contract that returns some ETH
+        ETHReturningContract returner = new ETHReturningContract();
+        vm.deal(address(returner), 10 ether);
+
+        uint256 sentAmount = 5 ether;
+        uint256 returnedAmount = 2 ether;
+
+        // Deposit ETH to bridge
+        vm.prank(user);
+        (bool success,) = address(bridge).call{value: sentAmount}("");
+        assertTrue(success);
+
+        uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
+
+        // Initialize message to call returner
+        bytes32 messageId = keccak256("eth-return-test");
+        bytes memory payload = abi.encodeWithSelector(returner.acceptAndReturn.selector, returnedAmount);
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+
+        vm.prank(sequencer);
+        bridge.initializeMessage(messageId, address(returner), payload, sig, sentAmount);
+
+        submitValidatorSignatures(messageId);
+
+        // Handle message - bridge sends sentAmount ETH, returner returns returnedAmount ETH
+        bridge.handleMessage(messageId);
+
+        // Bridge should have: original WETH - sentAmount + returnedAmount (re-wrapped)
+        uint256 expectedWeth = bridgeWethBefore - sentAmount + returnedAmount;
+        assertEq(weth.balanceOf(address(bridge)), expectedWeth, "ETH should be auto re-wrapped via receive()");
+
+        // Returner should have kept sentAmount - returnedAmount
+        assertEq(address(returner).balance, 10 ether + sentAmount - returnedAmount);
+    }
+
     receive() external payable {}
 }
 
 contract RevertingContract {
     function alwaysReverts() external payable {
         revert("Always reverts");
+    }
+}
+
+contract ETHReturningContract {
+    /// @notice Accepts ETH and returns a specified amount back to caller
+    function acceptAndReturn(uint256 amountToReturn) external payable {
+        require(msg.value >= amountToReturn, "Insufficient ETH sent");
+        (bool success,) = msg.sender.call{value: amountToReturn}("");
+        require(success, "ETH return failed");
     }
 }
