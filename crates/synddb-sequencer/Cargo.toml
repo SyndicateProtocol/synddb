@@ -37,7 +37,6 @@ tower = { workspace = true }
 
 # Cryptography and signing (Ethereum-compatible)
 alloy = { workspace = true, features = ["signers", "signer-local"] }
-sha2 = { workspace = true }
 hex = { workspace = true }
 
 # Utilities

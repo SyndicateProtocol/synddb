@@ -18,7 +18,7 @@ use tracing::{info, warn};
 
 use crate::attestation::AttestationVerifier;
 use crate::inbox::{Inbox, MessageType, SequenceReceipt, SignedMessage};
-use crate::publish::DAPublisher;
+use crate::publish::traits::DAPublisher;
 
 /// Shared application state
 #[derive(Clone)]
@@ -518,7 +518,7 @@ mod base64_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::publish::MockPublisher;
+    use crate::publish::mock::MockPublisher;
     use crate::signer::MessageSigner;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};

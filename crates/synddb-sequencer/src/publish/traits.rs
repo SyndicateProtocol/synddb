@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use crate::inbox::SignedMessage;
 
 /// Result of publishing to a DA layer
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PublishResult {
     /// Name of the DA layer (e.g., "gcs", "celestia", "eigenda")
     pub layer: String,

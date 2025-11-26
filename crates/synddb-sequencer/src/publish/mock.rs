@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use super::{DAPublisher, PublishError, PublishResult};
 use crate::inbox::SignedMessage;
+use crate::publish::traits::{DAPublisher, PublishError, PublishResult};
 
 /// In-memory publisher for testing
 #[derive(Debug, Default)]

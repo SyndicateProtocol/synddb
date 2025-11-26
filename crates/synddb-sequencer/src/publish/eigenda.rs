@@ -1,14 +1,15 @@
 //! `EigenDA` layer publisher
 
-use super::PublishResult;
-use crate::attestor::SignedBatch;
-use crate::config::EigenDAConfig;
-use anyhow::Result;
+use crate::inbox::SignedMessage;
+use crate::publish::traits::PublishResult;
 
 #[derive(Debug)]
 pub struct EigenDAPublisher {
     _config: EigenDAConfig,
 }
+
+#[derive(Debug)]
+pub struct EigenDAConfig {}
 
 impl EigenDAPublisher {
     pub const fn new(config: EigenDAConfig) -> Self {
@@ -16,15 +17,10 @@ impl EigenDAPublisher {
     }
 
     /// Publish batch to `EigenDA`
-    pub async fn publish(&self, _batch: &SignedBatch) -> Result<PublishResult> {
+    pub async fn publish(&self, _message: &SignedMessage) -> PublishResult {
         // TODO: Use eigenda-rust to publish blob
         // TODO: Return blob reference
 
-        Ok(PublishResult {
-            layer: "eigenda".to_string(),
-            success: false,
-            reference: None,
-            error: Some("Not implemented".to_string()),
-        })
+        PublishResult::default()
     }
 }

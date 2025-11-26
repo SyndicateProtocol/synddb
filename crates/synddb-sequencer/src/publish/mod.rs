@@ -3,19 +3,14 @@
 //! This module provides a trait-based abstraction for publishing signed messages
 //! to various storage/DA backends. The first implementation is Google Cloud Storage.
 
-mod mock;
-mod traits;
+pub mod mock;
+pub mod traits;
+
+// Update these with feature flags once implemented;
+pub mod arweave;
+pub mod celestia;
+pub mod eigenda;
+pub mod ipfs;
 
 #[cfg(feature = "gcs")]
 pub mod gcs;
-
-// // Re-export main types
-pub use mock::MockPublisher;
-pub use traits::{DAPublisher, PublishError, PublishResult};
-
-//
-// // Re-export for tests
-// #[cfg(test)]
-// pub mod tests {
-//     pub use super::mock::MockPublisher;
-// }

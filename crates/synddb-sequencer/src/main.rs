@@ -10,11 +10,11 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tracing::{error, info, warn};
 
+use synddb_sequencer::publish::traits::DAPublisher;
 use synddb_sequencer::{
     config::SequencerConfig,
     http_api::{create_router, AppState},
     inbox::Inbox,
-    publish::DAPublisher,
     signer::MessageSigner,
 };
 

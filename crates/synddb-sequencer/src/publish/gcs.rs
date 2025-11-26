@@ -11,15 +11,12 @@
 //!     └── sequence.json
 //! ```
 
-use super::PublishError;
+use crate::publish::traits::{DAPublisher, PublishError, PublishResult};
 use serde::{Deserialize, Serialize};
 
-use {
-    super::{DAPublisher, PublishResult},
-    crate::inbox::SignedMessage,
-    async_trait::async_trait,
-    tracing::{debug, error, info, warn},
-};
+use crate::inbox::SignedMessage;
+use async_trait::async_trait;
+use tracing::{debug, error, info, warn};
 
 /// Configuration for GCS publisher
 #[derive(Debug, Clone, Serialize, Deserialize)]
