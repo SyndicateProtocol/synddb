@@ -16,16 +16,16 @@ on:
     paths:
       - 'crates/synddb-client/**'
       - 'crates/synddb-chain-monitor/**'  # dependency of synddb-client
-      - 'Cargo.toml'
-      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
       - '.github/workflows/build-ffi-libs.yml'
 
   pull_request:
     paths:
       - 'crates/synddb-client/**'
       - 'crates/synddb-chain-monitor/**'  # dependency of synddb-client
-      - 'Cargo.toml'
-      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
       - '.github/workflows/build-ffi-libs.yml'
 
   workflow_dispatch:
