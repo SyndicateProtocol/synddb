@@ -8,8 +8,9 @@ interface IBridge {
         bytes32 messageId,
         address targetAddress,
         bytes calldata payload,
-        SequencerSignature calldata sequencerSignature
-    ) external;
+        SequencerSignature calldata sequencerSignature,
+        uint256 ethAmount
+    ) external payable;
 
     function handleMessage(bytes32 messageId) external;
 
@@ -18,8 +19,9 @@ interface IBridge {
         address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
-        bytes[] calldata validatorSignatures
-    ) external;
+        bytes[] calldata validatorSignatures,
+        uint256 ethAmount
+    ) external payable;
 
     function isMessageCompleted(bytes32 messageId) external view returns (bool);
 

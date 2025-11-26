@@ -60,7 +60,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
 
         // Step 3: Execute burn on source chain
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(burnMessageId, address(onft), burnPayload, burnSig);
+        sourceBridge.initializeMessage(burnMessageId, address(onft), burnPayload, burnSig, 0);
         submitValidatorSignatures(sourceBridge, burnMessageId);
         sourceBridge.handleMessage(burnMessageId);
 
@@ -79,7 +79,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
 
         // Execute mint on destination chain (no validators needed for this simple test)
         vm.prank(sequencer);
-        destBridge.initializeMessage(mintMessageId, address(receiver), mintPayload, burnSig);
+        destBridge.initializeMessage(mintMessageId, address(receiver), mintPayload, burnSig, 0);
         destBridge.handleMessage(mintMessageId);
 
         // Verify NFT was minted on destination chain
@@ -98,7 +98,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(messageId, address(onft), payload, sig);
+        sourceBridge.initializeMessage(messageId, address(onft), payload, sig, 0);
         submitValidatorSignatures(sourceBridge, messageId);
 
         // Should revert because attacker doesn't own the token
@@ -145,7 +145,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         SequencerSignature memory sig1 = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(burnMsg1, address(sourceOnft), burnPayload1, sig1);
+        sourceBridge.initializeMessage(burnMsg1, address(sourceOnft), burnPayload1, sig1, 0);
         submitValidatorSignatures(sourceBridge, burnMsg1);
         sourceBridge.handleMessage(burnMsg1);
 
@@ -158,7 +158,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         bytes memory mintPayload = abi.encodeWithSelector(destOnft.crosschainMint.selector, user, tokenId);
 
         vm.prank(sequencer);
-        destBridge.initializeMessage(mintMsg, address(destOnft), mintPayload, sig1);
+        destBridge.initializeMessage(mintMsg, address(destOnft), mintPayload, sig1, 0);
         destBridge.handleMessage(mintMsg);
 
         assertEq(destOnft.ownerOf(tokenId), user);
@@ -171,7 +171,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         bytes memory burnPayload2 = abi.encodeWithSelector(destOnft.crosschainBurn.selector, user, tokenId);
 
         vm.prank(sequencer);
-        destBridge.initializeMessage(burnMsg2, address(destOnft), burnPayload2, sig1);
+        destBridge.initializeMessage(burnMsg2, address(destOnft), burnPayload2, sig1, 0);
         destBridge.handleMessage(burnMsg2);
 
         // Verify burned on dest
@@ -183,7 +183,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         bytes memory mintPayload2 = abi.encodeWithSelector(sourceOnft.crosschainMint.selector, user, tokenId);
 
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(mintMsg2, address(sourceOnft), mintPayload2, sig1);
+        sourceBridge.initializeMessage(mintMsg2, address(sourceOnft), mintPayload2, sig1, 0);
         submitValidatorSignatures(sourceBridge, mintMsg2);
         sourceBridge.handleMessage(mintMsg2);
 
@@ -218,7 +218,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
             SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
             vm.prank(sequencer);
-            sourceBridge.initializeMessage(messageId, address(batchOnft), payload, sig);
+            sourceBridge.initializeMessage(messageId, address(batchOnft), payload, sig, 0);
             submitValidatorSignatures(sourceBridge, messageId);
             sourceBridge.handleMessage(messageId);
         }
@@ -250,7 +250,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(messageId, address(multiOnft), payload, sig);
+        sourceBridge.initializeMessage(messageId, address(multiOnft), payload, sig, 0);
         submitValidatorSignatures(sourceBridge, messageId);
         sourceBridge.handleMessage(messageId);
 

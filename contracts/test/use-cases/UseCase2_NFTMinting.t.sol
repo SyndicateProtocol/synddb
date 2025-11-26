@@ -56,7 +56,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
+        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
@@ -77,7 +77,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
             SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
+            bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
 
             submitValidatorSignatures(bridge, messageId);
 
@@ -105,7 +105,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
             SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
+            bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
 
             submitValidatorSignatures(bridge, messageId);
 
@@ -134,7 +134,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(approveMessageId, address(weth), approvePayload, sig);
+        bridge.initializeMessage(approveMessageId, address(weth), approvePayload, sig, 0);
 
         submitValidatorSignatures(bridge, approveMessageId);
 
@@ -144,7 +144,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         bytes memory mintPayload = abi.encodeWithSelector(paidNFT.mintWithWETH.selector, user, address(weth), NFT_PRICE);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, sig);
+        bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, sig, 0);
 
         submitValidatorSignatures(bridge, mintMessageId);
 
@@ -170,7 +170,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(approveMessageId, address(weth), approvePayload, sig);
+        bridge.initializeMessage(approveMessageId, address(weth), approvePayload, sig, 0);
 
         submitValidatorSignatures(bridge, approveMessageId);
 
@@ -181,7 +181,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
             abi.encodeWithSelector(paidNFT.mintWithWETH.selector, user, address(weth), insufficientAmount);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, sig);
+        bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, sig, 0);
 
         submitValidatorSignatures(bridge, mintMessageId);
 
@@ -189,31 +189,29 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         bridge.handleMessage(mintMessageId);
     }
 
-    /// @notice Test minting NFT with native ETH via Bridge.withdrawAndCall
+    /// @notice Test minting NFT with native ETH
     /// @dev This tests the harder case: Bridge holds WETH, needs to unwrap to ETH for NFT payment
-    ///      The Bridge calls itself (self-call) to execute withdrawAndCall
-    function test_MintPaidNFTWithETH_ViaWithdrawAndCall() public {
+    function test_MintPaidNFTWithETH() public {
         // User deposits ETH into bridge (gets wrapped to WETH)
         vm.prank(user);
         (bool success,) = address(bridge).call{value: NFT_PRICE}("");
         assertTrue(success);
         assertEq(weth.balanceOf(address(bridge)), NFT_PRICE);
 
-        // Bridge calls itself to unwrap WETH and mint NFT with ETH
+        // Bridge calls paidNFT to unwrap WETH and mint NFT with ETH
         bytes32 messageId = keccak256("withdraw-and-mint");
 
         // Encode the NFT mint call that requires ETH
-        bytes memory nftMintCall = abi.encodeWithSelector(paidNFT.mintWithPayment.selector, user);
-
-        // Encode the Bridge.withdrawAndCall to unwrap WETH and forward ETH to NFT
-        bytes memory payload =
-            abi.encodeWithSelector(bridge.withdrawAndCall.selector, NFT_PRICE, address(paidNFT), nftMintCall);
+        bytes memory payload = abi.encodeWithSelector(paidNFT.mintWithPayment.selector, user);
 
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
-        // Bridge calls itself (self-call)
+        // Give sequencer some ETH to pay for the transaction
+        vm.deal(sequencer, NFT_PRICE);
+
+        // Bridge calls paidNFT with ETH payment
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(bridge), payload, sig);
+        bridge.initializeMessage{value: NFT_PRICE}(messageId, address(paidNFT), payload, sig, NFT_PRICE);
         submitValidatorSignatures(bridge, messageId);
         bridge.handleMessage(messageId);
 
@@ -225,8 +223,9 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         assertEq(address(paidNFT).balance, NFT_PRICE);
         assertEq(weth.balanceOf(address(paidNFT)), 0);
 
-        // Verify bridge WETH was consumed
-        assertEq(weth.balanceOf(address(bridge)), 0);
+        // Verify bridge still has the user's original WETH deposit
+        // (User's deposit + Sequencer's deposit - unwrapped amount = NFT_PRICE)
+        assertEq(weth.balanceOf(address(bridge)), NFT_PRICE);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -241,7 +240,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
+        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
@@ -257,7 +256,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
+        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
@@ -278,7 +277,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
+        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
 
         // Only submit 1 signature (threshold is 2)
         submitValidatorSignatures(bridge, messageId, 1);
@@ -295,7 +294,7 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig);
+        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
 
         // Submit exactly 2 signatures
         submitValidatorSignatures(bridge, messageId, 2);

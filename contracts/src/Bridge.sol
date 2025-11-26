@@ -24,78 +24,34 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
     error ArrayLengthMismatch();
     error OnlySelfCall();
+    error InsufficientWETHBalance(uint256 required, uint256 available);
 
     constructor(address admin, address _wrappedNativeToken) ModuleCheckRegistry(admin) {
         wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
     }
 
     receive() external payable {
-        // Only wrap ETH if it's not coming from the WETH contract itself
-        // (to avoid infinite loop during withdrawAndCall)
+        // Only wrap ETH if it's not coming from WETH unwrapping
         if (msg.sender != address(wrappedNativeToken)) {
             wrappedNativeToken.deposit{value: msg.value}();
             emit NativeTokenWrapped(msg.sender, msg.value);
         }
     }
 
-    /**
-     * @notice Withdraws WETH to native ETH and forwards to target contract with calldata
-     * @dev Can only be called by the Bridge itself (via handleMessage)
-     *      This enables the Bridge to interact with contracts that require native ETH payment
-     *
-     * FLOW EXPLANATION:
-     * ================
-     * Problem: Bridge holds WETH, but some contracts require native ETH.
-     *
-     * Solution: This function unwraps WETH → ETH and forwards to target in one call.
-     *
-     * Example Flow:
-     * 1. User deposits ETH → Bridge wraps it to WETH (via receive())
-     * 2. Sequencer calls initializeMessage with:
-     *    - targetAddress: address(bridge) (self-call)
-     *    - payload: encoded withdrawAndCall(amount, tokenContract, mintCalldata)
-     * 3. Validators sign the message
-     * 4. handleMessage executes → Bridge calls itself → withdrawAndCall:
-     *    a. Unwraps WETH → ETH
-     *    b. Forwards ETH to token contract with mint calldata
-     * 5. Token contract receives ETH and processes the call
-     *
-     * Security: Only callable by Bridge itself to prevent unauthorized WETH withdrawals
-     *
-     * @param amount Amount of WETH to unwrap
-     * @param target Target contract to call with native ETH
-     * @param data Calldata to forward to target
-     * @return returnData Return data from the target call
-     */
-    function withdrawAndCall(uint256 amount, address payable target, bytes calldata data)
-        external
-        returns (bytes memory returnData)
-    {
-        // Only allow Bridge to call itself (via handleMessage)
-        if (msg.sender != address(this)) {
-            revert OnlySelfCall();
-        }
-
-        wrappedNativeToken.withdraw(amount);
-
-        emit NativeTokenUnwrapped(amount, target);
-
-        (bool success, bytes memory result) = target.call{value: amount}(data);
-        if (!success) {
-            revert MessageExecutionFailed(bytes32(0), result);
-        }
-
-        return result;
-    }
-
     function initializeMessage(
         bytes32 messageId,
         address targetAddress,
         bytes calldata payload,
-        SequencerSignature calldata sequencerSignature
-    ) public onlyRole(SEQUENCER_ROLE) {
+        SequencerSignature calldata sequencerSignature,
+        uint256 ethAmount
+    ) public payable onlyRole(SEQUENCER_ROLE) {
         if (isMessageInitialized(messageId)) {
             revert MessageAlreadyInitialized(messageId);
+        }
+
+        if (ethAmount > 0) {
+            wrappedNativeToken.deposit{value: ethAmount}();
+            emit NativeTokenWrapped(msg.sender, ethAmount);
         }
 
         messageStates[messageId] = MessageState({
@@ -103,7 +59,8 @@ contract Bridge is IBridge, ModuleCheckRegistry {
             targetAddress: targetAddress,
             stage: ProcessingStage.PreExecution,
             payload: payload,
-            createdAt: block.timestamp
+            createdAt: block.timestamp,
+            ethAmount: ethAmount
         });
 
         sequencerSignatures[messageId] = sequencerSignature;
@@ -142,7 +99,17 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
         state.stage = ProcessingStage.Executing;
 
-        (bool success, bytes memory returnData) = state.targetAddress.call(state.payload);
+        if (state.ethAmount > 0) {
+            uint256 wethBalance = wrappedNativeToken.balanceOf(address(this));
+            if (wethBalance < state.ethAmount) {
+                revert InsufficientWETHBalance(state.ethAmount, wethBalance);
+            }
+
+            wrappedNativeToken.withdraw(state.ethAmount);
+            emit NativeTokenUnwrapped(state.ethAmount, state.targetAddress);
+        }
+
+        (bool success, bytes memory returnData) = state.targetAddress.call{value: state.ethAmount}(state.payload);
 
         if (!success) {
             revert MessageExecutionFailed(messageId, returnData);
@@ -162,9 +129,10 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
-        bytes[] calldata validatorSignatures
-    ) external {
-        initializeMessage(messageId, targetAddress, payload, sequencerSignature);
+        bytes[] calldata validatorSignatures,
+        uint256 ethAmount
+    ) external payable {
+        initializeMessage(messageId, targetAddress, payload, sequencerSignature, ethAmount);
 
         // collect validator signatures and verify them
         for (uint256 i = 0; i < validatorSignatures.length; i++) {
@@ -198,17 +166,18 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes32[] calldata messageIds,
         address[] calldata targetAddresses,
         bytes[] calldata payloads,
-        SequencerSignature[] calldata _sequencerSignatures
-    ) external onlyRole(SEQUENCER_ROLE) {
+        SequencerSignature[] calldata _sequencerSignatures,
+        uint256[] calldata ethAmounts
+    ) external payable onlyRole(SEQUENCER_ROLE) {
         if (
             messageIds.length != targetAddresses.length || messageIds.length != payloads.length
-                || messageIds.length != _sequencerSignatures.length
+                || messageIds.length != _sequencerSignatures.length || messageIds.length != ethAmounts.length
         ) {
             revert ArrayLengthMismatch();
         }
 
         for (uint256 i = 0; i < messageIds.length; i++) {
-            initializeMessage(messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i]);
+            initializeMessage(messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i], ethAmounts[i]);
         }
     }
 

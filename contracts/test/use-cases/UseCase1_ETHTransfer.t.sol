@@ -69,7 +69,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(weth), payload, sig);
+        bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
 
         // Submit validator signatures (2 out of 3 threshold)
         submitValidatorSignatures(bridge, messageId);
@@ -118,7 +118,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
             SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(weth), payload, sig);
+            bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
 
             // Submit validator signatures
             submitValidatorSignatures(bridge, messageId);
@@ -148,7 +148,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(weth), payload, sig);
+        bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
 
         // Only submit 1 signature (threshold is 2)
         submitValidatorSignatures(bridge, messageId, 1);
@@ -172,7 +172,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(weth), payload, sig);
+        bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
 
         // Submit exactly 2 signatures (threshold is 2)
         submitValidatorSignatures(bridge, messageId);
@@ -196,7 +196,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(weth), payload, sig);
+        bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
 
         // Submit all 3 signatures (threshold is 2)
         submitValidatorSignatures(bridge, messageId, 3);

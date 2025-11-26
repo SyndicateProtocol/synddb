@@ -176,7 +176,7 @@ contract ModuleAddingAndRemovingTest is Test {
 
             // Initialize message
             vm.startPrank(sequencer);
-            testBridge.initializeMessage(messageId, address(this), payload, sig);
+            testBridge.initializeMessage(messageId, address(this), payload, sig, 0);
             vm.stopPrank();
 
             // Measure gas for handling message (which validates all modules)
@@ -291,7 +291,7 @@ contract ModuleAddingAndRemovingTest is Test {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(this), payload, sig);
+        bridge.initializeMessage(messageId, address(this), payload, sig, 0);
 
         uint256 gasBeforeHandle = gasleft();
         try bridge.handleMessage(messageId) {

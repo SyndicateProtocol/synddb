@@ -16,6 +16,7 @@ struct MessageState {
     ProcessingStage stage;
     bytes payload;
     uint256 createdAt;
+    uint256 ethAmount;
 }
 
 struct SequencerSignature {

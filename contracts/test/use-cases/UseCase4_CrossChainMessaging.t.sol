@@ -65,7 +65,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(crossChainMessageId, address(destinationChain), payload, sig);
+        bridge.initializeMessage(crossChainMessageId, address(destinationChain), payload, sig, 0);
         submitValidatorSignatures(bridge, crossChainMessageId);
         bridge.handleMessage(crossChainMessageId);
 
@@ -90,7 +90,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
         submitValidatorSignatures(bridge, messageId);
         bridge.handleMessage(messageId);
 
@@ -126,7 +126,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
         submitValidatorSignatures(bridge, messageId);
         bridge.handleMessage(messageId);
 
@@ -164,7 +164,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             );
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
+            bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
             submitValidatorSignatures(bridge, messageId);
             bridge.handleMessage(messageId);
         }
@@ -201,7 +201,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
         submitValidatorSignatures(bridge, messageId);
         bridge.handleMessage(messageId);
 
@@ -225,7 +225,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
         submitValidatorSignatures(bridge, messageId);
         bridge.handleMessage(messageId);
 
@@ -248,7 +248,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
         submitValidatorSignatures(bridge, messageId);
         bridge.handleMessage(messageId);
 
@@ -271,7 +271,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
         submitValidatorSignatures(bridge, messageId);
         bridge.handleMessage(messageId);
 
@@ -304,7 +304,8 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
                 totalAmount,
                 mintData
             ),
-            sig
+            sig,
+            0
         );
         submitValidatorSignatures(bridge, mintMessageId);
         bridge.handleMessage(mintMessageId);
@@ -328,7 +329,8 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
                 returnAmount,
                 returnData
             ),
-            sig
+            sig,
+            0
         );
         submitValidatorSignatures(bridge, returnMessageId);
         bridge.handleMessage(returnMessageId);
@@ -360,7 +362,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
 
         // Only submit 1 signature (threshold is 2)
         submitValidatorSignatures(bridge, messageId, 1);
@@ -387,7 +389,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
 
         // Submit exactly 2 signatures
         submitValidatorSignatures(bridge, messageId, 2);

@@ -65,7 +65,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
@@ -87,7 +87,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
@@ -119,7 +119,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
 
         bytes32 usdcMessageId = keccak256("multi-usdc");
         bridge.initializeMessage(
-            usdcMessageId, address(usdc), abi.encodeWithSelector(usdc.transfer.selector, recipient, usdcAmount), sig
+            usdcMessageId, address(usdc), abi.encodeWithSelector(usdc.transfer.selector, recipient, usdcAmount), sig, 0
         );
         vm.stopPrank();
         submitValidatorSignatures(bridge, usdcMessageId);
@@ -128,7 +128,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         vm.prank(sequencer);
         bytes32 daiMessageId = keccak256("multi-dai");
         bridge.initializeMessage(
-            daiMessageId, address(dai), abi.encodeWithSelector(dai.transfer.selector, recipient, daiAmount), sig
+            daiMessageId, address(dai), abi.encodeWithSelector(dai.transfer.selector, recipient, daiAmount), sig, 0
         );
         submitValidatorSignatures(bridge, daiMessageId);
         bridge.handleMessage(daiMessageId);
@@ -136,7 +136,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         vm.prank(sequencer);
         bytes32 wethMessageId = keccak256("multi-weth");
         bridge.initializeMessage(
-            wethMessageId, address(weth), abi.encodeWithSelector(weth.transfer.selector, recipient, wethAmount), sig
+            wethMessageId, address(weth), abi.encodeWithSelector(weth.transfer.selector, recipient, wethAmount), sig, 0
         );
         submitValidatorSignatures(bridge, wethMessageId);
         bridge.handleMessage(wethMessageId);
@@ -169,7 +169,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
             bytes memory payload = abi.encodeWithSelector(usdc.transfer.selector, recipients[i], amountEach);
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(usdc), payload, sig);
+            bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
             submitValidatorSignatures(bridge, messageId);
             bridge.handleMessage(messageId);
         }
@@ -197,7 +197,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(approveMessageId, address(usdc), approvePayload, sig);
+        bridge.initializeMessage(approveMessageId, address(usdc), approvePayload, sig, 0);
         submitValidatorSignatures(bridge, approveMessageId);
         bridge.handleMessage(approveMessageId);
 
@@ -226,7 +226,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
         submitValidatorSignatures(bridge, messageId);
 
         vm.expectRevert();
@@ -245,7 +245,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
         submitValidatorSignatures(bridge, messageId);
 
         vm.expectRevert();
@@ -262,7 +262,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
         submitValidatorSignatures(bridge, messageId);
         bridge.handleMessage(messageId);
 
@@ -291,7 +291,8 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
             transferMessageId,
             address(usdc),
             abi.encodeWithSelector(usdc.transfer.selector, recipient, transferAmount),
-            sig
+            sig,
+            0
         );
         submitValidatorSignatures(bridge, transferMessageId);
         bridge.handleMessage(transferMessageId);
@@ -301,7 +302,11 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         bytes32 returnMessageId = keccak256("complete-return");
         vm.prank(sequencer);
         bridge.initializeMessage(
-            returnMessageId, address(usdc), abi.encodeWithSelector(usdc.transfer.selector, user, remainingAmount), sig
+            returnMessageId,
+            address(usdc),
+            abi.encodeWithSelector(usdc.transfer.selector, user, remainingAmount),
+            sig,
+            0
         );
         submitValidatorSignatures(bridge, returnMessageId);
         bridge.handleMessage(returnMessageId);
@@ -328,7 +333,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
 
         // Only submit 1 signature (threshold is 2)
         submitValidatorSignatures(bridge, messageId, 1);
@@ -350,7 +355,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
 
         // Submit exactly 2 signatures
         submitValidatorSignatures(bridge, messageId, 2);
