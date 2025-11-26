@@ -6,14 +6,17 @@ name: Build FFI Libraries
 # 3. Release tags: Build all platforms and create GitHub Release - production distribution
 
 on:
-  # Main branch commits and release tags
   push:
     branches:
       - main
     tags:
       - 'v*.*.*'
+    paths:
+      - 'crates/synddb-client/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-ffi-libs.yml'
 
-  # PRs: Build and test (dry run, no commits)
   pull_request:
     paths:
       - 'crates/synddb-client/**'
@@ -21,8 +24,16 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/build-ffi-libs.yml'
 
-  # Manual trigger for testing (dry run only, no commits/releases)
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Build scenario'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - release
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
@@ -134,17 +145,9 @@ jobs:
 
       - name: Cache cargo dependencies
         if: steps.should_build.outputs.should_build == 'true'
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-cargo-
+          key: ${{ matrix.arch }}-ffi
 
       - name: Build FFI library
         if: steps.should_build.outputs.should_build == 'true'
@@ -348,8 +351,8 @@ jobs:
 
           ### Documentation
 
-          - [Client README](https://github.com/Syndicate/SyndDB/tree/main/crates/synddb-client)
-          - [FFI Examples](https://github.com/Syndicate/SyndDB/tree/main/crates/synddb-client/examples/ffi)
+          - [Client README](https://github.com/SyndicateProtocol/SyndDB/tree/main/crates/synddb-client)
+          - [FFI Examples](https://github.com/SyndicateProtocol/SyndDB/tree/main/crates/synddb-client/examples/ffi)
           - [API Documentation](https://docs.rs/synddb-client)
 
           ### Building from Source
