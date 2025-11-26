@@ -43,12 +43,11 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 
 **Stage 1: Initialization**
 
-- Create message state with messageId, targetAddress, stage, payload, createdAt timestamp, and ethAmount
-- If ethAmount > 0, wrap the sent ETH to WETH for internal accounting
+- Create message state with messageId, targetAddress, stage, payload, createdAt timestamp, and nativeTokenAmount
+- Note: ETH must be deposited to bridge separately via receive() which wraps to WETH
 - Store SequencerSignature separately in dedicated mapping
 - Mark stage as PreExecution
 - Restricted to SEQUENCER_ROLE
-- Validates that msg.value == ethAmount to prevent stuck ETH
 
 **Stage 2: PreExecution (Validation)**
 
@@ -61,12 +60,12 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 
 **Stage 3: Core Execution**
 
-- If ethAmount > 0:
+- If nativeTokenAmount > 0:
   - Verify Bridge has sufficient WETH balance
   - Unwrap WETH to native ETH
   - Emit NativeTokenUnwrapped event
 - Execute the core message logic by calling targetAddress with payload
-- Low-level call: `targetAddress.call{value: ethAmount}(payload)`
+- Low-level call: `targetAddress.call{value: nativeTokenAmount}(payload)`
 - Reverts with `MessageExecutionFailed(messageId, returnData)` if call fails
 - Update stage to Executing → PostExecution
 - Protected by reentrancy guard via stage checks
@@ -171,7 +170,7 @@ struct MessageState {
     ProcessingStage stage;
     bytes payload;           // Calldata to execute
     uint256 createdAt;      // Timestamp when message was initialized
-    uint256 ethAmount;      // Amount of ETH to send with the call (0 for no ETH)
+    uint256 nativeTokenAmount; // Amount of native token to send with the call (0 for no ETH)
 }
 
 struct SequencerSignature {
@@ -197,20 +196,21 @@ enum ProcessingStage {
  * Creates message state and stores sequencer signature
  * This is initiated by the sequencer upon receiving a signed message
  * Restricted to SEQUENCER_ROLE
+ * Note: ETH must be deposited separately via receive() before calling this
  *
  * @param messageId Unique identifier
  * @param targetAddress Target contract to call
  * @param payload Calldata to execute on target
  * @param sequencerSignature Sequencer signature and submission timestamp
- * @param ethAmount Amount of ETH to send with the call (must equal msg.value)
+ * @param nativeTokenAmount Amount of native token to unwrap and send with the call
  */
 function initializeMessage(
     bytes32 messageId,
     address targetAddress,
     bytes calldata payload,
     SequencerSignature calldata sequencerSignature,
-    uint256 ethAmount
-) public payable;
+    uint256 nativeTokenAmount
+) public;
 
 /**
  * Pass the message through all validation and execution stages
@@ -223,13 +223,14 @@ function handleMessage(bytes32 messageId) public;
 /**
  * Convenience function to initialize and handle in one call
  * Also collects and verifies validator signatures via relayer pattern
+ * Note: ETH must be deposited separately via receive() before calling this
  *
  * @param messageId Unique identifier
  * @param targetAddress Target contract to call
  * @param payload Calldata to execute
  * @param sequencerSignature Sequencer signature
  * @param validatorSignatures Array of validator signatures to verify
- * @param ethAmount Amount of ETH to send with the call (must equal msg.value)
+ * @param nativeTokenAmount Amount of native token to unwrap and send with the call
  */
 function initializeAndHandleMessage(
     bytes32 messageId,
@@ -237,8 +238,8 @@ function initializeAndHandleMessage(
     bytes calldata payload,
     SequencerSignature calldata sequencerSignature,
     bytes[] calldata validatorSignatures,
-    uint256 ethAmount
-) external payable;
+    uint256 nativeTokenAmount
+) external;
 
 /**
  * Check if a message has been handled
@@ -305,22 +306,22 @@ The Bridge supports batch processing for efficiency:
 ```solidity
 /**
  * Initialize multiple messages in a single transaction
- * Validates that msg.value equals the sum of all ethAmounts
+ * Note: ETH must be deposited separately via receive() before calling this
  * Restricted to SEQUENCER_ROLE
  *
  * @param messageIds Array of unique identifiers
  * @param targetAddresses Array of target contracts to call
  * @param payloads Array of calldata to execute
  * @param _sequencerSignatures Array of sequencer signatures
- * @param ethAmounts Array of ETH amounts to send with each call
+ * @param nativeTokenAmounts Array of native token amounts to send with each call
  */
 function batchInitializeMessage(
     bytes32[] calldata messageIds,
     address[] calldata targetAddresses,
     bytes[] calldata payloads,
     SequencerSignature[] calldata _sequencerSignatures,
-    uint256[] calldata ethAmounts
-) external payable;
+    uint256[] calldata nativeTokenAmounts
+) external;
 
 /**
  * Handle multiple messages in a single transaction
@@ -347,11 +348,13 @@ The Bridge implements a sophisticated ETH/WETH management system that automatica
 ### Flow Diagram
 
 ```
-User/Sequencer sends ETH with initializeMessage()
+User/Sequencer sends ETH to Bridge (triggers receive())
                     ↓
         Bridge wraps ETH → WETH immediately
                     ↓
         WETH stored in Bridge (internal accounting)
+                    ↓
+        Sequencer calls initializeMessage() (no ETH sent)
                     ↓
         Message waits for validator signatures
                     ↓
@@ -362,6 +365,8 @@ User/Sequencer sends ETH with initializeMessage()
         ETH sent with call to target contract
                     ↓
         Target contract receives native ETH
+                    ↓
+        If target returns ETH → Bridge receive() auto re-wraps
 ```
 
 ### Key Functions and Behavior
@@ -387,7 +392,7 @@ receive() external payable {
 3. Bridge's `receive()` would try to wrap it again
 4. This would fail due to insufficient gas (receive only gets 2300 gas)
 
-#### initializeMessage() - ETH Wrapping
+#### initializeMessage() - Message Initialization Only
 
 ```solidity
 function initializeMessage(
@@ -395,41 +400,37 @@ function initializeMessage(
     address targetAddress,
     bytes calldata payload,
     SequencerSignature calldata sequencerSignature,
-    uint256 ethAmount
-) public payable onlyRole(SEQUENCER_ROLE) {
-    // Validate msg.value matches ethAmount to prevent stuck ETH
-    if (msg.value != ethAmount) {
-        revert InvalidETHAmount(msg.value, ethAmount);
-    }
-
-    _initializeMessage(messageId, targetAddress, payload, sequencerSignature, ethAmount);
+    uint256 nativeTokenAmount
+) public onlyRole(SEQUENCER_ROLE) {
+    _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
 }
 
 function _initializeMessage(...) internal {
-    // ... message initialization code ...
-
-    if (ethAmount > 0) {
-        wrappedNativeToken.deposit{value: ethAmount}();
-        emit NativeTokenWrapped(msg.sender, ethAmount);
+    if (isMessageInitialized(messageId)) {
+        revert MessageAlreadyInitialized(messageId);
     }
 
-    // Store ethAmount in MessageState for later unwrapping
+    // Store nativeTokenAmount in MessageState for later unwrapping
     messageStates[messageId] = MessageState({
         messageId: messageId,
         targetAddress: targetAddress,
         stage: ProcessingStage.PreExecution,
         payload: payload,
         createdAt: block.timestamp,
-        ethAmount: ethAmount
+        nativeTokenAmount: nativeTokenAmount
     });
+
+    sequencerSignatures[messageId] = sequencerSignature;
+    emit MessageInitialized(messageId, payload);
 }
 ```
 
-**Key Validation:**
+**Key Design:**
 
-- `msg.value == ethAmount` check prevents accidental stuck ETH
-- If user sends 1 ETH but ethAmount is 0.5 ETH, transaction reverts
-- Ensures exact accounting of ETH amounts
+- No `payable` modifier - ETH wrapping happens separately via `receive()`
+- No `msg.value` validation - function doesn't accept ETH
+- `nativeTokenAmount` is stored for later unwrapping in `handleMessage()`
+- Sequencer must ensure sufficient WETH is in bridge before calling
 
 #### handleMessage() - ETH Unwrapping
 
@@ -439,18 +440,18 @@ function handleMessage(bytes32 messageId) public {
 
     // ... validation code ...
 
-    if (state.ethAmount > 0) {
-        uint256 wethBalance = wrappedNativeToken.balanceOf(address(this));
-        if (wethBalance < state.ethAmount) {
-            revert InsufficientWETHBalance(state.ethAmount, wethBalance);
+    if (state.nativeTokenAmount > 0) {
+        uint256 wrappedNativeTokenBalance = wrappedNativeToken.balanceOf(address(this));
+        if (wrappedNativeTokenBalance < state.nativeTokenAmount) {
+            revert InsufficientWrappedNativeTokenBalance(state.nativeTokenAmount, wrappedNativeTokenBalance);
         }
 
-        wrappedNativeToken.withdraw(state.ethAmount);
-        emit NativeTokenUnwrapped(state.ethAmount, state.targetAddress);
+        wrappedNativeToken.withdraw(state.nativeTokenAmount);
+        emit NativeTokenUnwrapped(state.nativeTokenAmount, state.targetAddress);
     }
 
     // Execute call with native ETH
-    (bool success, bytes memory returnData) = state.targetAddress.call{value: state.ethAmount}(state.payload);
+    (bool success, bytes memory returnData) = state.targetAddress.call{value: state.nativeTokenAmount}(state.payload);
 
     if (!success) {
         revert MessageExecutionFailed(messageId, returnData);
@@ -459,6 +460,19 @@ function handleMessage(bytes32 messageId) public {
     // ... post-execution code ...
 }
 ```
+
+If the target contract returns ETH to the bridge during the call, it is automatically re-wrapped to WETH:
+
+1. Bridge calls `target.call{value: amount}(payload)`
+2. Target can return ETH back to bridge (e.g., refund, change)
+3. Returned ETH automatically triggers `Bridge.receive()`
+4. `receive()` checks `msg.sender != address(wrappedNativeToken)` (true for external contracts)
+5. Returned ETH is automatically wrapped to WETH
+
+**Example:** Bridge sends 5 ETH to target, target returns 2 ETH:
+
+- Bridge WETH balance: Initial - 5 WETH + 2 WETH (auto re-wrapped) = Initial - 3 WETH
+- No ETH remains unwrapped in the bridge
 
 ### IModuleCheck Interface
 
