@@ -238,13 +238,10 @@ jobs:
           # Capture file list before commit (must be done while files are staged)
           UPDATED_FILES=$(git diff --staged --name-only | sed 's/^/- /')
 
-          # NOTE: Intentionally not indented - YAML preserves whitespace in the commit message
-          git commit -m "chore: Update FFI libraries [skip ci]
-
-Built from: ${{ github.sha }}
-
-Updated:
-$UPDATED_FILES"
+          git commit -m "chore: Update FFI libraries [skip ci]" \
+            -m "Built from: ${{ github.sha }}" \
+            -m "Updated:" \
+            -m "$UPDATED_FILES"
 
           git push
 
