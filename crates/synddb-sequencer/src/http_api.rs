@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::attestation::AttestationVerifier;
+use crate::http_errors::{bad_request, internal_error, not_found, unauthorized, HttpError};
 use crate::inbox::{Inbox, MessageType, SequenceReceipt, SignedMessage};
 use crate::publish::traits::DAPublisher;
 
@@ -164,12 +165,6 @@ pub struct StatusResponse {
     pub signer_address: String,
 }
 
-/// Error response
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-}
-
 /// Individual health check result
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthCheck {
@@ -237,7 +232,7 @@ impl From<SignedMessage> for MessageResponse {
 async fn receive_changesets(
     State(state): State<AppState>,
     Json(request): Json<ChangesetBatchRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, HttpError> {
     info!(
         batch_id = %request.batch_id,
         changeset_count = request.changesets.len(),
@@ -250,23 +245,13 @@ async fn receive_changesets(
             Some(token) => {
                 verifier.verify(token).await.map_err(|e| {
                     warn!(batch_id = %request.batch_id, error = %e, "Attestation verification failed");
-                    (
-                        StatusCode::UNAUTHORIZED,
-                        Json(ErrorResponse {
-                            error: format!("Attestation verification failed: {e}"),
-                        }),
-                    )
+                    unauthorized(format!("Attestation verification failed: {e}"))
                 })?;
                 info!(batch_id = %request.batch_id, "Attestation token verified");
             }
             None => {
                 warn!(batch_id = %request.batch_id, "Missing attestation token");
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(ErrorResponse {
-                        error: "Attestation token required but not provided".to_string(),
-                    }),
-                ));
+                return Err(unauthorized("Attestation token required but not provided"));
             }
         }
     }
@@ -274,12 +259,7 @@ async fn receive_changesets(
     // Serialize the batch as the payload
     let payload = serde_json::to_vec(&request).map_err(|e| {
         warn!("Failed to serialize changeset batch: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Serialization failed".to_string(),
-            }),
-        )
+        internal_error("Serialization failed")
     })?;
 
     // Sequence and sign the message
@@ -289,12 +269,7 @@ async fn receive_changesets(
         .await
         .map_err(|e| {
             warn!("Failed to sequence message: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Signing failed: {e}"),
-                }),
-            )
+            internal_error(format!("Signing failed: {e}"))
         })?;
 
     // Publish to DA layer if configured
@@ -324,7 +299,7 @@ async fn receive_changesets(
 async fn receive_withdrawal(
     State(state): State<AppState>,
     Json(request): Json<WithdrawalRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, HttpError> {
     info!(
         request_id = %request.request_id,
         recipient = %request.recipient,
@@ -339,12 +314,8 @@ async fn receive_withdrawal(
             .chars()
             .all(|c| c.is_ascii_hexdigit())
     {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Invalid recipient address format: must be 0x followed by 40 hex characters"
-                    .to_string(),
-            }),
+        return Err(bad_request(
+            "Invalid recipient address format: must be 0x followed by 40 hex characters",
         ));
     }
 
@@ -353,33 +324,20 @@ async fn receive_withdrawal(
         || !request.amount.chars().all(|c| c.is_ascii_digit())
         || (request.amount.len() > 1 && request.amount.starts_with('0'))
     {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Invalid amount format: must be a non-negative decimal number without leading zeros".to_string(),
-            }),
+        return Err(bad_request(
+            "Invalid amount format: must be a non-negative decimal number without leading zeros",
         ));
     }
 
     // Validate request_id is not empty
     if request.request_id.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "request_id cannot be empty".to_string(),
-            }),
-        ));
+        return Err(bad_request("request_id cannot be empty"));
     }
 
     // Serialize the request as the payload
     let payload = serde_json::to_vec(&request).map_err(|e| {
         warn!("Failed to serialize withdrawal request: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Serialization failed".to_string(),
-            }),
-        )
+        internal_error("Serialization failed")
     })?;
 
     // Sequence and sign the message
@@ -389,12 +347,7 @@ async fn receive_withdrawal(
         .await
         .map_err(|e| {
             warn!("Failed to sequence withdrawal: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Signing failed: {e}"),
-                }),
-            )
+            internal_error(format!("Signing failed: {e}"))
         })?;
 
     // Publish to DA layer if configured
@@ -422,7 +375,7 @@ async fn receive_withdrawal(
 async fn receive_snapshot(
     State(state): State<AppState>,
     Json(request): Json<SnapshotRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, HttpError> {
     info!(
         message_id = %request.message_id,
         snapshot_size = request.snapshot.data.len(),
@@ -436,23 +389,13 @@ async fn receive_snapshot(
             Some(token) => {
                 verifier.verify(token).await.map_err(|e| {
                     warn!(message_id = %request.message_id, error = %e, "Attestation verification failed");
-                    (
-                        StatusCode::UNAUTHORIZED,
-                        Json(ErrorResponse {
-                            error: format!("Attestation verification failed: {e}"),
-                        }),
-                    )
+                    unauthorized(format!("Attestation verification failed: {e}"))
                 })?;
                 info!(message_id = %request.message_id, "Attestation token verified");
             }
             None => {
                 warn!(message_id = %request.message_id, "Missing attestation token");
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(ErrorResponse {
-                        error: "Attestation token required but not provided".to_string(),
-                    }),
-                ));
+                return Err(unauthorized("Attestation token required but not provided"));
             }
         }
     }
@@ -460,12 +403,7 @@ async fn receive_snapshot(
     // Serialize the snapshot request as the payload
     let payload = serde_json::to_vec(&request).map_err(|e| {
         warn!("Failed to serialize snapshot: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Serialization failed".to_string(),
-            }),
-        )
+        internal_error("Serialization failed")
     })?;
 
     // Sequence and sign the message
@@ -475,12 +413,7 @@ async fn receive_snapshot(
         .await
         .map_err(|e| {
             warn!("Failed to sequence snapshot: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Signing failed: {e}"),
-                }),
-            )
+            internal_error(format!("Signing failed: {e}"))
         })?;
 
     // Publish to DA layer if configured
@@ -519,7 +452,7 @@ async fn health_check() -> &'static str {
 /// Checks that the publisher (if configured) is accessible.
 async fn readiness_check(
     State(state): State<AppState>,
-) -> Result<Json<ReadinessResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<ReadinessResponse>, HttpError> {
     let mut checks = Vec::new();
 
     // Check inbox is operational
@@ -579,11 +512,11 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
 async fn get_message(
     State(state): State<AppState>,
     Path(sequence): Path<u64>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, HttpError> {
     let publisher = state.publisher.as_ref().ok_or_else(|| {
         (
             StatusCode::NOT_IMPLEMENTED,
-            Json(ErrorResponse {
+            Json(crate::http_errors::ErrorResponse {
                 error: "No publisher configured - message retrieval unavailable".to_string(),
             }),
         )
@@ -591,20 +524,13 @@ async fn get_message(
 
     match publisher.get(sequence).await {
         Ok(Some(message)) => Ok(Json(MessageResponse::from(message))),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Message with sequence {} not found", sequence),
-            }),
-        )),
+        Ok(None) => Err(not_found(format!(
+            "Message with sequence {} not found",
+            sequence
+        ))),
         Err(e) => {
             warn!(sequence, error = %e, "Failed to retrieve message");
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to retrieve message: {e}"),
-                }),
-            ))
+            Err(internal_error(format!("Failed to retrieve message: {e}")))
         }
     }
 }

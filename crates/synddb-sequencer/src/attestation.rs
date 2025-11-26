@@ -206,6 +206,18 @@ impl AttestationVerifier {
     }
 }
 
+/// OIDC Discovery Document structure
+#[derive(Debug, Deserialize)]
+struct OidcDiscovery {
+    issuer: String,
+    jwks_uri: String,
+    subject_types_supported: Vec<String>,
+    response_types_supported: Vec<String>,
+    claims_supported: Vec<String>,
+    id_token_signing_alg_values_supported: Vec<String>,
+    scopes_supported: Vec<String>,
+}
+
 /// Decode base64url-encoded data (used in JWTs)
 fn base64_decode_url_safe(input: &str) -> Result<Vec<u8>, AttestationError> {
     // Add padding if needed
@@ -333,5 +345,94 @@ mod tests {
         let verified_claims = result.unwrap();
         assert_eq!(verified_claims.sub, "test-subject");
         assert!(verified_claims.secboot);
+    }
+
+    #[tokio::test]
+    #[ignore] // Only run when explicitly requested (requires network)
+    async fn test_google_oidc_discovery_document() {
+        // Fetch the OIDC discovery document from Google
+        let client = reqwest::Client::new();
+        let response = client
+            .get(GOOGLE_OIDC_DISCOVERY_URL)
+            .send()
+            .await
+            .expect("Failed to fetch OIDC discovery document");
+
+        assert_eq!(
+            response.status(),
+            200,
+            "OIDC discovery endpoint returned non-200 status"
+        );
+
+        // Parse the response as our expected structure
+        let discovery: OidcDiscovery = response
+            .json()
+            .await
+            .expect("Failed to parse OIDC discovery document");
+
+        // Validate expected values
+        assert_eq!(
+            discovery.issuer, "https://confidentialcomputing.googleapis.com",
+            "Issuer mismatch"
+        );
+
+        // Verify jwks_uri is present and looks correct
+        assert!(
+            discovery.jwks_uri.starts_with("https://"),
+            "JWKS URI should use HTTPS"
+        );
+        assert!(
+            discovery.jwks_uri.contains("googleapis.com"),
+            "JWKS URI should be from googleapis.com"
+        );
+
+        // Verify expected supported values
+        assert!(
+            discovery
+                .response_types_supported
+                .contains(&"id_token".to_string()),
+            "Should support id_token response type"
+        );
+
+        assert!(
+            discovery
+                .id_token_signing_alg_values_supported
+                .contains(&"RS256".to_string()),
+            "Should support RS256 signing algorithm"
+        );
+
+        // Verify expected claims are supported
+        let expected_claims = vec![
+            "sub",
+            "aud",
+            "exp",
+            "iat",
+            "iss",
+            "secboot",
+            "hwmodel",
+            "swname",
+            "swversion",
+        ];
+        for claim in expected_claims {
+            assert!(
+                discovery.claims_supported.contains(&claim.to_string()),
+                "Should support '{}' claim",
+                claim
+            );
+        }
+
+        // Verify scopes
+        assert!(
+            discovery.scopes_supported.contains(&"openid".to_string()),
+            "Should support 'openid' scope"
+        );
+
+        println!("✓ OIDC discovery document structure is valid");
+        println!("  Issuer: {}", discovery.issuer);
+        println!("  JWKS URI: {}", discovery.jwks_uri);
+        println!(
+            "  Supported claims: {}",
+            discovery.claims_supported.join(", ")
+        );
     }
 }
