@@ -245,14 +245,14 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # Capture file list before commit (must be done while files are staged)
-          UPDATED_FILES=$(git diff --staged --name-only | sed 's/^/  - /')
+          UPDATED_FILES=$(git diff --staged --name-only | sed 's/^/- /')
 
           git commit -m "chore: Update FFI libraries [skip ci]
 
-          Built from: ${{ github.sha }}
+Built from: ${{ github.sha }}
 
-          Updated:
-          ${UPDATED_FILES}"
+Updated:
+$UPDATED_FILES"
 
           git push
 
