@@ -8,6 +8,7 @@ The Bridge acts as the settlement layer for SyndDB, handling:
 
 - Chain crossing token transfers (deposits and withdrawals)
 - Cross-chain message passing
+- Native ETH and WETH management with automatic wrapping/unwrapping
 
 ## Inspiration
 
@@ -42,10 +43,12 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 
 **Stage 1: Initialization**
 
-- Create message state with messageId, targetAddress, stage, payload, and createdAt timestamp
+- Create message state with messageId, targetAddress, stage, payload, createdAt timestamp, and ethAmount
+- If ethAmount > 0, wrap the sent ETH to WETH for internal accounting
 - Store SequencerSignature separately in dedicated mapping
 - Mark stage as PreExecution
 - Restricted to SEQUENCER_ROLE
+- Validates that msg.value == ethAmount to prevent stuck ETH
 
 **Stage 2: PreExecution (Validation)**
 
@@ -58,11 +61,15 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 
 **Stage 3: Core Execution**
 
+- If ethAmount > 0:
+  - Verify Bridge has sufficient WETH balance
+  - Unwrap WETH to native ETH
+  - Emit NativeTokenUnwrapped event
 - Execute the core message logic by calling targetAddress with payload
-- Low-level call: `targetAddress.call(payload)`
+- Low-level call: `targetAddress.call{value: ethAmount}(payload)`
 - Reverts with `MessageExecutionFailed(messageId, returnData)` if call fails
 - Update stage to Executing → PostExecution
-- Protected by reentrancy guard
+- Protected by reentrancy guard via stage checks
 
 **Stage 4: PostExecution (Post-Processing)**
 
@@ -164,6 +171,7 @@ struct MessageState {
     ProcessingStage stage;
     bytes payload;           // Calldata to execute
     uint256 createdAt;      // Timestamp when message was initialized
+    uint256 ethAmount;      // Amount of ETH to send with the call (0 for no ETH)
 }
 
 struct SequencerSignature {
@@ -194,13 +202,15 @@ enum ProcessingStage {
  * @param targetAddress Target contract to call
  * @param payload Calldata to execute on target
  * @param sequencerSignature Sequencer signature and submission timestamp
+ * @param ethAmount Amount of ETH to send with the call (must equal msg.value)
  */
 function initializeMessage(
     bytes32 messageId,
     address targetAddress,
     bytes calldata payload,
-    SequencerSignature calldata sequencerSignature
-) public;
+    SequencerSignature calldata sequencerSignature,
+    uint256 ethAmount
+) public payable;
 
 /**
  * Pass the message through all validation and execution stages
@@ -219,14 +229,16 @@ function handleMessage(bytes32 messageId) public;
  * @param payload Calldata to execute
  * @param sequencerSignature Sequencer signature
  * @param validatorSignatures Array of validator signatures to verify
+ * @param ethAmount Amount of ETH to send with the call (must equal msg.value)
  */
 function initializeAndHandleMessage(
     bytes32 messageId,
     address targetAddress,
     bytes calldata payload,
     SequencerSignature calldata sequencerSignature,
-    bytes[] calldata validatorSignatures
-) external;
+    bytes[] calldata validatorSignatures,
+    uint256 ethAmount
+) external payable;
 
 /**
  * Check if a message has been handled
@@ -284,6 +296,168 @@ function getPreModules() external view returns (address[] memory);
  * @return Array of module addresses
  */
 function getPostModules() external view returns (address[] memory);
+```
+
+#### Batch Operations
+
+The Bridge supports batch processing for efficiency:
+
+```solidity
+/**
+ * Initialize multiple messages in a single transaction
+ * Validates that msg.value equals the sum of all ethAmounts
+ * Restricted to SEQUENCER_ROLE
+ *
+ * @param messageIds Array of unique identifiers
+ * @param targetAddresses Array of target contracts to call
+ * @param payloads Array of calldata to execute
+ * @param _sequencerSignatures Array of sequencer signatures
+ * @param ethAmounts Array of ETH amounts to send with each call
+ */
+function batchInitializeMessage(
+    bytes32[] calldata messageIds,
+    address[] calldata targetAddresses,
+    bytes[] calldata payloads,
+    SequencerSignature[] calldata _sequencerSignatures,
+    uint256[] calldata ethAmounts
+) external payable;
+
+/**
+ * Handle multiple messages in a single transaction
+ * Each message must already be initialized
+ *
+ * @param messageIds Array of message identifiers to handle
+ */
+function batchHandleMessage(bytes32[] calldata messageIds) external;
+```
+
+## ETH and WETH Handling
+
+The Bridge implements a sophisticated ETH/WETH management system that automatically handles wrapping and unwrapping of native ETH.
+
+### Design Philosophy
+
+**Why WETH for Internal Accounting?**
+
+- **Consistent accounting**: WETH provides ERC20-like balance tracking
+- **Reentrancy safety**: Wrapping ETH immediately prevents reentrancy issues during initialization
+- **Balance verification**: Can check WETH balance before unwrapping in `handleMessage()`
+- **Failed execution recovery**: If message execution fails, WETH remains in bridge (no stuck ETH)
+
+### Flow Diagram
+
+```
+User/Sequencer sends ETH with initializeMessage()
+                    ↓
+        Bridge wraps ETH → WETH immediately
+                    ↓
+        WETH stored in Bridge (internal accounting)
+                    ↓
+        Message waits for validator signatures
+                    ↓
+        handleMessage() called
+                    ↓
+        Bridge unwraps WETH → ETH
+                    ↓
+        ETH sent with call to target contract
+                    ↓
+        Target contract receives native ETH
+```
+
+### Key Functions and Behavior
+
+#### receive() Function
+
+The Bridge's `receive()` function automatically wraps incoming ETH to WETH, with a critical exception:
+
+```solidity
+receive() external payable {
+    // Only wrap ETH if it's not coming from WETH unwrapping
+    if (msg.sender != address(wrappedNativeToken)) {
+        wrappedNativeToken.deposit{value: msg.value}();
+        emit NativeTokenWrapped(msg.sender, msg.value);
+    }
+}
+```
+
+**Design Decision:** The sender check prevents infinite loops when unwrapping WETH. Without this check:
+
+1. `handleMessage()` calls `wrappedNativeToken.withdraw(ethAmount)`
+2. WETH contract sends ETH back to Bridge
+3. Bridge's `receive()` would try to wrap it again
+4. This would fail due to insufficient gas (receive only gets 2300 gas)
+
+#### initializeMessage() - ETH Wrapping
+
+```solidity
+function initializeMessage(
+    bytes32 messageId,
+    address targetAddress,
+    bytes calldata payload,
+    SequencerSignature calldata sequencerSignature,
+    uint256 ethAmount
+) public payable onlyRole(SEQUENCER_ROLE) {
+    // Validate msg.value matches ethAmount to prevent stuck ETH
+    if (msg.value != ethAmount) {
+        revert InvalidETHAmount(msg.value, ethAmount);
+    }
+
+    _initializeMessage(messageId, targetAddress, payload, sequencerSignature, ethAmount);
+}
+
+function _initializeMessage(...) internal {
+    // ... message initialization code ...
+
+    if (ethAmount > 0) {
+        wrappedNativeToken.deposit{value: ethAmount}();
+        emit NativeTokenWrapped(msg.sender, ethAmount);
+    }
+
+    // Store ethAmount in MessageState for later unwrapping
+    messageStates[messageId] = MessageState({
+        messageId: messageId,
+        targetAddress: targetAddress,
+        stage: ProcessingStage.PreExecution,
+        payload: payload,
+        createdAt: block.timestamp,
+        ethAmount: ethAmount
+    });
+}
+```
+
+**Key Validation:**
+
+- `msg.value == ethAmount` check prevents accidental stuck ETH
+- If user sends 1 ETH but ethAmount is 0.5 ETH, transaction reverts
+- Ensures exact accounting of ETH amounts
+
+#### handleMessage() - ETH Unwrapping
+
+```solidity
+function handleMessage(bytes32 messageId) public {
+    MessageState storage state = messageStates[messageId];
+
+    // ... validation code ...
+
+    if (state.ethAmount > 0) {
+        uint256 wethBalance = wrappedNativeToken.balanceOf(address(this));
+        if (wethBalance < state.ethAmount) {
+            revert InsufficientWETHBalance(state.ethAmount, wethBalance);
+        }
+
+        wrappedNativeToken.withdraw(state.ethAmount);
+        emit NativeTokenUnwrapped(state.ethAmount, state.targetAddress);
+    }
+
+    // Execute call with native ETH
+    (bool success, bytes memory returnData) = state.targetAddress.call{value: state.ethAmount}(state.payload);
+
+    if (!success) {
+        revert MessageExecutionFailed(messageId, returnData);
+    }
+
+    // ... post-execution code ...
+}
 ```
 
 ### IModuleCheck Interface
@@ -384,4 +558,30 @@ Deposits tokens into the bridge from a sender on the source chain. When the depo
 ```solidity
 bytes4 constant DEPOSIT = bytes4(keccak256("deposit(address,address,uint256)"));
 // Parameters: (address token, address sender, uint256 amount)
+```
+
+## Testing Instructions
+
+Run all tests:
+
+```bash
+forge test
+```
+
+Run with gas reporting:
+
+```bash
+forge test --gas-report
+```
+
+Run specific test file:
+
+```bash
+forge test --match-path test/BridgeTest.t.sol
+```
+
+Run with verbosity to see events and traces:
+
+```bash
+forge test -vvv
 ```
