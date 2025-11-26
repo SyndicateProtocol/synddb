@@ -232,15 +232,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git commit -m "$(cat <<'EOF'
-          chore: Update FFI libraries [skip ci]
+          # Capture file list before commit (must be done while files are staged)
+          UPDATED_FILES=$(git diff --staged --name-only | sed 's/^/  - /')
 
-          Built from commit ${{ github.sha }}
+          git commit -m "chore: Update FFI libraries [skip ci]
 
-          Updated libraries:
-          $(git diff --staged --name-only | sed 's/^/- /')
-          EOF
-          )"
+          Built from: ${{ github.sha }}
+
+          Updated:
+          ${UPDATED_FILES}"
 
           git push
 
