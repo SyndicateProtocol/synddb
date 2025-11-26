@@ -33,6 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache cargo binaries
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          cache-all-crates: true
+
       - name: Install Taplo
         uses: clechasseur/rs-cargo@v2
         with:
@@ -51,6 +57,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache cargo binaries
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          cache-all-crates: true
 
       - name: Install cargo-machete
         uses: clechasseur/rs-cargo@v2
@@ -93,9 +105,6 @@ jobs:
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: clippy-${{ hashFiles('**/Cargo.lock') }}
-          save-if: false
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features
@@ -115,8 +124,6 @@ jobs:
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
