@@ -5,11 +5,23 @@
 
 use alloy::primitives::{keccak256, Address};
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::signer::{MessageSigner, SignerError};
+
+/// Compress payload using `zstd`
+///
+/// Uses compression level 3 (default) for a good balance of speed and compression ratio.
+fn compress_payload(data: &[u8]) -> Vec<u8> {
+    let mut encoder = zstd::Encoder::new(Vec::new(), 3).expect("Failed to create zstd encoder");
+    encoder
+        .write_all(data)
+        .expect("Failed to write data to encoder");
+    encoder.finish().expect("Failed to finish compression")
+}
 
 /// Message types that can be sequenced
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,9 +44,9 @@ pub struct SignedMessage {
     pub timestamp: u64,
     /// Type of message
     pub message_type: MessageType,
-    /// Original message payload (JSON-serialized)
+    /// Compressed message payload (`zstd`-compressed JSON)
     pub payload: Vec<u8>,
-    /// Hash of the payload: `keccak256(payload)`
+    /// Hash of the compressed payload: `keccak256(compressed_payload)`
     pub message_hash: String,
     /// Signature over `(sequence || timestamp || message_hash)`
     pub signature: String,
@@ -95,8 +107,10 @@ impl Inbox {
     /// This atomically:
     /// 1. Assigns the next sequence number
     /// 2. Records the current timestamp
-    /// 3. Signs the message
-    /// 4. Returns a receipt
+    /// 3. Compresses the payload
+    /// 4. Hashes the compressed payload
+    /// 5. Signs the message
+    /// 6. Returns a receipt
     pub async fn sequence_message(
         &self,
         message_type: MessageType,
@@ -111,8 +125,11 @@ impl Inbox {
             .expect("Time went backwards")
             .as_secs();
 
-        // Hash the payload
-        let message_hash = keccak256(&payload);
+        // Compress the payload
+        let compressed_payload = compress_payload(&payload);
+
+        // Hash the compressed payload
+        let message_hash = keccak256(&compressed_payload);
 
         // Sign the message
         let signature = self
@@ -128,7 +145,7 @@ impl Inbox {
             sequence,
             timestamp,
             message_type,
-            payload,
+            payload: compressed_payload,
             message_hash: message_hash_hex.clone(),
             signature: signature_hex.clone(),
             signer: signer_address.clone(),
@@ -192,7 +209,10 @@ mod tests {
 
         assert_eq!(signed_msg.sequence, 0);
         assert_eq!(receipt.sequence, 0);
-        assert_eq!(signed_msg.payload, payload);
+        // Payload is now compressed, so it won't match the original
+        assert_ne!(signed_msg.payload, payload);
+        // But it should be smaller or similar size for small payloads
+        assert!(!signed_msg.payload.is_empty());
         assert!(signed_msg.signature.starts_with("0x"));
         assert!(signed_msg.message_hash.starts_with("0x"));
     }

@@ -46,6 +46,9 @@ async-trait = { workspace = true }
 # HTTP client (for attestation verification)
 reqwest = { workspace = true }
 
+# Compression
+zstd = { workspace = true }
+
 # Google Cloud Storage
 google-cloud-storage = { workspace = true, optional = true }
 

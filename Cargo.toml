@@ -57,6 +57,7 @@ humantime-serde = "1.1"
 humantime = "2"
 hex = "0.4"
 base64 = "0.22"
+zstd = "0.13"
 
 # Blockchain / Cryptography
 alloy = { version = "1.0.25", features = [
