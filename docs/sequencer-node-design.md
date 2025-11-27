@@ -274,6 +274,28 @@ impl MessageSigner {
 
 ### Signature Verification (Client-side or On-chain)
 
+TODO - synddb-validator nodes to perform sequence number and signature verification
+
+```rust,norun
+// Pseudocode - not yet implemented
+  fn verify_sequence_continuity(messages: &[SignedMessage]) -> Result<()> {
+      // 1. Check sequence numbers are monotonically increasing
+      for i in 1..messages.len() {
+          if messages[i].sequence != messages[i-1].sequence + 1 {
+              return Err("Gap in sequence detected");
+          }
+      }
+
+      // 2. Verify each signature
+      for msg in messages {
+          verify_signature(msg)?;
+      }
+
+      Ok(())
+  }
+```
+
+
 ```solidity
 // On-chain verification
 function verifySequencerSignature(
