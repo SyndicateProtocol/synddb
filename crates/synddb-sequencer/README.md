@@ -54,10 +54,13 @@ SIGNING_KEY=<key> RUST_LOG=debug RUST_LOG_JSON=true cargo run -p synddb-sequence
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SIGNING_KEY` | Yes | - | Hex-encoded secp256k1 private key |
-| `HOST` | No | `0.0.0.0` | HTTP server bind address |
-| `PORT` | No | `8080` | HTTP server port |
+| `BIND_ADDRESS` | No | `0.0.0.0:8433` | HTTP server bind address |
 | `GCS_BUCKET` | No | - | GCS bucket for persistence (requires `gcs` feature) |
 | `GCS_PREFIX` | No | `sequencer` | Path prefix within GCS bucket |
+| `REQUEST_TIMEOUT` | No | `30s` | Request timeout for HTTP operations |
+| `MAX_MESSAGE_SIZE` | No | `10485760` | Maximum message size in bytes (10MB) |
+| `VERIFY_ATTESTATION` | No | `false` | Enable TEE attestation verification |
+| `ATTESTATION_SERVICE_URL` | No | - | Attestation service URL for TEE token verification |
 | `RUST_LOG` | No | `info` | Log level/filter (e.g., `debug`, `synddb_sequencer=trace`) |
 | `RUST_LOG_JSON` | No | `false` | Enable JSON-formatted logs |
 | `SHUTDOWN_TIMEOUT` | No | `30s` | Graceful shutdown timeout |

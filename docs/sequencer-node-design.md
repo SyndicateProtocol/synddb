@@ -60,9 +60,11 @@ Similar to Arbitrum's delayed inbox, all messages are accepted and ordered:
 Message Flow:
   1. Client sends message → HTTP POST
   2. Sequencer assigns sequence_number (monotonic counter)
-  3. Sequencer signs: signature = sign(keccak256(sequence || timestamp || message_hash))
-  4. Sequencer persists to GCS: gs://bucket/messages/{sequence}.json
-  5. Sequencer returns receipt with signature + sequence
+  3. Sequencer compresses payload with zstd (level 3)
+  4. Sequencer hashes compressed payload: message_hash = keccak256(compressed_payload)
+  5. Sequencer signs: signature = sign(keccak256(sequence || timestamp || message_hash))
+  6. Sequencer persists to GCS: gs://bucket/messages/{sequence}.json
+  7. Sequencer returns receipt with signature + sequence
 ```
 
 ### 3. Message Types
@@ -90,8 +92,8 @@ pub struct SignedMessage {
     pub sequence: u64,
     pub timestamp: u64,           // Unix timestamp (seconds)
     pub message_type: MessageType,
-    pub payload: Vec<u8>,         // Serialized InboundMessage
-    pub message_hash: B256,       // keccak256(payload)
+    pub payload: Vec<u8>,         // zstd-compressed JSON payload
+    pub message_hash: B256,       // keccak256(compressed_payload)
     pub signature: Signature,     // secp256k1 signature
     pub signer: Address,          // Derived from signing key
 }
@@ -127,36 +129,51 @@ crates/synddb-sequencer/
 Following existing conventions (clap + env vars + humantime):
 
 ```rust
-#[derive(Debug, Clone, Parser)]
-#[command(author, version, about = "SyndDB Sequencer Node")]
+#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
+#[command(name = "synddb-sequencer")]
+#[command(about = "SyndDB Sequencer - orders and signs messages from client applications")]
 pub struct SequencerConfig {
     /// HTTP server bind address
     #[arg(long, env = "BIND_ADDRESS", default_value = "0.0.0.0:8433")]
     pub bind_address: SocketAddr,
 
-    /// Private key for signing (hex-encoded, without 0x prefix)
+    /// Private key for signing messages (hex-encoded, without 0x prefix)
     #[arg(long, env = "SIGNING_KEY")]
     pub signing_key: String,
 
-    /// GCS bucket for message storage
-    #[arg(long, env = "GCS_BUCKET")]
-    pub gcs_bucket: String,
-
-    /// GCS path prefix for messages
-    #[arg(long, env = "GCS_PREFIX", default_value = "messages")]
-    pub gcs_prefix: String,
-
-    /// Request timeout
-    #[arg(long, env = "REQUEST_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
+    /// Request timeout for HTTP operations
+    #[arg(long, env = "REQUEST_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
     pub request_timeout: Duration,
 
-    /// Maximum message size in bytes
-    #[arg(long, env = "MAX_MESSAGE_SIZE", default_value = "10485760")]  // 10MB
+    /// Maximum message size in bytes (default: 10MB)
+    #[arg(long, env = "MAX_MESSAGE_SIZE", default_value = "10485760")]
     pub max_message_size: usize,
 
-    /// Enable TEE attestation verification
+    /// Enable TEE attestation verification for incoming requests
     #[arg(long, env = "VERIFY_ATTESTATION", default_value = "false")]
     pub verify_attestation: bool,
+
+    /// GCS bucket for message persistence (enables GCS publisher)
+    #[arg(long, env = "GCS_BUCKET")]
+    pub gcs_bucket: Option<String>,
+
+    /// GCS path prefix for messages
+    #[arg(long, env = "GCS_PREFIX", default_value = "sequencer")]
+    pub gcs_prefix: String,
+
+    /// Output logs in JSON format (for production log aggregation)
+    #[arg(long, env = "RUST_LOG_JSON", default_value = "false")]
+    pub log_json: bool,
+
+    /// Attestation service URL for TEE token verification
+    #[arg(long, env = "ATTESTATION_SERVICE_URL")]
+    pub attestation_service_url: Option<String>,
+
+    /// Graceful shutdown timeout
+    #[arg(long, env = "SHUTDOWN_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub shutdown_timeout: Duration,
 }
 ```
 
@@ -243,24 +260,35 @@ impl MessageSigner {
         self.wallet.address()
     }
 
-    /// Sign a message with EIP-191 prefix for Ethereum compatibility
-    pub async fn sign_message(&self, message: &SignedMessage) -> Result<Signature> {
-        // Create signing payload
-        let payload = self.create_signing_payload(message);
-
-        // Sign with EIP-191 prefix: "\x19Ethereum Signed Message:\n" + len + message
-        let signature = self.wallet.sign_message(&payload).await?;
-
-        Ok(signature)
+    /// Create the signing payload for a sequenced message
+    ///
+    /// Format: keccak256(sequence || timestamp || message_hash)
+    /// Note: message_hash is already keccak256(compressed_payload)
+    pub fn create_signing_payload(sequence: u64, timestamp: u64, message_hash: B256) -> B256 {
+        let mut data = Vec::with_capacity(48);
+        data.extend_from_slice(&sequence.to_be_bytes());
+        data.extend_from_slice(&timestamp.to_be_bytes());
+        data.extend_from_slice(message_hash.as_slice());
+        keccak256(&data)
     }
 
-    fn create_signing_payload(&self, msg: &SignedMessage) -> Vec<u8> {
-        // Canonical encoding: sequence || timestamp || message_hash
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&msg.sequence.to_be_bytes());
-        payload.extend_from_slice(&msg.timestamp.to_be_bytes());
-        payload.extend_from_slice(msg.message_hash.as_slice());
-        payload
+    /// Sign a message payload
+    ///
+    /// Uses EIP-191 personal sign prefix for Ethereum compatibility
+    pub async fn sign(&self, payload: B256) -> Result<SignatureBytes> {
+        let signature = self.signer.sign_hash(&payload).await?;
+        Ok(SignatureBytes::from_signature(&signature))
+    }
+
+    /// Sign a sequenced message (convenience method)
+    pub async fn sign_message(
+        &self,
+        sequence: u64,
+        timestamp: u64,
+        message_hash: B256,
+    ) -> Result<SignatureBytes> {
+        let payload = Self::create_signing_payload(sequence, timestamp, message_hash);
+        self.sign(payload).await
     }
 }
 ```
