@@ -24,6 +24,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
     error ArrayLengthMismatch();
     error InsufficientWrappedNativeTokenBalance(uint256 required, uint256 available);
+    error NoNativeTokenToWrap();
 
     constructor(address admin, address _wrappedNativeToken) ModuleCheckRegistry(admin) {
         wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
@@ -40,9 +41,31 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     receive() external payable {
         // Only wrap native token if it's not coming from WrappedNativeToken unwrapping
         if (msg.sender != address(wrappedNativeToken)) {
-            wrappedNativeToken.deposit{value: msg.value}();
-            emit NativeTokenWrapped(msg.sender, msg.value);
+            _wrapNativeToken(msg.value);
         }
+    }
+
+    /**
+     * @notice Wraps any stuck native token in the bridge to wrapped native token
+     * @dev This function can be called by the sequencer to recover any native token that may be stuck in the contract.
+     * It wraps up to the specified amount, limited by the contract's current native token balance.
+     * This should not be needed in normal operation but provides a safety mechanism.
+     * @param amount Maximum amount to wrap (will wrap min(amount, address(this).balance))
+     */
+    function wrapNativeToken(uint256 amount) external onlyRole(SEQUENCER_ROLE) {
+        uint256 balance = address(this).balance;
+        uint256 amountToWrap = amount > balance ? balance : amount;
+
+        if (amountToWrap == 0) {
+            revert NoNativeTokenToWrap();
+        }
+
+        _wrapNativeToken(amountToWrap);
+    }
+
+    function _wrapNativeToken(uint256 amount) private {
+        wrappedNativeToken.deposit{value: amount}();
+        emit NativeTokenWrapped(msg.sender, amount);
     }
 
     function initializeMessage(

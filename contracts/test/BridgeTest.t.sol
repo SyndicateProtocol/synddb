@@ -361,6 +361,97 @@ contract BridgeTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
+                    WRAPNATIVETOKEN HELPER TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_WrapNativeToken_WrapsStuckETH() public {
+        // Simulate stuck ETH by having bridge unwrap WETH
+        vm.prank(user);
+        weth.deposit{value: 10 ether}();
+        vm.prank(user);
+        weth.transfer(address(bridge), 10 ether);
+
+        // Unwrap to create stuck ETH
+        vm.prank(address(bridge));
+        weth.withdraw(5 ether);
+
+        uint256 stuckETH = address(bridge).balance;
+        assertEq(stuckETH, 5 ether);
+
+        uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
+
+        // Sequencer wraps the stuck ETH
+        vm.prank(sequencer);
+        bridge.wrapNativeToken(5 ether);
+
+        // ETH should be wrapped
+        assertEq(address(bridge).balance, 0);
+        assertEq(weth.balanceOf(address(bridge)), bridgeWethBefore + 5 ether);
+    }
+
+    function test_WrapNativeToken_WrapsPartialAmount() public {
+        // Create stuck ETH
+        vm.prank(user);
+        weth.deposit{value: 10 ether}();
+        vm.prank(user);
+        weth.transfer(address(bridge), 10 ether);
+        vm.prank(address(bridge));
+        weth.withdraw(5 ether);
+
+        uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
+
+        // Wrap only 3 ETH of the 5 stuck
+        vm.prank(sequencer);
+        bridge.wrapNativeToken(3 ether);
+
+        assertEq(address(bridge).balance, 2 ether);
+        assertEq(weth.balanceOf(address(bridge)), bridgeWethBefore + 3 ether);
+    }
+
+    function test_WrapNativeToken_CapsAtBalance() public {
+        // Create stuck ETH
+        vm.prank(user);
+        weth.deposit{value: 10 ether}();
+        vm.prank(user);
+        weth.transfer(address(bridge), 10 ether);
+        vm.prank(address(bridge));
+        weth.withdraw(5 ether);
+
+        uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
+
+        // Try to wrap more than available
+        vm.prank(sequencer);
+        bridge.wrapNativeToken(100 ether);
+
+        // Should only wrap what's available
+        assertEq(address(bridge).balance, 0);
+        assertEq(weth.balanceOf(address(bridge)), bridgeWethBefore + 5 ether);
+    }
+
+    function test_WrapNativeToken_RevertsIfNoETH() public {
+        // No stuck ETH
+        assertEq(address(bridge).balance, 0);
+
+        vm.prank(sequencer);
+        vm.expectRevert(Bridge.NoNativeTokenToWrap.selector);
+        bridge.wrapNativeToken(1 ether);
+    }
+
+    function test_WrapNativeToken_OnlySequencer() public {
+        // Create stuck ETH
+        vm.prank(user);
+        weth.deposit{value: 10 ether}();
+        vm.prank(user);
+        weth.transfer(address(bridge), 10 ether);
+        vm.prank(address(bridge));
+        weth.withdraw(5 ether);
+
+        vm.prank(user);
+        vm.expectRevert();
+        bridge.wrapNativeToken(1 ether);
+    }
+
+    /*//////////////////////////////////////////////////////////////
                 INITIALIZEANDHANDLEMESSAGE TESTS
     //////////////////////////////////////////////////////////////*/
 
