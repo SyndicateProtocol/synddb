@@ -2,16 +2,20 @@
 pragma solidity 0.8.30;
 
 import {ModuleCheckRegistry} from "src/ModuleCheckRegistry.sol";
-
 import {IBridge} from "src/interfaces/IBridge.sol";
+import {IWrappedNativeToken} from "src/interfaces/IWrappedNativeToken.sol";
 import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataTypes.sol";
 
 contract Bridge is IBridge, ModuleCheckRegistry {
     mapping(bytes32 messageId => MessageState state) public messageStates;
     mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 
+    IWrappedNativeToken public immutable wrappedNativeToken;
+
     event MessageInitialized(bytes32 indexed messageId, bytes payload);
     event MessageHandled(bytes32 indexed messageId, bool success);
+    event NativeTokenWrapped(address indexed sender, uint256 amount);
+    event NativeTokenUnwrapped(uint256 amount, address indexed target);
 
     error MessageAlreadyInitialized(bytes32 messageId);
     error MessageNotInitialized(bytes32 messageId);
@@ -19,15 +23,68 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageCurrentlyProcessing(bytes32 messageId, ProcessingStage currentStage);
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
     error ArrayLengthMismatch();
+    error InsufficientWrappedNativeTokenBalance(uint256 required, uint256 available);
+    error NoNativeTokenToWrap();
 
-    constructor(address admin) ModuleCheckRegistry(admin) {}
+    constructor(address admin, address _wrappedNativeToken) ModuleCheckRegistry(admin) {
+        wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
+    }
+
+    /**
+     * @notice Receives native native token and wraps it to wrappedNativeToken for internal accounting
+     * @dev This function is intentionally public and allows anyone to send native token to the bridge.
+     * The native token is immediately wrapped to wrappedNativeToken for consistent accounting and balance tracking.
+     *
+     * When msg.sender is the WrappedNativeToken contract itself (during unwrapping in handleMessage),
+     * the native token is NOT re-wrapped to prevent infinite loops.
+     */
+    receive() external payable {
+        // Only wrap native token if it's not coming from WrappedNativeToken unwrapping
+        if (msg.sender != address(wrappedNativeToken)) {
+            _wrapNativeToken(msg.value);
+        }
+    }
+
+    /**
+     * @notice Wraps any stuck native token in the bridge to wrapped native token
+     * @dev This function can be called by the sequencer to recover any native token that may be stuck in the contract.
+     * It wraps up to the specified amount, limited by the contract's current native token balance.
+     * This should not be needed in normal operation but provides a safety mechanism.
+     * @param amount Maximum amount to wrap (will wrap min(amount, address(this).balance))
+     */
+    function wrapNativeToken(uint256 amount) external onlyRole(SEQUENCER_ROLE) {
+        uint256 balance = address(this).balance;
+        uint256 amountToWrap = amount > balance ? balance : amount;
+
+        if (amountToWrap == 0) {
+            revert NoNativeTokenToWrap();
+        }
+
+        _wrapNativeToken(amountToWrap);
+    }
+
+    function _wrapNativeToken(uint256 amount) private {
+        wrappedNativeToken.deposit{value: amount}();
+        emit NativeTokenWrapped(msg.sender, amount);
+    }
 
     function initializeMessage(
         bytes32 messageId,
         address targetAddress,
         bytes calldata payload,
-        SequencerSignature calldata sequencerSignature
+        SequencerSignature calldata sequencerSignature,
+        uint256 nativeTokenAmount
     ) public onlyRole(SEQUENCER_ROLE) {
+        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
+    }
+
+    function _initializeMessage(
+        bytes32 messageId,
+        address targetAddress,
+        bytes calldata payload,
+        SequencerSignature calldata sequencerSignature,
+        uint256 nativeTokenAmount
+    ) internal {
         if (isMessageInitialized(messageId)) {
             revert MessageAlreadyInitialized(messageId);
         }
@@ -37,7 +94,8 @@ contract Bridge is IBridge, ModuleCheckRegistry {
             targetAddress: targetAddress,
             stage: ProcessingStage.PreExecution,
             payload: payload,
-            createdAt: block.timestamp
+            createdAt: block.timestamp,
+            nativeTokenAmount: nativeTokenAmount
         });
 
         sequencerSignatures[messageId] = sequencerSignature;
@@ -76,7 +134,18 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
         state.stage = ProcessingStage.Executing;
 
-        (bool success, bytes memory returnData) = state.targetAddress.call(state.payload);
+        if (state.nativeTokenAmount > 0) {
+            uint256 wrappedNativeTokenBalance = wrappedNativeToken.balanceOf(address(this));
+            if (wrappedNativeTokenBalance < state.nativeTokenAmount) {
+                revert InsufficientWrappedNativeTokenBalance(state.nativeTokenAmount, wrappedNativeTokenBalance);
+            }
+
+            wrappedNativeToken.withdraw(state.nativeTokenAmount);
+            emit NativeTokenUnwrapped(state.nativeTokenAmount, state.targetAddress);
+        }
+
+        (bool success, bytes memory returnData) =
+            state.targetAddress.call{value: state.nativeTokenAmount}(state.payload);
 
         if (!success) {
             revert MessageExecutionFailed(messageId, returnData);
@@ -96,9 +165,10 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
-        bytes[] calldata validatorSignatures
+        bytes[] calldata validatorSignatures,
+        uint256 nativeTokenAmount
     ) external {
-        initializeMessage(messageId, targetAddress, payload, sequencerSignature);
+        initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
 
         // collect validator signatures and verify them
         for (uint256 i = 0; i < validatorSignatures.length; i++) {
@@ -132,17 +202,20 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes32[] calldata messageIds,
         address[] calldata targetAddresses,
         bytes[] calldata payloads,
-        SequencerSignature[] calldata _sequencerSignatures
+        SequencerSignature[] calldata _sequencerSignatures,
+        uint256[] calldata nativeTokenAmounts
     ) external onlyRole(SEQUENCER_ROLE) {
         if (
             messageIds.length != targetAddresses.length || messageIds.length != payloads.length
-                || messageIds.length != _sequencerSignatures.length
+                || messageIds.length != _sequencerSignatures.length || messageIds.length != nativeTokenAmounts.length
         ) {
             revert ArrayLengthMismatch();
         }
 
         for (uint256 i = 0; i < messageIds.length; i++) {
-            initializeMessage(messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i]);
+            _initializeMessage(
+                messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i], nativeTokenAmounts[i]
+            );
         }
     }
 
