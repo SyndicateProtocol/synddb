@@ -454,4 +454,56 @@ mod tests {
         // Wait a moment for automatic publish
         thread::sleep(std::time::Duration::from_secs(2));
     }
+
+    #[test]
+    fn test_drop_graceful_shutdown() {
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Insert some data
+        conn.execute("INSERT INTO test (id, value) VALUES (1, 'test')", [])
+            .unwrap();
+
+        // Drop should gracefully shut down all threads without panicking
+        drop(synddb);
+    }
+
+    #[test]
+    fn test_drop_with_pending_changesets() {
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Insert multiple rows to create pending changesets
+        for i in 0..10 {
+            conn.execute(
+                "INSERT INTO test (id, value) VALUES (?1, ?2)",
+                rusqlite::params![i, format!("test{}", i)],
+            )
+            .unwrap();
+        }
+
+        // Drop should handle pending changesets gracefully
+        drop(synddb);
+    }
+
+    #[test]
+    fn test_explicit_shutdown() {
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        conn.execute("INSERT INTO test (id, value) VALUES (1, 'test')", [])
+            .unwrap();
+
+        // Explicit shutdown should work without error
+        synddb.shutdown().unwrap();
+    }
 }
