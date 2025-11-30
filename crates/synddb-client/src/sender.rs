@@ -149,8 +149,7 @@ impl ChangesetSender {
             Err(e) => {
                 error!(
                     "Failed to send batch after {} attempts: {}",
-                    self.config.max_retries + 1,
-                    e
+                    self.config.max_retries, e
                 );
             }
         }
@@ -263,9 +262,7 @@ impl ChangesetSender {
                 Err(e) => {
                     error!(
                         "Failed to retry changeset at sequence {} after {} attempts: {}",
-                        changeset.sequence,
-                        self.config.max_retries + 1,
-                        e
+                        changeset.sequence, self.config.max_retries, e
                     );
                     if let Err(e) = recovery.increment_changeset_retry(id, &e.to_string()) {
                         error!("Failed to update retry count: {}", e);

@@ -127,8 +127,7 @@ impl SnapshotSender {
             Err(e) => {
                 error!(
                     "Failed to send snapshot after {} attempts: {}",
-                    self.config.max_retries + 1,
-                    e
+                    self.config.max_retries, e
                 );
             }
         }
@@ -235,9 +234,7 @@ impl SnapshotSender {
                 Err(e) => {
                     error!(
                         "Failed to retry snapshot at sequence {} after {} attempts: {}",
-                        snapshot.sequence,
-                        self.config.max_retries + 1,
-                        e
+                        snapshot.sequence, self.config.max_retries, e
                     );
                     if let Err(e) = recovery.increment_snapshot_retry(id, &e.to_string()) {
                         error!("Failed to update snapshot retry count: {}", e);
