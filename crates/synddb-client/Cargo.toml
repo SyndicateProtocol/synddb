@@ -13,46 +13,21 @@ ignored = ["humantime-serde"] # used in annotations
 workspace = true
 
 [dependencies]
-# SQLite with Session Extension support
 rusqlite = { workspace = true, features = ["bundled", "session", "hooks"] }
-
-# Async runtime for background sending
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
-
-# HTTP client for sending to sequencer
 reqwest = { workspace = true }
-
-# Serialization
 serde = { workspace = true }
-
-# Error handling
 anyhow = { workspace = true }
-
-# Logging
 tracing = { workspace = true }
-
-# Channels for background thread
 crossbeam-channel = { workspace = true }
-
-# UUID for batch IDs
 uuid = { workspace = true }
-
-# Humantime serialization
 humantime-serde = { workspace = true }
 humantime = { workspace = true }
-
-# CLI parsing
 clap = { workspace = true, features = ["derive", "env"] }
-
-# Unix domain socket support for Confidential Space attestation
 hyperlocal = { workspace = true }
 hyper = { workspace = true }
 serde_json = { workspace = true }
-
-# URL parsing and validation
 url = { workspace = true }
-
-# Chain monitor for blockchain event listening
 synddb-chain-monitor = { path = "../synddb-chain-monitor" }
 alloy = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
