@@ -17,13 +17,18 @@ where
     Fut: std::future::Future<Output = Result<(), E>>,
     E: std::fmt::Display,
 {
-    for attempt in 0..=max_retries {
+    for attempt in 0..max_retries {
         match operation().await {
             Ok(()) => return Ok(()),
             Err(e) => {
-                if attempt < max_retries {
-                    warn!("Attempt {} failed: {}", attempt + 1, e);
+                if attempt + 1 < max_retries {
                     let backoff = Duration::from_secs(1 << attempt);
+                    warn!(
+                        "Attempt {} failed: {}. Sleeping for {:?}",
+                        attempt + 1,
+                        e,
+                        backoff
+                    );
                     tokio::time::sleep(backoff).await;
                 } else {
                     return Err(e);

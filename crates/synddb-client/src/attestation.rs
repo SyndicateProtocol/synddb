@@ -279,12 +279,13 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires GCP Confidential Space environment"]
+    #[cfg(unix)]
     fn test_nonce_validation() {
-        // Test would require mock attestation service
-        // In real Confidential Space, this would work:
-        // let client = AttestationClient::new("test-audience", TokenType::Oidc).unwrap();
-        // let result = client.get_token_with_nonces(vec!["too_short".to_string()]);
-        // assert!(result.is_err());
+        let client = AttestationClient::new("test-audience", TokenType::Oidc).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(client.get_token_with_nonces(vec!["too_short".to_string()]));
+        assert!(result.is_err());
     }
 
     #[test]

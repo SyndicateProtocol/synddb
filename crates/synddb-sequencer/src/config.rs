@@ -11,7 +11,9 @@ use std::time::Duration;
 /// Sequencer node configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[command(name = "synddb-sequencer")]
-#[command(about = "SyndDB Sequencer - orders and signs messages from client applications")]
+#[command(
+    about = "SyndDB Sequencer - HTTP server that receives changesets from client libraries and publishes to DA layers"
+)]
 pub struct SequencerConfig {
     /// HTTP server bind address
     #[arg(long, env = "BIND_ADDRESS", default_value = "0.0.0.0:8433")]
