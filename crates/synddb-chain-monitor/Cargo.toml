@@ -37,6 +37,9 @@ serde = { workspace = true }
 humantime-serde = { workspace = true }
 humantime = "2.1"
 
+# Shared utilities
+synddb-shared = { path = "../synddb-shared" }
+
 # CLI parsing
 clap = { version = "4.5.53", features = ["derive", "env"] }
 

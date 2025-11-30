@@ -18,7 +18,7 @@ pub struct Config {
     pub buffer_size: usize,
 
     /// Maximum time to wait before publishing buffer (e.g., "1s")
-    #[arg(long, env = "PUBLISH_INTERVAL", default_value = "1s", value_parser = parse_duration)]
+    #[arg(long, env = "PUBLISH_INTERVAL", default_value = "1s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub publish_interval: Duration,
 
@@ -31,7 +31,7 @@ pub struct Config {
     pub max_retries: usize,
 
     /// Timeout for HTTP requests (e.g., "10s")
-    #[arg(long, env = "SNAPSHOT_REQUEST_TIMEOUT", default_value = "10s", value_parser = parse_duration)]
+    #[arg(long, env = "SNAPSHOT_REQUEST_TIMEOUT", default_value = "10s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub snapshot_request_timeout: Duration,
 
@@ -40,12 +40,12 @@ pub struct Config {
     pub snapshot_interval: u64,
 
     /// Enable recovery storage for failed batches
-    #[arg(long, env = "ENABLE_RECOVERY", default_value = "true")]
+    #[arg(long, env = "ENABLE_RECOVERY")]
     pub enable_recovery: bool,
 
-    /// Enable TEE attestation tokens for GCP Confidential Space
-    #[arg(long, env = "ENABLE_ATTESTATION", default_value = "false")]
-    pub enable_attestation: bool,
+    /// Disable TEE attestation tokens (enabled by default for production)
+    #[arg(long, env = "DISABLE_ATTESTATION")]
+    pub disable_attestation: bool,
 
     /// Type of attestation token (oidc, pki, or aws-principal-tags)
     #[arg(long, env = "ATTESTATION_TOKEN_TYPE", default_value = "oidc", value_parser = parse_token_type)]
@@ -65,10 +65,6 @@ impl Default for Config {
 }
 
 // Custom parsers for clap
-fn parse_duration(s: &str) -> Result<Duration, String> {
-    humantime::parse_duration(s).map_err(|e| format!("Invalid duration: {}", e))
-}
-
 fn parse_token_type(s: &str) -> Result<TokenType, String> {
     match s.to_lowercase().as_str() {
         "oidc" => Ok(TokenType::Oidc),

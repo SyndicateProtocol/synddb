@@ -4,6 +4,7 @@ use alloy::primitives::{Address, B256};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use synddb_shared::parse::{parse_address, parse_b256, parse_url};
 use url::Url;
 
 /// Configuration for the chain monitor service.
@@ -37,12 +38,12 @@ pub struct ChainMonitorConfig {
     pub event_signature: Option<B256>,
 
     /// Timeout for individual RPC requests (e.g., "10s")
-    #[arg(long, env = "MONITOR_REQUEST_TIMEOUT", default_value = "10s", value_parser = parse_duration)]
+    #[arg(long, env = "MONITOR_REQUEST_TIMEOUT", default_value = "10s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub monitor_request_timeout: Duration,
 
     /// Timeout for `eth_getLogs` requests (e.g., "5m")
-    #[arg(long, env = "GET_LOGS_TIMEOUT", default_value = "300s", value_parser = parse_duration)]
+    #[arg(long, env = "GET_LOGS_TIMEOUT", default_value = "300s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub get_logs_timeout: Duration,
 
@@ -51,7 +52,7 @@ pub struct ChainMonitorConfig {
     pub channel_size: usize,
 
     /// Duration to wait between retry attempts (e.g., "1s")
-    #[arg(long, env = "RETRY_INTERVAL", default_value = "1s", value_parser = parse_duration)]
+    #[arg(long, env = "RETRY_INTERVAL", default_value = "1s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub retry_interval: Duration,
 
@@ -118,106 +119,6 @@ impl ChainMonitorConfig {
         self.retry_interval = interval;
         self
     }
-}
-
-// TODO: refactor to a `/shared` dir later
-// Custom parsers for clap
-fn parse_url(s: &str) -> Result<Url, String> {
-    Url::parse(s).map_err(|e| format!("Invalid URL: {}", e))
-}
-
-fn parse_address(s: &str) -> Result<Address, String> {
-    s.parse().map_err(|e| format!("Invalid address: {}", e))
-}
-
-fn parse_b256(s: &str) -> Result<B256, String> {
-    // First try parsing as hex string
-    if let Ok(hash) = s.parse::<B256>() {
-        return Ok(hash);
-    }
-
-    // If that fails, try parsing as Solidity event definition
-    // e.g., "event Deposit(address indexed from, uint256 amount)"
-    parse_event_signature_from_definition(s)
-}
-
-/// Parse a Solidity event definition and compute its signature hash.
-///
-/// Supports formats like:
-/// - "event Deposit(address indexed from, uint256 amount)"
-/// - "Deposit(address,uint256)" (canonical signature)
-///
-/// Returns the keccak256 hash of the canonical event signature.
-fn parse_event_signature_from_definition(s: &str) -> Result<B256, String> {
-    let s = s.trim();
-
-    // Extract the event signature (name and parameter types)
-    let signature = if s.starts_with("event ") {
-        // Full event definition: "event Deposit(address indexed from, uint256 amount)"
-        extract_canonical_signature(s).ok_or_else(|| format!("Invalid event definition: {}", s))?
-    } else if s.contains('(') && s.contains(')') {
-        // Already in canonical form: "Deposit(address,uint256)"
-        s.to_string()
-    } else {
-        return Err(
-            "Invalid format. Expected hex string (0x...) or event definition (event Name(...))"
-                .into(),
-        );
-    };
-
-    // Compute keccak256 hash of the canonical signature
-    use alloy::primitives::keccak256;
-    let hash = keccak256(signature.as_bytes());
-
-    Ok(hash)
-}
-
-/// Extract canonical event signature from full Solidity event definition.
-///
-/// Example: "event Deposit(address indexed from, uint256 amount)"
-/// Returns: "Deposit(address,uint256)"
-fn extract_canonical_signature(event_def: &str) -> Option<String> {
-    // Remove "event " prefix
-    let event_def = event_def.strip_prefix("event ")?.trim();
-
-    // Find the event name and parameters
-    let paren_start = event_def.find('(')?;
-    let paren_end = event_def.rfind(')')?;
-
-    let name = event_def[..paren_start].trim();
-    let params = &event_def[paren_start + 1..paren_end];
-
-    // Extract just the types (removing "indexed" and parameter names)
-    let types: Vec<&str> = params
-        .split(',')
-        .filter_map(|param| {
-            let param = param.trim();
-            if param.is_empty() {
-                return None;
-            }
-
-            // Split by whitespace and take the first part (the type)
-            let parts: Vec<&str> = param.split_whitespace().collect();
-            if parts.is_empty() {
-                return None;
-            }
-
-            // Skip "indexed" keyword and take the type
-            let type_part = if parts[0] == "indexed" {
-                parts.get(1)?
-            } else {
-                parts[0]
-            };
-
-            Some(type_part)
-        })
-        .collect();
-
-    Some(format!("{}({})", name, types.join(",")))
-}
-
-fn parse_duration(s: &str) -> Result<Duration, String> {
-    humantime::parse_duration(s).map_err(|e| format!("Invalid duration: {}", e))
 }
 
 const fn default_request_timeout() -> Duration {
@@ -393,26 +294,6 @@ mod tests {
 
         let expected = alloy::primitives::keccak256(b"StateSync(uint256,bytes)");
         assert_eq!(result.unwrap(), expected);
-    }
-
-    #[test]
-    fn test_extract_canonical_signature() {
-        assert_eq!(
-            extract_canonical_signature("event Deposit(address indexed from, uint256 amount)"),
-            Some("Deposit(address,uint256)".to_string())
-        );
-
-        assert_eq!(
-            extract_canonical_signature("event Transfer(address from, address to, uint256 value)"),
-            Some("Transfer(address,address,uint256)".to_string())
-        );
-
-        assert_eq!(
-            extract_canonical_signature(
-                "event Approval(address indexed owner, address indexed spender, uint256 value)"
-            ),
-            Some("Approval(address,address,uint256)".to_string())
-        );
     }
 
     #[test]

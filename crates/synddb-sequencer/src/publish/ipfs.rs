@@ -1,14 +1,15 @@
 //! IPFS storage publisher
 
-use super::PublishResult;
-use crate::attestor::SignedBatch;
-use crate::config::IpfsConfig;
-use anyhow::Result;
+use crate::inbox::SignedMessage;
+use crate::publish::traits::PublishResult;
 
 #[derive(Debug)]
 pub struct IpfsPublisher {
     _config: IpfsConfig,
 }
+
+#[derive(Debug)]
+pub struct IpfsConfig {}
 
 impl IpfsPublisher {
     pub const fn new(config: IpfsConfig) -> Self {
@@ -16,15 +17,10 @@ impl IpfsPublisher {
     }
 
     /// Publish batch to IPFS
-    pub async fn publish(&self, _batch: &SignedBatch) -> Result<PublishResult> {
+    pub async fn publish(&self, _message: &SignedMessage) -> PublishResult {
         // TODO: Use ipfs-api to add content
         // TODO: Return CID as reference
 
-        Ok(PublishResult {
-            layer: "ipfs".to_string(),
-            success: false,
-            reference: None,
-            error: Some("Not implemented".to_string()),
-        })
+        PublishResult::default()
     }
 }

@@ -15,50 +15,47 @@ workspace = true
 [dependencies]
 # Core async and CLI
 tokio = { workspace = true, features = ["full"] }
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 
-# SQLite with Session Extension support
-#rusqlite = { workspace = true, features = ["bundled", "backup", "session"] }
-
-# Serialization and compression
+# Serialization
 serde = { workspace = true }
-serde_yaml = { workspace = true }
+serde_json = { workspace = true }
 
 # Configuration
-# config = "0.14"
 humantime-serde = { workspace = true }
+humantime = { workspace = true }
 
 # Logging and tracing
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
-# HTTP server for message API
+# HTTP server
 axum = { workspace = true }
+tower = { workspace = true }
 
-# Cryptography and signing
-sha2 = { workspace = true }
+# Cryptography and signing (Ethereum-compatible)
+alloy = { workspace = true, features = ["signers", "signer-local"] }
 hex = { workspace = true }
 
-# DA layer clients (optional for now - will add when implementing)
-# celestia-client = { version = "0.2", optional = true }
-# eigenda-rust = { version = "0.1", optional = true }
-# ipfs-api = { version = "0.11", optional = true }
-# arweave-rs = { version = "0.1", optional = true }
-
-# GCP TEE support (optional)
-# gcp-auth = { version = "0.10", optional = true }
-# google-cloud-secretmanager = { version = "0.6", optional = true }
-# reqwest = { version = "0.11", features = ["json"], optional = true }
-
 # Utilities
-#parking_lot = "0.12"
-#crossbeam-channel = "0.5"
-#backoff = "0.4"
+base64 = { workspace = true }
+async-trait = { workspace = true }
+
+# HTTP client (for attestation verification)
+reqwest = { workspace = true }
+
+# Compression
+zstd = { workspace = true }
+
+# Google Cloud Storage
+google-cloud-storage = { workspace = true, optional = true }
 
 [features]
 default = []
 tee = []
+gcs = ["google-cloud-storage"]
 celestia = []
 eigenda = []
 ipfs = []
