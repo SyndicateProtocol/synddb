@@ -14,8 +14,6 @@ We use **Rust compiled to C ABI** with thin language wrappers (~50 lines each). 
 - ✅ No build tools required for users
 - ✅ Same approach as SQLite, libcurl, OpenSSL
 
-See [FFI_VS_NATIVE_BINDINGS.md](./FFI_VS_NATIVE_BINDINGS.md) for why we chose C FFI over PyO3/Neon.
-
 ## Usage
 
 ### Rust
