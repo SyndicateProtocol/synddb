@@ -183,8 +183,16 @@ pub unsafe extern "C" fn synddb_attach_with_config(
         }
     };
 
+    let sequencer_url = match sequencer_url_str.parse() {
+        Ok(url) => url,
+        Err(e) => {
+            set_last_error(format!("Invalid sequencer URL: {}", e));
+            return SyndDBError::InvalidUtf8;
+        }
+    };
+
     let config = Config {
-        sequencer_url: sequencer_url_str.to_string(),
+        sequencer_url,
         publish_interval: Duration::from_millis(publish_interval_ms),
         snapshot_interval,
         ..Default::default()

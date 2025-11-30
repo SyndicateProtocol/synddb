@@ -175,10 +175,14 @@ impl ChangesetSender {
     }
 
     async fn send_batch(&self, batch: &ChangesetBatch) -> Result<(), reqwest::Error> {
-        let url = format!("{}/changesets", self.config.sequencer_url);
+        let url = self
+            .config
+            .sequencer_url
+            .join("changesets")
+            .expect("valid URL path");
 
         self.client
-            .post(&url)
+            .post(url)
             .json(batch)
             .send()
             .await?

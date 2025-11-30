@@ -49,9 +49,11 @@ hyperlocal = { workspace = true }
 hyper = { workspace = true }
 serde_json = { workspace = true }
 
+# URL parsing and validation
+url = { workspace = true }
+
 # Chain monitor for blockchain event listening
 synddb-chain-monitor = { path = "../synddb-chain-monitor" }
-url = { workspace = true, optional = true }
 alloy = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 
@@ -64,7 +66,7 @@ default = []
 # Enable C FFI exports (for cross-language support via ctypes/ffi-napi/cgo)
 ffi = []
 # Enable blockchain chain monitoring
-chain-monitor = ["url", "alloy", "async-trait"]
+chain-monitor = ["alloy", "async-trait"]
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

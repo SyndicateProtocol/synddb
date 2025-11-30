@@ -155,10 +155,14 @@ impl SnapshotSender {
         &self,
         message: &SnapshotMessage,
     ) -> Result<(), reqwest::Error> {
-        let url = format!("{}/snapshots", self.config.sequencer_url);
+        let url = self
+            .config
+            .sequencer_url
+            .join("snapshots")
+            .expect("valid URL path");
 
         self.client
-            .post(&url)
+            .post(url)
             .json(message)
             .send()
             .await?

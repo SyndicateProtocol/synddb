@@ -23,15 +23,15 @@
 //!
 //! # Why `'static` lifetime?
 //!
-//! SyndDB uses background threads to:
+//! `SyndDB` uses background threads to:
 //! - Periodically publish changesets to the sequencer
 //! - Send snapshots when configured
 //! - Monitor blockchain events (with `chain-monitor` feature)
 //!
-//! These threads need to access the SQLite connection, which requires `'static` lifetime.
+//! These threads need to access the `SQLite` connection, which requires `'static` lifetime.
 //! Using `Box::leak` is safe here because:
 //! - The connection should live for the entire application lifetime anyway
-//! - SyndDB is typically attached once at startup and detached at shutdown
+//! - `SyndDB` is typically attached once at startup and detached at shutdown
 //! - The small memory "leak" is reclaimed when the process exits
 //!
 //! If you need more control over the connection lifetime, consider using
@@ -131,11 +131,14 @@ impl SyndDB {
     /// synddb.publish()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn attach(conn: &'static Connection, sequencer_url: impl Into<String>) -> Result<Self> {
+    pub fn attach(conn: &'static Connection, sequencer_url: &str) -> Result<Self> {
+        let url = sequencer_url
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid sequencer URL '{}': {}", sequencer_url, e))?;
         Self::attach_with_config(
             conn,
             Config {
-                sequencer_url: sequencer_url.into(),
+                sequencer_url: url,
                 ..Default::default()
             },
         )
@@ -168,7 +171,7 @@ impl SyndDB {
         // This is optional - if None, failed batches are dropped
         let recovery = if config.enable_recovery {
             let mut hasher = DefaultHasher::new();
-            config.sequencer_url.hash(&mut hasher);
+            config.sequencer_url.as_str().hash(&mut hasher);
             let url_hash = hasher.finish();
 
             let temp_dir = std::env::temp_dir();
@@ -194,7 +197,10 @@ impl SyndDB {
             info!("Attestation disabled");
             None
         } else {
-            match AttestationClient::new(&config.sequencer_url, config.attestation_token_type) {
+            match AttestationClient::new(
+                config.sequencer_url.as_str(),
+                config.attestation_token_type,
+            ) {
                 Ok(client) => {
                     info!(
                         "Attestation enabled (type: {:?})",

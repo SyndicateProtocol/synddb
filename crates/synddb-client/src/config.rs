@@ -5,13 +5,19 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use synddb_chain_monitor::config::ChainMonitorConfig;
+use url::Url;
+
+/// Parse and validate a URL string
+fn parse_url(s: &str) -> Result<Url, String> {
+    Url::parse(s).map_err(|e| format!("Invalid URL '{}': {}", s, e))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Config {
-    /// URL of the sequencer TEE
-    #[arg(long, env = "SEQUENCER_URL", default_value = "http://localhost:8433")]
-    pub sequencer_url: String,
+    /// URL of the sequencer TEE (e.g., `http://localhost:8433`)
+    #[arg(long, env = "SEQUENCER_URL", default_value = "http://localhost:8433", value_parser = parse_url)]
+    pub sequencer_url: Url,
 
     /// Maximum number of changesets to buffer before publishing
     #[arg(long, env = "BUFFER_SIZE", default_value = "100")]
