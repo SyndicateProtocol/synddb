@@ -10,7 +10,9 @@
 //! use rusqlite::Connection;
 //! use synddb_client::SyndDB;
 //!
-//! // Note: Connection must have 'static lifetime
+//! // The connection must have 'static lifetime because SyndDB spawns background
+//! // threads that need access to it. Box::leak is the recommended pattern for
+//! // application-lifetime database connections.
 //! let conn = Box::leak(Box::new(Connection::open("app.db")?));
 //! let _synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
 //!
@@ -18,6 +20,22 @@
 //! conn.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![1, 100])?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! # Why `'static` lifetime?
+//!
+//! SyndDB uses background threads to:
+//! - Periodically publish changesets to the sequencer
+//! - Send snapshots when configured
+//! - Monitor blockchain events (with `chain-monitor` feature)
+//!
+//! These threads need to access the SQLite connection, which requires `'static` lifetime.
+//! Using `Box::leak` is safe here because:
+//! - The connection should live for the entire application lifetime anyway
+//! - SyndDB is typically attached once at startup and detached at shutdown
+//! - The small memory "leak" is reclaimed when the process exits
+//!
+//! If you need more control over the connection lifetime, consider using
+//! `SyndDB::shutdown()` for explicit cleanup before your application exits.
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
