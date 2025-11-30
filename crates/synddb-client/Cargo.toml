@@ -39,10 +39,10 @@ uuid = { workspace = true }
 
 # Humantime serialization
 humantime-serde = { workspace = true }
-humantime = "2.1"
+humantime = { workspace = true }
 
 # CLI parsing
-clap = { version = "4.5.53", features = ["derive", "env"] }
+clap = { workspace = true, features = ["derive", "env"] }
 
 # Unix domain socket support for Confidential Space attestation
 hyperlocal = { workspace = true }
