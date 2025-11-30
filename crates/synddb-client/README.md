@@ -69,17 +69,17 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 ┌─────────────────────────────────────────┐
 │   Application Process (in TEE)          │
 │                                         │
-│   ┌─────────────────────────────────┐  │
-│   │  App Code                       │  │
-│   │  db.execute(...)                │  │
-│   └──────────┬──────────────────────┘  │
+│   ┌─────────────────────────────────┐   │
+│   │  App Code                       │   │
+│   │  db.execute(...)                │   │
+│   └──────────┬──────────────────────┘   │
 │              │                          │
-│   ┌──────────▼──────────────────────┐  │
-│   │  synddb-client Library          │  │
-│   │  - Session Extension            │  │
-│   │  - Capture changesets           │  │
-│   │  - Background sender thread     │  │
-│   └──────────┬──────────────────────┘  │
+│   ┌──────────▼──────────────────────┐   │
+│   │  synddb-client Library          │   │
+│   │  - Session Extension            │   │
+│   │  - Capture changesets           │   │
+│   │  - Background sender thread     │   │
+│   └──────────┬──────────────────────┘   │
 │              │                          │
 └──────────────┼──────────────────────────┘
                │
