@@ -48,6 +48,7 @@ on:
     # Tag pushes (releases) always run regardless of paths - this is intentional.
     paths:
       - 'crates/synddb-client/**'
+      - '!crates/synddb-client/libs/**'  # Exclude libs to prevent infinite loop (this workflow commits to libs/)
       - 'crates/synddb-chain-monitor/**'  # dependency of synddb-client
       - '**/Cargo.toml'
       - '**/Cargo.lock'
@@ -56,6 +57,7 @@ on:
   pull_request:
     paths:
       - 'crates/synddb-client/**'
+      - '!crates/synddb-client/libs/**'  # Exclude libs to prevent infinite loop (this workflow commits to libs/)
       - 'crates/synddb-chain-monitor/**'  # dependency of synddb-client
       - '**/Cargo.toml'
       - '**/Cargo.lock'
@@ -279,7 +281,7 @@ jobs:
           # Capture file list before commit (must be done while files are staged)
           UPDATED_FILES=$(git diff --staged --name-only | sed 's/^/- /')
 
-          git commit -m "chore: Update FFI libraries [skip ci]" \
+          git commit -m "chore: Update FFI libraries" \
             -m "Built from: ${{ github.sha }}" \
             -m "Updated:" \
             -m "$UPDATED_FILES"
