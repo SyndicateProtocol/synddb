@@ -13,16 +13,30 @@ name: Build FFI Libraries
 #   remote: - Changes must be made through a pull request.
 #   ! [remote rejected] main -> main (push declined due to repository rule violations)
 #
-# To fix this, add github-actions[bot] to the bypass list:
-#   1. Go to repository Settings → Rules → Rulesets
-#   2. Edit the ruleset protecting the main branch
-#   3. Under "Bypass list", click "Add bypass"
-#   4. Search for and add "github-actions[bot]"
-#   5. Save the ruleset
+# To fix this, set up a deploy key with bypass permissions:
 #
-# For classic branch protection (Settings → Branches → Branch protection rules):
-#   1. Edit the rule for main
-#   2. Under "Restrict who can push to matching branches", add github-actions[bot]
+#   1. Generate an SSH key pair:
+#      ssh-keygen -t ed25519 -C "ffi-deploy-key" -f ffi-deploy-key -N ""
+#
+#   2. Add the PUBLIC key as a Deploy Key with write access:
+#      - Go to repository Settings → Deploy keys → Add deploy key
+#      - Title: "FFI Library Auto-commit"
+#      - Paste contents of ffi-deploy-key.pub
+#      - Check "Allow write access"
+#
+#   3. Add the PRIVATE key as a repository secret:
+#      - Go to repository Settings → Secrets and variables → Actions
+#      - Create new repository secret named FFI_DEPLOY_KEY
+#      - Paste contents of ffi-deploy-key (private key)
+#
+#   4. Add "Deploy keys" to the ruleset bypass list:
+#      - Go to repository Settings → Rules → Rulesets
+#      - Edit the ruleset protecting the main branch
+#      - Under "Bypass list", click "Add bypass"
+#      - Select "Deploy keys"
+#
+#   5. Delete the local key files (secrets are now stored in GitHub):
+#      rm ffi-deploy-key ffi-deploy-key.pub
 
 on:
   push:
@@ -220,6 +234,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.FFI_DEPLOY_KEY }}
 
       - name: Download dev library artifacts
         uses: actions/download-artifact@v4
