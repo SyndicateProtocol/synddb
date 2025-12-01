@@ -13,10 +13,12 @@
 pub mod apply;
 pub mod config;
 pub mod error;
+pub mod state;
 pub mod sync;
 
 // Re-export main types for convenience
 pub use apply::ChangesetApplier;
 pub use config::ValidatorConfig;
 pub use error::ValidatorError;
+pub use state::StateStore;
 pub use sync::{DAFetcher, SignatureVerifier};
