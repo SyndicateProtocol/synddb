@@ -18,37 +18,12 @@ use synddb_sequencer::{
     inbox::Inbox,
     signer::MessageSigner,
 };
-
-/// Initialize logging based on configuration
-fn init_logging(config: &SequencerConfig) {
-    use tracing_subscriber::{filter, prelude::*, EnvFilter};
-
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(filter::LevelFilter::INFO.into())
-        .from_env_lossy();
-
-    if config.log_json {
-        // JSON format for production
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(tracing_subscriber::fmt::layer().json())
-            .init();
-    } else {
-        // Pretty format for development
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(tracing_subscriber::fmt::layer().with_target(true))
-            .init();
-    }
-}
+use synddb_shared::runtime;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Parse configuration from CLI args and environment
     let config = SequencerConfig::parse();
-
-    // Initialize logging
-    init_logging(&config);
+    runtime::init_logging(config.log_json);
 
     info!("SyndDB Sequencer starting...");
     info!(bind_address = %config.bind_address, "Configuration loaded");

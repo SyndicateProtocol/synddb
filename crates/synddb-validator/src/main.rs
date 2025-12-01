@@ -4,10 +4,10 @@ use alloy::primitives::{keccak256, B256};
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
-use tokio::signal;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
+use synddb_shared::runtime;
 use synddb_validator::bridge::{BridgeSigner, SignatureStore};
 use synddb_validator::config::ValidatorConfig;
 use synddb_validator::http::{create_router, create_signature_router, AppState, SignatureApiState};
@@ -17,7 +17,7 @@ use synddb_validator::validator::Validator;
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = ValidatorConfig::parse();
-    init_logging(&config);
+    runtime::init_logging(config.log_json);
 
     info!(
         sequencer = %config.sequencer_address,
@@ -30,6 +30,9 @@ async fn main() -> Result<()> {
         .validate_bridge_config()
         .map_err(|e| anyhow::anyhow!(e))?;
 
+    // Using watch::channel for shutdown because we need broadcast semantics:
+    // the shutdown signal must be received by multiple tasks (sync loop, validator internals).
+    // mpsc::channel is single-consumer and wouldn't allow cloning the receiver.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let fetcher = create_fetcher(&config).await?;
     let mut validator = Validator::new(&config, fetcher.clone(), shutdown_rx.clone())?;
@@ -103,7 +106,7 @@ async fn main() -> Result<()> {
 
     // Wait for shutdown signal
     info!("Validator running. Press Ctrl+C to shut down.");
-    wait_for_shutdown().await;
+    runtime::wait_for_shutdown().await;
 
     // Signal shutdown
     info!("Shutdown signal received, stopping...");
@@ -236,51 +239,6 @@ fn current_timestamp() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-}
-
-/// Wait for shutdown signal (Ctrl+C or SIGTERM)
-async fn wait_for_shutdown() {
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install signal handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-}
-
-fn init_logging(config: &ValidatorConfig) {
-    use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
-
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-
-    if config.log_json {
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(tracing_subscriber::fmt::layer().json())
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(tracing_subscriber::fmt::layer().with_target(true))
-            .init();
-    }
 }
 
 fn start_http_server(
