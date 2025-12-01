@@ -5,16 +5,16 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::time::Duration;
 
-/// SyndDB Validator configuration
+/// `SyndDB` Validator configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[command(name = "synddb-validator")]
 #[command(about = "SyndDB Validator - validates sequencer messages and applies changesets")]
 pub struct ValidatorConfig {
-    /// Path to the SQLite database file for replicated state
+    /// Path to the `SQLite` database file for replicated state
     #[arg(long, env = "DATABASE_PATH", default_value = "/data/validator.db")]
     pub database_path: String,
 
-    /// Path to the SQLite database file for validator state (sequences, etc.)
+    /// Path to the `SQLite` database file for validator state (sequences, etc.)
     #[arg(
         long,
         env = "STATE_DB_PATH",

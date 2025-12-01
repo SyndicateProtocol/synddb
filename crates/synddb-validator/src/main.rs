@@ -1,4 +1,4 @@
-//! SyndDB Validator binary entry point
+//! `SyndDB` Validator binary entry point
 
 use anyhow::Result;
 use clap::Parser;

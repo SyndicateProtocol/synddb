@@ -1,4 +1,4 @@
-//! Shared types for SyndDB wire format
+//! Shared types for `SyndDB` wire format
 //!
 //! This module contains the core types used for communication between
 //! `synddb-sequencer`, `synddb-validator`, and `synddb-client`.

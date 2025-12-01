@@ -17,7 +17,7 @@ pub struct SignatureVerifier {
 
 impl SignatureVerifier {
     /// Create a new verifier expecting messages from the given sequencer
-    pub fn new(expected_signer: Address) -> Self {
+    pub const fn new(expected_signer: Address) -> Self {
         Self { expected_signer }
     }
 
