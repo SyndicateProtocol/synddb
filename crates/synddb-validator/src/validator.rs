@@ -150,6 +150,21 @@ impl Validator {
     ///
     /// Returns `Ok(true)` if message was synced, `Ok(false)` if not available yet
     pub async fn sync_one(&mut self, sequence: u64) -> Result<bool> {
+        self.sync_one_with_callback(sequence, |_| {}).await
+    }
+
+    /// Sync a single message by sequence number with a callback for withdrawal messages
+    ///
+    /// The callback receives the `WithdrawalRequest` if the message is a withdrawal.
+    /// Returns `Ok(true)` if message was synced, `Ok(false)` if not available yet.
+    pub async fn sync_one_with_callback<F>(
+        &mut self,
+        sequence: u64,
+        on_withdrawal: F,
+    ) -> Result<bool>
+    where
+        F: FnOnce(&synddb_shared::types::WithdrawalRequest),
+    {
         // 1. Fetch message
         let message = match self.fetcher.get(sequence).await? {
             Some(msg) => msg,
@@ -169,12 +184,24 @@ impl Validator {
 
         debug!(sequence, "Signature verified");
 
-        // 3. Apply to database
+        // 3. Check for withdrawal and call callback
+        if let Some(withdrawal) = ChangesetApplier::extract_withdrawal(&message)? {
+            debug!(
+                sequence,
+                request_id = %withdrawal.request_id,
+                recipient = %withdrawal.recipient,
+                amount = %withdrawal.amount,
+                "Processing withdrawal message"
+            );
+            on_withdrawal(&withdrawal);
+        }
+
+        // 4. Apply to database (logs withdrawal, applies changeset)
         self.applier.apply_message(&message)?;
 
         debug!(sequence, "Message applied");
 
-        // 4. Update state
+        // 5. Update state
         self.state.record_sync(sequence)?;
 
         info!(sequence, "Synced message");

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use rusqlite::session::ConflictAction;
 use rusqlite::Connection;
 use std::io::{Cursor, Read};
-use synddb_shared::types::{ChangesetBatchRequest, MessageType, SignedMessage};
+use synddb_shared::types::{ChangesetBatchRequest, MessageType, SignedMessage, WithdrawalRequest};
 use tracing::{debug, info, warn};
 
 /// Applies changesets from sequenced messages to an `SQLite` database
@@ -135,6 +135,22 @@ impl ChangesetApplier {
             .read_to_end(&mut decompressed)
             .context("Failed to decompress")?;
         Ok(decompressed)
+    }
+
+    /// Extract withdrawal request from a message
+    ///
+    /// Returns `Some(WithdrawalRequest)` if this is a withdrawal message,
+    /// `None` otherwise.
+    pub fn extract_withdrawal(message: &SignedMessage) -> Result<Option<WithdrawalRequest>> {
+        if message.message_type != MessageType::Withdrawal {
+            return Ok(None);
+        }
+
+        let decompressed = Self::decompress(&message.payload)?;
+        let request: WithdrawalRequest =
+            serde_json::from_slice(&decompressed).context("Failed to parse withdrawal request")?;
+
+        Ok(Some(request))
     }
 
     /// Apply a single changeset to the database using the streaming API
