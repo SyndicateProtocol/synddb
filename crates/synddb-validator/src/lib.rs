@@ -1,0 +1,18 @@
+//! SyndDB Validator - validates sequencer messages and applies changesets
+//!
+//! The validator syncs state from DA layers, verifies sequencer signatures,
+//! and applies SQLite changesets to maintain a replica of the sequenced state.
+//!
+//! # Features
+//!
+//! - **Signature Verification**: Verifies that messages are signed by the expected sequencer
+//! - **Changeset Application**: Applies SQLite changesets to reconstruct state
+//! - **State Persistence**: Tracks sync progress for crash recovery
+//! - **HTTP API**: Provides health checks and status endpoints
+
+pub mod config;
+pub mod error;
+
+// Re-export main types for convenience
+pub use config::ValidatorConfig;
+pub use error::ValidatorError;

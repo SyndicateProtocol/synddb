@@ -2665,6 +2665,7 @@ dependencies = [
  "once_cell",
  "serdect",
  "sha2",
+ "signature",
 ]
 
 [[package]]
@@ -4284,6 +4285,31 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "synddb-validator"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "clap",
+ "google-cloud-storage",
+ "hex",
+ "humantime",
+ "humantime-serde",
+ "k256",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "synddb-shared",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zstd",
 ]
 
 [[package]]
