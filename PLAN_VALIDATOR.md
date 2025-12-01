@@ -925,9 +925,17 @@ impl WebSocketServer {
 
 ### 5. Bridge Signer Mode
 
-When `--bridge-signer` is enabled, the validator signs withdrawal approvals and state attestations. Signatures are stored locally and served via an API for relayers to collect and submit to the bridge contract.
+When `--bridge-signer` is enabled, the validator signs withdrawal approvals and state attestations for the bridge contract.
 
-**Key distinction**: Bridge signers don't submit transactions - they only sign. A separate relayer collects signatures from multiple validators and submits to the bridge.
+**Submission modes:**
+- **Relayer mode** (default, `--bridge-submit=false`): Validator signs and stores signatures. A separate relayer collects signatures from multiple validators via the signature API and submits to the bridge.
+- **Direct mode** (`--bridge-submit=true`): Validator signs and submits transactions directly to the bridge contract. Useful for single-validator setups or when running your own relayer.
+
+**Bridge contract interactions:**
+- Read validator registration status
+- Read signature threshold requirements
+- Submit withdrawals (direct mode only)
+- Submit state attestations (direct mode only)
 
 ```rust
 // src/bridge/mod.rs
@@ -1118,6 +1126,8 @@ pub fn signature_router(store: Arc<SignatureStore>) -> Router {
     Router::new()
         .route("/signatures/withdrawal/:request_id", get(get_withdrawal_signatures))
         .route("/signatures/state/:sequence", get(get_state_attestations))
+        .route("/signatures/pending", get(get_pending_withdrawals))
+        .route("/health", get(health))
         .with_state(store)
 }
 
@@ -1127,7 +1137,54 @@ async fn get_withdrawal_signatures(
 ) -> Json<Vec<WithdrawalSignature>> {
     Json(store.get_withdrawal_signatures(&request_id))
 }
+
+async fn get_state_attestations(
+    State(store): State<Arc<SignatureStore>>,
+    Path(sequence): Path<u64>,
+) -> Json<Vec<StateAttestation>> {
+    Json(store.get_state_attestations(sequence))
+}
+
+async fn get_pending_withdrawals(
+    State(store): State<Arc<SignatureStore>>,
+) -> Json<Vec<String>> {
+    Json(store.get_pending_withdrawal_ids())
+}
 ```
+
+### Signature API Reference
+
+The signature endpoint (default `:8081`) serves signatures for relayers:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/signatures/withdrawal/:request_id` | GET | Get all signatures for a withdrawal |
+| `/signatures/state/:sequence` | GET | Get state attestations for a sequence |
+| `/signatures/pending` | GET | List withdrawal IDs with pending signatures |
+| `/health` | GET | Health check |
+
+**Example: Fetch withdrawal signatures**
+```bash
+curl http://validator:8081/signatures/withdrawal/0x1234...
+
+# Response
+[
+  {
+    "request_id": "0x1234...",
+    "recipient": "0xabcd...",
+    "amount": "1000000000000000000",
+    "sequence": 42,
+    "signature": "0x...",
+    "signer": "0x9876..."
+  }
+]
+```
+
+**Relayer workflow:**
+1. Poll `/signatures/pending` for new withdrawal IDs
+2. For each ID, fetch signatures from multiple validators
+3. Once threshold signatures collected, submit to bridge contract
+4. Bridge contract verifies signatures and processes withdrawal
 
 ### 6. Extension System
 
@@ -1249,13 +1306,27 @@ pub struct ValidatorConfig {
     #[arg(long, env = "BRIDGE_CONTRACT", required_if_eq("bridge_signer", "true"))]
     pub bridge_contract: Option<String>,
 
+    /// RPC URL for bridge contract chain (required if --bridge-signer)
+    #[arg(long, env = "BRIDGE_RPC", required_if_eq("bridge_signer", "true"))]
+    pub bridge_rpc: Option<String>,
+
+    /// Chain ID for EIP-712 signing domain (required if --bridge-signer)
+    #[arg(long, env = "BRIDGE_CHAIN_ID", required_if_eq("bridge_signer", "true"))]
+    pub bridge_chain_id: Option<u64>,
+
     /// Signing key for bridge operations (hex, required if --bridge-signer)
     #[arg(long, env = "BRIDGE_SIGNING_KEY", required_if_eq("bridge_signer", "true"))]
     pub bridge_signing_key: Option<String>,
 
-    /// Endpoint to serve signatures for relayers (required if --bridge-signer)
+    /// Endpoint to serve signatures for relayers
     #[arg(long, env = "BRIDGE_SIGNATURE_ENDPOINT", default_value = "0.0.0.0:8081")]
     pub bridge_signature_endpoint: SocketAddr,
+
+    /// Submit transactions directly instead of waiting for relayer
+    /// When false (default), signatures are stored for relayer pickup
+    /// When true, validator submits directly to bridge contract
+    #[arg(long, env = "BRIDGE_SUBMIT", default_value = "false")]
+    pub bridge_submit: bool,
 
     // === Logging ===
 
@@ -1287,12 +1358,25 @@ synddb-validator \
   --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
   --gcs-bucket=synddb-messages
 
-# Bridge signer - additionally signs for bridge contract
+# Bridge signer (relayer mode) - signs, relayer submits
 synddb-validator \
   --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
   --gcs-bucket=synddb-messages \
   --bridge-signer \
   --bridge-contract=0x1234567890abcdef1234567890abcdef12345678 \
+  --bridge-rpc=https://eth-mainnet.g.alchemy.com/v2/... \
+  --bridge-chain-id=1 \
+  --bridge-signing-key=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+# Bridge signer (direct submit) - signs and submits directly
+synddb-validator \
+  --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
+  --gcs-bucket=synddb-messages \
+  --bridge-signer \
+  --bridge-submit \
+  --bridge-contract=0x1234567890abcdef1234567890abcdef12345678 \
+  --bridge-rpc=https://eth-mainnet.g.alchemy.com/v2/... \
+  --bridge-chain-id=1 \
   --bridge-signing-key=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 ```
 
@@ -1316,8 +1400,11 @@ export LOG_JSON="false"
 # Bridge signer mode (all required if BRIDGE_SIGNER=true)
 export BRIDGE_SIGNER="true"
 export BRIDGE_CONTRACT="0x..."
+export BRIDGE_RPC="https://eth-mainnet.g.alchemy.com/v2/..."
+export BRIDGE_CHAIN_ID="1"
 export BRIDGE_SIGNING_KEY="0x..."
 export BRIDGE_SIGNATURE_ENDPOINT="0.0.0.0:8081"
+export BRIDGE_SUBMIT="false"  # true to submit directly, false for relayer
 ```
 
 ## Validator TEE Integration with GCP Confidential Space
