@@ -32,7 +32,6 @@ humantime = { workspace = true }
 
 # Logging and tracing
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 # HTTP server
 axum = { workspace = true }

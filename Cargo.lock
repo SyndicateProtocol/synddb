@@ -4272,7 +4272,6 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "tracing-subscriber",
  "zstd",
 ]
 
@@ -4311,7 +4310,6 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "tracing-subscriber",
  "zstd",
 ]
 
