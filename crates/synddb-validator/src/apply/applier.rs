@@ -70,23 +70,31 @@ impl ChangesetApplier {
         }
     }
 
-    /// Apply a changeset message
-    fn apply_changeset_message(&mut self, message: &SignedMessage) -> Result<()> {
-        // 1. Decompress the payload
+    /// Decompress and parse a message payload
+    fn decompress_and_parse<T: serde::de::DeserializeOwned>(
+        &self,
+        message: &SignedMessage,
+        type_name: &str,
+    ) -> Result<T> {
         let decompressed = Self::decompress(&message.payload).map_err(|e| {
             ValidatorError::DecompressionError(format!(
-                "Failed to decompress sequence {}: {e}",
+                "Failed to decompress {type_name} at sequence {}: {e}",
                 message.sequence
             ))
         })?;
 
-        // 2. Parse as ChangesetBatchRequest
-        let batch: ChangesetBatchRequest = serde_json::from_slice(&decompressed).map_err(|e| {
+        serde_json::from_slice(&decompressed).map_err(|e| {
             ValidatorError::ParseError(format!(
-                "Failed to parse changeset batch at sequence {}: {e}",
+                "Failed to parse {type_name} at sequence {}: {e}",
                 message.sequence
             ))
-        })?;
+            .into()
+        })
+    }
+
+    /// Apply a changeset message
+    fn apply_changeset_message(&mut self, message: &SignedMessage) -> Result<()> {
+        let batch: ChangesetBatchRequest = self.decompress_and_parse(message, "changeset batch")?;
 
         debug!(
             sequence = message.sequence,
@@ -133,21 +141,7 @@ impl ChangesetApplier {
 
     /// Apply a snapshot message by restoring the database from the snapshot
     fn apply_snapshot_message(&mut self, message: &SignedMessage) -> Result<()> {
-        // 1. Decompress the payload
-        let decompressed = Self::decompress(&message.payload).map_err(|e| {
-            ValidatorError::DecompressionError(format!(
-                "Failed to decompress snapshot at sequence {}: {e}",
-                message.sequence
-            ))
-        })?;
-
-        // 2. Parse as SnapshotRequest
-        let request: SnapshotRequest = serde_json::from_slice(&decompressed).map_err(|e| {
-            ValidatorError::ParseError(format!(
-                "Failed to parse snapshot request at sequence {}: {e}",
-                message.sequence
-            ))
-        })?;
+        let request: SnapshotRequest = self.decompress_and_parse(message, "snapshot")?;
 
         info!(
             sequence = message.sequence,

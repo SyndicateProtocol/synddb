@@ -12,6 +12,14 @@ use tracing::{debug, info};
 
 use crate::config::ValidatorConfig;
 
+/// Get current Unix timestamp in seconds
+fn current_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
 /// A signature for a bridge message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageSignature {
@@ -100,23 +108,12 @@ impl BridgeSigner {
     /// address validator = ECDSA.recover(messageHash, signature);
     /// ```
     pub async fn sign_message(&self, message_id: B256) -> Result<MessageSignature> {
-        // Create EIP-191 personal sign hash
-        // This matches OpenZeppelin's MessageHashUtils.toEthSignedMessageHash(bytes32)
         let eth_signed_hash = Self::to_eth_signed_message_hash(message_id);
-
-        // Sign the hash
         let signature = self
             .signer
             .sign_hash(&eth_signed_hash)
             .await
             .context("Failed to sign message")?;
-
-        // Format as r || s || v (65 bytes)
-        let mut sig_bytes = Vec::with_capacity(65);
-        sig_bytes.extend_from_slice(&signature.r().to_be_bytes::<32>());
-        sig_bytes.extend_from_slice(&signature.s().to_be_bytes::<32>());
-        // Ethereum uses v = 27 or 28
-        sig_bytes.push(if signature.v() { 28 } else { 27 });
 
         debug!(
             message_id = %message_id,
@@ -124,30 +121,16 @@ impl BridgeSigner {
             "Signed bridge message"
         );
 
-        Ok(MessageSignature {
-            message_id: format!("{message_id:#x}"),
-            signature: sig_bytes,
-            signer: self.signer.address(),
-            signed_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        })
+        Ok(self.create_message_signature(message_id, &signature))
     }
 
     /// Sign a message ID synchronously (for use in sync contexts)
     pub fn sign_message_sync(&self, message_id: B256) -> Result<MessageSignature> {
         let eth_signed_hash = Self::to_eth_signed_message_hash(message_id);
-
         let signature = self
             .signer
             .sign_hash_sync(&eth_signed_hash)
             .context("Failed to sign message")?;
-
-        let mut sig_bytes = Vec::with_capacity(65);
-        sig_bytes.extend_from_slice(&signature.r().to_be_bytes::<32>());
-        sig_bytes.extend_from_slice(&signature.s().to_be_bytes::<32>());
-        sig_bytes.push(if signature.v() { 28 } else { 27 });
 
         debug!(
             message_id = %message_id,
@@ -155,15 +138,28 @@ impl BridgeSigner {
             "Signed bridge message (sync)"
         );
 
-        Ok(MessageSignature {
+        Ok(self.create_message_signature(message_id, &signature))
+    }
+
+    /// Create a `MessageSignature` from raw signature components
+    fn create_message_signature(
+        &self,
+        message_id: B256,
+        signature: &alloy::signers::Signature,
+    ) -> MessageSignature {
+        // Format as r || s || v (65 bytes)
+        let mut sig_bytes = Vec::with_capacity(65);
+        sig_bytes.extend_from_slice(&signature.r().to_be_bytes::<32>());
+        sig_bytes.extend_from_slice(&signature.s().to_be_bytes::<32>());
+        // Ethereum uses v = 27 or 28
+        sig_bytes.push(if signature.v() { 28 } else { 27 });
+
+        MessageSignature {
             message_id: format!("{message_id:#x}"),
             signature: sig_bytes,
             signer: self.signer.address(),
-            signed_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        })
+            signed_at: current_timestamp(),
+        }
     }
 
     /// Convert a bytes32 message to EIP-191 signed message hash

@@ -116,11 +116,7 @@ async fn main() -> Result<()> {
                 if synced > 0 {
                     info!(synced, "Completed initial sync");
                     if let Ok(Some(seq)) = validator.last_sequence() {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs();
-                        sync_app_state.update_sync_status(Some(seq), now);
+                        sync_app_state.update_sync_status(Some(seq), current_timestamp());
                     }
                 }
             }
@@ -130,41 +126,12 @@ async fn main() -> Result<()> {
         }
 
         // Create callbacks for continuous sync
-        let signer_for_loop = sync_signer.clone();
-        let store_for_loop = sync_store.clone();
-        let state_for_loop = sync_app_state.clone();
-
-        // Withdrawal signing callback
-        let mut on_withdrawal = move |withdrawal: &synddb_shared::types::WithdrawalRequest| {
-            if let Some(ref signer) = signer_for_loop {
-                let message_id = request_id_to_message_id(&withdrawal.request_id);
-                match signer.sign_message_sync(message_id) {
-                    Ok(sig) => {
-                        info!(
-                            request_id = %withdrawal.request_id,
-                            message_id = %sig.message_id,
-                            signer = %sig.signer,
-                            "Signed withdrawal message"
-                        );
-                        store_for_loop.store(sig);
-                    }
-                    Err(e) => {
-                        error!(
-                            request_id = %withdrawal.request_id,
-                            error = %e,
-                            "Failed to sign withdrawal message"
-                        );
-                    }
-                }
-            }
-        };
+        let mut on_withdrawal = create_withdrawal_callback(sync_signer.clone(), sync_store.clone());
 
         // Sync progress callback - updates HTTP status
+        let state_for_loop = sync_app_state.clone();
         let mut on_sync = move |sequence: u64| {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let now = current_timestamp();
             state_for_loop.update_sync_status(Some(sequence), now);
         };
 
@@ -208,25 +175,14 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Sync to head while signing withdrawal messages
-async fn sync_to_head_with_signing(
-    validator: &mut Validator,
-    signer: Option<&Arc<BridgeSigner>>,
-    store: &SignatureStore,
-) -> Result<u64> {
-    let mut next_sequence = validator.last_sequence()?.map_or(0, |s| s + 1);
-    let mut synced = 0;
-
-    // Create the withdrawal callback
-    let signer_clone = signer.cloned();
-    let store_clone = store.clone();
-    let mut on_withdrawal = move |withdrawal: &synddb_shared::types::WithdrawalRequest| {
-        if let Some(ref signer) = signer_clone {
-            // Convert request_id to message_id (bytes32)
-            // The bridge expects keccak256(request_id) as the message ID
+/// Create a withdrawal signing callback
+fn create_withdrawal_callback(
+    signer: Option<Arc<BridgeSigner>>,
+    store: SignatureStore,
+) -> impl FnMut(&synddb_shared::types::WithdrawalRequest) {
+    move |withdrawal: &synddb_shared::types::WithdrawalRequest| {
+        if let Some(ref signer) = signer {
             let message_id = request_id_to_message_id(&withdrawal.request_id);
-
-            // Sign the message
             match signer.sign_message_sync(message_id) {
                 Ok(sig) => {
                     info!(
@@ -235,7 +191,7 @@ async fn sync_to_head_with_signing(
                         signer = %sig.signer,
                         "Signed withdrawal message"
                     );
-                    store_clone.store(sig);
+                    store.store(sig);
                 }
                 Err(e) => {
                     error!(
@@ -246,10 +202,20 @@ async fn sync_to_head_with_signing(
                 }
             }
         }
-    };
+    }
+}
+
+/// Sync to head while signing withdrawal messages
+async fn sync_to_head_with_signing(
+    validator: &mut Validator,
+    signer: Option<&Arc<BridgeSigner>>,
+    store: &SignatureStore,
+) -> Result<u64> {
+    let mut next_sequence = validator.last_sequence()?.map_or(0, |s| s + 1);
+    let mut synced = 0;
+    let mut on_withdrawal = create_withdrawal_callback(signer.cloned(), store.clone());
 
     loop {
-        // Sync with callback for withdrawals
         let result = validator
             .sync_one_with_callback(next_sequence, &mut on_withdrawal)
             .await;
@@ -259,10 +225,7 @@ async fn sync_to_head_with_signing(
                 synced += 1;
                 next_sequence += 1;
             }
-            Ok(false) => {
-                // Caught up to head
-                break;
-            }
+            Ok(false) => break,
             Err(e) => {
                 warn!(sequence = next_sequence, error = %e, "Sync error, stopping");
                 break;
@@ -312,6 +275,14 @@ async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn synddb_valid
     anyhow::bail!(
         "No DA fetcher configured. Set GCS_BUCKET environment variable or --gcs-bucket flag."
     );
+}
+
+/// Get current Unix timestamp in seconds
+fn current_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// Wait for shutdown signal (Ctrl+C or SIGTERM)

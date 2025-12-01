@@ -6,6 +6,14 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use tracing::{debug, info};
 
+/// Get current Unix timestamp in seconds
+fn current_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
 /// Persists validator state for crash recovery
 pub struct StateStore {
     conn: Connection,
@@ -125,14 +133,8 @@ impl StateStore {
 
     /// Record a successful sync operation
     pub fn record_sync(&self, sequence: u64) -> Result<()> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
         self.set_last_sequence(sequence)?;
-        self.set_last_sync_time(now)?;
-
+        self.set_last_sync_time(current_timestamp())?;
         Ok(())
     }
 
@@ -155,15 +157,10 @@ impl StateStore {
     /// This is called when the validator detects missing sequences and
     /// is configured to skip gaps.
     pub fn record_gap(&self, gap_start: u64, gap_end: u64) -> Result<()> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
         self.conn
             .execute(
                 "INSERT INTO sequence_gaps (gap_start, gap_end, detected_at) VALUES (?, ?, ?)",
-                [gap_start, gap_end, now],
+                [gap_start, gap_end, current_timestamp()],
             )
             .context("Failed to record gap")?;
 
