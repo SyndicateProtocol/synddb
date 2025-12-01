@@ -5,6 +5,11 @@ name: Build FFI Libraries
 # 2. Main branch: Build dev platforms and commit to repo - enable cross-language dev
 # 3. Release tags: Build all platforms and create GitHub Release - production distribution
 #
+# SQUASH MERGE WARNING:
+# When squash-merging PRs that modify this workflow, ensure the squash commit
+# message does NOT contain "[skip ci]" anywhere in the body. GitHub scans the
+# entire commit message for this keyword and will skip ALL workflows if found.
+#
 # BRANCH PROTECTION NOTE:
 # If you have branch protection rules requiring PRs for the main branch, the
 # commit-dev-libs job will fail with an error like:
