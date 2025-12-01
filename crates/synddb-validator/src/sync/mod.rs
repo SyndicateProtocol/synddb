@@ -2,5 +2,7 @@
 
 pub mod fetcher;
 pub mod providers;
+pub mod verifier;
 
 pub use fetcher::DAFetcher;
+pub use verifier::SignatureVerifier;

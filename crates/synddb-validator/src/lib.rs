@@ -17,4 +17,4 @@ pub mod sync;
 // Re-export main types for convenience
 pub use config::ValidatorConfig;
 pub use error::ValidatorError;
-pub use sync::DAFetcher;
+pub use sync::{DAFetcher, SignatureVerifier};
