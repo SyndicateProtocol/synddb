@@ -7,7 +7,10 @@ use tokio::signal;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 
-use synddb_validator::{create_router, AppState, Validator, ValidatorConfig};
+use synddb_validator::{
+    create_router, create_signature_router, AppState, BridgeSigner, SignatureApiState,
+    SignatureStore, Validator, ValidatorConfig,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -18,6 +21,11 @@ async fn main() -> Result<()> {
     info!(sequencer = %config.sequencer_address, "Configuration loaded");
     info!(database = %config.database_path, "Database path");
     info!(state_db = %config.state_db_path, "State database path");
+
+    // Validate bridge config if enabled
+    config
+        .validate_bridge_config()
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -52,6 +60,40 @@ async fn main() -> Result<()> {
             .await
             .expect("HTTP server error");
     });
+
+    // Start bridge signer API if enabled
+    let signature_store = SignatureStore::new();
+    let signature_api_handle = if config.is_bridge_signer() {
+        let bridge_signer = BridgeSigner::new(&config)?;
+        info!(
+            signer = %bridge_signer.address(),
+            bridge = %bridge_signer.bridge_contract(),
+            chain_id = bridge_signer.chain_id(),
+            "Bridge signer mode enabled"
+        );
+
+        let sig_api_state = SignatureApiState::new(
+            signature_store.clone(),
+            format!("{:#x}", bridge_signer.address()),
+            format!("{:#x}", bridge_signer.bridge_contract()),
+            bridge_signer.chain_id(),
+        );
+
+        let sig_bind_address = config.bridge_signature_endpoint;
+        Some(tokio::spawn(async move {
+            let router = create_signature_router(sig_api_state);
+            let listener = tokio::net::TcpListener::bind(sig_bind_address)
+                .await
+                .expect("Failed to bind signature API server");
+            info!(address = %sig_bind_address, "Signature API server listening");
+
+            axum::serve(listener, router)
+                .await
+                .expect("Signature API server error");
+        }))
+    } else {
+        None
+    };
 
     // Start sync loop
     let sync_app_state = app_state.clone();
@@ -108,6 +150,9 @@ async fn main() -> Result<()> {
 
     // HTTP server will be dropped when we exit
     http_handle.abort();
+    if let Some(sig_handle) = signature_api_handle {
+        sig_handle.abort();
+    }
 
     info!("`SyndDB` Validator stopped");
     Ok(())

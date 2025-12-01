@@ -55,6 +55,31 @@ pub struct ValidatorConfig {
     #[arg(long, env = "SHUTDOWN_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
+
+    // === Bridge Signer Mode ===
+    /// Enable bridge signer mode - signs withdrawal messages for bridge contract
+    #[arg(long, env = "BRIDGE_SIGNER", default_value = "false")]
+    pub bridge_signer: bool,
+
+    /// Bridge contract address (required if --bridge-signer)
+    #[arg(long, env = "BRIDGE_CONTRACT")]
+    pub bridge_contract: Option<String>,
+
+    /// Chain ID for the bridge contract (required if --bridge-signer)
+    #[arg(long, env = "BRIDGE_CHAIN_ID")]
+    pub bridge_chain_id: Option<u64>,
+
+    /// Signing key for bridge operations (hex private key, required if --bridge-signer)
+    #[arg(long, env = "BRIDGE_SIGNING_KEY")]
+    pub bridge_signing_key: Option<String>,
+
+    /// Endpoint to serve signatures for relayers
+    #[arg(
+        long,
+        env = "BRIDGE_SIGNATURE_ENDPOINT",
+        default_value = "0.0.0.0:8081"
+    )]
+    pub bridge_signature_endpoint: SocketAddr,
 }
 
 impl ValidatorConfig {
@@ -69,6 +94,34 @@ impl ValidatorConfig {
             "--state-db-path",
             ":memory:",
         ])
+    }
+
+    /// Check if bridge signer mode is enabled
+    pub const fn is_bridge_signer(&self) -> bool {
+        self.bridge_signer
+    }
+
+    /// Validate bridge signer configuration
+    ///
+    /// Returns an error if bridge signer is enabled but required fields are missing.
+    pub fn validate_bridge_config(&self) -> Result<(), String> {
+        if !self.bridge_signer {
+            return Ok(());
+        }
+
+        if self.bridge_contract.is_none() {
+            return Err("--bridge-contract is required when --bridge-signer is enabled".into());
+        }
+
+        if self.bridge_chain_id.is_none() {
+            return Err("--bridge-chain-id is required when --bridge-signer is enabled".into());
+        }
+
+        if self.bridge_signing_key.is_none() {
+            return Err("--bridge-signing-key is required when --bridge-signer is enabled".into());
+        }
+
+        Ok(())
     }
 }
 
@@ -89,6 +142,7 @@ mod tests {
         assert_eq!(config.sync_interval, Duration::from_secs(1));
         assert_eq!(config.start_sequence, 0);
         assert!(!config.log_json);
+        assert!(!config.bridge_signer);
     }
 
     #[test]
@@ -117,5 +171,54 @@ mod tests {
             "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
         );
         assert_eq!(config.database_path, ":memory:");
+    }
+
+    #[test]
+    fn test_bridge_signer_config() {
+        let config = ValidatorConfig::parse_from([
+            "synddb-validator",
+            "--sequencer-address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--bridge-signer",
+            "--bridge-contract",
+            "0x1234567890abcdef1234567890abcdef12345678",
+            "--bridge-chain-id",
+            "1",
+            "--bridge-signing-key",
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        ]);
+
+        assert!(config.bridge_signer);
+        assert_eq!(
+            config.bridge_contract,
+            Some("0x1234567890abcdef1234567890abcdef12345678".to_string())
+        );
+        assert_eq!(config.bridge_chain_id, Some(1));
+        assert!(config.bridge_signing_key.is_some());
+        assert!(config.validate_bridge_config().is_ok());
+    }
+
+    #[test]
+    fn test_bridge_signer_validation_missing_contract() {
+        let config = ValidatorConfig::parse_from([
+            "synddb-validator",
+            "--sequencer-address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--bridge-signer",
+        ]);
+
+        assert!(config.validate_bridge_config().is_err());
+    }
+
+    #[test]
+    fn test_bridge_signer_disabled_no_validation() {
+        let config = ValidatorConfig::parse_from([
+            "synddb-validator",
+            "--sequencer-address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        ]);
+
+        // Should pass validation even without bridge config
+        assert!(config.validate_bridge_config().is_ok());
     }
 }

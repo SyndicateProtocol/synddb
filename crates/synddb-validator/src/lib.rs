@@ -9,8 +9,10 @@
 //! - **Changeset Application**: Applies `SQLite` changesets to reconstruct state
 //! - **State Persistence**: Tracks sync progress for crash recovery
 //! - **HTTP API**: Provides health checks and status endpoints
+//! - **Bridge Signing**: Optional mode to sign messages for the bridge contract
 
 pub mod apply;
+pub mod bridge;
 pub mod config;
 pub mod error;
 pub mod http;
@@ -20,9 +22,10 @@ pub mod validator;
 
 // Re-export main types for convenience
 pub use apply::ChangesetApplier;
+pub use bridge::{BridgeSigner, MessageSignature, SignatureStore};
 pub use config::ValidatorConfig;
 pub use error::ValidatorError;
-pub use http::{create_router, AppState};
+pub use http::{create_router, create_signature_router, AppState, SignatureApiState};
 pub use state::StateStore;
 pub use sync::{DAFetcher, SignatureVerifier};
 pub use validator::Validator;
