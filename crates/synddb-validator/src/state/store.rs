@@ -27,8 +27,9 @@ impl StateStore {
             );
 
             -- Insert default values if not present
+            -- -1 means never synced
             INSERT OR IGNORE INTO validator_state (key, value, updated_at)
-            VALUES ('last_sequence', '0', strftime('%s', 'now'));
+            VALUES ('last_sequence', '-1', strftime('%s', 'now'));
 
             INSERT OR IGNORE INTO validator_state (key, value, updated_at)
             VALUES ('last_sync_time', '0', strftime('%s', 'now'));
@@ -47,7 +48,9 @@ impl StateStore {
     }
 
     /// Get the last successfully processed sequence number
-    pub fn last_sequence(&self) -> Result<u64> {
+    ///
+    /// Returns `None` if no messages have been synced yet.
+    pub fn last_sequence(&self) -> Result<Option<u64>> {
         let value: String = self
             .conn
             .query_row(
@@ -57,7 +60,19 @@ impl StateStore {
             )
             .context("Failed to get last_sequence")?;
 
-        value.parse().context("Invalid last_sequence value")
+        // Empty string or "-1" means never synced
+        if value.is_empty() || value == "-1" {
+            return Ok(None);
+        }
+
+        Ok(Some(value.parse().context("Invalid last_sequence value")?))
+    }
+
+    /// Get the next sequence number to sync
+    ///
+    /// Returns 0 for a fresh validator, or `last_sequence + 1` otherwise.
+    pub fn next_sequence(&self) -> Result<u64> {
+        Ok(self.last_sequence()?.map_or(0, |seq| seq + 1))
     }
 
     /// Update the last successfully processed sequence number
@@ -145,7 +160,9 @@ mod tests {
         let store = StateStore::in_memory().unwrap();
 
         // Should have default values
-        assert_eq!(store.last_sequence().unwrap(), 0);
+        // None means never synced
+        assert_eq!(store.last_sequence().unwrap(), None);
+        assert_eq!(store.next_sequence().unwrap(), 0);
         assert_eq!(store.last_sync_time().unwrap(), 0);
     }
 
@@ -154,10 +171,12 @@ mod tests {
         let store = StateStore::in_memory().unwrap();
 
         store.set_last_sequence(42).unwrap();
-        assert_eq!(store.last_sequence().unwrap(), 42);
+        assert_eq!(store.last_sequence().unwrap(), Some(42));
+        assert_eq!(store.next_sequence().unwrap(), 43);
 
         store.set_last_sequence(100).unwrap();
-        assert_eq!(store.last_sequence().unwrap(), 100);
+        assert_eq!(store.last_sequence().unwrap(), Some(100));
+        assert_eq!(store.next_sequence().unwrap(), 101);
     }
 
     #[test]
@@ -173,14 +192,14 @@ mod tests {
         let store = StateStore::in_memory().unwrap();
 
         // Before sync
-        assert_eq!(store.last_sequence().unwrap(), 0);
+        assert_eq!(store.last_sequence().unwrap(), None);
         assert_eq!(store.last_sync_time().unwrap(), 0);
 
         // Record sync
         store.record_sync(42).unwrap();
 
         // After sync
-        assert_eq!(store.last_sequence().unwrap(), 42);
+        assert_eq!(store.last_sequence().unwrap(), Some(42));
         assert!(store.last_sync_time().unwrap() > 0);
     }
 
@@ -223,7 +242,7 @@ mod tests {
         // Reopen and verify persistence
         {
             let store = StateStore::new(db_path_str).unwrap();
-            assert_eq!(store.last_sequence().unwrap(), 42);
+            assert_eq!(store.last_sequence().unwrap(), Some(42));
             assert_eq!(store.last_sync_time().unwrap(), 1700000000);
         }
 

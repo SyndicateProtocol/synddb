@@ -15,6 +15,7 @@ pub mod config;
 pub mod error;
 pub mod state;
 pub mod sync;
+pub mod validator;
 
 // Re-export main types for convenience
 pub use apply::ChangesetApplier;
@@ -22,3 +23,4 @@ pub use config::ValidatorConfig;
 pub use error::ValidatorError;
 pub use state::StateStore;
 pub use sync::{DAFetcher, SignatureVerifier};
+pub use validator::Validator;
