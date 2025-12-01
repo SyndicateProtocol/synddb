@@ -138,8 +138,7 @@ mod tests {
     fn test_store_and_get() {
         let store = SignatureStore::new();
 
-        let sig = mock_signature("0x1234");
-        store.store(sig.clone());
+        store.store(mock_signature("0x1234"));
 
         let retrieved = store.get("0x1234").unwrap();
         assert_eq!(retrieved.message_id, "0x1234");
