@@ -13,6 +13,7 @@
 pub mod apply;
 pub mod config;
 pub mod error;
+pub mod http;
 pub mod state;
 pub mod sync;
 pub mod validator;
@@ -21,6 +22,7 @@ pub mod validator;
 pub use apply::ChangesetApplier;
 pub use config::ValidatorConfig;
 pub use error::ValidatorError;
+pub use http::{create_router, AppState};
 pub use state::StateStore;
 pub use sync::{DAFetcher, SignatureVerifier};
 pub use validator::Validator;

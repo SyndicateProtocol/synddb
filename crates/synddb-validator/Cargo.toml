@@ -54,6 +54,9 @@ async-trait = { workspace = true }
 # Google Cloud Storage (feature-gated)
 google-cloud-storage = { workspace = true, optional = true }
 
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+
 [features]
 default = ["gcs"]
 gcs = ["google-cloud-storage"]
