@@ -80,6 +80,20 @@ pub struct ValidatorConfig {
         default_value = "0.0.0.0:8081"
     )]
     pub bridge_signature_endpoint: SocketAddr,
+
+    // === Gap Detection ===
+    /// Maximum number of retries when a sequence gap is detected
+    #[arg(long, env = "GAP_RETRY_COUNT", default_value = "5")]
+    pub gap_retry_count: u32,
+
+    /// Delay between gap retry attempts
+    #[arg(long, env = "GAP_RETRY_DELAY", default_value = "5s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub gap_retry_delay: Duration,
+
+    /// Skip gaps after max retries instead of erroring (use with caution)
+    #[arg(long, env = "GAP_SKIP_ON_FAILURE", default_value = "false")]
+    pub gap_skip_on_failure: bool,
 }
 
 impl ValidatorConfig {

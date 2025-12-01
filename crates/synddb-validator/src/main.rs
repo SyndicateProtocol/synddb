@@ -129,8 +129,50 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Run continuous sync loop
-        if let Err(e) = validator.run().await {
+        // Create callbacks for continuous sync
+        let signer_for_loop = sync_signer.clone();
+        let store_for_loop = sync_store.clone();
+        let state_for_loop = sync_app_state.clone();
+
+        // Withdrawal signing callback
+        let mut on_withdrawal = move |withdrawal: &synddb_shared::types::WithdrawalRequest| {
+            if let Some(ref signer) = signer_for_loop {
+                let message_id = request_id_to_message_id(&withdrawal.request_id);
+                match signer.sign_message_sync(message_id) {
+                    Ok(sig) => {
+                        info!(
+                            request_id = %withdrawal.request_id,
+                            message_id = %sig.message_id,
+                            signer = %sig.signer,
+                            "Signed withdrawal message"
+                        );
+                        store_for_loop.store(sig);
+                    }
+                    Err(e) => {
+                        error!(
+                            request_id = %withdrawal.request_id,
+                            error = %e,
+                            "Failed to sign withdrawal message"
+                        );
+                    }
+                }
+            }
+        };
+
+        // Sync progress callback - updates HTTP status
+        let mut on_sync = move |sequence: u64| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            state_for_loop.update_sync_status(Some(sequence), now);
+        };
+
+        // Run continuous sync loop with callbacks
+        if let Err(e) = validator
+            .run_with_callbacks(&mut on_withdrawal, &mut on_sync)
+            .await
+        {
             error!(error = %e, "Sync loop error");
         }
 
@@ -175,41 +217,42 @@ async fn sync_to_head_with_signing(
     let mut next_sequence = validator.last_sequence()?.map_or(0, |s| s + 1);
     let mut synced = 0;
 
+    // Create the withdrawal callback
+    let signer_clone = signer.cloned();
+    let store_clone = store.clone();
+    let mut on_withdrawal = move |withdrawal: &synddb_shared::types::WithdrawalRequest| {
+        if let Some(ref signer) = signer_clone {
+            // Convert request_id to message_id (bytes32)
+            // The bridge expects keccak256(request_id) as the message ID
+            let message_id = request_id_to_message_id(&withdrawal.request_id);
+
+            // Sign the message
+            match signer.sign_message_sync(message_id) {
+                Ok(sig) => {
+                    info!(
+                        request_id = %withdrawal.request_id,
+                        message_id = %sig.message_id,
+                        signer = %sig.signer,
+                        "Signed withdrawal message"
+                    );
+                    store_clone.store(sig);
+                }
+                Err(e) => {
+                    error!(
+                        request_id = %withdrawal.request_id,
+                        error = %e,
+                        "Failed to sign withdrawal message"
+                    );
+                }
+            }
+        }
+    };
+
     loop {
         // Sync with callback for withdrawals
-        let result = if let Some(signer) = signer {
-            let signer = Arc::clone(signer);
-            let store = store.clone();
-            validator
-                .sync_one_with_callback(next_sequence, |withdrawal| {
-                    // Convert request_id to message_id (bytes32)
-                    // The bridge expects keccak256(request_id) as the message ID
-                    let message_id = request_id_to_message_id(&withdrawal.request_id);
-
-                    // Sign the message
-                    match signer.sign_message_sync(message_id) {
-                        Ok(sig) => {
-                            info!(
-                                request_id = %withdrawal.request_id,
-                                message_id = %sig.message_id,
-                                signer = %sig.signer,
-                                "Signed withdrawal message"
-                            );
-                            store.store(sig);
-                        }
-                        Err(e) => {
-                            error!(
-                                request_id = %withdrawal.request_id,
-                                error = %e,
-                                "Failed to sign withdrawal message"
-                            );
-                        }
-                    }
-                })
-                .await
-        } else {
-            validator.sync_one(next_sequence).await
-        };
+        let result = validator
+            .sync_one_with_callback(next_sequence, &mut on_withdrawal)
+            .await;
 
         match result {
             Ok(true) => {

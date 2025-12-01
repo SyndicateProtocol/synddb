@@ -5,12 +5,16 @@ use anyhow::{Context, Result};
 use rusqlite::session::ConflictAction;
 use rusqlite::Connection;
 use std::io::{Cursor, Read};
-use synddb_shared::types::{ChangesetBatchRequest, MessageType, SignedMessage, WithdrawalRequest};
+use synddb_shared::types::{
+    ChangesetBatchRequest, MessageType, SignedMessage, SnapshotRequest, WithdrawalRequest,
+};
 use tracing::{debug, info, warn};
 
 /// Applies changesets from sequenced messages to an `SQLite` database
 pub struct ChangesetApplier {
     conn: Connection,
+    /// Path to the database file (None for in-memory)
+    db_path: Option<String>,
 }
 
 impl ChangesetApplier {
@@ -25,14 +29,20 @@ impl ChangesetApplier {
 
         info!(path = db_path, "Database opened for changeset application");
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            db_path: Some(db_path.to_string()),
+        })
     }
 
     /// Create an applier with an in-memory database (for testing)
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().context("Failed to open in-memory database")?;
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            db_path: None,
+        })
     }
 
     /// Get a reference to the underlying connection (for queries)
@@ -44,18 +54,12 @@ impl ChangesetApplier {
     ///
     /// Handles different message types:
     /// - `Changeset`: Decompress and apply changeset batch
-    /// - `Snapshot`: Log only (snapshot restoration not implemented yet)
+    /// - `Snapshot`: Restore database from snapshot
     /// - `Withdrawal`: Log only (no database changes)
     pub fn apply_message(&mut self, message: &SignedMessage) -> Result<()> {
         match message.message_type {
             MessageType::Changeset => self.apply_changeset_message(message),
-            MessageType::Snapshot => {
-                info!(
-                    sequence = message.sequence,
-                    "Snapshot message (restoration not yet implemented)"
-                );
-                Ok(())
-            }
+            MessageType::Snapshot => self.apply_snapshot_message(message),
             MessageType::Withdrawal => {
                 debug!(
                     sequence = message.sequence,
@@ -125,6 +129,158 @@ impl ChangesetApplier {
         );
 
         Ok(())
+    }
+
+    /// Apply a snapshot message by restoring the database from the snapshot
+    fn apply_snapshot_message(&mut self, message: &SignedMessage) -> Result<()> {
+        // 1. Decompress the payload
+        let decompressed = Self::decompress(&message.payload).map_err(|e| {
+            ValidatorError::DecompressionError(format!(
+                "Failed to decompress snapshot at sequence {}: {e}",
+                message.sequence
+            ))
+        })?;
+
+        // 2. Parse as SnapshotRequest
+        let request: SnapshotRequest = serde_json::from_slice(&decompressed).map_err(|e| {
+            ValidatorError::ParseError(format!(
+                "Failed to parse snapshot request at sequence {}: {e}",
+                message.sequence
+            ))
+        })?;
+
+        info!(
+            sequence = message.sequence,
+            message_id = %request.message_id,
+            snapshot_sequence = request.snapshot.sequence,
+            size = request.snapshot.data.len(),
+            "Restoring database from snapshot"
+        );
+
+        // 3. Restore based on whether we have a file path or in-memory db
+        if let Some(path) = self.db_path.clone() {
+            self.restore_snapshot_to_file(&path, &request.snapshot.data)?;
+        } else {
+            self.restore_snapshot_in_memory(&request.snapshot.data)?;
+        }
+
+        info!(
+            sequence = message.sequence,
+            message_id = %request.message_id,
+            "Snapshot restored successfully"
+        );
+
+        Ok(())
+    }
+
+    /// Restore a snapshot to a file-based database
+    ///
+    /// Uses `SQLite`'s backup API to atomically restore the database.
+    fn restore_snapshot_to_file(&mut self, db_path: &str, snapshot_data: &[u8]) -> Result<()> {
+        use std::fs;
+        use std::io::Write;
+
+        // Write snapshot to a temporary file
+        let temp_path = format!("{db_path}.snapshot.tmp");
+        {
+            let mut file =
+                fs::File::create(&temp_path).context("Failed to create temporary snapshot file")?;
+            file.write_all(snapshot_data)
+                .context("Failed to write snapshot data")?;
+            file.sync_all().context("Failed to sync snapshot file")?;
+        }
+
+        // Open the snapshot as a source database
+        let source = Connection::open(&temp_path).context("Failed to open snapshot database")?;
+
+        // Verify it's a valid SQLite database
+        source
+            .query_row("SELECT 1", [], |_| Ok(()))
+            .context("Snapshot is not a valid SQLite database")?;
+
+        // Use SQLite backup API to restore
+        {
+            let backup = rusqlite::backup::Backup::new(&source, &mut self.conn)
+                .context("Failed to create backup handle")?;
+
+            // Run the backup (copies all pages)
+            backup
+                .run_to_completion(100, std::time::Duration::from_millis(10), None)
+                .context("Failed to restore from snapshot")?;
+        } // backup dropped here, releasing the borrow
+
+        // Clean up temporary file
+        if let Err(e) = fs::remove_file(&temp_path) {
+            warn!(path = %temp_path, error = %e, "Failed to remove temporary snapshot file");
+        }
+
+        // Re-apply WAL mode after restore
+        self.conn
+            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+            .context("Failed to re-apply pragmas after snapshot restore")?;
+
+        Ok(())
+    }
+
+    /// Restore a snapshot to an in-memory database
+    fn restore_snapshot_in_memory(&mut self, snapshot_data: &[u8]) -> Result<()> {
+        // For in-memory databases, we need to:
+        // 1. Write the snapshot to a temp file
+        // 2. Open it
+        // 3. Backup from it to our in-memory db
+
+        use std::fs;
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // Use unique file name to avoid conflicts with parallel operations
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let temp_path = std::env::temp_dir().join(format!("synddb_snapshot_restore_{id}.db"));
+        let temp_path_str = temp_path.to_string_lossy();
+
+        // Write snapshot to temp file
+        {
+            let mut file =
+                fs::File::create(&temp_path).context("Failed to create temporary snapshot file")?;
+            file.write_all(snapshot_data)
+                .context("Failed to write snapshot data")?;
+        }
+
+        // Open snapshot
+        let source =
+            Connection::open(&temp_path).context("Failed to open temporary snapshot database")?;
+
+        // Backup to our in-memory connection
+        let backup = rusqlite::backup::Backup::new(&source, &mut self.conn)
+            .context("Failed to create backup handle")?;
+
+        backup
+            .run_to_completion(100, std::time::Duration::from_millis(10), None)
+            .context("Failed to restore from snapshot")?;
+
+        // Clean up
+        if let Err(e) = fs::remove_file(&temp_path) {
+            warn!(path = %temp_path_str, error = %e, "Failed to remove temporary snapshot file");
+        }
+
+        Ok(())
+    }
+
+    /// Extract snapshot request from a message
+    ///
+    /// Returns `Some(SnapshotRequest)` if this is a snapshot message,
+    /// `None` otherwise.
+    pub fn extract_snapshot(message: &SignedMessage) -> Result<Option<SnapshotRequest>> {
+        if message.message_type != MessageType::Snapshot {
+            return Ok(None);
+        }
+
+        let decompressed = Self::decompress(&message.payload)?;
+        let request: SnapshotRequest =
+            serde_json::from_slice(&decompressed).context("Failed to parse snapshot request")?;
+
+        Ok(Some(request))
     }
 
     /// Decompress a zstd-compressed payload
@@ -318,22 +474,201 @@ mod tests {
         assert!(applier.apply_message(&message).is_ok());
     }
 
+    /// Create a compressed snapshot message
+    fn create_compressed_snapshot(db_data: Vec<u8>, sequence: u64) -> Vec<u8> {
+        use std::io::Write;
+        use synddb_shared::types::{SnapshotData, SnapshotRequest};
+
+        let request = SnapshotRequest {
+            snapshot: SnapshotData {
+                data: db_data,
+                timestamp: 1700000000,
+                sequence,
+            },
+            message_id: format!("snap-{sequence}"),
+            attestation_token: None,
+        };
+
+        let json = serde_json::to_vec(&request).unwrap();
+
+        // Compress with zstd
+        let mut encoder = zstd::Encoder::new(Vec::new(), 3).unwrap();
+        encoder.write_all(&json).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// Create an in-memory database and return its bytes
+    fn create_test_database_bytes() -> Vec<u8> {
+        use std::fs;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // Use atomic counter for unique file names in parallel tests
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let thread_id = std::thread::current().id();
+
+        // Create a file-based database with some data (so we can read the bytes)
+        let temp_path =
+            std::env::temp_dir().join(format!("test_snapshot_source_{id}_{thread_id:?}.db"));
+        let _ = fs::remove_file(&temp_path); // clean up from previous runs
+
+        {
+            let conn = Connection::open(&temp_path).unwrap();
+            // Disable WAL mode for simpler snapshot format
+            conn.execute_batch("PRAGMA journal_mode=DELETE;").unwrap();
+            conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+                .unwrap();
+            conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
+                .unwrap();
+            conn.execute("INSERT INTO users VALUES (2, 'Bob')", [])
+                .unwrap();
+        }
+
+        // Read the file bytes
+        let bytes = fs::read(&temp_path).unwrap();
+        let _ = fs::remove_file(&temp_path);
+        bytes
+    }
+
     #[test]
-    fn test_snapshot_message_no_change() {
+    fn test_snapshot_restore_in_memory() {
+        // Create a target applier (empty database)
         let mut applier = ChangesetApplier::in_memory().unwrap();
 
+        // Create snapshot data from a test database
+        let snapshot_data = create_test_database_bytes();
+        let compressed = create_compressed_snapshot(snapshot_data, 100);
+
+        let message = SignedMessage {
+            sequence: 101,
+            timestamp: 1700000000,
+            message_type: MessageType::Snapshot,
+            payload: compressed,
+            message_hash: "0x0".to_string(),
+            signature: "0x0".to_string(),
+            signer: "0x0".to_string(),
+        };
+
+        // Apply the snapshot
+        applier.apply_message(&message).unwrap();
+
+        // Verify the data was restored
+        let count: i64 = applier
+            .connection()
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        let name: String = applier
+            .connection()
+            .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "Alice");
+    }
+
+    #[test]
+    fn test_snapshot_restore_to_file() {
+        use std::fs;
+
+        // Create a file-based applier
+        let temp_path = std::env::temp_dir().join("test_snapshot_target.db");
+        let temp_path_str = temp_path.to_str().unwrap();
+
+        // Clean up any previous test
+        let _ = fs::remove_file(&temp_path);
+
+        let mut applier = ChangesetApplier::new(temp_path_str).unwrap();
+
+        // Create snapshot data from a test database
+        let snapshot_data = create_test_database_bytes();
+        let compressed = create_compressed_snapshot(snapshot_data, 100);
+
+        let message = SignedMessage {
+            sequence: 101,
+            timestamp: 1700000000,
+            message_type: MessageType::Snapshot,
+            payload: compressed,
+            message_hash: "0x0".to_string(),
+            signature: "0x0".to_string(),
+            signer: "0x0".to_string(),
+        };
+
+        // Apply the snapshot
+        applier.apply_message(&message).unwrap();
+
+        // Verify the data was restored
+        let count: i64 = applier
+            .connection()
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // Clean up
+        drop(applier);
+        let _ = fs::remove_file(&temp_path);
+    }
+
+    #[test]
+    fn test_snapshot_invalid_database() {
+        let mut applier = ChangesetApplier::in_memory().unwrap();
+
+        // Create a snapshot with invalid database data
+        let invalid_data = b"not a valid sqlite database".to_vec();
+        let compressed = create_compressed_snapshot(invalid_data, 100);
+
+        let message = SignedMessage {
+            sequence: 101,
+            timestamp: 1700000000,
+            message_type: MessageType::Snapshot,
+            payload: compressed,
+            message_hash: "0x0".to_string(),
+            signature: "0x0".to_string(),
+            signer: "0x0".to_string(),
+        };
+
+        // Should fail
+        let result = applier.apply_message(&message);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_snapshot() {
+        let snapshot_data = create_test_database_bytes();
+        let compressed = create_compressed_snapshot(snapshot_data.clone(), 42);
+
+        let message = SignedMessage {
+            sequence: 43,
+            timestamp: 1700000000,
+            message_type: MessageType::Snapshot,
+            payload: compressed,
+            message_hash: "0x0".to_string(),
+            signature: "0x0".to_string(),
+            signer: "0x0".to_string(),
+        };
+
+        let extracted = ChangesetApplier::extract_snapshot(&message).unwrap();
+        assert!(extracted.is_some());
+
+        let request = extracted.unwrap();
+        assert_eq!(request.message_id, "snap-42");
+        assert_eq!(request.snapshot.sequence, 42);
+        assert_eq!(request.snapshot.data.len(), snapshot_data.len());
+    }
+
+    #[test]
+    fn test_extract_snapshot_wrong_type() {
         let message = SignedMessage {
             sequence: 0,
             timestamp: 1700000000,
-            message_type: MessageType::Snapshot,
+            message_type: MessageType::Changeset,
             payload: vec![],
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
         };
 
-        // Should succeed (logging only for now)
-        assert!(applier.apply_message(&message).is_ok());
+        let extracted = ChangesetApplier::extract_snapshot(&message).unwrap();
+        assert!(extracted.is_none());
     }
 
     #[test]

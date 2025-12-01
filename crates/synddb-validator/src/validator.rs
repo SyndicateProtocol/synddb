@@ -29,6 +29,12 @@ pub struct Validator {
     sync_interval: Duration,
     /// Shutdown receiver
     shutdown_rx: watch::Receiver<bool>,
+    /// Gap retry count
+    gap_retry_count: u32,
+    /// Gap retry delay
+    gap_retry_delay: Duration,
+    /// Skip gaps after max retries
+    gap_skip_on_failure: bool,
 }
 
 impl Validator {
@@ -52,6 +58,8 @@ impl Validator {
         info!(
             sequencer = %config.sequencer_address,
             database = %config.database_path,
+            gap_retry_count = config.gap_retry_count,
+            gap_skip_on_failure = config.gap_skip_on_failure,
             "Validator initialized"
         );
 
@@ -62,6 +70,9 @@ impl Validator {
             state,
             sync_interval: config.sync_interval,
             shutdown_rx,
+            gap_retry_count: config.gap_retry_count,
+            gap_retry_delay: config.gap_retry_delay,
+            gap_skip_on_failure: config.gap_skip_on_failure,
         })
     }
 
@@ -82,6 +93,9 @@ impl Validator {
             state,
             sync_interval: Duration::from_millis(100),
             shutdown_rx,
+            gap_retry_count: 3,
+            gap_retry_delay: Duration::from_millis(100),
+            gap_skip_on_failure: false,
         })
     }
 
@@ -99,11 +113,36 @@ impl Validator {
 
     /// Run the sync loop until shutdown
     pub async fn run(&mut self) -> Result<()> {
+        self.run_with_callbacks(|_| {}, |_| {}).await
+    }
+
+    /// Run the sync loop with callbacks for withdrawals and progress updates
+    ///
+    /// - `on_withdrawal`: Called when a withdrawal message is processed
+    /// - `on_sync`: Called after each successful sync with the sequence number
+    pub async fn run_with_callbacks<W, S>(
+        &mut self,
+        mut on_withdrawal: W,
+        mut on_sync: S,
+    ) -> Result<()>
+    where
+        W: FnMut(&synddb_shared::types::WithdrawalRequest),
+        S: FnMut(u64),
+    {
         info!("Starting validator sync loop");
 
         // Get starting sequence
         let mut next_sequence = self.state.next_sequence()?;
         info!(next_sequence, "Resuming from sequence");
+
+        // Track consecutive "not found" count for gap detection
+        let mut not_found_count: u32 = 0;
+
+        // Extract config values to avoid holding &self across await
+        let gap_retry_count = self.gap_retry_count;
+        let gap_retry_delay = self.gap_retry_delay;
+        let gap_skip_on_failure = self.gap_skip_on_failure;
+        let sync_interval = self.sync_interval;
 
         loop {
             // Check for shutdown
@@ -113,16 +152,78 @@ impl Validator {
             }
 
             // Try to sync next message
-            match self.sync_one(next_sequence).await {
+            match self
+                .sync_one_with_callback(next_sequence, &mut on_withdrawal)
+                .await
+            {
                 Ok(true) => {
-                    // Successfully synced, move to next
+                    // Successfully synced, reset gap counter
+                    not_found_count = 0;
+                    // Call progress callback
+                    on_sync(next_sequence);
                     next_sequence += 1;
                     // Don't sleep - immediately try next message
                     continue;
                 }
                 Ok(false) => {
-                    // No message available yet, wait before polling again
-                    debug!(sequence = next_sequence, "No message available, waiting");
+                    // No message available yet
+                    not_found_count += 1;
+
+                    // Check if this might be a gap (we're missing messages)
+                    if not_found_count >= gap_retry_count {
+                        // Try to detect if there are future messages available
+                        // Clone fetcher to avoid holding &self across await
+                        let fetcher = Arc::clone(&self.fetcher);
+                        match Self::detect_gap_static(&fetcher, next_sequence).await {
+                            Ok(Some(available_seq)) => {
+                                let gap_size = available_seq - next_sequence;
+                                warn!(
+                                    expected = next_sequence,
+                                    available = available_seq,
+                                    gap_size,
+                                    "Sequence gap detected"
+                                );
+
+                                if !gap_skip_on_failure {
+                                    // Return error - operator needs to intervene
+                                    return Err(ValidatorError::SequenceGap {
+                                        expected: next_sequence,
+                                        actual: available_seq,
+                                    }
+                                    .into());
+                                }
+
+                                warn!(
+                                    skipping_from = next_sequence,
+                                    skipping_to = available_seq,
+                                    "Skipping gap (gap_skip_on_failure enabled)"
+                                );
+                                // Record the gap in state (for auditing)
+                                if let Err(e) = self.state.record_gap(next_sequence, available_seq)
+                                {
+                                    error!(error = %e, "Failed to record gap");
+                                }
+                                next_sequence = available_seq;
+                                not_found_count = 0;
+                                continue;
+                            }
+                            Ok(None) => {
+                                // No future messages either, just waiting for new data
+                                debug!(sequence = next_sequence, "No message available, waiting");
+                                not_found_count = 0; // Reset since we confirmed no gap
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "Failed to detect gap");
+                            }
+                        }
+                    } else {
+                        debug!(
+                            sequence = next_sequence,
+                            retry = not_found_count,
+                            max_retries = gap_retry_count,
+                            "No message available, will retry"
+                        );
+                    }
                 }
                 Err(e) => {
                     // Error during sync - log and continue
@@ -130,9 +231,15 @@ impl Validator {
                 }
             }
 
-            // Wait before next poll
+            // Wait before next poll (use gap_retry_delay if we're in gap detection mode)
+            let wait_duration = if not_found_count > 0 {
+                gap_retry_delay
+            } else {
+                sync_interval
+            };
+
             tokio::select! {
-                _ = tokio::time::sleep(self.sync_interval) => {}
+                _ = tokio::time::sleep(wait_duration) => {}
                 _ = self.shutdown_rx.changed() => {
                     if *self.shutdown_rx.borrow() {
                         info!("Shutdown signal received during wait");
@@ -146,11 +253,46 @@ impl Validator {
         Ok(())
     }
 
+    /// Detect if there's a gap by checking for future messages (static version)
+    ///
+    /// Returns `Some(sequence)` if a message exists at a higher sequence number,
+    /// indicating a gap. Returns `None` if no future messages are found.
+    async fn detect_gap_static(
+        fetcher: &Arc<dyn DAFetcher>,
+        expected_sequence: u64,
+    ) -> Result<Option<u64>> {
+        // Check a few future sequences to see if data exists
+        for offset in 1..=10 {
+            let check_seq = expected_sequence + offset;
+            match fetcher.get(check_seq).await {
+                Ok(Some(_)) => {
+                    // Found a message at a higher sequence - there's a gap
+                    return Ok(Some(check_seq));
+                }
+                Ok(None) => {
+                    // No message at this sequence either
+                }
+                Err(e) => {
+                    debug!(sequence = check_seq, error = %e, "Error checking for gap");
+                }
+            }
+        }
+
+        // Also try to get the latest sequence from the fetcher
+        if let Ok(Some(latest)) = fetcher.get_latest_sequence().await {
+            if latest > expected_sequence {
+                return Ok(Some(expected_sequence + 1)); // Return next expected
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Sync a single message by sequence number
     ///
     /// Returns `Ok(true)` if message was synced, `Ok(false)` if not available yet
     pub async fn sync_one(&mut self, sequence: u64) -> Result<bool> {
-        self.sync_one_with_callback(sequence, |_| {}).await
+        self.sync_one_with_callback(sequence, &mut |_| {}).await
     }
 
     /// Sync a single message by sequence number with a callback for withdrawal messages
@@ -160,10 +302,10 @@ impl Validator {
     pub async fn sync_one_with_callback<F>(
         &mut self,
         sequence: u64,
-        on_withdrawal: F,
+        on_withdrawal: &mut F,
     ) -> Result<bool>
     where
-        F: FnOnce(&synddb_shared::types::WithdrawalRequest),
+        F: FnMut(&synddb_shared::types::WithdrawalRequest),
     {
         // 1. Fetch message
         let message = match self.fetcher.get(sequence).await? {

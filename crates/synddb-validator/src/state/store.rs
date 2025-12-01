@@ -26,6 +26,14 @@ impl StateStore {
                 updated_at INTEGER NOT NULL
             );
 
+            -- Table to record detected sequence gaps for auditing
+            CREATE TABLE IF NOT EXISTS sequence_gaps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                gap_start INTEGER NOT NULL,
+                gap_end INTEGER NOT NULL,
+                detected_at INTEGER NOT NULL
+            );
+
             -- Insert default values if not present
             -- -1 means never synced
             INSERT OR IGNORE INTO validator_state (key, value, updated_at)
@@ -141,6 +149,57 @@ impl StateStore {
 
         Ok(value as u64)
     }
+
+    /// Record a sequence gap for auditing
+    ///
+    /// This is called when the validator detects missing sequences and
+    /// is configured to skip gaps.
+    pub fn record_gap(&self, gap_start: u64, gap_end: u64) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        self.conn
+            .execute(
+                "INSERT INTO sequence_gaps (gap_start, gap_end, detected_at) VALUES (?, ?, ?)",
+                [gap_start, gap_end, now],
+            )
+            .context("Failed to record gap")?;
+
+        info!(
+            gap_start,
+            gap_end,
+            gap_size = gap_end - gap_start,
+            "Recorded sequence gap"
+        );
+
+        Ok(())
+    }
+
+    /// Get all recorded gaps
+    pub fn get_gaps(&self) -> Result<Vec<(u64, u64, u64)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT gap_start, gap_end, detected_at FROM sequence_gaps ORDER BY id")?;
+
+        let gaps = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()
+            .context("Failed to query gaps")?;
+
+        Ok(gaps)
+    }
+
+    /// Check if there are any recorded gaps
+    pub fn has_gaps(&self) -> Result<bool> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM sequence_gaps", [], |row| row.get(0))
+            .context("Failed to count gaps")?;
+
+        Ok(count > 0)
+    }
 }
 
 impl std::fmt::Debug for StateStore {
@@ -248,5 +307,30 @@ mod tests {
 
         // Clean up
         let _ = fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn test_record_gap() {
+        let store = StateStore::in_memory().unwrap();
+
+        // No gaps initially
+        assert!(!store.has_gaps().unwrap());
+        assert!(store.get_gaps().unwrap().is_empty());
+
+        // Record a gap
+        store.record_gap(5, 10).unwrap();
+
+        // Verify gap was recorded
+        assert!(store.has_gaps().unwrap());
+        let gaps = store.get_gaps().unwrap();
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].0, 5); // gap_start
+        assert_eq!(gaps[0].1, 10); // gap_end
+        assert!(gaps[0].2 > 0); // detected_at
+
+        // Record another gap
+        store.record_gap(20, 25).unwrap();
+        let gaps = store.get_gaps().unwrap();
+        assert_eq!(gaps.len(), 2);
     }
 }
