@@ -57,6 +57,10 @@ pub struct ValidatorConfig {
     pub shutdown_timeout: Duration,
 
     // === Bridge Signer Mode ===
+    // Note: Unlike ChainMonitorConfig which uses `#[command(flatten)]`, these fields are kept
+    // as individual Options. Clap's flatten with Option<T> requires all nested fields to have
+    // defaults, but bridge_contract, bridge_chain_id, and bridge_signing_key have no sensible
+    // defaults. The `validate_bridge_config()` method validates interdependencies at runtime.
     /// Enable bridge signer mode - signs withdrawal messages for bridge contract
     #[arg(long, env = "BRIDGE_SIGNER")]
     pub bridge_signer: bool,
