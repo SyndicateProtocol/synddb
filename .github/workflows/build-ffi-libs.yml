@@ -4,6 +4,25 @@ name: Build FFI Libraries
 # 1. Pull Requests: Build dev platforms (dry run, no commits) - verify builds work
 # 2. Main branch: Build dev platforms and commit to repo - enable cross-language dev
 # 3. Release tags: Build all platforms and create GitHub Release - production distribution
+#
+# BRANCH PROTECTION NOTE:
+# If you have branch protection rules requiring PRs for the main branch, the
+# commit-dev-libs job will fail with an error like:
+#
+#   remote: error: GH013: Repository rule violations found for refs/heads/main.
+#   remote: - Changes must be made through a pull request.
+#   ! [remote rejected] main -> main (push declined due to repository rule violations)
+#
+# To fix this, add github-actions[bot] to the bypass list:
+#   1. Go to repository Settings → Rules → Rulesets
+#   2. Edit the ruleset protecting the main branch
+#   3. Under "Bypass list", click "Add bypass"
+#   4. Search for and add "github-actions[bot]"
+#   5. Save the ruleset
+#
+# For classic branch protection (Settings → Branches → Branch protection rules):
+#   1. Edit the rule for main
+#   2. Under "Restrict who can push to matching branches", add github-actions[bot]
 
 on:
   push:
