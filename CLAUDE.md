@@ -91,6 +91,15 @@ gh run watch <run-id>
 
 # View logs for a failed run
 gh run view <run-id> --log-failed
+
+# Manually trigger a workflow
+gh workflow run <workflow-name> --ref <branch>
+
+# Check all CI status checks for current PR
+gh pr checks
+
+# View PR details
+gh pr view <pr-number>
 ```
 
 **Note:** When squash-merging PRs, ensure the commit message body does not contain `[skip ci]` - GitHub scans the entire message and will skip all workflows if found.
