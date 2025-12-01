@@ -15,7 +15,7 @@ pub enum MessageType {
 }
 
 /// A message that has been sequenced and signed by the sequencer
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SignedMessage {
     /// Monotonically increasing sequence number
     pub sequence: u64,
@@ -34,7 +34,7 @@ pub struct SignedMessage {
 }
 
 /// Receipt returned to clients after successful sequencing
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SequenceReceipt {
     /// Assigned sequence number
     pub sequence: u64,

@@ -12,7 +12,9 @@
 
 pub mod config;
 pub mod error;
+pub mod sync;
 
 // Re-export main types for convenience
 pub use config::ValidatorConfig;
 pub use error::ValidatorError;
+pub use sync::DAFetcher;
