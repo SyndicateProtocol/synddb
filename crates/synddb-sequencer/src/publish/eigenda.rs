@@ -1,7 +1,7 @@
 //! `EigenDA` layer publisher
 
-use crate::inbox::SignedMessage;
 use crate::publish::traits::PublishResult;
+use synddb_shared::types::SignedMessage;
 
 #[derive(Debug)]
 pub struct EigenDAPublisher {

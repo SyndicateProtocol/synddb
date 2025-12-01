@@ -2,18 +2,17 @@
 //!
 //! This module contains the core types used for communication between
 //! `synddb-sequencer`, `synddb-validator`, and `synddb-client`.
+//!
+//! Types are organized in submodules:
+//! - `message`: Core message types (`SignedMessage`, `MessageType`, `SequenceReceipt`)
+//! - `payloads`: Request/response payload types
+//! - `serde_helpers`: Serialization utilities (e.g., base64)
 
-mod message;
-mod payloads;
+pub mod message;
+pub mod payloads;
 pub mod serde_helpers;
 
-// Re-export message types
 pub use message::{MessageType, SequenceReceipt, SignedMessage};
-
-// Re-export payload types
 pub use payloads::{
     ChangesetBatchRequest, ChangesetData, SnapshotData, SnapshotRequest, WithdrawalRequest,
 };
-
-// Re-export serde helpers for convenience
-pub use serde_helpers::base64_serde;

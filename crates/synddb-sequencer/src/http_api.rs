@@ -18,12 +18,11 @@ use tracing::{error, info, warn};
 
 use crate::attestation::AttestationVerifier;
 use crate::http_errors::{HttpError, SequencerError};
-use crate::inbox::{Inbox, MessageType, SequenceReceipt, SignedMessage};
+use crate::inbox::Inbox;
 use crate::publish::traits::DAPublisher;
-
-// Import shared types for request parsing
-pub use synddb_shared::types::{
-    base64_serde, ChangesetBatchRequest, ChangesetData, SnapshotData, SnapshotRequest,
+use synddb_shared::types::serde_helpers::base64_serde;
+use synddb_shared::types::{
+    ChangesetBatchRequest, MessageType, SequenceReceipt, SignedMessage, SnapshotRequest,
     WithdrawalRequest,
 };
 

@@ -53,18 +53,6 @@ pub enum ValidatorError {
     ConfigError(String),
 }
 
-impl From<std::io::Error> for ValidatorError {
-    fn from(e: std::io::Error) -> Self {
-        Self::DecompressionError(e.to_string())
-    }
-}
-
-impl From<serde_json::Error> for ValidatorError {
-    fn from(e: serde_json::Error) -> Self {
-        Self::ParseError(e.to_string())
-    }
-}
-
 impl From<rusqlite::Error> for ValidatorError {
     fn from(e: rusqlite::Error) -> Self {
         Self::DatabaseError(e.to_string())

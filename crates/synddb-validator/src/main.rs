@@ -8,61 +8,35 @@ use tokio::signal;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use synddb_validator::{
-    create_router, create_signature_router, AppState, BridgeSigner, SignatureApiState,
-    SignatureStore, Validator, ValidatorConfig,
-};
+use synddb_validator::bridge::{BridgeSigner, SignatureStore};
+use synddb_validator::config::ValidatorConfig;
+use synddb_validator::http::{create_router, create_signature_router, AppState, SignatureApiState};
+use synddb_validator::sync::DAFetcher;
+use synddb_validator::validator::Validator;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = ValidatorConfig::parse();
     init_logging(&config);
 
-    info!("`SyndDB` Validator starting...");
-    info!(sequencer = %config.sequencer_address, "Configuration loaded");
-    info!(database = %config.database_path, "Database path");
-    info!(state_db = %config.state_db_path, "State database path");
+    info!(
+        sequencer = %config.sequencer_address,
+        database = %config.database_path,
+        state_db = %config.state_db_path,
+        "`SyndDB` Validator starting"
+    );
 
-    // Validate bridge config if enabled
     config
         .validate_bridge_config()
         .map_err(|e| anyhow::anyhow!(e))?;
 
-    // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-
-    // Create DA fetcher based on config
     let fetcher = create_fetcher(&config).await?;
-
-    // Create validator
     let mut validator = Validator::new(&config, fetcher.clone(), shutdown_rx.clone())?;
-
-    // Create HTTP app state
     let app_state = AppState::new();
 
-    // Get initial sync state
-    if let Ok(Some(seq)) = validator.last_sequence() {
-        info!(last_sequence = seq, "Resuming from previous state");
-    } else {
-        info!("Starting fresh sync from sequence 0");
-    }
+    let http_handle = start_http_server(app_state.clone(), config.bind_address);
 
-    // Start HTTP server
-    let http_app_state = app_state.clone();
-    let bind_address = config.bind_address;
-    let http_handle = tokio::spawn(async move {
-        let router = create_router(http_app_state);
-        let listener = tokio::net::TcpListener::bind(bind_address)
-            .await
-            .expect("Failed to bind HTTP server");
-        info!(address = %bind_address, "HTTP server listening");
-
-        axum::serve(listener, router)
-            .await
-            .expect("HTTP server error");
-    });
-
-    // Create bridge signer and signature store if enabled
     let signature_store = SignatureStore::new();
     let bridge_signer: Option<Arc<BridgeSigner>> = if config.is_bridge_signer() {
         let signer = BridgeSigner::new(&config)?;
@@ -77,30 +51,13 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Start signature API server if bridge signer is enabled
-    let signature_api_handle = if let Some(ref signer) = bridge_signer {
-        let sig_api_state = SignatureApiState::new(
+    let signature_api_handle = bridge_signer.as_ref().map(|signer| {
+        start_signature_http_server(
             signature_store.clone(),
-            format!("{:#x}", signer.address()),
-            format!("{:#x}", signer.bridge_contract()),
-            signer.chain_id(),
-        );
-
-        let sig_bind_address = config.bridge_signature_endpoint;
-        Some(tokio::spawn(async move {
-            let router = create_signature_router(sig_api_state);
-            let listener = tokio::net::TcpListener::bind(sig_bind_address)
-                .await
-                .expect("Failed to bind signature API server");
-            info!(address = %sig_bind_address, "Signature API server listening");
-
-            axum::serve(listener, router)
-                .await
-                .expect("Signature API server error");
-        }))
-    } else {
-        None
-    };
+            signer,
+            config.bridge_signature_endpoint,
+        )
+    });
 
     // Start sync loop
     let sync_app_state = app_state.clone();
@@ -128,11 +85,9 @@ async fn main() -> Result<()> {
         // Create callbacks for continuous sync
         let mut on_withdrawal = create_withdrawal_callback(sync_signer.clone(), sync_store.clone());
 
-        // Sync progress callback - updates HTTP status
         let state_for_loop = sync_app_state.clone();
         let mut on_sync = move |sequence: u64| {
-            let now = current_timestamp();
-            state_for_loop.update_sync_status(Some(sequence), now);
+            state_for_loop.update_sync_status(Some(sequence), current_timestamp());
         };
 
         // Run continuous sync loop with callbacks
@@ -259,8 +214,7 @@ fn request_id_to_message_id(request_id: &str) -> B256 {
 }
 
 /// Create the appropriate DA fetcher based on configuration
-async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn synddb_validator::DAFetcher>> {
-    #[cfg(feature = "gcs")]
+async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn DAFetcher>> {
     if let Some(bucket) = &config.gcs_bucket {
         info!(bucket = %bucket, prefix = %config.gcs_prefix, "Using GCS fetcher");
         let fetcher = synddb_validator::sync::providers::GcsFetcher::new(
@@ -271,7 +225,6 @@ async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn synddb_valid
         return Ok(Arc::new(fetcher));
     }
 
-    // No fetcher configured
     anyhow::bail!(
         "No DA fetcher configured. Set GCS_BUCKET environment variable or --gcs-bucket flag."
     );
@@ -328,4 +281,44 @@ fn init_logging(config: &ValidatorConfig) {
             .with(tracing_subscriber::fmt::layer().with_target(true))
             .init();
     }
+}
+
+fn start_http_server(
+    app_state: AppState,
+    bind_address: std::net::SocketAddr,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let router = create_router(app_state);
+        let listener = tokio::net::TcpListener::bind(bind_address)
+            .await
+            .expect("Failed to bind HTTP server");
+        info!(address = %bind_address, "HTTP server listening");
+        axum::serve(listener, router)
+            .await
+            .expect("HTTP server error");
+    })
+}
+
+fn start_signature_http_server(
+    store: SignatureStore,
+    signer: &Arc<BridgeSigner>,
+    bind_address: std::net::SocketAddr,
+) -> tokio::task::JoinHandle<()> {
+    let sig_api_state = SignatureApiState::new(
+        store,
+        format!("{:#x}", signer.address()),
+        format!("{:#x}", signer.bridge_contract()),
+        signer.chain_id(),
+    );
+
+    tokio::spawn(async move {
+        let router = create_signature_router(sig_api_state);
+        let listener = tokio::net::TcpListener::bind(bind_address)
+            .await
+            .expect("Failed to bind signature API server");
+        info!(address = %bind_address, "Signature API server listening");
+        axum::serve(listener, router)
+            .await
+            .expect("Signature API server error");
+    })
 }

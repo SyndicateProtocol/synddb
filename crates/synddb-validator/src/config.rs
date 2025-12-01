@@ -58,7 +58,7 @@ pub struct ValidatorConfig {
 
     // === Bridge Signer Mode ===
     /// Enable bridge signer mode - signs withdrawal messages for bridge contract
-    #[arg(long, env = "BRIDGE_SIGNER", default_value = "false")]
+    #[arg(long, env = "BRIDGE_SIGNER")]
     pub bridge_signer: bool,
 
     /// Bridge contract address (required if --bridge-signer)
@@ -232,7 +232,6 @@ mod tests {
             "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
         ]);
 
-        // Should pass validation even without bridge config
         assert!(config.validate_bridge_config().is_ok());
     }
 }

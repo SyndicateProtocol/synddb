@@ -10,9 +10,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::signer::{MessageSigner, SignerError};
-
-// Re-export shared types for convenience
-pub use synddb_shared::types::{MessageType, SequenceReceipt, SignedMessage};
+use synddb_shared::types::{MessageType, SequenceReceipt, SignedMessage};
 
 /// Compress payload using `zstd`
 ///
