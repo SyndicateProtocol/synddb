@@ -106,6 +106,18 @@ cargo test -p synddb-sequencer
 - Keep solutions minimal - avoid over-engineering
 - Use `tracing` macros (`info!`, `warn!`, `debug!`, `error!`) for logging
 - Structured logging with fields: `info!(sequence = seq, "Message")`
+- Do not add self-explanatory comments that do not clarify code. Below is an example of useless comments:
+
+```rust
+// Create shutdown channel
+let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+// Create DA fetcher based on config
+let fetcher = create_fetcher(&config).await?;
+
+// Create validator
+let mut validator = Validator::new(&config, fetcher.clone(), shutdown_rx.clone())?;
+```
 
 ## Common Workflows
 
