@@ -1,5 +1,5 @@
 [package]
-name = "synddb-sequencer"
+name = "synddb-validator"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [package.metadata.cargo-machete]
-ignored = ["humantime-serde"] # used in annotations
+ignored = ["humantime-serde"] # used in serde annotations
 
 [lints]
 workspace = true
@@ -36,30 +36,24 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 # HTTP server
 axum = { workspace = true }
-tower = { workspace = true }
 
-# Cryptography and signing (Ethereum-compatible)
+# Cryptography (signature verification)
 alloy = { workspace = true, features = ["signers", "signer-local"] }
+k256 = { workspace = true }
 hex = { workspace = true }
 
-# Utilities
-base64 = { workspace = true }
-async-trait = { workspace = true }
-
-# HTTP client (for attestation verification)
-reqwest = { workspace = true }
+# Database
+rusqlite = { workspace = true, features = ["bundled", "backup", "session"] }
 
 # Compression
 zstd = { workspace = true }
 
-# Google Cloud Storage
+# Utilities
+async-trait = { workspace = true }
+
+# Google Cloud Storage (feature-gated)
 google-cloud-storage = { workspace = true, optional = true }
 
 [features]
-default = []
-tee = []
+default = ["gcs"]
 gcs = ["google-cloud-storage"]
-celestia = []
-eigenda = []
-ipfs = []
-arweave = []

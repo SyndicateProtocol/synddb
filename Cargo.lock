@@ -4266,6 +4266,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "synddb-shared",
  "thiserror 1.0.69",
  "tokio",
  "tower",
@@ -4279,6 +4280,9 @@ name = "synddb-shared"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
  "url",
 ]
 
