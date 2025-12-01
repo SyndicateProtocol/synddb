@@ -1,11 +1,12 @@
 //! `SyndDB` Validator binary entry point
 
+use alloy::primitives::{keccak256, B256};
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
 use tokio::signal;
 use tokio::sync::watch;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use synddb_validator::{
     create_router, create_signature_router, AppState, BridgeSigner, SignatureApiState,
@@ -61,22 +62,28 @@ async fn main() -> Result<()> {
             .expect("HTTP server error");
     });
 
-    // Start bridge signer API if enabled
+    // Create bridge signer and signature store if enabled
     let signature_store = SignatureStore::new();
-    let signature_api_handle = if config.is_bridge_signer() {
-        let bridge_signer = BridgeSigner::new(&config)?;
+    let bridge_signer: Option<Arc<BridgeSigner>> = if config.is_bridge_signer() {
+        let signer = BridgeSigner::new(&config)?;
         info!(
-            signer = %bridge_signer.address(),
-            bridge = %bridge_signer.bridge_contract(),
-            chain_id = bridge_signer.chain_id(),
+            signer = %signer.address(),
+            bridge = %signer.bridge_contract(),
+            chain_id = signer.chain_id(),
             "Bridge signer mode enabled"
         );
+        Some(Arc::new(signer))
+    } else {
+        None
+    };
 
+    // Start signature API server if bridge signer is enabled
+    let signature_api_handle = if let Some(ref signer) = bridge_signer {
         let sig_api_state = SignatureApiState::new(
             signature_store.clone(),
-            format!("{:#x}", bridge_signer.address()),
-            format!("{:#x}", bridge_signer.bridge_contract()),
-            bridge_signer.chain_id(),
+            format!("{:#x}", signer.address()),
+            format!("{:#x}", signer.bridge_contract()),
+            signer.chain_id(),
         );
 
         let sig_bind_address = config.bridge_signature_endpoint;
@@ -97,16 +104,17 @@ async fn main() -> Result<()> {
 
     // Start sync loop
     let sync_app_state = app_state.clone();
+    let sync_signer = bridge_signer.clone();
+    let sync_store = signature_store.clone();
     let sync_handle = tokio::spawn(async move {
         // Mark as running
         sync_app_state.set_running(true);
 
         // Initial sync to head
-        match validator.sync_to_head().await {
+        match sync_to_head_with_signing(&mut validator, sync_signer.as_ref(), &sync_store).await {
             Ok(synced) => {
                 if synced > 0 {
                     info!(synced, "Completed initial sync");
-                    // Update app state with sync progress
                     if let Ok(Some(seq)) = validator.last_sequence() {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -156,6 +164,92 @@ async fn main() -> Result<()> {
 
     info!("`SyndDB` Validator stopped");
     Ok(())
+}
+
+/// Sync to head while signing withdrawal messages
+async fn sync_to_head_with_signing(
+    validator: &mut Validator,
+    signer: Option<&Arc<BridgeSigner>>,
+    store: &SignatureStore,
+) -> Result<u64> {
+    let mut next_sequence = validator.last_sequence()?.map_or(0, |s| s + 1);
+    let mut synced = 0;
+
+    loop {
+        // Sync with callback for withdrawals
+        let result = if let Some(signer) = signer {
+            let signer = Arc::clone(signer);
+            let store = store.clone();
+            validator
+                .sync_one_with_callback(next_sequence, |withdrawal| {
+                    // Convert request_id to message_id (bytes32)
+                    // The bridge expects keccak256(request_id) as the message ID
+                    let message_id = request_id_to_message_id(&withdrawal.request_id);
+
+                    // Sign the message
+                    match signer.sign_message_sync(message_id) {
+                        Ok(sig) => {
+                            info!(
+                                request_id = %withdrawal.request_id,
+                                message_id = %sig.message_id,
+                                signer = %sig.signer,
+                                "Signed withdrawal message"
+                            );
+                            store.store(sig);
+                        }
+                        Err(e) => {
+                            error!(
+                                request_id = %withdrawal.request_id,
+                                error = %e,
+                                "Failed to sign withdrawal message"
+                            );
+                        }
+                    }
+                })
+                .await
+        } else {
+            validator.sync_one(next_sequence).await
+        };
+
+        match result {
+            Ok(true) => {
+                synced += 1;
+                next_sequence += 1;
+            }
+            Ok(false) => {
+                // Caught up to head
+                break;
+            }
+            Err(e) => {
+                warn!(sequence = next_sequence, error = %e, "Sync error, stopping");
+                break;
+            }
+        }
+    }
+
+    if synced > 0 {
+        debug!(synced, last_sequence = next_sequence - 1, "Synced to head");
+    }
+
+    Ok(synced)
+}
+
+/// Convert a request ID string to a bytes32 message ID for the bridge
+///
+/// If the `request_id` is already a 0x-prefixed 32-byte hex string, parse it directly.
+/// Otherwise, hash it with keccak256.
+fn request_id_to_message_id(request_id: &str) -> B256 {
+    // Try to parse as hex first (0x-prefixed 32-byte hex)
+    if request_id.starts_with("0x") && request_id.len() == 66 {
+        if let Ok(bytes) = hex::decode(&request_id[2..]) {
+            if bytes.len() == 32 {
+                return B256::from_slice(&bytes);
+            }
+        }
+    }
+
+    // Otherwise, hash the request_id
+    keccak256(request_id.as_bytes())
 }
 
 /// Create the appropriate DA fetcher based on configuration
