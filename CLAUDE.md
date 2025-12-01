@@ -74,6 +74,29 @@ pub struct Config {
 
 ## CI Validation
 
+This project relies heavily on GitHub Actions for CI. After pushing to a branch, check workflow status with the `gh` CLI:
+
+```bash
+# List recent workflow runs
+gh run list --limit 5
+
+# Check runs for a specific workflow
+gh run list --workflow=rust-ci.yml
+
+# View details of a specific run
+gh run view <run-id>
+
+# Watch a run in progress
+gh run watch <run-id>
+
+# View logs for a failed run
+gh run view <run-id> --log-failed
+```
+
+**Note:** When squash-merging PRs, ensure the commit message body does not contain `[skip ci]` - GitHub scans the entire message and will skip all workflows if found.
+
+### Local CI Validation
+
 Before committing, run the full CI validation locally:
 
 ```bash
