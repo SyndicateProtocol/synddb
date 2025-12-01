@@ -54,6 +54,13 @@ pub struct Config {
 ### Project structure
 - Do not re-export dependencies from `crates/` in mod.rs or lib.rs files. Refer to the full path instead.
 
+### Incremental Commits
+When working on large features or refactors, commit incrementally as you complete each todo item. Do not wait until the entire feature is complete. This:
+- Preserves working states you can revert to
+- Makes code review easier
+- Reduces risk of losing work
+- Creates a clear history of changes
+
 ## Key Dependencies
 
 | Category | Crates |
