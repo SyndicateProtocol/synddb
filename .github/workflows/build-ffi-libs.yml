@@ -281,7 +281,7 @@ jobs:
           # Capture file list before commit (must be done while files are staged)
           UPDATED_FILES=$(git diff --staged --name-only | sed 's/^/- /')
 
-          git commit -m "chore: Update FFI libraries" \
+          git commit -m "chore: Update FFI libraries [skip ci]" \
             -m "Built from: ${{ github.sha }}" \
             -m "Updated:" \
             -m "$UPDATED_FILES"
