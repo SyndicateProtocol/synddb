@@ -184,8 +184,8 @@ fn verify_rs256_signature(parsed: &ParsedJwt, jwk: &JwkKey) -> Result<(), Verifi
     let n = BigUint::from_bytes_be(&n_bytes);
     let e = BigUint::from_bytes_be(&e_bytes);
 
-    let public_key = RsaPublicKey::new(n, e)
-        .map_err(|e| VerificationError::RsaKeyError(format!("{:?}", e)))?;
+    let public_key =
+        RsaPublicKey::new(n, e).map_err(|e| VerificationError::RsaKeyError(format!("{:?}", e)))?;
 
     let verifying_key = VerifyingKey::<Sha256>::new(public_key);
 

@@ -160,10 +160,26 @@ fn decode_base64_standard(input: &str) -> Result<Vec<u8>, &'static str> {
         let c = input[i + 2];
         let d = input[i + 3];
 
-        let va = if a < 128 { DECODE_TABLE[a as usize] } else { -1 };
-        let vb = if b < 128 { DECODE_TABLE[b as usize] } else { -1 };
-        let vc = if c < 128 { DECODE_TABLE[c as usize] } else { -1 };
-        let vd = if d < 128 { DECODE_TABLE[d as usize] } else { -1 };
+        let va = if a < 128 {
+            DECODE_TABLE[a as usize]
+        } else {
+            -1
+        };
+        let vb = if b < 128 {
+            DECODE_TABLE[b as usize]
+        } else {
+            -1
+        };
+        let vc = if c < 128 {
+            DECODE_TABLE[c as usize]
+        } else {
+            -1
+        };
+        let vd = if d < 128 {
+            DECODE_TABLE[d as usize]
+        } else {
+            -1
+        };
 
         if va < 0 || vb < 0 {
             return Err("Invalid base64 character");
