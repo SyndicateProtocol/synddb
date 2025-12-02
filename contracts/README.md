@@ -1,66 +1,24 @@
-## Foundry
+# SyndDB Smart Contracts
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+Smart contracts for the SyndDB cross-chain message bridge system.
 
-Foundry consists of:
+## Deployed Contracts
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+### Base Sepolia Testnet
 
-## Documentation
+| Contract | Address | Explorer |
+|----------|---------|----------|
+| Bridge | `0xbe831bdf6d6de7fc607f2261c53a4bacf98d358b` | [View on BaseScan](https://sepolia.basescan.org/address/0xbe831bdf6d6de7fc607f2261c53a4bacf98d358b#code) |
 
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
-
-```shell
-$ forge build
-```
-
-### Test
-
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
 
 ### Deploy
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
+Deploy the Bridge contract to Base Sepolia:
 
 ```shell
-$ cast <subcommand>
+$ make deploy-bridge-base-sepolia
 ```
 
-### Help
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
 
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+

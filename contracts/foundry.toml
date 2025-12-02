@@ -5,6 +5,9 @@ libs = ["lib"]
 solc_version = "0.8.30"
 optimizer = true
 optimizer_runs = 200
-via_ir = true  # Required to avoid "Stack too deep" errors
+via_ir = true           # Required to avoid "Stack too deep" errors
+
+[rpc_endpoints]
+base_sepolia = "https://sepolia.base.org"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
