@@ -42,6 +42,10 @@ pub struct BridgeSigner {
     signer: PrivateKeySigner,
     bridge_contract: Address,
     chain_id: u64,
+    /// Pre-formatted signer address (checksummed hex with 0x prefix)
+    address_formatted: String,
+    /// Pre-formatted bridge contract address (checksummed hex with 0x prefix)
+    bridge_contract_formatted: String,
 }
 
 impl BridgeSigner {
@@ -67,9 +71,12 @@ impl BridgeSigner {
         let key_hex = signing_key.strip_prefix("0x").unwrap_or(signing_key);
         let signer: PrivateKeySigner = key_hex.parse().context("Invalid private key")?;
 
+        let address_formatted = format!("{:#x}", signer.address());
+        let bridge_contract_formatted = format!("{:#x}", bridge_contract);
+
         info!(
-            signer = %signer.address(),
-            bridge = %bridge_contract,
+            signer = %address_formatted,
+            bridge = %bridge_contract_formatted,
             chain_id = chain_id,
             "Bridge signer initialized"
         );
@@ -78,6 +85,8 @@ impl BridgeSigner {
             signer,
             bridge_contract,
             chain_id,
+            address_formatted,
+            bridge_contract_formatted,
         })
     }
 
@@ -87,8 +96,18 @@ impl BridgeSigner {
         self.signer.address()
     }
 
+    /// Get the signer's address as a formatted hex string (checksummed, with 0x prefix)
+    pub fn address_formatted(&self) -> &str {
+        &self.address_formatted
+    }
+
     pub const fn bridge_contract(&self) -> Address {
         self.bridge_contract
+    }
+
+    /// Get the bridge contract address as a formatted hex string (checksummed, with 0x prefix)
+    pub fn bridge_contract_formatted(&self) -> &str {
+        &self.bridge_contract_formatted
     }
 
     pub const fn chain_id(&self) -> u64 {

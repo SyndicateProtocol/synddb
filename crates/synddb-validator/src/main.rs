@@ -266,8 +266,8 @@ fn start_signature_http_server(
 ) -> tokio::task::JoinHandle<()> {
     let sig_api_state = SignatureApiState::new(
         store,
-        format!("{:#x}", signer.address()),
-        format!("{:#x}", signer.bridge_contract()),
+        signer.address_formatted().to_owned(),
+        signer.bridge_contract_formatted().to_owned(),
         signer.chain_id(),
     );
 
