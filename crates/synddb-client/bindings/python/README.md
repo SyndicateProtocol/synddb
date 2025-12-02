@@ -4,12 +4,18 @@ Pure Python FFI wrapper for SyndDB - **no compilation needed!**
 
 ## Installation
 
-1. Build the Rust library:
+1. Install Rust (if not already installed):
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+See https://doc.rust-lang.org/cargo/getting-started/installation.html for more options.
+
+2. Build the Rust library:
 ```bash
 cargo build --package synddb-client --features ffi --release
 ```
 
-2. Copy `synddb.py` to your project:
+3. Copy `synddb.py` to your project:
 ```bash
 cp bindings/python/synddb.py /path/to/your/project/
 ```

@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_event_store_path("./chain_events.db");
 
     let config = Config {
-        sequencer_url: "http://localhost:8433".to_string(),
+        sequencer_url: "http://localhost:8433".parse().unwrap(),
         publish_interval: Duration::from_secs(5),
         chain_monitor: Some(chain_monitor_config),
         ..Default::default()

@@ -135,7 +135,11 @@ impl ChangesetSender {
         );
 
         // Send with retries
-        match retry_with_backoff(self.config.max_retries, || self.send_batch(&batch)).await {
+        match retry_with_backoff("send_changeset_batch", self.config.max_retries, || {
+            self.send_batch(&batch)
+        })
+        .await
+        {
             Ok(()) => {
                 info!(
                     "Successfully sent batch {} ({} changesets)",
@@ -149,8 +153,7 @@ impl ChangesetSender {
             Err(e) => {
                 error!(
                     "Failed to send batch after {} attempts: {}",
-                    self.config.max_retries + 1,
-                    e
+                    self.config.max_retries, e
                 );
             }
         }
@@ -175,10 +178,14 @@ impl ChangesetSender {
     }
 
     async fn send_batch(&self, batch: &ChangesetBatch) -> Result<(), reqwest::Error> {
-        let url = format!("{}/changesets", self.config.sequencer_url);
+        let url = self
+            .config
+            .sequencer_url
+            .join("changesets")
+            .expect("valid URL path");
 
         self.client
-            .post(&url)
+            .post(url)
             .json(batch)
             .send()
             .await?
@@ -246,7 +253,11 @@ impl ChangesetSender {
                 attestation_token,
             };
 
-            match retry_with_backoff(self.config.max_retries, || self.send_batch(&batch)).await {
+            match retry_with_backoff("retry_failed_changeset", self.config.max_retries, || {
+                self.send_batch(&batch)
+            })
+            .await
+            {
                 Ok(()) => {
                     info!(
                         "Successfully retried changeset at sequence {}",
@@ -259,9 +270,7 @@ impl ChangesetSender {
                 Err(e) => {
                     error!(
                         "Failed to retry changeset at sequence {} after {} attempts: {}",
-                        changeset.sequence,
-                        self.config.max_retries + 1,
-                        e
+                        changeset.sequence, self.config.max_retries, e
                     );
                     if let Err(e) = recovery.increment_changeset_retry(id, &e.to_string()) {
                         error!("Failed to update retry count: {}", e);

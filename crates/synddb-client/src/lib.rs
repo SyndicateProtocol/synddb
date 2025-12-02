@@ -10,7 +10,9 @@
 //! use rusqlite::Connection;
 //! use synddb_client::SyndDB;
 //!
-//! // Note: Connection must have 'static lifetime
+//! // The connection must have 'static lifetime because SyndDB spawns background
+//! // threads that need access to it. Box::leak is the recommended pattern for
+//! // application-lifetime database connections.
 //! let conn = Box::leak(Box::new(Connection::open("app.db")?));
 //! let _synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
 //!
@@ -18,6 +20,22 @@
 //! conn.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![1, 100])?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! # Why `'static` lifetime?
+//!
+//! `SyndDB` uses background threads to:
+//! - Periodically publish changesets to the sequencer
+//! - Send snapshots when configured
+//! - Monitor blockchain events (with `chain-monitor` feature)
+//!
+//! These threads need to access the `SQLite` connection, which requires `'static` lifetime.
+//! Using `Box::leak` is safe here because:
+//! - The connection should live for the entire application lifetime anyway
+//! - `SyndDB` is typically attached once at startup and detached at shutdown
+//! - The small memory "leak" is reclaimed when the process exits
+//!
+//! If you need more control over the connection lifetime, consider using
+//! `SyndDB::shutdown()` for explicit cleanup before your application exits.
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
@@ -113,11 +131,13 @@ impl SyndDB {
     /// synddb.publish()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn attach(conn: &'static Connection, sequencer_url: impl Into<String>) -> Result<Self> {
+    pub fn attach(conn: &'static Connection, sequencer_url: &str) -> Result<Self> {
+        let url =
+            synddb_shared::parse::parse_url(sequencer_url).map_err(|e| anyhow::anyhow!("{}", e))?;
         Self::attach_with_config(
             conn,
             Config {
-                sequencer_url: sequencer_url.into(),
+                sequencer_url: url,
                 ..Default::default()
             },
         )
@@ -150,7 +170,7 @@ impl SyndDB {
         // This is optional - if None, failed batches are dropped
         let recovery = if config.enable_recovery {
             let mut hasher = DefaultHasher::new();
-            config.sequencer_url.hash(&mut hasher);
+            config.sequencer_url.as_str().hash(&mut hasher);
             let url_hash = hasher.finish();
 
             let temp_dir = std::env::temp_dir();
@@ -176,7 +196,10 @@ impl SyndDB {
             info!("Attestation disabled");
             None
         } else {
-            match AttestationClient::new(&config.sequencer_url, config.attestation_token_type) {
+            match AttestationClient::new(
+                config.sequencer_url.as_str(),
+                config.attestation_token_type,
+            ) {
                 Ok(client) => {
                     info!(
                         "Attestation enabled (type: {:?})",
@@ -453,5 +476,57 @@ mod tests {
 
         // Wait a moment for automatic publish
         thread::sleep(std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_drop_graceful_shutdown() {
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Insert some data
+        conn.execute("INSERT INTO test (id, value) VALUES (1, 'test')", [])
+            .unwrap();
+
+        // Drop should gracefully shut down all threads without panicking
+        drop(synddb);
+    }
+
+    #[test]
+    fn test_drop_with_pending_changesets() {
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Insert multiple rows to create pending changesets
+        for i in 0..10 {
+            conn.execute(
+                "INSERT INTO test (id, value) VALUES (?1, ?2)",
+                rusqlite::params![i, format!("test{}", i)],
+            )
+            .unwrap();
+        }
+
+        // Drop should handle pending changesets gracefully
+        drop(synddb);
+    }
+
+    #[test]
+    fn test_explicit_shutdown() {
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        conn.execute("INSERT INTO test (id, value) VALUES (1, 'test')", [])
+            .unwrap();
+
+        // Explicit shutdown should work without error
+        synddb.shutdown().unwrap();
     }
 }
