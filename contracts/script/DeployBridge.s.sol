@@ -15,20 +15,21 @@ contract DeployBridge is Script {
     // Base Sepolia WETH address (constant across all Base networks)
     address constant WRAPPED_NATIVE_TOKEN = 0x4200000000000000000000000000000000000006;
 
-    address public ADMIN = msg.sender; // Change if a different admin is needed
-
     function run() external returns (Bridge) {
+        // Read admin address from environment variable
+        address admin = vm.envAddress("ADMIN_ADDRESS");
+
         console.log("========================================");
         console.log("Deploying Bridge Contract to Base Sepolia");
         console.log("========================================");
-        console.log("Deployer/Admin:", ADMIN);
+        console.log("Admin:", admin);
         console.log("Wrapped Native Token (WETH):", WRAPPED_NATIVE_TOKEN);
         console.log("========================================");
 
         // Start broadcasting transactions
         vm.startBroadcast();
 
-        Bridge bridge = new Bridge(ADMIN, WRAPPED_NATIVE_TOKEN);
+        Bridge bridge = new Bridge(admin, WRAPPED_NATIVE_TOKEN);
 
         vm.stopBroadcast();
 
