@@ -33,16 +33,12 @@ interface IModuleCheckRegistry {
 
     /**
      * @notice Gets all registered pre-execution modules
-     * @dev Returns `address[] memory` instead of `address[] calldata` because the data is constructed
-     *      from storage (EnumerableSet) and returned, not passed in as calldata.
      * @return Array of module addresses that run before execution
      */
     function getPreModules() external view returns (address[] memory);
 
     /**
      * @notice Gets all registered post-execution modules
-     * @dev Returns `address[] memory` instead of `address[] calldata` because the data is constructed
-     *      from storage (EnumerableSet) and returned, not passed in as calldata.
      * @return Array of module addresses that run after execution
      */
     function getPostModules() external view returns (address[] memory);
