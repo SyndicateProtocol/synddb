@@ -197,12 +197,15 @@ async fn main() -> Result<()> {
         jwks,
         oidc_discovery,
         instructions: Instructions {
-            summary: "Use these samples to develop and test SP1 on-chain attestation verification".to_string(),
+            summary: "Use these samples to develop and test SP1 on-chain attestation verification"
+                .to_string(),
             verification_steps: vec![
-                "1. Parse the JWT: split raw_token by '.' into [header, payload, signature]".to_string(),
+                "1. Parse the JWT: split raw_token by '.' into [header, payload, signature]"
+                    .to_string(),
                 "2. Decode header and payload from base64url".to_string(),
                 "3. Find the signing key in jwks.keys where kid matches header.kid".to_string(),
-                "4. Verify RS256 signature: RSA_PKCS1_SHA256(signing_input, signature, public_key)".to_string(),
+                "4. Verify RS256 signature: RSA_PKCS1_SHA256(signing_input, signature, public_key)"
+                    .to_string(),
                 "5. Validate claims: iss, aud, exp, iat".to_string(),
                 "6. Check TEE claims: secboot, swname, image_digest".to_string(),
             ],
@@ -218,7 +221,10 @@ async fn main() -> Result<()> {
     };
 
     // Output the bundle
-    info!(sample_count = bundle.samples.len(), "Serializing attestation bundle");
+    info!(
+        sample_count = bundle.samples.len(),
+        "Serializing attestation bundle"
+    );
     let output = serde_json::to_string_pretty(&bundle)
         .context("Failed to serialize attestation bundle to JSON")?;
 
@@ -231,7 +237,11 @@ async fn main() -> Result<()> {
 
     // Also write to /tmp for potential retrieval
     let output_path = "/tmp/attestation_samples.json";
-    info!(path = output_path, size = output.len(), "Writing samples to file");
+    info!(
+        path = output_path,
+        size = output.len(),
+        "Writing samples to file"
+    );
 
     match std::fs::write(output_path, &output) {
         Ok(()) => {
@@ -294,8 +304,16 @@ fn log_system_diagnostics() {
 
     // Process info
     info!(pid = std::process::id(), "Process ID");
-    info!(uid = unsafe { libc::getuid() }, gid = unsafe { libc::getgid() }, "User/Group IDs");
-    info!(euid = unsafe { libc::geteuid() }, egid = unsafe { libc::getegid() }, "Effective User/Group IDs");
+    info!(
+        uid = unsafe { libc::getuid() },
+        gid = unsafe { libc::getgid() },
+        "User/Group IDs"
+    );
+    info!(
+        euid = unsafe { libc::geteuid() },
+        egid = unsafe { libc::getegid() },
+        "Effective User/Group IDs"
+    );
 
     // Current working directory
     match std::env::current_dir() {
@@ -545,8 +563,12 @@ async fn capture_attestation(audience: &str, nonces: Vec<String>) -> Result<Atte
         debug!(iat = %iat, "Token issued at");
     }
 
-    let signature_bytes = decode_base64url(parts[2])
-        .with_context(|| format!("Failed to decode JWT signature (length: {})", parts[2].len()))?;
+    let signature_bytes = decode_base64url(parts[2]).with_context(|| {
+        format!(
+            "Failed to decode JWT signature (length: {})",
+            parts[2].len()
+        )
+    })?;
 
     debug!(
         signature_len = signature_bytes.len(),
@@ -585,8 +607,8 @@ async fn fetch_attestation_token(audience: &str, nonces: Vec<String>) -> Result<
         nonces: nonces.clone(),
     };
 
-    let body_json = serde_json::to_string(&request_body)
-        .context("Failed to serialize attestation request")?;
+    let body_json =
+        serde_json::to_string(&request_body).context("Failed to serialize attestation request")?;
 
     debug!(
         socket_path = ATTESTATION_SOCKET_PATH,
@@ -669,10 +691,7 @@ async fn fetch_attestation_token(audience: &str, nonces: Vec<String>) -> Result<
         .await
         .context("Failed to read response body from attestation service")?;
 
-    debug!(
-        response_len = body_bytes.len(),
-        "Read response body"
-    );
+    debug!(response_len = body_bytes.len(), "Read response body");
 
     // Log raw response for debugging (but truncate if very long)
     let body_str = String::from_utf8_lossy(&body_bytes);
@@ -716,7 +735,10 @@ async fn fetch_google_keys() -> Result<(serde_json::Value, serde_json::Value)> {
         .context("Failed to create HTTP client")?;
 
     // Fetch OIDC discovery document
-    debug!(url = GOOGLE_OIDC_DISCOVERY_URL, "Fetching OIDC discovery document");
+    debug!(
+        url = GOOGLE_OIDC_DISCOVERY_URL,
+        "Fetching OIDC discovery document"
+    );
 
     let discovery_response = client
         .get(GOOGLE_OIDC_DISCOVERY_URL)
@@ -801,7 +823,11 @@ async fn fetch_google_keys() -> Result<(serde_json::Value, serde_json::Value)> {
             body = %error_body,
             "JWKS request failed"
         );
-        anyhow::bail!("JWKS request failed with status {}: {}", jwks_status, error_body);
+        anyhow::bail!(
+            "JWKS request failed with status {}: {}",
+            jwks_status,
+            error_body
+        );
     }
 
     let jwks: serde_json::Value = jwks_response
@@ -853,7 +879,11 @@ fn decode_base64url(input: &str) -> Result<Vec<u8>> {
                 input_len = input.len(),
                 "Base64 decode failed"
             );
-            anyhow::anyhow!("Base64 decode failed for input of length {}: {}", input.len(), e)
+            anyhow::anyhow!(
+                "Base64 decode failed for input of length {}: {}",
+                input.len(),
+                e
+            )
         })
 }
 
