@@ -13,3 +13,14 @@ workspace = true
 # Ethereum types and URL parsing
 alloy = { workspace = true }
 url = { workspace = true }
+
+# Serialization for shared types
+serde = { workspace = true }
+base64 = { workspace = true }
+
+# Logging and signal handling (for runtime utilities)
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+tokio = { workspace = true, features = ["signal"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

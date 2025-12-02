@@ -18,8 +18,11 @@ use tracing::{error, info, warn};
 
 use crate::attestation::AttestationVerifier;
 use crate::http_errors::{HttpError, SequencerError};
-use crate::inbox::{Inbox, MessageType, SequenceReceipt, SignedMessage};
+use crate::inbox::Inbox;
 use crate::publish::traits::DAPublisher;
+use synddb_shared::types::message::{MessageType, SequenceReceipt, SignedMessage};
+use synddb_shared::types::payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest};
+use synddb_shared::types::serde_helpers::base64_serde;
 
 /// Shared application state
 #[derive(Clone)]
@@ -64,70 +67,8 @@ pub fn create_router(state: AppState) -> Router {
 }
 
 // ============================================================================
-// Request/Response Types
+// Response Types (HTTP API specific)
 // ============================================================================
-
-/// Changeset data from synddb-client
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChangesetData {
-    /// Raw changeset bytes (base64 encoded in JSON)
-    #[serde(with = "base64_serde")]
-    pub data: Vec<u8>,
-    /// Client-side sequence number
-    pub sequence: u64,
-    /// Client-side timestamp (Unix timestamp in seconds)
-    pub timestamp: u64,
-}
-
-/// Changeset batch request from synddb-client
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChangesetBatchRequest {
-    /// Batch identifier for tracking
-    pub batch_id: String,
-    /// List of changesets in this batch
-    pub changesets: Vec<ChangesetData>,
-    /// Optional TEE attestation token
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attestation_token: Option<String>,
-}
-
-/// Withdrawal request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WithdrawalRequest {
-    /// Unique request identifier
-    pub request_id: String,
-    /// Recipient address (Ethereum format)
-    pub recipient: String,
-    /// Amount to withdraw (as string to handle large numbers)
-    pub amount: String,
-    /// Optional calldata
-    #[serde(default, with = "base64_serde")]
-    pub data: Vec<u8>,
-}
-
-/// Snapshot data from synddb-client
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotData {
-    /// Complete `SQLite` database file bytes (base64 encoded in JSON)
-    #[serde(with = "base64_serde")]
-    pub data: Vec<u8>,
-    /// Client-side timestamp (Unix timestamp in seconds)
-    pub timestamp: u64,
-    /// Client-side sequence number (which changesets are included)
-    pub sequence: u64,
-}
-
-/// Snapshot request from synddb-client
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotRequest {
-    /// Snapshot data
-    pub snapshot: SnapshotData,
-    /// Message identifier for tracking
-    pub message_id: String,
-    /// Optional TEE attestation token
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attestation_token: Option<String>,
-}
 
 /// Response for successful sequencing
 #[derive(Debug, Serialize, Deserialize)]
@@ -527,34 +468,6 @@ async fn get_message(
             error!(sequence, error = %e, "Failed to retrieve message");
             Err(SequencerError::MessageRetrievalFailed(e.to_string()).into())
         }
-    }
-}
-
-// ============================================================================
-// Base64 Serde Helper
-// ============================================================================
-
-mod base64_serde {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub(super) fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        use base64::Engine;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-        encoded.serialize(serializer)
-    }
-
-    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        use base64::Engine;
-        let s = String::deserialize(deserializer)?;
-        base64::engine::general_purpose::STANDARD
-            .decode(&s)
-            .map_err(serde::de::Error::custom)
     }
 }
 

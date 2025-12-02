@@ -54,6 +54,13 @@ pub struct Config {
 ### Project structure
 - Do not re-export dependencies from `crates/` in mod.rs or lib.rs files. Refer to the full path instead.
 
+### Incremental Commits
+When working on large features or refactors, commit incrementally as you complete each todo item. Do not wait until the entire feature is complete. This:
+- Preserves working states you can revert to
+- Makes code review easier
+- Reduces risk of losing work
+- Creates a clear history of changes
+
 ## Key Dependencies
 
 | Category | Crates |
@@ -138,6 +145,18 @@ cargo test -p synddb-sequencer
 - Keep solutions minimal - avoid over-engineering
 - Use `tracing` macros (`info!`, `warn!`, `debug!`, `error!`) for logging
 - Structured logging with fields: `info!(sequence = seq, "Message")`
+- Do not add self-explanatory comments that do not clarify code. Below is an example of useless comments:
+
+```rust
+// Create shutdown channel
+let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+// Create DA fetcher based on config
+let fetcher = create_fetcher(&config).await?;
+
+// Create validator
+let mut validator = Validator::new(&config, fetcher.clone(), shutdown_rx.clone())?;
+```
 
 ## Common Workflows
 

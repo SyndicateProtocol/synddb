@@ -2665,6 +2665,7 @@ dependencies = [
  "once_cell",
  "serdect",
  "sha2",
+ "signature",
 ]
 
 [[package]]
@@ -4267,11 +4268,11 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "synddb-shared",
  "thiserror 1.0.69",
  "tokio",
  "tower",
  "tracing",
- "tracing-subscriber",
  "zstd",
 ]
 
@@ -4280,7 +4281,37 @@ name = "synddb-shared"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "synddb-validator"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "clap",
+ "google-cloud-storage",
+ "hex",
+ "humantime",
+ "humantime-serde",
+ "k256",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "synddb-shared",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower",
+ "tracing",
+ "zstd",
 ]
 
 [[package]]

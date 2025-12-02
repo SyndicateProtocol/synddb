@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::inbox::SignedMessage;
 use crate::publish::traits::{DAPublisher, PublishError, PublishResult};
+use synddb_shared::types::message::SignedMessage;
 
 /// In-memory publisher for testing
 #[derive(Debug, Default)]
@@ -60,7 +60,7 @@ impl DAPublisher for MockPublisher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inbox::MessageType;
+    use synddb_shared::types::message::MessageType;
 
     #[tokio::test]
     async fn test_mock_publisher_roundtrip() {

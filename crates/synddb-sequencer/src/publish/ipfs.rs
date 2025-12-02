@@ -1,7 +1,7 @@
 //! IPFS storage publisher
 
-use crate::inbox::SignedMessage;
 use crate::publish::traits::PublishResult;
+use synddb_shared::types::message::SignedMessage;
 
 #[derive(Debug)]
 pub struct IpfsPublisher {
