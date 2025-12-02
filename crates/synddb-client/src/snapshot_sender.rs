@@ -112,7 +112,7 @@ impl SnapshotSender {
         );
 
         // Send with retries
-        match retry_with_backoff(self.config.max_retries, || {
+        match retry_with_backoff("send_snapshot", self.config.max_retries, || {
             self.send_snapshot_internal(&message)
         })
         .await
@@ -217,7 +217,7 @@ impl SnapshotSender {
                 attestation_token,
             };
 
-            match retry_with_backoff(self.config.max_retries, || {
+            match retry_with_backoff("retry_failed_snapshot", self.config.max_retries, || {
                 self.send_snapshot_internal(&message)
             })
             .await

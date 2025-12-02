@@ -5,12 +5,8 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use synddb_chain_monitor::config::ChainMonitorConfig;
+use synddb_shared::parse::parse_url;
 use url::Url;
-
-/// Parse and validate a URL string
-fn parse_url(s: &str) -> Result<Url, String> {
-    Url::parse(s).map_err(|e| format!("Invalid URL '{}': {}", s, e))
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[command(author, version, about, long_about = None)]

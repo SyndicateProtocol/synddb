@@ -135,7 +135,11 @@ impl ChangesetSender {
         );
 
         // Send with retries
-        match retry_with_backoff(self.config.max_retries, || self.send_batch(&batch)).await {
+        match retry_with_backoff("send_changeset_batch", self.config.max_retries, || {
+            self.send_batch(&batch)
+        })
+        .await
+        {
             Ok(()) => {
                 info!(
                     "Successfully sent batch {} ({} changesets)",
@@ -249,7 +253,11 @@ impl ChangesetSender {
                 attestation_token,
             };
 
-            match retry_with_backoff(self.config.max_retries, || self.send_batch(&batch)).await {
+            match retry_with_backoff("retry_failed_changeset", self.config.max_retries, || {
+                self.send_batch(&batch)
+            })
+            .await
+            {
                 Ok(()) => {
                     info!(
                         "Successfully retried changeset at sequence {}",

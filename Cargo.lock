@@ -4242,6 +4242,7 @@ dependencies = [
  "serde",
  "serde_json",
  "synddb-chain-monitor",
+ "synddb-shared",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -132,9 +132,8 @@ impl SyndDB {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn attach(conn: &'static Connection, sequencer_url: &str) -> Result<Self> {
-        let url = sequencer_url
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid sequencer URL '{}': {}", sequencer_url, e))?;
+        let url =
+            synddb_shared::parse::parse_url(sequencer_url).map_err(|e| anyhow::anyhow!("{}", e))?;
         Self::attach_with_config(
             conn,
             Config {

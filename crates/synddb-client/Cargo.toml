@@ -29,6 +29,7 @@ hyper = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
 synddb-chain-monitor = { path = "../synddb-chain-monitor" }
+synddb-shared = { path = "../synddb-shared" }
 alloy = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 

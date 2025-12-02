@@ -6,12 +6,17 @@ use tracing::warn;
 /// Retry an async operation with exponential backoff
 ///
 /// # Arguments
+/// * `operation_name` - Name of the operation for logging
 /// * `max_retries` - Maximum number of retry attempts
 /// * `operation` - Async function to retry
 ///
 /// # Returns
 /// `Ok(())` if any attempt succeeds, `Err(last_error)` if all attempts fail
-pub async fn retry_with_backoff<F, Fut, E>(max_retries: usize, mut operation: F) -> Result<(), E>
+pub async fn retry_with_backoff<F, Fut, E>(
+    operation_name: &str,
+    max_retries: usize,
+    mut operation: F,
+) -> Result<(), E>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<(), E>>,
@@ -24,10 +29,11 @@ where
                 if attempt + 1 < max_retries {
                     let backoff = Duration::from_secs(1 << attempt);
                     warn!(
-                        "Attempt {} failed: {}. Sleeping for {:?}",
-                        attempt + 1,
-                        e,
-                        backoff
+                        operation = operation_name,
+                        attempt = attempt + 1,
+                        error = %e,
+                        backoff = ?backoff,
+                        "Operation failed, retrying"
                     );
                     tokio::time::sleep(backoff).await;
                 } else {
