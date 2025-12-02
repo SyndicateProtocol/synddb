@@ -147,7 +147,7 @@ fn decode_base64_standard(input: &str) -> Result<Vec<u8>, &'static str> {
     ];
 
     let input = input.as_bytes();
-    if input.len() % 4 != 0 {
+    if !input.len().is_multiple_of(4) {
         return Err("Invalid base64 length");
     }
 
