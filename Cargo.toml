@@ -67,7 +67,7 @@ alloy = { version = "1.0.25", features = [
   "sol-types",
 ] }
 k256 = { version = "0.13", features = ["ecdsa"] }
-url = "2.5"
+url = { version = "2.5", features = ["serde"] }
 async-trait = "0.1"
 
 # Google Cloud

@@ -14,8 +14,6 @@ We use **Rust compiled to C ABI** with thin language wrappers (~50 lines each). 
 - ✅ No build tools required for users
 - ✅ Same approach as SQLite, libcurl, OpenSSL
 
-See [FFI_VS_NATIVE_BINDINGS.md](./FFI_VS_NATIVE_BINDINGS.md) for why we chose C FFI over PyO3/Neon.
-
 ## Usage
 
 ### Rust
@@ -69,17 +67,17 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 ┌─────────────────────────────────────────┐
 │   Application Process (in TEE)          │
 │                                         │
-│   ┌─────────────────────────────────┐  │
-│   │  App Code                       │  │
-│   │  db.execute(...)                │  │
-│   └──────────┬──────────────────────┘  │
+│   ┌─────────────────────────────────┐   │
+│   │  App Code                       │   │
+│   │  db.execute(...)                │   │
+│   └──────────┬──────────────────────┘   │
 │              │                          │
-│   ┌──────────▼──────────────────────┐  │
-│   │  synddb-client Library          │  │
-│   │  - Session Extension            │  │
-│   │  - Capture changesets           │  │
-│   │  - Background sender thread     │  │
-│   └──────────┬──────────────────────┘  │
+│   ┌──────────▼──────────────────────┐   │
+│   │  synddb-client Library          │   │
+│   │  - Session Extension            │   │
+│   │  - Capture changesets           │   │
+│   │  - Background sender thread     │   │
+│   └──────────┬──────────────────────┘   │
 │              │                          │
 └──────────────┼──────────────────────────┘
                │

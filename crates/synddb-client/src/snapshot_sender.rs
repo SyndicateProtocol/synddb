@@ -112,7 +112,7 @@ impl SnapshotSender {
         );
 
         // Send with retries
-        match retry_with_backoff(self.config.max_retries, || {
+        match retry_with_backoff("send_snapshot", self.config.max_retries, || {
             self.send_snapshot_internal(&message)
         })
         .await
@@ -127,8 +127,7 @@ impl SnapshotSender {
             Err(e) => {
                 error!(
                     "Failed to send snapshot after {} attempts: {}",
-                    self.config.max_retries + 1,
-                    e
+                    self.config.max_retries, e
                 );
             }
         }
@@ -155,10 +154,14 @@ impl SnapshotSender {
         &self,
         message: &SnapshotMessage,
     ) -> Result<(), reqwest::Error> {
-        let url = format!("{}/snapshots", self.config.sequencer_url);
+        let url = self
+            .config
+            .sequencer_url
+            .join("snapshots")
+            .expect("valid URL path");
 
         self.client
-            .post(&url)
+            .post(url)
             .json(message)
             .send()
             .await?
@@ -214,7 +217,7 @@ impl SnapshotSender {
                 attestation_token,
             };
 
-            match retry_with_backoff(self.config.max_retries, || {
+            match retry_with_backoff("retry_failed_snapshot", self.config.max_retries, || {
                 self.send_snapshot_internal(&message)
             })
             .await
@@ -231,9 +234,7 @@ impl SnapshotSender {
                 Err(e) => {
                     error!(
                         "Failed to retry snapshot at sequence {} after {} attempts: {}",
-                        snapshot.sequence,
-                        self.config.max_retries + 1,
-                        e
+                        snapshot.sequence, self.config.max_retries, e
                     );
                     if let Err(e) = recovery.increment_snapshot_retry(id, &e.to_string()) {
                         error!("Failed to update snapshot retry count: {}", e);

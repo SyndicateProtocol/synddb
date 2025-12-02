@@ -254,10 +254,7 @@ impl FailedBatchRecovery {
     pub(crate) fn cleanup_old_failures(&self, days: u32) -> Result<(usize, usize)> {
         let cutoff_time = std::time::SystemTime::now()
             - std::time::Duration::from_secs(days as u64 * 24 * 60 * 60);
-        let cutoff_secs = cutoff_time
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let cutoff_secs = cutoff_time.duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
 
         let conn = self.conn.lock().unwrap();
 

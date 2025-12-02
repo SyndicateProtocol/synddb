@@ -13,45 +13,23 @@ ignored = ["humantime-serde"] # used in annotations
 workspace = true
 
 [dependencies]
-# SQLite with Session Extension support
 rusqlite = { workspace = true, features = ["bundled", "session", "hooks"] }
-
-# Async runtime for background sending
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
-
-# HTTP client for sending to sequencer
 reqwest = { workspace = true }
-
-# Serialization
 serde = { workspace = true }
-
-# Error handling
 anyhow = { workspace = true }
-
-# Logging
 tracing = { workspace = true }
-
-# Channels for background thread
 crossbeam-channel = { workspace = true }
-
-# UUID for batch IDs
 uuid = { workspace = true }
-
-# Humantime serialization
 humantime-serde = { workspace = true }
-humantime = "2.1"
-
-# CLI parsing
-clap = { version = "4.5.53", features = ["derive", "env"] }
-
-# Unix domain socket support for Confidential Space attestation
+humantime = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
 hyperlocal = { workspace = true }
 hyper = { workspace = true }
 serde_json = { workspace = true }
-
-# Chain monitor for blockchain event listening
+url = { workspace = true }
 synddb-chain-monitor = { path = "../synddb-chain-monitor" }
-url = { workspace = true, optional = true }
+synddb-shared = { path = "../synddb-shared" }
 alloy = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 
@@ -64,7 +42,7 @@ default = []
 # Enable C FFI exports (for cross-language support via ctypes/ffi-napi/cgo)
 ffi = []
 # Enable blockchain chain monitoring
-chain-monitor = ["url", "alloy", "async-trait"]
+chain-monitor = ["alloy", "async-trait"]
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

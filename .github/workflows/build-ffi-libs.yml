@@ -4,6 +4,39 @@ name: Build FFI Libraries
 # 1. Pull Requests: Build dev platforms (dry run, no commits) - verify builds work
 # 2. Main branch: Build dev platforms and commit to repo - enable cross-language dev
 # 3. Release tags: Build all platforms and create GitHub Release - production distribution
+#
+# BRANCH PROTECTION NOTE:
+# If you have branch protection rules requiring PRs for the main branch, the
+# commit-dev-libs job will fail with an error like:
+#
+#   remote: error: GH013: Repository rule violations found for refs/heads/main.
+#   remote: - Changes must be made through a pull request.
+#   ! [remote rejected] main -> main (push declined due to repository rule violations)
+#
+# To fix this, set up a deploy key with bypass permissions:
+#
+#   1. Generate an SSH key pair:
+#      ssh-keygen -t ed25519 -C "ffi-deploy-key" -f ffi-deploy-key -N ""
+#
+#   2. Add the PUBLIC key as a Deploy Key with write access:
+#      - Go to repository Settings → Deploy keys → Add deploy key
+#      - Title: "FFI Library Auto-commit"
+#      - Paste contents of ffi-deploy-key.pub
+#      - Check "Allow write access"
+#
+#   3. Add the PRIVATE key as a repository secret:
+#      - Go to repository Settings → Secrets and variables → Actions
+#      - Create new repository secret named FFI_DEPLOY_KEY
+#      - Paste contents of ffi-deploy-key (private key)
+#
+#   4. Add "Deploy keys" to the ruleset bypass list:
+#      - Go to repository Settings → Rules → Rulesets
+#      - Edit the ruleset protecting the main branch
+#      - Under "Bypass list", click "Add bypass"
+#      - Select "Deploy keys"
+#
+#   5. Delete the local key files (secrets are now stored in GitHub):
+#      rm ffi-deploy-key ffi-deploy-key.pub
 
 on:
   push:
@@ -15,6 +48,7 @@ on:
     # Tag pushes (releases) always run regardless of paths - this is intentional.
     paths:
       - 'crates/synddb-client/**'
+      - '!crates/synddb-client/libs/**'  # Exclude libs to prevent infinite loop (this workflow commits to libs/)
       - 'crates/synddb-chain-monitor/**'  # dependency of synddb-client
       - '**/Cargo.toml'
       - '**/Cargo.lock'
@@ -23,6 +57,7 @@ on:
   pull_request:
     paths:
       - 'crates/synddb-client/**'
+      - '!crates/synddb-client/libs/**'  # Exclude libs to prevent infinite loop (this workflow commits to libs/)
       - 'crates/synddb-chain-monitor/**'  # dependency of synddb-client
       - '**/Cargo.toml'
       - '**/Cargo.lock'
@@ -201,6 +236,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.FFI_DEPLOY_KEY }}
 
       - name: Download dev library artifacts
         uses: actions/download-artifact@v4
