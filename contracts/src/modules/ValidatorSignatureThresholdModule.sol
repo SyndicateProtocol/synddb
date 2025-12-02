@@ -24,7 +24,7 @@ contract ValidatorSignatureThresholdModule is IModuleCheck, Ownable {
 
     /**
      * @notice Initializes the module with bridge, validators, and signature threshold
-     * @dev Validates no duplicate validators and threshold is within valid range
+     * @dev Validates that there are no duplicate validators and threshold is within valid range
      * @param bridge Address of the bridge contract implementing IValidatorSigningAndQuery
      * @param _validators Array of validator addresses that can sign messages
      * @param _signatureThreshold Minimum number of signatures required (must be > 0 and <= validators.length)

@@ -285,7 +285,8 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
     /**
      * @notice Initializes multiple messages in a single transaction
-     * @dev Only callable by addresses with SEQUENCER_ROLE. All arrays must have equal length
+     * @dev Only callable by addresses with SEQUENCER_ROLE. All arrays must have equal length.
+     *      If any message initialization fails, the entire batch will revert atomically.
      * @param messageIds Array of unique message identifiers
      * @param targetAddresses Array of addresses that will receive message calls
      * @param payloads Array of encoded function call data
@@ -315,6 +316,8 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
     /**
      * @notice Executes multiple previously initialized messages in a single transaction
+     * @dev If any message execution fails, the entire batch will revert and no partial batch will be committed.
+     *      This ensures atomic execution of all messages in the batch.
      * @param messageIds Array of message identifiers to execute
      */
     function batchHandleMessage(bytes32[] calldata messageIds) external {
