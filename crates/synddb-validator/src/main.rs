@@ -8,10 +8,12 @@ use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
 use synddb_shared::runtime;
-use synddb_validator::bridge::{BridgeSigner, SignatureStore};
+use synddb_validator::bridge::signature_store::SignatureStore;
+use synddb_validator::bridge::signer::BridgeSigner;
 use synddb_validator::config::ValidatorConfig;
-use synddb_validator::http::{create_router, create_signature_router, AppState, SignatureApiState};
-use synddb_validator::sync::DAFetcher;
+use synddb_validator::http::api::{create_router, AppState};
+use synddb_validator::http::signatures::{create_signature_router, SignatureApiState};
+use synddb_validator::sync::fetcher::DAFetcher;
 use synddb_validator::validator::Validator;
 
 #[tokio::main]

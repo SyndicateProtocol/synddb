@@ -3,7 +3,7 @@
 //! Stores signed messages so that relayers can retrieve them via the HTTP API
 //! and submit them to the bridge contract.
 
-use super::MessageSignature;
+use super::signer::MessageSignature;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, info};
@@ -19,10 +19,15 @@ pub struct SignatureStore {
 
 #[derive(Debug)]
 struct SignatureStoreInner {
+    data: RwLock<SignatureData>,
+}
+
+#[derive(Debug, Default)]
+struct SignatureData {
     /// Signatures indexed by message ID
-    signatures: RwLock<HashMap<String, MessageSignature>>,
+    signatures: HashMap<String, MessageSignature>,
     /// List of pending (not yet submitted) message IDs in order
-    pending: RwLock<Vec<String>>,
+    pending: Vec<String>,
 }
 
 impl SignatureStore {
@@ -30,8 +35,7 @@ impl SignatureStore {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(SignatureStoreInner {
-                signatures: RwLock::new(HashMap::new()),
-                pending: RwLock::new(Vec::new()),
+                data: RwLock::new(SignatureData::default()),
             }),
         }
     }
@@ -42,14 +46,12 @@ impl SignatureStore {
     pub fn store(&self, signature: MessageSignature) {
         let message_id = signature.message_id.clone();
 
-        let mut sigs = self.inner.signatures.write().unwrap();
-        let is_new = !sigs.contains_key(&message_id);
-        sigs.insert(message_id.clone(), signature);
+        let mut data = self.inner.data.write().unwrap();
+        let is_new = !data.signatures.contains_key(&message_id);
+        data.signatures.insert(message_id.clone(), signature);
 
         if is_new {
-            let mut pending = self.inner.pending.write().unwrap();
-            pending.push(message_id.clone());
-
+            data.pending.push(message_id.clone());
             info!(message_id = %message_id, "Stored new signature");
         } else {
             debug!(message_id = %message_id, "Updated existing signature");
@@ -59,26 +61,25 @@ impl SignatureStore {
     /// Get a signature by message ID
     pub fn get(&self, message_id: &str) -> Option<MessageSignature> {
         self.inner
-            .signatures
+            .data
             .read()
             .unwrap()
+            .signatures
             .get(message_id)
             .cloned()
     }
 
     /// Get all pending message IDs
     pub fn pending_ids(&self) -> Vec<String> {
-        self.inner.pending.read().unwrap().clone()
+        self.inner.data.read().unwrap().pending.clone()
     }
 
     /// Get all pending signatures
     pub fn pending_signatures(&self) -> Vec<MessageSignature> {
-        let pending = self.inner.pending.read().unwrap();
-        let sigs = self.inner.signatures.read().unwrap();
-
-        pending
+        let data = self.inner.data.read().unwrap();
+        data.pending
             .iter()
-            .filter_map(|id| sigs.get(id).cloned())
+            .filter_map(|id| data.signatures.get(id).cloned())
             .collect()
     }
 
@@ -86,21 +87,21 @@ impl SignatureStore {
     ///
     /// The signature is kept in storage for reference but won't appear in pending list.
     pub fn mark_submitted(&self, message_id: &str) {
-        let mut pending = self.inner.pending.write().unwrap();
-        pending.retain(|id| id != message_id);
-
+        let mut data = self.inner.data.write().unwrap();
+        data.pending.retain(|id| id != message_id);
         debug!(message_id = %message_id, "Marked signature as submitted");
     }
 
     /// Remove a signature completely
     pub fn remove(&self, message_id: &str) -> Option<MessageSignature> {
-        self.mark_submitted(message_id);
-        self.inner.signatures.write().unwrap().remove(message_id)
+        let mut data = self.inner.data.write().unwrap();
+        data.pending.retain(|id| id != message_id);
+        data.signatures.remove(message_id)
     }
 
     /// Get the number of stored signatures
     pub fn len(&self) -> usize {
-        self.inner.signatures.read().unwrap().len()
+        self.inner.data.read().unwrap().signatures.len()
     }
 
     /// Check if the store is empty
@@ -110,7 +111,7 @@ impl SignatureStore {
 
     /// Get the number of pending signatures
     pub fn pending_count(&self) -> usize {
-        self.inner.pending.read().unwrap().len()
+        self.inner.data.read().unwrap().pending.len()
     }
 }
 

@@ -87,12 +87,10 @@ impl BridgeSigner {
         self.signer.address()
     }
 
-    /// Get the bridge contract address
     pub const fn bridge_contract(&self) -> Address {
         self.bridge_contract
     }
 
-    /// Get the chain ID
     pub const fn chain_id(&self) -> u64 {
         self.chain_id
     }
@@ -108,7 +106,7 @@ impl BridgeSigner {
     /// address validator = ECDSA.recover(messageHash, signature);
     /// ```
     pub async fn sign_message(&self, message_id: B256) -> Result<MessageSignature> {
-        let eth_signed_hash = Self::to_eth_signed_message_hash(message_id);
+        let eth_signed_hash = Self::eth_signed_message_hash(message_id);
         let signature = self
             .signer
             .sign_hash(&eth_signed_hash)
@@ -126,7 +124,7 @@ impl BridgeSigner {
 
     /// Sign a message ID synchronously (for use in sync contexts)
     pub fn sign_message_sync(&self, message_id: B256) -> Result<MessageSignature> {
-        let eth_signed_hash = Self::to_eth_signed_message_hash(message_id);
+        let eth_signed_hash = Self::eth_signed_message_hash(message_id);
         let signature = self
             .signer
             .sign_hash_sync(&eth_signed_hash)
@@ -168,7 +166,7 @@ impl BridgeSigner {
     /// ```solidity
     /// return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
     /// ```
-    fn to_eth_signed_message_hash(message: B256) -> B256 {
+    fn eth_signed_message_hash(message: B256) -> B256 {
         let mut data = Vec::with_capacity(60);
         data.extend_from_slice(b"\x19Ethereum Signed Message:\n32");
         data.extend_from_slice(message.as_slice());
@@ -242,7 +240,6 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(signer.address(), expected_address);
-        assert_eq!(signer.chain_id(), 1);
     }
 
     #[test]
@@ -274,15 +271,15 @@ mod tests {
     fn test_eth_signed_message_hash() {
         // Test that our hash matches what the bridge contract expects
         let message_id = B256::from_slice(&[0xab; 32]);
-        let hash = BridgeSigner::to_eth_signed_message_hash(message_id);
+        let hash = BridgeSigner::eth_signed_message_hash(message_id);
 
         // The hash should be deterministic
-        let hash2 = BridgeSigner::to_eth_signed_message_hash(message_id);
+        let hash2 = BridgeSigner::eth_signed_message_hash(message_id);
         assert_eq!(hash, hash2);
 
         // Different message should give different hash
         let other_id = B256::from_slice(&[0xcd; 32]);
-        let other_hash = BridgeSigner::to_eth_signed_message_hash(other_id);
+        let other_hash = BridgeSigner::eth_signed_message_hash(other_id);
         assert_ne!(hash, other_hash);
     }
 

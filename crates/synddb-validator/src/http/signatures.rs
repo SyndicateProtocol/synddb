@@ -12,7 +12,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::bridge::SignatureStore;
+use crate::bridge::signature_store::SignatureStore;
 
 /// Response for pending signatures list
 #[derive(Debug, Serialize, Deserialize)]
@@ -128,7 +128,7 @@ async fn list_signatures_handler(State(state): State<SignatureApiState>) -> impl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bridge::MessageSignature;
+    use crate::bridge::signer::MessageSignature;
     use alloy::primitives::Address;
     use axum::body::Body;
     use axum::http::Request;

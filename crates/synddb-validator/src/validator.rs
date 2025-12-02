@@ -3,11 +3,12 @@
 //! The `Validator` orchestrates fetching, verification, and application of
 //! sequenced messages to maintain a replica of the sequenced state.
 
-use crate::apply::ChangesetApplier;
+use crate::apply::applier::ChangesetApplier;
 use crate::config::ValidatorConfig;
 use crate::error::ValidatorError;
-use crate::state::StateStore;
-use crate::sync::{DAFetcher, SignatureVerifier};
+use crate::state::store::StateStore;
+use crate::sync::fetcher::DAFetcher;
+use crate::sync::verifier::SignatureVerifier;
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -108,12 +109,7 @@ impl Validator {
 
     /// Get a reference to the database connection (for queries)
     pub const fn connection(&self) -> &rusqlite::Connection {
-        self.applier.connection()
-    }
-
-    /// Run the sync loop until shutdown
-    pub async fn run(&mut self) -> Result<()> {
-        self.run_with_callbacks(|_| {}, |_| {}).await
+        &self.applier.conn
     }
 
     /// Run the sync loop with callbacks for withdrawals and progress updates
@@ -174,7 +170,7 @@ impl Validator {
                         // Try to detect if there are future messages available
                         // Clone fetcher to avoid holding &self across await
                         let fetcher = Arc::clone(&self.fetcher);
-                        match Self::detect_gap_static(&fetcher, next_sequence).await {
+                        match Self::detect_gap(&fetcher, next_sequence).await {
                             Ok(Some(available_seq)) => {
                                 let gap_size = available_seq - next_sequence;
                                 warn!(
@@ -185,7 +181,12 @@ impl Validator {
                                 );
 
                                 if !gap_skip_on_failure {
-                                    // Return error - operator needs to intervene
+                                    error!(
+                                        expected = next_sequence,
+                                        available = available_seq,
+                                        gap_size,
+                                        "Sequence gap detected - operator intervention required"
+                                    );
                                     return Err(ValidatorError::SequenceGap {
                                         expected: next_sequence,
                                         actual: available_seq,
@@ -253,11 +254,11 @@ impl Validator {
         Ok(())
     }
 
-    /// Detect if there's a gap by checking for future messages (static version)
+    /// Detect if there's a gap by checking for future messages
     ///
     /// Returns `Some(sequence)` if a message exists at a higher sequence number,
     /// indicating a gap. Returns `None` if no future messages are found.
-    async fn detect_gap_static(
+    async fn detect_gap(
         fetcher: &Arc<dyn DAFetcher>,
         expected_sequence: u64,
     ) -> Result<Option<u64>> {
@@ -397,6 +398,13 @@ mod tests {
     use rusqlite::session::Session;
     use std::io::Write;
     use synddb_shared::types::{ChangesetBatchRequest, ChangesetData, MessageType, SignedMessage};
+
+    /// Test-only helper: run the sync loop until shutdown
+    impl Validator {
+        pub async fn run(&mut self) -> Result<()> {
+            self.run_with_callbacks(|_| {}, |_| {}).await
+        }
+    }
 
     // Test private key (DO NOT use in production!)
     // Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266

@@ -1,18 +1,23 @@
 //! Changeset applier for reconstructing state from sequenced messages
 
-use crate::error::ValidatorError;
+use std::fs;
+use std::io::{Cursor, Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::{Context, Result};
 use rusqlite::session::ConflictAction;
 use rusqlite::Connection;
-use std::io::{Cursor, Read};
 use synddb_shared::types::{
     ChangesetBatchRequest, MessageType, SignedMessage, SnapshotRequest, WithdrawalRequest,
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
+
+use crate::error::ValidatorError;
 
 /// Applies changesets from sequenced messages to an `SQLite` database
 pub struct ChangesetApplier {
-    conn: Connection,
+    /// The underlying database connection
+    pub conn: Connection,
     /// Path to the database file (None for in-memory)
     db_path: Option<String>,
 }
@@ -43,11 +48,6 @@ impl ChangesetApplier {
             conn,
             db_path: None,
         })
-    }
-
-    /// Get a reference to the underlying connection (for queries)
-    pub const fn connection(&self) -> &Connection {
-        &self.conn
     }
 
     /// Apply a signed message to the database
@@ -103,8 +103,8 @@ impl ChangesetApplier {
             "Applying changeset batch"
         );
 
-        // 3. Apply each changeset in a transaction
         let tx = self.conn.transaction().map_err(|e| {
+            error!(error = %e, "Failed to begin transaction");
             ValidatorError::DatabaseError(format!("Failed to begin transaction: {e}"))
         })?;
 
@@ -127,6 +127,7 @@ impl ChangesetApplier {
         }
 
         tx.commit().map_err(|e| {
+            error!(error = %e, "Failed to commit transaction");
             ValidatorError::DatabaseError(format!("Failed to commit transaction: {e}"))
         })?;
 
@@ -151,7 +152,6 @@ impl ChangesetApplier {
             "Restoring database from snapshot"
         );
 
-        // 3. Restore based on whether we have a file path or in-memory db
         if let Some(path) = self.db_path.clone() {
             self.restore_snapshot_to_file(&path, &request.snapshot.data)?;
         } else {
@@ -171,9 +171,6 @@ impl ChangesetApplier {
     ///
     /// Uses `SQLite`'s backup API to atomically restore the database.
     fn restore_snapshot_to_file(&mut self, db_path: &str, snapshot_data: &[u8]) -> Result<()> {
-        use std::fs;
-        use std::io::Write;
-
         // Write snapshot to a temporary file
         let temp_path = format!("{db_path}.snapshot.tmp");
         {
@@ -222,10 +219,6 @@ impl ChangesetApplier {
         // 1. Write the snapshot to a temp file
         // 2. Open it
         // 3. Backup from it to our in-memory db
-
-        use std::fs;
-        use std::io::Write;
-        use std::sync::atomic::{AtomicU64, Ordering};
 
         // Use unique file name to avoid conflicts with parallel operations
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -418,11 +411,11 @@ mod tests {
         // Create target database with same schema and initial state
         let mut applier = ChangesetApplier::in_memory().unwrap();
         applier
-            .connection()
+            .conn
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
         applier
-            .connection()
+            .conn
             .execute("INSERT INTO users VALUES (1, 'Alice')", [])
             .unwrap();
 
@@ -444,7 +437,7 @@ mod tests {
 
         // Verify the change was applied
         let name: String = applier
-            .connection()
+            .conn
             .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
             .unwrap();
         assert_eq!(name, "Bob");
@@ -548,13 +541,13 @@ mod tests {
 
         // Verify the data was restored
         let count: i64 = applier
-            .connection()
+            .conn
             .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 2);
 
         let name: String = applier
-            .connection()
+            .conn
             .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
             .unwrap();
         assert_eq!(name, "Alice");
@@ -592,7 +585,7 @@ mod tests {
 
         // Verify the data was restored
         let count: i64 = applier
-            .connection()
+            .conn
             .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 2);
@@ -720,15 +713,15 @@ mod tests {
         // Create target database
         let mut applier = ChangesetApplier::in_memory().unwrap();
         applier
-            .connection()
+            .conn
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
         applier
-            .connection()
+            .conn
             .execute("INSERT INTO users VALUES (1, 'Alice')", [])
             .unwrap();
         applier
-            .connection()
+            .conn
             .execute("INSERT INTO users VALUES (2, 'Charlie')", [])
             .unwrap();
 
@@ -750,11 +743,11 @@ mod tests {
 
         // Verify both changes were applied
         let name1: String = applier
-            .connection()
+            .conn
             .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
             .unwrap();
         let name2: String = applier
-            .connection()
+            .conn
             .query_row("SELECT name FROM users WHERE id = 2", [], |row| row.get(0))
             .unwrap();
 

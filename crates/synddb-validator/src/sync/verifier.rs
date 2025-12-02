@@ -21,11 +21,6 @@ impl SignatureVerifier {
         Self { expected_signer }
     }
 
-    /// Get the expected signer address
-    pub const fn expected_signer(&self) -> Address {
-        self.expected_signer
-    }
-
     /// Verify a signed message
     ///
     /// Checks:

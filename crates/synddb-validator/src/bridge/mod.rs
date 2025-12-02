@@ -12,8 +12,5 @@
 //!
 //! Signatures are stored for relayer pickup via the `/signatures/*` API endpoints.
 
-mod signature_store;
-mod signer;
-
-pub use signature_store::SignatureStore;
-pub use signer::{BridgeSigner, MessageSignature};
+pub mod signature_store;
+pub mod signer;
