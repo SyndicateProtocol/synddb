@@ -122,7 +122,7 @@ impl Validator {
         mut on_sync: S,
     ) -> Result<()>
     where
-        W: FnMut(&synddb_shared::types::WithdrawalRequest),
+        W: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
         S: FnMut(u64),
     {
         info!("Starting validator sync loop");
@@ -306,7 +306,7 @@ impl Validator {
         on_withdrawal: &mut F,
     ) -> Result<bool>
     where
-        F: FnMut(&synddb_shared::types::WithdrawalRequest),
+        F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
     {
         // 1. Fetch message
         let message = match self.fetcher.get(sequence).await? {
@@ -397,7 +397,8 @@ mod tests {
     use crate::sync::providers::MockFetcher;
     use rusqlite::session::Session;
     use std::io::Write;
-    use synddb_shared::types::{ChangesetBatchRequest, ChangesetData, MessageType, SignedMessage};
+    use synddb_shared::types::message::{MessageType, SignedMessage};
+    use synddb_shared::types::payloads::{ChangesetBatchRequest, ChangesetData};
 
     /// Test-only helper: run the sync loop until shutdown
     impl Validator {

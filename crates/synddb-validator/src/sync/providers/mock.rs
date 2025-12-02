@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use synddb_shared::types::SignedMessage;
+use synddb_shared::types::message::SignedMessage;
 
 /// Mock fetcher for testing
 ///
@@ -102,7 +102,7 @@ impl DAFetcher for MockFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use synddb_shared::types::MessageType;
+    use synddb_shared::types::message::MessageType;
 
     fn test_message(sequence: u64) -> SignedMessage {
         SignedMessage {

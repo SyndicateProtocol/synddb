@@ -14,7 +14,7 @@
 use crate::sync::fetcher::DAFetcher;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use synddb_shared::types::SignedMessage;
+use synddb_shared::types::message::SignedMessage;
 use tracing::{debug, info, warn};
 
 /// Google Cloud Storage fetcher

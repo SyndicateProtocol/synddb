@@ -20,11 +20,9 @@ use crate::attestation::AttestationVerifier;
 use crate::http_errors::{HttpError, SequencerError};
 use crate::inbox::Inbox;
 use crate::publish::traits::DAPublisher;
+use synddb_shared::types::message::{MessageType, SequenceReceipt, SignedMessage};
+use synddb_shared::types::payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest};
 use synddb_shared::types::serde_helpers::base64_serde;
-use synddb_shared::types::{
-    ChangesetBatchRequest, MessageType, SequenceReceipt, SignedMessage, SnapshotRequest,
-    WithdrawalRequest,
-};
 
 /// Shared application state
 #[derive(Clone)]

@@ -52,15 +52,3 @@ pub enum ValidatorError {
     #[error("Configuration error: {0}")]
     ConfigError(String),
 }
-
-impl From<rusqlite::Error> for ValidatorError {
-    fn from(e: rusqlite::Error) -> Self {
-        Self::DatabaseError(e.to_string())
-    }
-}
-
-impl From<hex::FromHexError> for ValidatorError {
-    fn from(e: hex::FromHexError) -> Self {
-        Self::InvalidSignature(e.to_string())
-    }
-}

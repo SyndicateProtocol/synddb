@@ -139,8 +139,8 @@ async fn main() -> Result<()> {
 fn create_withdrawal_callback(
     signer: Option<Arc<BridgeSigner>>,
     store: SignatureStore,
-) -> impl FnMut(&synddb_shared::types::WithdrawalRequest) {
-    move |withdrawal: &synddb_shared::types::WithdrawalRequest| {
+) -> impl FnMut(&synddb_shared::types::payloads::WithdrawalRequest) {
+    move |withdrawal: &synddb_shared::types::payloads::WithdrawalRequest| {
         if let Some(ref signer) = signer {
             let message_id = request_id_to_message_id(&withdrawal.request_id);
             match signer.sign_message_sync(message_id) {

@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use synddb_shared::types::SignedMessage;
+use synddb_shared::types::message::SignedMessage;
 
 /// Trait for fetching messages from a data availability layer
 ///

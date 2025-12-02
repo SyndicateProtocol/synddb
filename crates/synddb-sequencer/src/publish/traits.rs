@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
-use synddb_shared::types::SignedMessage;
+use synddb_shared::types::message::SignedMessage;
 
 /// Result of publishing to a DA layer
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

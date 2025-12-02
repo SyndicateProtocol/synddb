@@ -6,7 +6,7 @@ use crate::error::ValidatorError;
 use alloy::primitives::{keccak256, Address, B256};
 use anyhow::{Context, Result};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
-use synddb_shared::types::SignedMessage;
+use synddb_shared::types::message::SignedMessage;
 
 /// Verifies signatures on `SignedMessage` payloads
 #[derive(Debug, Clone)]
@@ -127,7 +127,7 @@ mod tests {
     use super::*;
     use alloy::signers::local::PrivateKeySigner;
     use alloy::signers::Signer;
-    use synddb_shared::types::MessageType;
+    use synddb_shared::types::message::MessageType;
 
     // Test private key (DO NOT use in production!)
     // Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266

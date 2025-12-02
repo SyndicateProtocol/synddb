@@ -1,7 +1,7 @@
 //! Arweave storage publisher
 
 use crate::publish::traits::PublishResult;
-use synddb_shared::types::SignedMessage;
+use synddb_shared::types::message::SignedMessage;
 
 #[derive(Debug)]
 pub struct ArweavePublisher {

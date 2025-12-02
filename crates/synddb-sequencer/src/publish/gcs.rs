@@ -15,7 +15,7 @@ use crate::publish::traits::{DAPublisher, PublishError, PublishResult};
 use serde::{Deserialize, Serialize};
 
 use async_trait::async_trait;
-use synddb_shared::types::SignedMessage;
+use synddb_shared::types::message::SignedMessage;
 use tracing::{debug, error, info, warn};
 
 /// Configuration for GCS publisher

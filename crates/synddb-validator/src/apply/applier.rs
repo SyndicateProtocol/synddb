@@ -8,9 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 use rusqlite::session::ConflictAction;
 use rusqlite::Connection;
-use synddb_shared::types::{
-    ChangesetBatchRequest, MessageType, SignedMessage, SnapshotRequest, WithdrawalRequest,
-};
+use synddb_shared::types::message::{MessageType, SignedMessage};
+use synddb_shared::types::payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest};
 use tracing::{debug, error, info, warn};
 
 use crate::error::ValidatorError;
@@ -334,7 +333,7 @@ mod tests {
             changesets: changesets
                 .into_iter()
                 .enumerate()
-                .map(|(i, data)| synddb_shared::types::ChangesetData {
+                .map(|(i, data)| synddb_shared::types::payloads::ChangesetData {
                     data,
                     sequence: i as u64,
                     timestamp: 1700000000,
@@ -442,7 +441,7 @@ mod tests {
     /// Create a compressed snapshot message
     fn create_compressed_snapshot(db_data: Vec<u8>, sequence: u64) -> Vec<u8> {
         use std::io::Write;
-        use synddb_shared::types::{SnapshotData, SnapshotRequest};
+        use synddb_shared::types::payloads::{SnapshotData, SnapshotRequest};
 
         let request = SnapshotRequest {
             snapshot: SnapshotData {
