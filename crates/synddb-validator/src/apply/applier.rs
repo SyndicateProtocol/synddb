@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::io::{Cursor, Read, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
@@ -14,12 +15,20 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::ValidatorError;
 
+/// Database type for changeset application
+enum DatabaseType {
+    /// File-based database with path for snapshot restoration
+    File(PathBuf),
+    /// In-memory database
+    InMemory,
+}
+
 /// Applies changesets from sequenced messages to an `SQLite` database
 pub struct ChangesetApplier {
     /// The underlying database connection
     pub conn: Connection,
-    /// Path to the database file (None for in-memory)
-    db_path: Option<String>,
+    /// Database type (file or in-memory)
+    db_type: DatabaseType,
 }
 
 impl ChangesetApplier {
@@ -36,7 +45,7 @@ impl ChangesetApplier {
 
         Ok(Self {
             conn,
-            db_path: Some(db_path.to_string()),
+            db_type: DatabaseType::File(PathBuf::from(db_path)),
         })
     }
 
@@ -46,7 +55,7 @@ impl ChangesetApplier {
 
         Ok(Self {
             conn,
-            db_path: None,
+            db_type: DatabaseType::InMemory,
         })
     }
 
@@ -152,11 +161,7 @@ impl ChangesetApplier {
             "Restoring database from snapshot"
         );
 
-        if let Some(path) = self.db_path.clone() {
-            self.restore_snapshot_to_file(&path, &request.snapshot.data)?;
-        } else {
-            self.restore_snapshot_in_memory(&request.snapshot.data)?;
-        }
+        self.restore_snapshot(&request.snapshot.data)?;
 
         info!(
             sequence = message.sequence,
@@ -167,18 +172,31 @@ impl ChangesetApplier {
         Ok(())
     }
 
-    /// Restore a snapshot to a file-based database
+    /// Restore a snapshot to the database
     ///
     /// Uses `SQLite`'s backup API to atomically restore the database.
-    fn restore_snapshot_to_file(&mut self, db_path: &str, snapshot_data: &[u8]) -> Result<()> {
-        // Write snapshot to a temporary file
-        let temp_path = format!("{db_path}.snapshot.tmp");
+    /// Handles both file-based and in-memory databases.
+    fn restore_snapshot(&mut self, snapshot_data: &[u8]) -> Result<()> {
+        // Generate temp file path based on database type
+        let temp_path = match &self.db_type {
+            DatabaseType::File(path) => PathBuf::from(format!("{}.snapshot.tmp", path.display())),
+            DatabaseType::InMemory => {
+                static COUNTER: AtomicU64 = AtomicU64::new(0);
+                let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+                std::env::temp_dir().join(format!("synddb_snapshot_restore_{id}.db"))
+            }
+        };
+
+        // Write snapshot to temporary file
         {
             let mut file =
                 fs::File::create(&temp_path).context("Failed to create temporary snapshot file")?;
             file.write_all(snapshot_data)
                 .context("Failed to write snapshot data")?;
-            file.sync_all().context("Failed to sync snapshot file")?;
+            // Sync for file-based databases to ensure durability
+            if matches!(self.db_type, DatabaseType::File(_)) {
+                file.sync_all().context("Failed to sync snapshot file")?;
+            }
         }
 
         // Open the snapshot as a source database
@@ -194,61 +212,21 @@ impl ChangesetApplier {
             let backup = rusqlite::backup::Backup::new(&source, &mut self.conn)
                 .context("Failed to create backup handle")?;
 
-            // Run the backup (copies all pages)
             backup
                 .run_to_completion(100, std::time::Duration::from_millis(10), None)
                 .context("Failed to restore from snapshot")?;
-        } // backup dropped here, releasing the borrow
+        }
 
         // Clean up temporary file
         if let Err(e) = fs::remove_file(&temp_path) {
-            warn!(path = %temp_path, error = %e, "Failed to remove temporary snapshot file");
+            warn!(path = %temp_path.display(), error = %e, "Failed to remove temporary snapshot file");
         }
 
-        // Re-apply WAL mode after restore
-        self.conn
-            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-            .context("Failed to re-apply pragmas after snapshot restore")?;
-
-        Ok(())
-    }
-
-    /// Restore a snapshot to an in-memory database
-    fn restore_snapshot_in_memory(&mut self, snapshot_data: &[u8]) -> Result<()> {
-        // For in-memory databases, we need to:
-        // 1. Write the snapshot to a temp file
-        // 2. Open it
-        // 3. Backup from it to our in-memory db
-
-        // Use unique file name to avoid conflicts with parallel operations
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let temp_path = std::env::temp_dir().join(format!("synddb_snapshot_restore_{id}.db"));
-        let temp_path_str = temp_path.to_string_lossy();
-
-        // Write snapshot to temp file
-        {
-            let mut file =
-                fs::File::create(&temp_path).context("Failed to create temporary snapshot file")?;
-            file.write_all(snapshot_data)
-                .context("Failed to write snapshot data")?;
-        }
-
-        // Open snapshot
-        let source =
-            Connection::open(&temp_path).context("Failed to open temporary snapshot database")?;
-
-        // Backup to our in-memory connection
-        let backup = rusqlite::backup::Backup::new(&source, &mut self.conn)
-            .context("Failed to create backup handle")?;
-
-        backup
-            .run_to_completion(100, std::time::Duration::from_millis(10), None)
-            .context("Failed to restore from snapshot")?;
-
-        // Clean up
-        if let Err(e) = fs::remove_file(&temp_path) {
-            warn!(path = %temp_path_str, error = %e, "Failed to remove temporary snapshot file");
+        // Re-apply WAL mode for file-based databases after restore
+        if matches!(self.db_type, DatabaseType::File(_)) {
+            self.conn
+                .execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+                .context("Failed to re-apply pragmas after snapshot restore")?;
         }
 
         Ok(())
