@@ -4282,8 +4282,10 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "base64 0.22.1",
+ "hex",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "tracing-subscriber",
  "url",

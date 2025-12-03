@@ -2,10 +2,14 @@
 //!
 //! Signs messages with EIP-191 prefix for compatibility with Ethereum
 //! smart contracts and standard verification tools.
+//!
+//! This module uses the signing payload computation functions from `synddb_shared`
+//! to ensure consistency with signature verification.
 
 use alloy::primitives::{keccak256, Address, B256};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::Signer;
+use synddb_shared::types::message::{SignedBatch, SignedMessage};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -48,12 +52,11 @@ impl MessageSigner {
     /// Create the signing payload for a sequenced message
     ///
     /// Format: `keccak256(sequence || timestamp || message_hash)`
+    ///
+    /// This delegates to [`SignedMessage::compute_signing_payload`] to ensure
+    /// consistency between signing and verification.
     pub fn create_signing_payload(sequence: u64, timestamp: u64, message_hash: B256) -> B256 {
-        let mut data = Vec::with_capacity(48);
-        data.extend_from_slice(&sequence.to_be_bytes());
-        data.extend_from_slice(&timestamp.to_be_bytes());
-        data.extend_from_slice(message_hash.as_slice());
-        keccak256(&data)
+        SignedMessage::compute_signing_payload(sequence, timestamp, message_hash)
     }
 
     /// Sign a message payload
@@ -78,6 +81,38 @@ impl MessageSigner {
         message_hash: B256,
     ) -> Result<SignatureBytes, SignerError> {
         let payload = Self::create_signing_payload(sequence, timestamp, message_hash);
+        self.sign(payload).await
+    }
+
+    /// Create the signing payload for a batch
+    ///
+    /// Format: `keccak256(start_sequence || end_sequence || messages_hash)`
+    /// where `messages_hash` is the keccak256 of the serialized messages JSON
+    ///
+    /// This delegates to [`SignedBatch::compute_signing_payload`] to ensure
+    /// consistency between signing and verification.
+    pub fn create_batch_signing_payload(
+        start_sequence: u64,
+        end_sequence: u64,
+        messages_hash: B256,
+    ) -> B256 {
+        SignedBatch::compute_signing_payload(start_sequence, end_sequence, messages_hash)
+    }
+
+    /// Compute the hash of serialized messages for batch signing
+    pub fn compute_messages_hash(messages_json: &[u8]) -> B256 {
+        keccak256(messages_json)
+    }
+
+    /// Sign a batch (convenience method)
+    pub async fn sign_batch(
+        &self,
+        start_sequence: u64,
+        end_sequence: u64,
+        messages_hash: B256,
+    ) -> Result<SignatureBytes, SignerError> {
+        let payload =
+            Self::create_batch_signing_payload(start_sequence, end_sequence, messages_hash);
         self.sign(payload).await
     }
 }

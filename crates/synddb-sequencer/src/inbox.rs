@@ -51,6 +51,11 @@ impl Inbox {
         self.signer.address()
     }
 
+    /// Get a reference to the signer (for sharing with publishers)
+    pub fn signer(&self) -> Arc<MessageSigner> {
+        Arc::clone(&self.signer)
+    }
+
     /// Get the current sequence number (next to be assigned)
     pub fn current_sequence(&self) -> u64 {
         self.sequence.load(Ordering::SeqCst)
