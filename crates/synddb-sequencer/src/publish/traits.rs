@@ -14,12 +14,18 @@ use synddb_shared::types::message::{SignedBatch, SignedMessage};
 // - Fire-and-forget: HTTP handler returns immediately after sequencing, batch publishes async
 // - Wait-for-batch: HTTP handler waits until its message's batch is published (higher latency)
 //
+// With larger batch sizes (e.g., 50+), it makes sense to add zstd compression to the
+// batch before upload. Individual message payloads are already compressed, but the batch
+// envelope and repeated JSON structure compress well at scale. Not worth it for batch_size=1.
+//
 // ```
 // pub struct BatchConfig {
 //     /// Maximum messages per batch before flushing (default: 50)
 //     pub batch_size: usize,
 //     /// Maximum time to wait before flushing a partial batch (default: 5s)
 //     pub batch_interval: Duration,
+//     /// Enable zstd compression for batches (recommended for batch_size > 1)
+//     pub compress: bool,
 // }
 // ```
 
