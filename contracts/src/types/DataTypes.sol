@@ -12,9 +12,9 @@ pragma solidity 0.8.30;
  */
 enum ProcessingStage {
     NotStarted, // Message has not been initialized
-    PreExecution, // Message initialized, awaiting pre-execution validation
+    PreExecution, // Message initialized, awaiting pre-execution validation (ModuleCheck.check() is called at this stage)
     Executing, // Message is currently being executed
-    PostExecution, // Execution complete, awaiting post-execution validation
+    PostExecution, // Execution complete, awaiting post-execution validation (ModuleCheck.check() is called at this stage)
     Completed, // Message successfully processed
     Rejected // Message rejected during validation
 }

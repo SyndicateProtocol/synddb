@@ -37,7 +37,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
         supplyCheckModule = new ERC20TotalSupplyCheckModule(address(weth), 1000000 ether);
 
-        bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);
+        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
         bridge.addPreModule(address(supplyCheckModule));
         bridge.addPreModule(address(validatorModule));
 

@@ -13,26 +13,33 @@ import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataT
  */
 contract Bridge is IBridge, ModuleCheckRegistry {
     mapping(bytes32 messageId => MessageState state) public messageStates;
-    mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 
     IWrappedNativeToken public immutable wrappedNativeToken;
 
     /**
      * @notice Emitted when a new message is initialized
-     * @param messageId Unique identifier of the message
-     * @param payload Encoded function call data
+     * @dev The messageId can be used for idempotency checks (duplicate message IDs will revert).
+     *      Recommended ID schemes include:
+     *      - Sequential nonces: `keccak256(abi.encodePacked(chainId, nonce))`
+     *      - UUIDs: Must be hashed to bytes32, e.g., `keccak256(abi.encodePacked(uuidString))`
+     *      - Hash of message data: `keccak256(abi.encodePacked(sourceChain, sender, nonce, payload))`
+     * @param messageId Unique identifier of the message (bytes32)
+     * @param payload Encoded function call data (e.g., abi.encodeWithSignature("transfer(address,uint256)", recipient, amount))
      */
     event MessageInitialized(bytes32 indexed messageId, bytes payload);
 
     /**
      * @notice Emitted when a message execution completes
+     * @dev This corresponds to ProcessingStage.Completed in DataTypes.sol
      * @param messageId Unique identifier of the message
      * @param success Whether the execution succeeded
      */
     event MessageHandled(bytes32 indexed messageId, bool success);
 
     /**
-     * @notice Emitted when native token is wrapped
+     * @notice Emitted when native token is wrapped to ERC20 wrapped native token
+     * @dev This occurs in the fallback receive() function when native tokens are sent to the bridge.
+     *      The bridge does NOT accept ERC-20 tokens directly; only native tokens are automatically wrapped.
      * @param sender Address that sent the native token
      * @param amount Amount of native token wrapped
      */
@@ -85,7 +92,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
      * This should not be needed in normal operation but provides a safety mechanism.
      * @param amount Maximum amount to wrap (will wrap min(amount, address(this).balance))
      */
-    function wrapNativeToken(uint256 amount) external onlyRole(SEQUENCER_ROLE) {
+    function wrapNativeToken(uint256 amount) external onlyRole(MESSAGE_INITIALIZER_ROLE) {
         uint256 balance = address(this).balance;
         uint256 amountToWrap = amount > balance ? balance : amount;
 
@@ -105,22 +112,14 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         emit NativeTokenWrapped(msg.sender, amount);
     }
 
-    /**
-     * @notice Initializes a new cross-chain message
-     * @dev Only callable by addresses with SEQUENCER_ROLE
-     * @param messageId Unique identifier for the message
-     * @param targetAddress Address that will receive the message call
-     * @param payload Encoded function call data
-     * @param sequencerSignature Signature from the trusted sequencer
-     * @param nativeTokenAmount Amount of native token to transfer with the call
-     */
+    /// @inheritdoc IBridge
     function initializeMessage(
         bytes32 messageId,
         address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
         uint256 nativeTokenAmount
-    ) public onlyRole(SEQUENCER_ROLE) {
+    ) public onlyRole(MESSAGE_INITIALIZER_ROLE) {
         _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
     }
 
@@ -158,16 +157,10 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         emit MessageInitialized(messageId, payload);
     }
 
-    /**
-     * @notice Processes a cross-chain message by executing its payload and validating pre/post execution modules
-     * @dev This function allows reentrancy for composability but prevents re-processing the same message via stage
-     * checks.
-     *
-     * WARNING: Message handlers should be carefully designed to handle reentrant calls. Avoid relying on contract state that could change during execution.
-     * The bridge allows cross-message reentrancy to enable composable cross-chain operations, but same-message reentrancy is blocked.
-     *
-     * @param messageId The unique identifier of the message to process
-     */
+    /// @inheritdoc IBridge
+    /// @dev This function allows reentrancy for composability but prevents re-processing the same message via stage checks.
+    ///      WARNING: Message handlers should be carefully designed to handle reentrant calls. The bridge allows
+    ///      cross-message reentrancy to enable composable cross-chain operations, but same-message reentrancy is blocked.
     function handleMessage(bytes32 messageId) public {
         MessageState storage state = messageStates[messageId];
 
@@ -215,16 +208,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         emit MessageHandled(messageId, true);
     }
 
-    /**
-     * @notice Initializes and immediately executes a message in a single transaction
-     * @dev Combines initialization, validator signature collection, and execution
-     * @param messageId Unique identifier for the message
-     * @param targetAddress Address that will receive the message call
-     * @param payload Encoded function call data
-     * @param sequencerSignature Signature from the trusted sequencer
-     * @param validatorSignatures Array of signatures from authorized validators
-     * @param nativeTokenAmount Amount of native token to transfer with the call
-     */
+    /// @inheritdoc IBridge
     function initializeAndHandleMessage(
         bytes32 messageId,
         address targetAddress,
@@ -243,38 +227,22 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         handleMessage(messageId);
     }
 
-    /**
-     * @notice Checks if a message has been successfully completed
-     * @param messageId Unique identifier of the message
-     * @return bool True if the message reached the Completed stage
-     */
+    /// @inheritdoc IBridge
     function isMessageCompleted(bytes32 messageId) public view returns (bool) {
         return messageStates[messageId].stage == ProcessingStage.Completed;
     }
 
-    /**
-     * @notice Checks if a message has been rejected
-     * @param messageId Unique identifier of the message
-     * @return bool True if the message reached the Rejected stage
-     */
+    /// @inheritdoc IBridge
     function isMessageRejected(bytes32 messageId) public view returns (bool) {
         return messageStates[messageId].stage == ProcessingStage.Rejected;
     }
 
-    /**
-     * @notice Checks if a message has finished processing (completed or rejected)
-     * @param messageId Unique identifier of the message
-     * @return bool True if the message is in a terminal state
-     */
+    /// @inheritdoc IBridge
     function isMessageHandled(bytes32 messageId) public view returns (bool) {
         return isMessageCompleted(messageId) || isMessageRejected(messageId);
     }
 
-    /**
-     * @notice Checks if a message has been initialized
-     * @param messageId Unique identifier of the message
-     * @return bool True if the message has been initialized
-     */
+    /// @inheritdoc IBridge
     function isMessageInitialized(bytes32 messageId) public view returns (bool) {
         return messageStates[messageId].stage != ProcessingStage.NotStarted;
     }
@@ -285,7 +253,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
     /**
      * @notice Initializes multiple messages in a single transaction
-     * @dev Only callable by addresses with SEQUENCER_ROLE. All arrays must have equal length.
+     * @dev Only callable by addresses with MESSAGE_INITIALIZER_ROLE. All arrays must have equal length.
      *      If any message initialization fails, the entire batch will revert atomically.
      * @param messageIds Array of unique message identifiers
      * @param targetAddresses Array of addresses that will receive message calls
@@ -299,7 +267,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes[] calldata payloads,
         SequencerSignature[] calldata _sequencerSignatures,
         uint256[] calldata nativeTokenAmounts
-    ) external onlyRole(SEQUENCER_ROLE) {
+    ) external onlyRole(MESSAGE_INITIALIZER_ROLE) {
         if (
             messageIds.length != targetAddresses.length || messageIds.length != payloads.length
                 || messageIds.length != _sequencerSignatures.length || messageIds.length != nativeTokenAmounts.length

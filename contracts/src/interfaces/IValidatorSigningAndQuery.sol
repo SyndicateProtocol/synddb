@@ -9,10 +9,13 @@ pragma solidity 0.8.30;
 interface IValidatorSigningAndQuery {
     /**
      * @notice Emitted when a validator signs a message
+     * @dev This event is emitted by both signMessage() (when validator signs directly) and
+     *      signMessageWithSignature() (when a relayer submits a signature on behalf of a validator)
      * @param messageId The unique identifier of the signed message
      * @param validator The address of the validator who signed
+     * @param submittedBy The address that submitted the signature (msg.sender). Useful for tracking relayer activity and rewards.
      */
-    event MessageSigned(bytes32 indexed messageId, address indexed validator);
+    event MessageSigned(bytes32 indexed messageId, address indexed validator, address indexed submittedBy);
 
     /**
      * @notice Thrown when a signature comes from an unauthorized validator

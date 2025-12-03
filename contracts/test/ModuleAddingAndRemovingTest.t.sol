@@ -43,7 +43,7 @@ contract ModuleAddingAndRemovingTest is Test {
         weth = makeAddr("weth");
 
         bridge = new Bridge(admin, weth);
-        bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);
+        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -161,7 +161,7 @@ contract ModuleAddingAndRemovingTest is Test {
         for (uint256 j = 0; j < moduleCounts.length; j++) {
             // Deploy fresh Bridge for each test
             Bridge testBridge = new Bridge(admin, weth);
-            testBridge.grantRole(testBridge.SEQUENCER_ROLE(), sequencer);
+            testBridge.grantRole(testBridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
 
             // Add gas-consuming modules
             for (uint256 i = 0; i < moduleCounts[j]; i++) {

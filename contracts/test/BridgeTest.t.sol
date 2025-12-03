@@ -44,7 +44,7 @@ contract BridgeTest is Test {
         setupValidators(3);
         validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
 
-        bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);
+        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
         bridge.addPreModule(address(validatorModule));
 
         vm.deal(sequencer, type(uint128).max);
@@ -321,6 +321,25 @@ contract BridgeTest is Test {
 
         vm.expectRevert();
         bridge.handleMessage(messageId);
+    }
+
+    function test_HandleMessage_SequencerOnlyMode_NoValidators() public {
+        // Deploy a new bridge with no validator module (sequencer-only mode)
+        Bridge sequencerOnlyBridge = new Bridge(admin, address(weth));
+        sequencerOnlyBridge.grantRole(sequencerOnlyBridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+
+        bytes32 messageId = keccak256("sequencer-only");
+        bytes memory payload = "";
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+
+        vm.prank(sequencer);
+        sequencerOnlyBridge.initializeMessage(messageId, receiver, payload, sig, 0);
+
+        // Should handle message successfully without any validator signatures
+        sequencerOnlyBridge.handleMessage(messageId);
+
+        assertTrue(sequencerOnlyBridge.isMessageCompleted(messageId));
+        assertTrue(sequencerOnlyBridge.isMessageHandled(messageId));
     }
 
     /*//////////////////////////////////////////////////////////////

@@ -28,7 +28,7 @@ abstract contract UseCaseBaseTest is Test {
     function createBridgeWithWETH(address admin, address sequencer) internal returns (Bridge bridge, WETH9 weth) {
         weth = new WETH9();
         bridge = new Bridge(admin, address(weth));
-        bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);
+        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
     }
 
     /// @notice Setup bridge with validators and validator module

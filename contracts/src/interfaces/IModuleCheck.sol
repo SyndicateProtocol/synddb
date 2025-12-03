@@ -10,11 +10,13 @@ import {ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
 interface IModuleCheck {
     /**
      * @notice Validates a message at a specific processing stage
-     * @dev Called by the bridge during pre-execution or post-execution phases
+     * @dev Called by the bridge during pre-execution or post-execution phases.
+     *      IMPORTANT: This function is ONLY called during ProcessingStage.PreExecution and ProcessingStage.PostExecution.
+     *      It is NOT called during NotStarted, Executing, Completed, or Rejected stages.
      * @param messageId Unique identifier of the message being processed
-     * @param stage Current processing stage (PreExecution or PostExecution)
+     * @param stage Current processing stage (PreExecution or PostExecution only)
      * @param payload The encoded function call data
-     * @param sequencerSignature Signature from the trusted sequencer
+     * @param sequencerSignature Signature from the trusted TEE sequencer
      * @return bool True if validation passes, false otherwise
      */
     function check(
