@@ -143,6 +143,30 @@ SIGNING_KEY=ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
 cargo build -p synddb-sequencer --release --features gcs
 ```
 
+## Storage Layout
+
+Messages are published to GCS as atomic batches:
+
+```
+gs://{bucket}/{prefix}/
+└── batches/
+    ├── 000000000001_000000000050.json   # messages 1-50
+    ├── 000000000051_000000000100.json   # messages 51-100
+    └── ...
+```
+
+**Batch filename format**: `{start:012}_{end:012}.json`
+- `start` - First sequence number in the batch (inclusive), zero-padded to 12 digits
+- `end` - Last sequence number in the batch (inclusive), zero-padded to 12 digits
+
+**Benefits**:
+- Atomic publication of messages with state (no separate state file)
+- State is implicit (highest `end` sequence across all batches)
+- Files sort lexicographically in sequence order
+- Supports ~1 trillion sequences (12 digits)
+
+**State Recovery**: On startup, the sequencer scans batch filenames to find the highest `end` sequence number.
+
 ## Security
 
 - The `SIGNING_KEY` must be kept secret - it signs all sequenced messages
