@@ -20,7 +20,9 @@
 //! with state, preventing partial publication failures.
 
 use crate::publish::traits::{DAPublisher, PublishError, PublishResult};
+use crate::signer::MessageSigner;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use synddb_shared::types::message::{SignedBatch, SignedMessage};
@@ -58,6 +60,8 @@ impl GcsConfig {
 pub struct GcsPublisher {
     client: google_cloud_storage::client::Client,
     config: GcsConfig,
+    /// Signer for creating batch signatures
+    signer: Arc<MessageSigner>,
 }
 
 impl std::fmt::Debug for GcsPublisher {
@@ -65,6 +69,7 @@ impl std::fmt::Debug for GcsPublisher {
         f.debug_struct("GcsPublisher")
             .field("config", &self.config)
             .field("client", &"<GCS Client>")
+            .field("signer", &format!("{:?}", self.signer.address()))
             .finish()
     }
 }
@@ -74,7 +79,9 @@ impl GcsPublisher {
     ///
     /// Uses default credentials (`GOOGLE_APPLICATION_CREDENTIALS` env var,
     /// workload identity, or metadata server).
-    pub async fn new(config: GcsConfig) -> Result<Self, PublishError> {
+    ///
+    /// The signer is used to create batch signatures when publishing.
+    pub async fn new(config: GcsConfig, signer: Arc<MessageSigner>) -> Result<Self, PublishError> {
         use google_cloud_storage::client::{Client, ClientConfig};
 
         let client_config = ClientConfig::default()
@@ -84,9 +91,13 @@ impl GcsPublisher {
 
         let client = Client::new(client_config);
 
-        info!(bucket = %config.bucket, prefix = %config.prefix, "GCS publisher initialized");
+        info!(bucket = %config.bucket, prefix = %config.prefix, signer = %format!("{:?}", signer.address()), "GCS publisher initialized");
 
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            signer,
+        })
     }
 
     /// Get the path for a batch file
@@ -196,6 +207,12 @@ impl GcsPublisher {
     }
 
     /// Find the batch containing a specific sequence number
+    ///
+    ///TODO: This is O(n) in the number of batches - it lists all batches and scans them.
+    /// For large numbers of batches, consider:
+    /// 1. Prefix narrowing: estimate batch start from sequence if batch sizes are consistent
+    /// 2. In-memory caching: cache (start, end) -> filename after first list
+    /// 3. For sequential replay, iterate batches in order by filename instead of using `get()`
     async fn find_batch_containing(&self, sequence: u64) -> Result<Option<String>, PublishError> {
         use google_cloud_storage::http::objects::list::ListObjectsRequest;
 
@@ -235,19 +252,52 @@ impl DAPublisher for GcsPublisher {
     }
 
     async fn publish(&self, message: &SignedMessage) -> PublishResult {
-        // Wrap single message in a batch
+        let messages = vec![message.clone()];
+
+        let messages_json = match serde_json::to_vec(&messages) {
+            Ok(json) => json,
+            Err(e) => {
+                error!(sequence = message.sequence, error = %e, "Failed to serialize messages for batch signing");
+                return PublishResult::failure("gcs", format!("Serialization error: {e}"));
+            }
+        };
+
+        let messages_hash = MessageSigner::compute_messages_hash(&messages_json);
+        let batch_signature = match self
+            .signer
+            .sign_batch(message.sequence, message.sequence, messages_hash)
+            .await
+        {
+            Ok(sig) => sig.to_hex_prefixed(),
+            Err(e) => {
+                error!(sequence = message.sequence, error = %e, "Failed to sign batch");
+                return PublishResult::failure("gcs", format!("Signing error: {e}"));
+            }
+        };
+
         let batch = SignedBatch {
             start_sequence: message.sequence,
             end_sequence: message.sequence,
-            messages: vec![message.clone()],
-            batch_signature: message.signature.clone(),
-            signer: message.signer.clone(),
+            messages,
+            batch_signature,
+            signer: format!("{:?}", self.signer.address()),
             created_at: message.timestamp,
         };
         self.publish_batch(&batch).await
     }
 
     async fn publish_batch(&self, batch: &SignedBatch) -> PublishResult {
+        // Sanity check: verify batch signature before publishing
+        if let Err(e) = batch.verify_batch_signature() {
+            error!(
+                start = batch.start_sequence,
+                end = batch.end_sequence,
+                error = %e,
+                "Batch signature verification failed - refusing to publish invalid batch"
+            );
+            return PublishResult::failure("gcs", format!("Signature verification failed: {e}"));
+        }
+
         let path = self.batch_path(batch.start_sequence, batch.end_sequence);
 
         // Serialize batch
@@ -356,11 +406,15 @@ impl DAPublisher for GcsPublisher {
 #[derive(Debug)]
 pub struct GcsPublisher {
     _config: GcsConfig,
+    _signer: Arc<MessageSigner>,
 }
 
 #[cfg(not(feature = "gcs"))]
 impl GcsPublisher {
-    pub async fn new(_config: GcsConfig) -> Result<Self, PublishError> {
+    pub async fn new(
+        _config: GcsConfig,
+        _signer: Arc<MessageSigner>,
+    ) -> Result<Self, PublishError> {
         Err(PublishError::Config(
             "GCS feature not enabled. Compile with --features gcs".to_string(),
         ))

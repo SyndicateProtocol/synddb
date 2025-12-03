@@ -2,23 +2,40 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::publish::traits::{DAPublisher, PublishError, PublishResult};
+use crate::signer::MessageSigner;
 use synddb_shared::types::message::{SignedBatch, SignedMessage};
 
-/// In-memory publisher for testing
+/// Internal state for `MockPublisher`
 #[derive(Debug, Default)]
+struct MockState {
+    messages: HashMap<u64, SignedMessage>,
+    batches: HashMap<u64, SignedBatch>,
+    saved_sequence: Option<u64>,
+    fail_on_publish: bool,
+}
+
+/// In-memory publisher for testing
+#[derive(Debug)]
 pub struct MockPublisher {
-    messages: Mutex<HashMap<u64, SignedMessage>>,
-    batches: Mutex<HashMap<u64, SignedBatch>>,
-    state: Mutex<Option<u64>>,
-    pub fail_on_publish: Mutex<bool>,
+    state: Mutex<MockState>,
+    /// Signer for creating batch signatures
+    signer: Arc<MessageSigner>,
 }
 
 impl MockPublisher {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(signer: Arc<MessageSigner>) -> Self {
+        Self {
+            state: Mutex::new(MockState::default()),
+            signer,
+        }
+    }
+
+    /// Set whether publish operations should fail
+    pub fn set_fail_on_publish(&self, fail: bool) {
+        self.state.lock().unwrap().fail_on_publish = fail;
     }
 }
 
@@ -29,28 +46,62 @@ impl DAPublisher for MockPublisher {
     }
 
     async fn publish(&self, message: &SignedMessage) -> PublishResult {
-        if *self.fail_on_publish.lock().unwrap() {
+        if self.state.lock().unwrap().fail_on_publish {
             return PublishResult::failure("mock", "Simulated failure");
         }
 
-        let mut messages = self.messages.lock().unwrap();
-        messages.insert(message.sequence, message.clone());
-        PublishResult::success("mock", format!("mock://{}", message.sequence))
+        // Wrap single message in a batch with proper batch signature
+        let messages_vec = vec![message.clone()];
+
+        // Serialize messages for hashing
+        let messages_json = match serde_json::to_vec(&messages_vec) {
+            Ok(json) => json,
+            Err(e) => {
+                return PublishResult::failure("mock", format!("Serialization error: {e}"));
+            }
+        };
+
+        // Compute messages hash and sign the batch
+        let messages_hash = MessageSigner::compute_messages_hash(&messages_json);
+        let batch_signature = match self
+            .signer
+            .sign_batch(message.sequence, message.sequence, messages_hash)
+            .await
+        {
+            Ok(sig) => sig.to_hex_prefixed(),
+            Err(e) => {
+                return PublishResult::failure("mock", format!("Signing error: {e}"));
+            }
+        };
+
+        let batch = SignedBatch {
+            start_sequence: message.sequence,
+            end_sequence: message.sequence,
+            messages: messages_vec,
+            batch_signature,
+            signer: format!("{:?}", self.signer.address()),
+            created_at: message.timestamp,
+        };
+
+        self.publish_batch(&batch).await
     }
 
     async fn publish_batch(&self, batch: &SignedBatch) -> PublishResult {
-        if *self.fail_on_publish.lock().unwrap() {
+        // Sanity check: verify batch signature before publishing
+        if let Err(e) = batch.verify_batch_signature() {
+            return PublishResult::failure("mock", format!("Signature verification failed: {e}"));
+        }
+
+        let mut state = self.state.lock().unwrap();
+
+        if state.fail_on_publish {
             return PublishResult::failure("mock", "Simulated failure");
         }
 
-        // Store batch
-        let mut batches = self.batches.lock().unwrap();
-        batches.insert(batch.start_sequence, batch.clone());
-
-        // Also index individual messages for get()
-        let mut messages = self.messages.lock().unwrap();
+        // Store batch and index individual messages
+        state.batches.insert(batch.start_sequence, batch.clone());
         for msg in &batch.messages {
-            messages.insert(msg.sequence, msg.clone());
+            state.messages.insert(msg.sequence, msg.clone());
         }
 
         PublishResult::success(
@@ -63,21 +114,20 @@ impl DAPublisher for MockPublisher {
     }
 
     async fn get(&self, sequence: u64) -> Result<Option<SignedMessage>, PublishError> {
-        let messages = self.messages.lock().unwrap();
-        Ok(messages.get(&sequence).cloned())
+        let state = self.state.lock().unwrap();
+        Ok(state.messages.get(&sequence).cloned())
     }
 
     async fn get_batch(&self, start_sequence: u64) -> Result<Option<SignedBatch>, PublishError> {
-        let batches = self.batches.lock().unwrap();
-        Ok(batches.get(&start_sequence).cloned())
+        let state = self.state.lock().unwrap();
+        Ok(state.batches.get(&start_sequence).cloned())
     }
 
     async fn get_latest_sequence(&self) -> Result<Option<u64>, PublishError> {
-        let messages = self.messages.lock().unwrap();
-        let batches = self.batches.lock().unwrap();
+        let state = self.state.lock().unwrap();
 
-        let msg_max = messages.keys().max().copied();
-        let batch_max = batches.values().map(|b| b.end_sequence).max();
+        let msg_max = state.messages.keys().max().copied();
+        let batch_max = state.batches.values().map(|b| b.end_sequence).max();
 
         Ok(match (msg_max, batch_max) {
             (Some(m), Some(b)) => Some(m.max(b)),
@@ -88,38 +138,64 @@ impl DAPublisher for MockPublisher {
     }
 
     async fn save_state(&self, sequence: u64) -> Result<(), PublishError> {
-        *self.state.lock().unwrap() = Some(sequence);
+        self.state.lock().unwrap().saved_sequence = Some(sequence);
         Ok(())
     }
 
     async fn load_state(&self) -> Result<Option<u64>, PublishError> {
-        Ok(*self.state.lock().unwrap())
+        Ok(self.state.lock().unwrap().saved_sequence)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::keccak256;
     use synddb_shared::types::message::MessageType;
+
+    const TEST_PRIVATE_KEY: &str =
+        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    fn test_signer() -> Arc<MessageSigner> {
+        Arc::new(MessageSigner::new(TEST_PRIVATE_KEY).unwrap())
+    }
+
+    /// Create a properly signed message for testing
+    async fn create_signed_message(
+        signer: &MessageSigner,
+        sequence: u64,
+        timestamp: u64,
+    ) -> SignedMessage {
+        let payload = b"test payload";
+        let message_hash = keccak256(payload);
+        let signing_payload =
+            SignedMessage::compute_signing_payload(sequence, timestamp, message_hash);
+        let signature = signer.sign(signing_payload).await.unwrap();
+
+        SignedMessage {
+            sequence,
+            timestamp,
+            message_type: MessageType::Changeset,
+            payload: payload.to_vec(),
+            message_hash: format!("0x{}", hex::encode(message_hash)),
+            signature: signature.to_hex_prefixed(),
+            signer: format!("{:?}", signer.address()),
+        }
+    }
 
     #[tokio::test]
     async fn test_mock_publisher_roundtrip() {
-        let publisher = MockPublisher::new();
+        let signer = test_signer();
+        let publisher = MockPublisher::new(Arc::clone(&signer));
 
-        let message = SignedMessage {
-            sequence: 42,
-            timestamp: 1700000000,
-            message_type: MessageType::Changeset,
-            payload: b"test payload".to_vec(),
-            message_hash: "0x1234".to_string(),
-            signature: "0xabcd".to_string(),
-            signer: "0x5678".to_string(),
-        };
+        // Create a properly signed message
+        let message = create_signed_message(&signer, 42, 1700000000).await;
 
         // Publish
         let result = publisher.publish(&message).await;
         assert!(result.success);
-        assert_eq!(result.reference, Some("mock://42".to_string()));
+        // Now returns batch reference since publish wraps in a batch
+        assert_eq!(result.reference, Some("mock://batch/42_42".to_string()));
 
         // Retrieve
         let retrieved = publisher.get(42).await.unwrap();
@@ -133,7 +209,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_publisher_state() {
-        let publisher = MockPublisher::new();
+        let publisher = MockPublisher::new(test_signer());
 
         // Initially no state
         assert!(publisher.load_state().await.unwrap().is_none());
@@ -147,8 +223,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_publisher_failure() {
-        let publisher = MockPublisher::new();
-        *publisher.fail_on_publish.lock().unwrap() = true;
+        let publisher = MockPublisher::new(test_signer());
+        publisher.set_fail_on_publish(true);
 
         let message = SignedMessage {
             sequence: 1,
@@ -167,35 +243,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_publisher_batch() {
-        let publisher = MockPublisher::new();
+        let signer = test_signer();
+        let publisher = MockPublisher::new(Arc::clone(&signer));
 
-        let messages = vec![
-            SignedMessage {
-                sequence: 1,
-                timestamp: 1700000000,
-                message_type: MessageType::Changeset,
-                payload: b"msg1".to_vec(),
-                message_hash: "0x1".to_string(),
-                signature: "0xsig1".to_string(),
-                signer: "0xsigner".to_string(),
-            },
-            SignedMessage {
-                sequence: 2,
-                timestamp: 1700000001,
-                message_type: MessageType::Changeset,
-                payload: b"msg2".to_vec(),
-                message_hash: "0x2".to_string(),
-                signature: "0xsig2".to_string(),
-                signer: "0xsigner".to_string(),
-            },
-        ];
+        // Create properly signed messages
+        let msg1 = create_signed_message(&signer, 1, 1700000000).await;
+        let msg2 = create_signed_message(&signer, 2, 1700000001).await;
+        let messages = vec![msg1, msg2];
+
+        // Create properly signed batch
+        let messages_hash = SignedBatch::compute_messages_hash(&messages).unwrap();
+        let batch_payload = SignedBatch::compute_signing_payload(1, 2, messages_hash);
+        let batch_sig = signer.sign(batch_payload).await.unwrap();
 
         let batch = SignedBatch {
             start_sequence: 1,
             end_sequence: 2,
             messages,
-            batch_signature: "0xbatchsig".to_string(),
-            signer: "0xsigner".to_string(),
+            batch_signature: batch_sig.to_hex_prefixed(),
+            signer: format!("{:?}", signer.address()),
             created_at: 1700000002,
         };
 

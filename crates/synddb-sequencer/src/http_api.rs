@@ -662,7 +662,7 @@ mod tests {
     async fn test_receive_changesets_with_publisher() {
         let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
         let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new());
+        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
 
         let state = AppState {
             inbox: inbox.clone(),
@@ -799,7 +799,7 @@ mod tests {
     async fn test_get_message_with_publisher() {
         let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
         let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new());
+        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
 
         let state = AppState {
             inbox: inbox.clone(),
@@ -845,7 +845,7 @@ mod tests {
     async fn test_get_message_not_found() {
         let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
         let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new());
+        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
 
         let state = AppState {
             inbox,
@@ -921,7 +921,7 @@ mod tests {
     async fn test_readiness_with_publisher() {
         let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
         let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new());
+        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
 
         let state = AppState {
             inbox,
@@ -988,7 +988,7 @@ mod tests {
     async fn test_receive_snapshot_with_publisher() {
         let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
         let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new());
+        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
 
         let state = AppState {
             inbox: inbox.clone(),
