@@ -47,7 +47,7 @@ The Bridge processes messages in four distinct stages. **All stages execute atom
 - Note: ETH must be deposited to bridge separately via receive() which wraps to WETH
 - Store SequencerSignature separately in dedicated mapping
 - Mark stage as PreExecution
-- Restricted to SEQUENCER_ROLE
+- Restricted to MESSAGE_INITIALIZER_ROLE (sequencers, relayers, etc.)
 
 **Stage 2: PreExecution (Validation)**
 
@@ -122,7 +122,7 @@ The Bridge contract manages:
 ```
 contracts/src/
 ├── Bridge.sol                                    # Core bridge contract (inherits ModuleCheckRegistry)
-├── ModuleCheckRegistry.sol                       # Base contract for module management and validator signing
+├── ModuleCheckRegistry.sol                       # Base contract for module management, validator and signature storage
 │
 ├── interfaces/
 │   ├── IBridge.sol                              # Bridge interface
@@ -136,6 +136,7 @@ contracts/src/
 └── modules/
     ├── ERC20TotalSupplyCheckModule.sol          # Example: ERC20 supply cap validation
     ├── ERC20MaxSupplyIncreaseModule.sol         # Example: ERC20 supply change tracking
+    ├── MessageOrderingModule.sol                # Example: Nonce-based sequential message ordering
     └── ValidatorSignatureThresholdModule.sol    # Example: Validator signature threshold check
 ```
 
@@ -152,13 +153,14 @@ The main bridge contract that orchestrates message processing across all stages.
 EnumerableSet.AddressSet private preModules;
 EnumerableSet.AddressSet private postModules;
 mapping(bytes32 messageId => mapping(address validator => bool hasSigned)) public validatorSignatures;
+mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 
-bytes32 public constant SEQUENCER_ROLE = keccak256("SEQUENCER_ROLE");
+bytes32 public constant MESSAGE_INITIALIZER_ROLE = keccak256("MESSAGE_INITIALIZER_ROLE");
 bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
 
 // In Bridge
 mapping(bytes32 messageId => MessageState state) public messageStates;
-mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
+IWrappedNativeToken public immutable wrappedNativeToken;
 ```
 
 #### Data Structures
@@ -195,7 +197,7 @@ enum ProcessingStage {
  * Initialize a new message for processing
  * Creates message state and stores sequencer signature
  * This is initiated by the sequencer upon receiving a signed message
- * Restricted to SEQUENCER_ROLE
+ * Restricted to MESSAGE_INITIALIZER_ROLE (sequencers, relayers, etc.)
  * Note: ETH must be deposited separately via receive() before calling this
  *
  * @param messageId Unique identifier
@@ -307,7 +309,7 @@ The Bridge supports batch processing for efficiency:
 /**
  * Initialize multiple messages in a single transaction
  * Note: ETH must be deposited separately via receive() before calling this
- * Restricted to SEQUENCER_ROLE
+ * Restricted to MESSAGE_INITIALIZER_ROLE
  *
  * @param messageIds Array of unique identifiers
  * @param targetAddresses Array of target contracts to call
@@ -401,7 +403,7 @@ function initializeMessage(
     bytes calldata payload,
     SequencerSignature calldata sequencerSignature,
     uint256 nativeTokenAmount
-) public onlyRole(SEQUENCER_ROLE) {
+) public onlyRole(MESSAGE_INITIALIZER_ROLE) {
     _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
 }
 
