@@ -7,29 +7,36 @@ import {Bridge} from "src/Bridge.sol";
 
 /**
  * @title DeployBridge
- * @notice Deployment script for the Bridge contract to Base Sepolia
- * @dev Uses Foundry's script system with keystore-based signing
- *      Wrapped Native Token (WETH) hardcoded for Base Sepolia: 0x4200000000000000000000000000000000000006
+ * @notice Deployment script for the Bridge contract to OP Stack networks
+ * @dev Uses Foundry's script system with keystore-based signing.
+ *      The wrapped native token address 0x4200000000000000000000000000000000000006 is consistent
+ *      across all OP Stack networks (Optimism, Base, Zora, Mode, etc.) as it's a predeploy address.
+ *      See: https://docs.optimism.io/chain/addresses#op-mainnet-l2
  */
 contract DeployBridge is Script {
-    // Base Sepolia WETH address (constant across all Base networks)
-    address constant WRAPPED_NATIVE_TOKEN = 0x4200000000000000000000000000000000000006;
+    // OP Stack predeploy WETH address (consistent across all OP Stack L2s)
+    // This includes: Optimism, Base, Zora, Mode, Fraxtal, and other OP Stack chains
+    address constant OP_STACK_WRAPPED_NATIVE_TOKEN = 0x4200000000000000000000000000000000000006;
 
     function run() external returns (Bridge) {
+        return run(OP_STACK_WRAPPED_NATIVE_TOKEN); // change this if deploying to non-OP Stack networks
+    }
+
+    function run(address wrappedNativeToken) public returns (Bridge) {
         // Read admin address from environment variable
         address admin = vm.envAddress("ADMIN_ADDRESS");
 
         console.log("========================================");
-        console.log("Deploying Bridge Contract to Base Sepolia");
+        console.log("Deploying Bridge Contract");
         console.log("========================================");
         console.log("Admin:", admin);
-        console.log("Wrapped Native Token (WETH):", WRAPPED_NATIVE_TOKEN);
+        console.log("Wrapped Native Token:", wrappedNativeToken);
         console.log("========================================");
 
         // Start broadcasting transactions
         vm.startBroadcast();
 
-        Bridge bridge = new Bridge(admin, WRAPPED_NATIVE_TOKEN);
+        Bridge bridge = new Bridge(admin, wrappedNativeToken);
 
         vm.stopBroadcast();
 

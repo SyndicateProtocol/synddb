@@ -52,7 +52,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
      */
     event NativeTokenUnwrapped(uint256 amount, address indexed target);
 
-    error InvalidEmptyAddress();
+    error ZeroAddressNotAllowed();
     error MessageAlreadyInitialized(bytes32 messageId);
     error MessageNotInitialized(bytes32 messageId);
     error MessageAlreadyHandled(bytes32 messageId);
@@ -69,7 +69,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
      */
     constructor(address admin, address _wrappedNativeToken) ModuleCheckRegistry(admin) {
         if (admin == address(0) || _wrappedNativeToken == address(0)) {
-            revert InvalidEmptyAddress();
+            revert ZeroAddressNotAllowed();
         }
         wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
     }
