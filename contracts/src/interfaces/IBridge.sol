@@ -19,7 +19,7 @@ interface IBridge {
      *        - Hash of message data: `keccak256(abi.encodePacked(sourceChain, sender, nonce, payload))`
      * @param targetAddress Address that will receive the message call
      * @param payload Encoded function call data (e.g., `abi.encodeWithSignature("transfer(address,uint256)", recipient, amount)`)
-     * @param sequencerSignature Signature from the trusted TEE sequencer. Optional if called by a sequencer with MESSAGE_INITIALIZER_ROLE.
+     * @param sequencerSignature Signature from the trusted TEE sequencer.
      * @param nativeTokenAmount Amount of native token to transfer with the call
      */
     function initializeMessage(
@@ -51,7 +51,7 @@ interface IBridge {
      * @param messageId Unique identifier for the message
      * @param targetAddress Address that will receive the message call
      * @param payload Encoded function call data
-     * @param sequencerSignature Signature from the trusted TEE sequencer. Optional if called by MESSAGE_INITIALIZER_ROLE.
+     * @param sequencerSignature Signature from the trusted TEE sequencer.
      * @param validatorSignatures Array of signatures from authorized validators. Can be empty if running in sequencer-only
      *        mode or if no validator signature threshold module is configured.
      * @param nativeTokenAmount Amount of native token to transfer with the call
