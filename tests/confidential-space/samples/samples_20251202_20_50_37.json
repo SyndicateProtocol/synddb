@@ -1,0 +1,216 @@
+{
+  "samples": [
+    {
+      "raw_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImQ2ZDUwNzFhYjc1MjQ2YTQyYWNmYTQ2ZDI5MzE2MzExY2RhYjUxZjciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJodHRwczovL3N5bmRkYi1zZXF1ZW5jZXIuZXhhbXBsZS5jb20iLCJleHAiOjE3NjQ3MTIyMzYsImlhdCI6MTc2NDcwODYzNiwiaXNzIjoiaHR0cHM6Ly9jb25maWRlbnRpYWxjb21wdXRpbmcuZ29vZ2xlYXBpcy5jb20iLCJuYmYiOjE3NjQ3MDg2MzYsInN1YiI6Imh0dHBzOi8vd3d3Lmdvb2dsZWFwaXMuY29tL2NvbXB1dGUvdjEvcHJvamVjdHMvc3luZC1kYi10ZXN0aW5nL3pvbmVzL3VzLWNlbnRyYWwxLWEvaW5zdGFuY2VzL2NzLWF0dGVzdGF0aW9uLXZtIiwiZWF0X3Byb2ZpbGUiOiJodHRwczovL2Nsb3VkLmdvb2dsZS5jb20vY29uZmlkZW50aWFsLWNvbXB1dGluZy9jb25maWRlbnRpYWwtc3BhY2UvZG9jcy9yZWZlcmVuY2UvdG9rZW4tY2xhaW1zIiwic2VjYm9vdCI6dHJ1ZSwib2VtaWQiOjExMTI5LCJod21vZGVsIjoiR0NQX0FNRF9TRVYiLCJzd25hbWUiOiJDT05GSURFTlRJQUxfU1BBQ0UiLCJzd3ZlcnNpb24iOlsiMjUxMDAxIl0sImRiZ3N0YXQiOiJlbmFibGVkIiwic3VibW9kcyI6eyJjb25maWRlbnRpYWxfc3BhY2UiOnsibW9uaXRvcmluZ19lbmFibGVkIjp7Im1lbW9yeSI6ZmFsc2V9fSwiY29udGFpbmVyIjp7ImltYWdlX3JlZmVyZW5jZSI6InVzLWNlbnRyYWwxLWRvY2tlci5wa2cuZGV2L3N5bmQtZGItdGVzdGluZy9zeW5kZGItdGVzdC9jcy1hdHRlc3RhdGlvbi1zYW1wbGU6bGF0ZXN0IiwiaW1hZ2VfZGlnZXN0Ijoic2hhMjU2OjU3YzU5NDZlMTA2N2M5YzAxOWQ4MjU1NDQxNmEyZmE5ODQzODg1OGY1YWI4MDMzYTI1NzVhYmZkY2QyNGZiMzIiLCJyZXN0YXJ0X3BvbGljeSI6Ik5ldmVyIiwiaW1hZ2VfaWQiOiJzaGEyNTY6Yjg3YTlhZGVmODhmOTA1ODJlMGM2Y2U4NjhjMTJkYTg3YWU1NWY2ZTljYTJmZTJiZTc1ZTM4ZDQ3MmJhMTlhOCIsImVudl9vdmVycmlkZSI6eyJBVFRFU1RBVElPTl9BVURJRU5DRSI6Imh0dHBzOi8vc3luZGRiLXNlcXVlbmNlci5leGFtcGxlLmNvbSIsIk9VVFBVVF9CVUNLRVQiOiJzeW5kLWRiLXRlc3RpbmctY3MtYXR0ZXN0YXRpb24tc2FtcGxlcyJ9LCJlbnYiOnsiQVRURVNUQVRJT05fQVVESUVOQ0UiOiJodHRwczovL3N5bmRkYi1zZXF1ZW5jZXIuZXhhbXBsZS5jb20iLCJIT1NUTkFNRSI6ImNzLWF0dGVzdGF0aW9uLXZtIiwiT1VUUFVUX0JVQ0tFVCI6InN5bmQtZGItdGVzdGluZy1jcy1hdHRlc3RhdGlvbi1zYW1wbGVzIiwiUEFUSCI6Ii91c3IvbG9jYWwvc2JpbjovdXNyL2xvY2FsL2JpbjovdXNyL3NiaW46L3Vzci9iaW46L3NiaW46L2JpbiIsIlJVU1RfTE9HIjoiaW5mbyIsIlNTTF9DRVJUX0ZJTEUiOiIvZXRjL3NzbC9jZXJ0cy9jYS1jZXJ0aWZpY2F0ZXMuY3J0In0sImFyZ3MiOlsiL2FwcC9jcy1hdHRlc3RhdGlvbi1zYW1wbGUiXX0sImdjZSI6eyJ6b25lIjoidXMtY2VudHJhbDEtYSIsInByb2plY3RfaWQiOiJzeW5kLWRiLXRlc3RpbmciLCJwcm9qZWN0X251bWJlciI6IjI5Nzk4NTI5Nzg5NCIsImluc3RhbmNlX25hbWUiOiJjcy1hdHRlc3RhdGlvbi12bSIsImluc3RhbmNlX2lkIjoiNjU0OTE5NDc2NTcxODcxMTg2MCJ9fSwiZ29vZ2xlX3NlcnZpY2VfYWNjb3VudHMiOlsiY3MtYXR0ZXN0YXRpb24td29ya2xvYWRAc3luZC1kYi10ZXN0aW5nLmlhbS5nc2VydmljZWFjY291bnQuY29tIl19.ewQiaF13YIT1tXZ49wLsszJdqdPVeJ47W_5zqvi2zarH_PaRIBy6EvGDksspGgZQCrG-mkFSiPuliGB35HOBA3u4N0vmsm4nWqM4PYm17lXqdmM2w4slAb0UREMn6S05Nf8e-KLISyvlJdQa-4okekgqLxUUUy2ZcfqzU-fDHZZwZ2-NVRzFki9uyOvoumtK0kOIRhgMj_DjoMF92KMiKI9Mwro-MUWAxDeVlrlBQyxCsPT_F-BIDR_D1SFJsJt2-v4C0vSOBx_IvwyLGk0ByYiltOEUU4sz718tlYO-qIYl91t9WdRsdQttfH0_10KfraWxLHSon7J01BXqCqb5lw",
+      "header": {
+        "alg": "RS256",
+        "kid": "d6d5071ab75246a42acfa46d29316311cdab51f7",
+        "typ": "JWT"
+      },
+      "claims": {
+        "aud": "https://synddb-sequencer.example.com",
+        "dbgstat": "enabled",
+        "eat_profile": "https://cloud.google.com/confidential-computing/confidential-space/docs/reference/token-claims",
+        "exp": 1764712236,
+        "google_service_accounts": [
+          "cs-attestation-workload@synd-db-testing.iam.gserviceaccount.com"
+        ],
+        "hwmodel": "GCP_AMD_SEV",
+        "iat": 1764708636,
+        "iss": "https://confidentialcomputing.googleapis.com",
+        "nbf": 1764708636,
+        "oemid": 11129,
+        "secboot": true,
+        "sub": "https://www.googleapis.com/compute/v1/projects/synd-db-testing/zones/us-central1-a/instances/cs-attestation-vm",
+        "submods": {
+          "confidential_space": {
+            "monitoring_enabled": {
+              "memory": false
+            }
+          },
+          "container": {
+            "args": [
+              "/app/cs-attestation-sample"
+            ],
+            "env": {
+              "ATTESTATION_AUDIENCE": "https://synddb-sequencer.example.com",
+              "HOSTNAME": "cs-attestation-vm",
+              "OUTPUT_BUCKET": "synd-db-testing-cs-attestation-samples",
+              "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "RUST_LOG": "info",
+              "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+            },
+            "env_override": {
+              "ATTESTATION_AUDIENCE": "https://synddb-sequencer.example.com",
+              "OUTPUT_BUCKET": "synd-db-testing-cs-attestation-samples"
+            },
+            "image_digest": "sha256:57c5946e1067c9c019d82554416a2fa98438858f5ab8033a2575abfdcd24fb32",
+            "image_id": "sha256:b87a9adef88f90582e0c6ce868c12da87ae55f6e9ca2fe2be75e38d472ba19a8",
+            "image_reference": "us-central1-docker.pkg.dev/synd-db-testing/synddb-test/cs-attestation-sample:latest",
+            "restart_policy": "Never"
+          },
+          "gce": {
+            "instance_id": "6549194765718711860",
+            "instance_name": "cs-attestation-vm",
+            "project_id": "synd-db-testing",
+            "project_number": "297985297894",
+            "zone": "us-central1-a"
+          }
+        },
+        "swname": "CONFIDENTIAL_SPACE",
+        "swversion": [
+          "251001"
+        ]
+      },
+      "signature_bytes": "0x7b0422685d776084f5b57678f702ecb3325da9d3d5789e3b5bfe73aaf8b6cdaac7fcf691201cba12f18392cb291a06500ab1be9a415288fba5886077e47381037bb8374be6b26e275aa3383d89b5ee55ea766336c38b2501bd14444327e92d3935ff1ef8a2c84b2be525d41afb8a247a482a2f1514532d9971fab353e7c31d9670676f8d551cc5922f6ec8ebe8ba6b4ad2438846180c8ff0e3a0c17dd8a322288f4cc2ba3e314580c4379596b941432c42b0f4ff17e0480d1fc3d52149b09b76fafe02d2f48e071fc8bf0c8b1a4d01c988a5b4e114538b33ef5f2d9583bea88625f75b7d59d46c750b6d7c7d3fd7429fada5b12c74a89fb274d415ea0aa6f997",
+      "signing_input": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImQ2ZDUwNzFhYjc1MjQ2YTQyYWNmYTQ2ZDI5MzE2MzExY2RhYjUxZjciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJodHRwczovL3N5bmRkYi1zZXF1ZW5jZXIuZXhhbXBsZS5jb20iLCJleHAiOjE3NjQ3MTIyMzYsImlhdCI6MTc2NDcwODYzNiwiaXNzIjoiaHR0cHM6Ly9jb25maWRlbnRpYWxjb21wdXRpbmcuZ29vZ2xlYXBpcy5jb20iLCJuYmYiOjE3NjQ3MDg2MzYsInN1YiI6Imh0dHBzOi8vd3d3Lmdvb2dsZWFwaXMuY29tL2NvbXB1dGUvdjEvcHJvamVjdHMvc3luZC1kYi10ZXN0aW5nL3pvbmVzL3VzLWNlbnRyYWwxLWEvaW5zdGFuY2VzL2NzLWF0dGVzdGF0aW9uLXZtIiwiZWF0X3Byb2ZpbGUiOiJodHRwczovL2Nsb3VkLmdvb2dsZS5jb20vY29uZmlkZW50aWFsLWNvbXB1dGluZy9jb25maWRlbnRpYWwtc3BhY2UvZG9jcy9yZWZlcmVuY2UvdG9rZW4tY2xhaW1zIiwic2VjYm9vdCI6dHJ1ZSwib2VtaWQiOjExMTI5LCJod21vZGVsIjoiR0NQX0FNRF9TRVYiLCJzd25hbWUiOiJDT05GSURFTlRJQUxfU1BBQ0UiLCJzd3ZlcnNpb24iOlsiMjUxMDAxIl0sImRiZ3N0YXQiOiJlbmFibGVkIiwic3VibW9kcyI6eyJjb25maWRlbnRpYWxfc3BhY2UiOnsibW9uaXRvcmluZ19lbmFibGVkIjp7Im1lbW9yeSI6ZmFsc2V9fSwiY29udGFpbmVyIjp7ImltYWdlX3JlZmVyZW5jZSI6InVzLWNlbnRyYWwxLWRvY2tlci5wa2cuZGV2L3N5bmQtZGItdGVzdGluZy9zeW5kZGItdGVzdC9jcy1hdHRlc3RhdGlvbi1zYW1wbGU6bGF0ZXN0IiwiaW1hZ2VfZGlnZXN0Ijoic2hhMjU2OjU3YzU5NDZlMTA2N2M5YzAxOWQ4MjU1NDQxNmEyZmE5ODQzODg1OGY1YWI4MDMzYTI1NzVhYmZkY2QyNGZiMzIiLCJyZXN0YXJ0X3BvbGljeSI6Ik5ldmVyIiwiaW1hZ2VfaWQiOiJzaGEyNTY6Yjg3YTlhZGVmODhmOTA1ODJlMGM2Y2U4NjhjMTJkYTg3YWU1NWY2ZTljYTJmZTJiZTc1ZTM4ZDQ3MmJhMTlhOCIsImVudl9vdmVycmlkZSI6eyJBVFRFU1RBVElPTl9BVURJRU5DRSI6Imh0dHBzOi8vc3luZGRiLXNlcXVlbmNlci5leGFtcGxlLmNvbSIsIk9VVFBVVF9CVUNLRVQiOiJzeW5kLWRiLXRlc3RpbmctY3MtYXR0ZXN0YXRpb24tc2FtcGxlcyJ9LCJlbnYiOnsiQVRURVNUQVRJT05fQVVESUVOQ0UiOiJodHRwczovL3N5bmRkYi1zZXF1ZW5jZXIuZXhhbXBsZS5jb20iLCJIT1NUTkFNRSI6ImNzLWF0dGVzdGF0aW9uLXZtIiwiT1VUUFVUX0JVQ0tFVCI6InN5bmQtZGItdGVzdGluZy1jcy1hdHRlc3RhdGlvbi1zYW1wbGVzIiwiUEFUSCI6Ii91c3IvbG9jYWwvc2JpbjovdXNyL2xvY2FsL2JpbjovdXNyL3NiaW46L3Vzci9iaW46L3NiaW46L2JpbiIsIlJVU1RfTE9HIjoiaW5mbyIsIlNTTF9DRVJUX0ZJTEUiOiIvZXRjL3NzbC9jZXJ0cy9jYS1jZXJ0aWZpY2F0ZXMuY3J0In0sImFyZ3MiOlsiL2FwcC9jcy1hdHRlc3RhdGlvbi1zYW1wbGUiXX0sImdjZSI6eyJ6b25lIjoidXMtY2VudHJhbDEtYSIsInByb2plY3RfaWQiOiJzeW5kLWRiLXRlc3RpbmciLCJwcm9qZWN0X251bWJlciI6IjI5Nzk4NTI5Nzg5NCIsImluc3RhbmNlX25hbWUiOiJjcy1hdHRlc3RhdGlvbi12bSIsImluc3RhbmNlX2lkIjoiNjU0OTE5NDc2NTcxODcxMTg2MCJ9fSwiZ29vZ2xlX3NlcnZpY2VfYWNjb3VudHMiOlsiY3MtYXR0ZXN0YXRpb24td29ya2xvYWRAc3luZC1kYi10ZXN0aW5nLmlhbS5nc2VydmljZWFjY291bnQuY29tIl19",
+      "captured_at": 1764708636,
+      "audience": "https://synddb-sequencer.example.com",
+      "nonces": []
+    },
+    {
+      "raw_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImQ2ZDUwNzFhYjc1MjQ2YTQyYWNmYTQ2ZDI5MzE2MzExY2RhYjUxZjciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJodHRwczovL3N5bmRkYi1zZXF1ZW5jZXIuZXhhbXBsZS5jb20iLCJleHAiOjE3NjQ3MTIyMzYsImlhdCI6MTc2NDcwODYzNiwiaXNzIjoiaHR0cHM6Ly9jb25maWRlbnRpYWxjb21wdXRpbmcuZ29vZ2xlYXBpcy5jb20iLCJuYmYiOjE3NjQ3MDg2MzYsInN1YiI6Imh0dHBzOi8vd3d3Lmdvb2dsZWFwaXMuY29tL2NvbXB1dGUvdjEvcHJvamVjdHMvc3luZC1kYi10ZXN0aW5nL3pvbmVzL3VzLWNlbnRyYWwxLWEvaW5zdGFuY2VzL2NzLWF0dGVzdGF0aW9uLXZtIiwiZWF0X25vbmNlIjoic3AxLXRlc3Qtbm9uY2UtMTc2NDcwODYzNiIsImVhdF9wcm9maWxlIjoiaHR0cHM6Ly9jbG91ZC5nb29nbGUuY29tL2NvbmZpZGVudGlhbC1jb21wdXRpbmcvY29uZmlkZW50aWFsLXNwYWNlL2RvY3MvcmVmZXJlbmNlL3Rva2VuLWNsYWltcyIsInNlY2Jvb3QiOnRydWUsIm9lbWlkIjoxMTEyOSwiaHdtb2RlbCI6IkdDUF9BTURfU0VWIiwic3duYW1lIjoiQ09ORklERU5USUFMX1NQQUNFIiwic3d2ZXJzaW9uIjpbIjI1MTAwMSJdLCJkYmdzdGF0IjoiZW5hYmxlZCIsInN1Ym1vZHMiOnsiY29uZmlkZW50aWFsX3NwYWNlIjp7Im1vbml0b3JpbmdfZW5hYmxlZCI6eyJtZW1vcnkiOmZhbHNlfX0sImNvbnRhaW5lciI6eyJpbWFnZV9yZWZlcmVuY2UiOiJ1cy1jZW50cmFsMS1kb2NrZXIucGtnLmRldi9zeW5kLWRiLXRlc3Rpbmcvc3luZGRiLXRlc3QvY3MtYXR0ZXN0YXRpb24tc2FtcGxlOmxhdGVzdCIsImltYWdlX2RpZ2VzdCI6InNoYTI1Njo1N2M1OTQ2ZTEwNjdjOWMwMTlkODI1NTQ0MTZhMmZhOTg0Mzg4NThmNWFiODAzM2EyNTc1YWJmZGNkMjRmYjMyIiwicmVzdGFydF9wb2xpY3kiOiJOZXZlciIsImltYWdlX2lkIjoic2hhMjU2OmI4N2E5YWRlZjg4ZjkwNTgyZTBjNmNlODY4YzEyZGE4N2FlNTVmNmU5Y2EyZmUyYmU3NWUzOGQ0NzJiYTE5YTgiLCJlbnZfb3ZlcnJpZGUiOnsiQVRURVNUQVRJT05fQVVESUVOQ0UiOiJodHRwczovL3N5bmRkYi1zZXF1ZW5jZXIuZXhhbXBsZS5jb20iLCJPVVRQVVRfQlVDS0VUIjoic3luZC1kYi10ZXN0aW5nLWNzLWF0dGVzdGF0aW9uLXNhbXBsZXMifSwiZW52Ijp7IkFUVEVTVEFUSU9OX0FVRElFTkNFIjoiaHR0cHM6Ly9zeW5kZGItc2VxdWVuY2VyLmV4YW1wbGUuY29tIiwiSE9TVE5BTUUiOiJjcy1hdHRlc3RhdGlvbi12bSIsIk9VVFBVVF9CVUNLRVQiOiJzeW5kLWRiLXRlc3RpbmctY3MtYXR0ZXN0YXRpb24tc2FtcGxlcyIsIlBBVEgiOiIvdXNyL2xvY2FsL3NiaW46L3Vzci9sb2NhbC9iaW46L3Vzci9zYmluOi91c3IvYmluOi9zYmluOi9iaW4iLCJSVVNUX0xPRyI6ImluZm8iLCJTU0xfQ0VSVF9GSUxFIjoiL2V0Yy9zc2wvY2VydHMvY2EtY2VydGlmaWNhdGVzLmNydCJ9LCJhcmdzIjpbIi9hcHAvY3MtYXR0ZXN0YXRpb24tc2FtcGxlIl19LCJnY2UiOnsiem9uZSI6InVzLWNlbnRyYWwxLWEiLCJwcm9qZWN0X2lkIjoic3luZC1kYi10ZXN0aW5nIiwicHJvamVjdF9udW1iZXIiOiIyOTc5ODUyOTc4OTQiLCJpbnN0YW5jZV9uYW1lIjoiY3MtYXR0ZXN0YXRpb24tdm0iLCJpbnN0YW5jZV9pZCI6IjY1NDkxOTQ3NjU3MTg3MTE4NjAifX0sImdvb2dsZV9zZXJ2aWNlX2FjY291bnRzIjpbImNzLWF0dGVzdGF0aW9uLXdvcmtsb2FkQHN5bmQtZGItdGVzdGluZy5pYW0uZ3NlcnZpY2VhY2NvdW50LmNvbSJdfQ.BWO3PkxL7llrEce-NWWbUNxhBuuZkegYUfxX4pb8zO5hHt4MaOdrXFF0SqSGA3MebR79BciqjNxKcOs9_nX1k7_-ADYOM4KMro7Zj_R8Vt4Buojjk_8VodpzSs-jMxEg9Y3zS3H1Mn1s5vYGhf_AENK3iTDiZwhqb75xcJkVmP-_WkZGP3VLprSKDDxn49wNjL2gBihBpY1DqZP0PprvqIepyOwDO2moGRixxLcJA5jRH5r1FUmUOD_bMBpnPMv0HTYG0aNEYU9BvmQ7V97GDFf_3mzJ7VBnjLBT2z_TmdwyVXvJxi1-p5mqUH5nzmMnBcZ9PqvvlaaoQszLinnq4w",
+      "header": {
+        "alg": "RS256",
+        "kid": "d6d5071ab75246a42acfa46d29316311cdab51f7",
+        "typ": "JWT"
+      },
+      "claims": {
+        "aud": "https://synddb-sequencer.example.com",
+        "dbgstat": "enabled",
+        "eat_nonce": "sp1-test-nonce-1764708636",
+        "eat_profile": "https://cloud.google.com/confidential-computing/confidential-space/docs/reference/token-claims",
+        "exp": 1764712236,
+        "google_service_accounts": [
+          "cs-attestation-workload@synd-db-testing.iam.gserviceaccount.com"
+        ],
+        "hwmodel": "GCP_AMD_SEV",
+        "iat": 1764708636,
+        "iss": "https://confidentialcomputing.googleapis.com",
+        "nbf": 1764708636,
+        "oemid": 11129,
+        "secboot": true,
+        "sub": "https://www.googleapis.com/compute/v1/projects/synd-db-testing/zones/us-central1-a/instances/cs-attestation-vm",
+        "submods": {
+          "confidential_space": {
+            "monitoring_enabled": {
+              "memory": false
+            }
+          },
+          "container": {
+            "args": [
+              "/app/cs-attestation-sample"
+            ],
+            "env": {
+              "ATTESTATION_AUDIENCE": "https://synddb-sequencer.example.com",
+              "HOSTNAME": "cs-attestation-vm",
+              "OUTPUT_BUCKET": "synd-db-testing-cs-attestation-samples",
+              "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "RUST_LOG": "info",
+              "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+            },
+            "env_override": {
+              "ATTESTATION_AUDIENCE": "https://synddb-sequencer.example.com",
+              "OUTPUT_BUCKET": "synd-db-testing-cs-attestation-samples"
+            },
+            "image_digest": "sha256:57c5946e1067c9c019d82554416a2fa98438858f5ab8033a2575abfdcd24fb32",
+            "image_id": "sha256:b87a9adef88f90582e0c6ce868c12da87ae55f6e9ca2fe2be75e38d472ba19a8",
+            "image_reference": "us-central1-docker.pkg.dev/synd-db-testing/synddb-test/cs-attestation-sample:latest",
+            "restart_policy": "Never"
+          },
+          "gce": {
+            "instance_id": "6549194765718711860",
+            "instance_name": "cs-attestation-vm",
+            "project_id": "synd-db-testing",
+            "project_number": "297985297894",
+            "zone": "us-central1-a"
+          }
+        },
+        "swname": "CONFIDENTIAL_SPACE",
+        "swversion": [
+          "251001"
+        ]
+      },
+      "signature_bytes": "0x0563b73e4c4bee596b11c7be35659b50dc6106eb9991e81851fc57e296fcccee611ede0c68e76b5c51744aa48603731e6d1efd05c8aa8cdc4a70eb3dfe75f593bffe00360e33828cae8ed98ff47c56de01ba88e393ff15a1da734acfa3331120f58df34b71f5327d6ce6f60685ffc010d2b78930e267086a6fbe7170991598ffbf5a46463f754ba6b48a0c3c67e3dc0d8cbda0062841a58d43a993f43e9aefa887a9c8ec033b69a81918b1c4b7090398d11f9af5154994383fdb301a673ccbf41d3606d1a344614f41be643b57dec60c57ffde6cc9ed50678cb053db3fd399dc32557bc9c62d7ea799aa507e67ce632705c67d3eabef95a6a842cccb8a79eae3",
+      "signing_input": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImQ2ZDUwNzFhYjc1MjQ2YTQyYWNmYTQ2ZDI5MzE2MzExY2RhYjUxZjciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJodHRwczovL3N5bmRkYi1zZXF1ZW5jZXIuZXhhbXBsZS5jb20iLCJleHAiOjE3NjQ3MTIyMzYsImlhdCI6MTc2NDcwODYzNiwiaXNzIjoiaHR0cHM6Ly9jb25maWRlbnRpYWxjb21wdXRpbmcuZ29vZ2xlYXBpcy5jb20iLCJuYmYiOjE3NjQ3MDg2MzYsInN1YiI6Imh0dHBzOi8vd3d3Lmdvb2dsZWFwaXMuY29tL2NvbXB1dGUvdjEvcHJvamVjdHMvc3luZC1kYi10ZXN0aW5nL3pvbmVzL3VzLWNlbnRyYWwxLWEvaW5zdGFuY2VzL2NzLWF0dGVzdGF0aW9uLXZtIiwiZWF0X25vbmNlIjoic3AxLXRlc3Qtbm9uY2UtMTc2NDcwODYzNiIsImVhdF9wcm9maWxlIjoiaHR0cHM6Ly9jbG91ZC5nb29nbGUuY29tL2NvbmZpZGVudGlhbC1jb21wdXRpbmcvY29uZmlkZW50aWFsLXNwYWNlL2RvY3MvcmVmZXJlbmNlL3Rva2VuLWNsYWltcyIsInNlY2Jvb3QiOnRydWUsIm9lbWlkIjoxMTEyOSwiaHdtb2RlbCI6IkdDUF9BTURfU0VWIiwic3duYW1lIjoiQ09ORklERU5USUFMX1NQQUNFIiwic3d2ZXJzaW9uIjpbIjI1MTAwMSJdLCJkYmdzdGF0IjoiZW5hYmxlZCIsInN1Ym1vZHMiOnsiY29uZmlkZW50aWFsX3NwYWNlIjp7Im1vbml0b3JpbmdfZW5hYmxlZCI6eyJtZW1vcnkiOmZhbHNlfX0sImNvbnRhaW5lciI6eyJpbWFnZV9yZWZlcmVuY2UiOiJ1cy1jZW50cmFsMS1kb2NrZXIucGtnLmRldi9zeW5kLWRiLXRlc3Rpbmcvc3luZGRiLXRlc3QvY3MtYXR0ZXN0YXRpb24tc2FtcGxlOmxhdGVzdCIsImltYWdlX2RpZ2VzdCI6InNoYTI1Njo1N2M1OTQ2ZTEwNjdjOWMwMTlkODI1NTQ0MTZhMmZhOTg0Mzg4NThmNWFiODAzM2EyNTc1YWJmZGNkMjRmYjMyIiwicmVzdGFydF9wb2xpY3kiOiJOZXZlciIsImltYWdlX2lkIjoic2hhMjU2OmI4N2E5YWRlZjg4ZjkwNTgyZTBjNmNlODY4YzEyZGE4N2FlNTVmNmU5Y2EyZmUyYmU3NWUzOGQ0NzJiYTE5YTgiLCJlbnZfb3ZlcnJpZGUiOnsiQVRURVNUQVRJT05fQVVESUVOQ0UiOiJodHRwczovL3N5bmRkYi1zZXF1ZW5jZXIuZXhhbXBsZS5jb20iLCJPVVRQVVRfQlVDS0VUIjoic3luZC1kYi10ZXN0aW5nLWNzLWF0dGVzdGF0aW9uLXNhbXBsZXMifSwiZW52Ijp7IkFUVEVTVEFUSU9OX0FVRElFTkNFIjoiaHR0cHM6Ly9zeW5kZGItc2VxdWVuY2VyLmV4YW1wbGUuY29tIiwiSE9TVE5BTUUiOiJjcy1hdHRlc3RhdGlvbi12bSIsIk9VVFBVVF9CVUNLRVQiOiJzeW5kLWRiLXRlc3RpbmctY3MtYXR0ZXN0YXRpb24tc2FtcGxlcyIsIlBBVEgiOiIvdXNyL2xvY2FsL3NiaW46L3Vzci9sb2NhbC9iaW46L3Vzci9zYmluOi91c3IvYmluOi9zYmluOi9iaW4iLCJSVVNUX0xPRyI6ImluZm8iLCJTU0xfQ0VSVF9GSUxFIjoiL2V0Yy9zc2wvY2VydHMvY2EtY2VydGlmaWNhdGVzLmNydCJ9LCJhcmdzIjpbIi9hcHAvY3MtYXR0ZXN0YXRpb24tc2FtcGxlIl19LCJnY2UiOnsiem9uZSI6InVzLWNlbnRyYWwxLWEiLCJwcm9qZWN0X2lkIjoic3luZC1kYi10ZXN0aW5nIiwicHJvamVjdF9udW1iZXIiOiIyOTc5ODUyOTc4OTQiLCJpbnN0YW5jZV9uYW1lIjoiY3MtYXR0ZXN0YXRpb24tdm0iLCJpbnN0YW5jZV9pZCI6IjY1NDkxOTQ3NjU3MTg3MTE4NjAifX0sImdvb2dsZV9zZXJ2aWNlX2FjY291bnRzIjpbImNzLWF0dGVzdGF0aW9uLXdvcmtsb2FkQHN5bmQtZGItdGVzdGluZy5pYW0uZ3NlcnZpY2VhY2NvdW50LmNvbSJdfQ",
+      "captured_at": 1764708636,
+      "audience": "https://synddb-sequencer.example.com",
+      "nonces": [
+        "sp1-test-nonce-1764708636"
+      ]
+    }
+  ],
+  "jwks": {
+    "keys": [
+      {
+        "alg": "RS256",
+        "e": "AQAB",
+        "kid": "f86c2ed71ca6b8af769c54f6c472ca30fd38055c",
+        "kty": "RSA",
+        "n": "kWjARxSgWN-iyi8DkFZGeWWRjIwStQh6khh-hvKhnmS7SiBDKKYYBN8AcTJgdoIlfMYpVFoNCBX7H1jpr9iADpLSvXmK_clXROtK0J8nMGIo-P_oOX_Dlq86xhmCFttV3qvBUGX9ttKaiYtdTjB8sgAiYhZUP60nhaMZ74Ua9jJf7XuKKahaQ7T46wnpVVzYmyryPiDv0GyV-zuEQOgAoZReNOUqd2AMsI5Fkrnw6Q1DaLGjmrB8o5HXfXHM-xJhH2buEIGk4iHWaZ9StxrgRomo9vkhEmdmNyX4iE8KSZtHx5ROVqCIdt9sZVqWJ7ShaMHwKeQ7_67ojLdZT3WqDw",
+        "use": "sig"
+      },
+      {
+        "alg": "RS256",
+        "e": "AQAB",
+        "kid": "d6d5071ab75246a42acfa46d29316311cdab51f7",
+        "kty": "RSA",
+        "n": "oXx5rKdo3qdKrKo7o5zyV2IQC5p_tKZmOypYuZyyMzQrG1FG22NAxVgNenPb9KlIcXy81w2qfZdhEKXXXlWmQHCf36638V981H4LcBrnRkaK3eQXkX5ojCmREnK2VB7HhBBQg3p0xNzFRclq4s5OcarPWHturxS7kChHwV7Rh9Dhez0vt43sB5YObxmmIUiB5Y373lrgn7uQOtgM6qbJXwThoN5hx5JXQS5OZyiRyGn4PEx460-x5s_q5-ljWuikgsSUSmZwAnf0uXSE-SwrSIaApSVZ2ZhMJA06Md5Io0XYwLUN7itQz6P-BArtfxiCAIrJpZumCY1fXB04kFjaEw",
+        "use": "sig"
+      }
+    ]
+  },
+  "oidc_discovery": {
+    "claims_supported": [
+      "sub",
+      "aud",
+      "exp",
+      "iat",
+      "iss",
+      "jti",
+      "nbf",
+      "dbgstat",
+      "eat_nonce",
+      "google_service_accounts",
+      "hwmodel",
+      "oemid",
+      "secboot",
+      "submods",
+      "swname",
+      "swversion"
+    ],
+    "id_token_signing_alg_values_supported": [
+      "RS256"
+    ],
+    "issuer": "https://confidentialcomputing.googleapis.com",
+    "jwks_uri": "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com",
+    "response_types_supported": [
+      "id_token"
+    ],
+    "scopes_supported": [
+      "openid"
+    ],
+    "subject_types_supported": [
+      "public"
+    ]
+  },
+  "instructions": {
+    "summary": "Use these samples to develop and test SP1 on-chain attestation verification",
+    "verification_steps": [
+      "1. Parse the JWT: split raw_token by '.' into [header, payload, signature]",
+      "2. Decode header and payload from base64url",
+      "3. Find the signing key in jwks.keys where kid matches header.kid",
+      "4. Verify RS256 signature: RSA_PKCS1_SHA256(signing_input, signature, public_key)",
+      "5. Validate claims: iss, aud, exp, iat",
+      "6. Check TEE claims: secboot, swname, image_digest"
+    ],
+    "important_claims": [
+      "iss - must be https://confidentialcomputing.googleapis.com",
+      "aud - must match expected audience",
+      "exp - token expiration (Unix timestamp)",
+      "secboot - secure boot enabled (should be true)",
+      "swname - should be CONFIDENTIAL_SPACE",
+      "submods.container.image_digest - container image hash"
+    ]
+  }
+}

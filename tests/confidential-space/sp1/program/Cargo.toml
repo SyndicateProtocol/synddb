@@ -1,0 +1,14 @@
+[package]
+name = "gcp-cs-attestation-sp1-program"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+alloy = { version = "1.0", default-features = false, features = ["sol-types"] }
+sp1-zkvm = "5.0"
+gcp-confidential-space = { path = "../../gcp-confidential-space", default-features = false, features = [
+  "sp1",
+] }

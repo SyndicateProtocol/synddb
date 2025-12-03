@@ -8,6 +8,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/rust-ci.yml"
+      - "tests/**"
 
   # Run on main pushes
   push:
@@ -75,6 +76,11 @@ jobs:
         with:
           command: machete
 
+      - name: Check for unused dependencies (tests/confidential-space)
+        run: |
+          cargo machete tests/confidential-space
+          cargo machete tests/confidential-space/gcp-confidential-space
+
   fmt:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Rust Format
@@ -89,6 +95,11 @@ jobs:
 
       - name: Check Rust formatting
         run: cargo +nightly fmt --all --check
+
+      - name: Check Rust formatting (tests/confidential-space)
+        run: |
+          cargo +nightly fmt --all --check --manifest-path tests/confidential-space/Cargo.toml
+          cargo +nightly fmt --all --check --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
 
   clippy:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
@@ -108,6 +119,11 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features
+
+      - name: Run Clippy (tests/confidential-space)
+        run: |
+          cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/Cargo.toml
+          cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
 
   test:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
@@ -134,3 +150,6 @@ jobs:
       # Fallback to standard cargo test for doctests (nextest doesn't support them)
       - name: Run doctests
         run: cargo test --workspace --doc
+
+      - name: Run tests (tests/confidential-space)
+        run: cargo test --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
