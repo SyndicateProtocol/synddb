@@ -517,6 +517,55 @@ This is ideal for:
 - Validating optimizations with statistical confidence
 - Benchmarking with other processes running (e.g., sequencer)
 
+## SyndDB Integration
+
+The benchmark tool supports full SyndDB integration for testing changeset capture and publishing under load.
+
+### Running with SyndDB
+
+```bash
+# Start the sequencer first
+SIGNING_KEY=ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+PUBLISHER_TYPE=local LOCAL_STORAGE_PATH=:memory: \
+cargo run --package synddb-sequencer --release
+
+# Run benchmark with SyndDB integration
+SEQUENCER_URL=http://localhost:8433 \
+cargo run --package synddb-benchmark --release -- run --rate 100 --duration 60
+```
+
+Or use the `--sequencer-url` flag:
+
+```bash
+cargo run --package synddb-benchmark --release -- run \
+  --sequencer-url http://localhost:8433 \
+  --rate 100 --duration 60
+```
+
+### Docker Compose
+
+The easiest way to run the full stack is with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+- **sequencer**: Receives changesets and publishes to local SQLite DA
+- **validator**: Fetches from sequencer and validates signatures
+- **customer_sqlite_app**: The orderbook benchmark with SyndDB integration
+- **stress_test**: Session stress test to verify no race conditions
+
+### How It Works
+
+When `SEQUENCER_URL` is set, the benchmark:
+1. Attaches `SyndDB` client to the SQLite connection
+2. Runs transactions normally (inserts, updates, etc.)
+3. Calls `synddb.publish()` after each transaction batch to send changesets
+4. Changesets are signed by the sequencer and published to the DA layer
+
+The benchmark uses the safe API pattern where `publish()` is called explicitly after transactions complete, ensuring thread-safe changeset extraction.
+
 ## Development
 
 ```bash

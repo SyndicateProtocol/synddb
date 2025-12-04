@@ -61,18 +61,29 @@ synddb = SyndDB.attach_with_config(
 
 ### Manual Publishing
 
+Changesets are published automatically every 1 second. For critical transactions, publish immediately:
+
 ```python
 from synddb import attach
 
 synddb = attach('app.db', 'http://localhost:8433')
 
-# Critical transaction - publish immediately
+# Critical transaction - publish immediately after commit
 import sqlite3
 conn = sqlite3.connect('app.db')
 conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 1000000))
 conn.commit()
 synddb.publish()  # Don't wait for automatic publish
 ```
+
+**When to call `publish()` manually:**
+- After critical transactions that must be sent immediately
+- Before application shutdown (handled automatically by `detach()`)
+- When you need to ensure data is sent before proceeding
+
+**When automatic publishing is sufficient:**
+- Normal application operations
+- High-throughput batch processing
 
 ### Context Manager
 
