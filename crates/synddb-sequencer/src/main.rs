@@ -30,7 +30,10 @@ async fn main() -> Result<()> {
     info!("SyndDB Sequencer starting...");
 
     // Log supported publisher types
-    let supported_types: Vec<_> = PublisherType::all_types().iter().map(|t| t.to_string()).collect();
+    let supported_types: Vec<_> = PublisherType::all_types()
+        .iter()
+        .map(|t| t.to_string())
+        .collect();
     info!(
         supported = %supported_types.join(", "),
         selected = %config.publisher_type,
@@ -55,12 +58,9 @@ async fn main() -> Result<()> {
                 (None, None)
             }
             PublisherType::Local => {
-                let path = config
-                    .local_storage_path
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!(
-                        "LOCAL_STORAGE_PATH is required when publisher_type=local"
-                    ))?;
+                let path = config.local_storage_path.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("LOCAL_STORAGE_PATH is required when publisher_type=local")
+                })?;
                 let local_config = if path == ":memory:" {
                     LocalConfig::in_memory()
                 } else {
@@ -68,18 +68,18 @@ async fn main() -> Result<()> {
                 };
                 let local_pub = LocalPublisher::new_arc(local_config, Arc::clone(&signer))
                     .context("Failed to initialize local publisher")?;
-                (Some(local_pub.clone() as Arc<dyn DAPublisher>), Some(local_pub))
+                (
+                    Some(local_pub.clone() as Arc<dyn DAPublisher>),
+                    Some(local_pub),
+                )
             }
             PublisherType::Gcs => {
                 #[cfg(feature = "gcs")]
                 {
                     use synddb_sequencer::publish::gcs::{GcsConfig, GcsPublisher};
-                    let bucket = config
-                        .gcs_bucket
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "GCS_BUCKET is required when publisher_type=gcs"
-                        ))?;
+                    let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
+                    })?;
                     let gcs_config = GcsConfig::new(bucket).with_prefix(&config.gcs_prefix);
                     let gcs_pub = GcsPublisher::new(gcs_config, Arc::clone(&signer))
                         .await
@@ -115,7 +115,10 @@ async fn main() -> Result<()> {
     };
 
     // Create the inbox (shares signer with publisher)
-    let inbox = Arc::new(Inbox::with_start_sequence_arc(Arc::clone(&signer), start_sequence));
+    let inbox = Arc::new(Inbox::with_start_sequence_arc(
+        Arc::clone(&signer),
+        start_sequence,
+    ));
 
     // Initialize attestation verifier if configured
     let attestation_verifier = if config.verify_attestation {

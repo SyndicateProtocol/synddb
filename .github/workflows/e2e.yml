@@ -1,0 +1,59 @@
+name: E2E Smoke Test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "crates/**"
+      - "docker/**"
+      - "tests/e2e/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/e2e.yml"
+
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-smoke-test:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: E2E Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run E2E smoke test
+        run: |
+          docker compose -f tests/e2e/docker-compose.yml up \
+            --build \
+            --abort-on-container-exit \
+            --exit-code-from e2e_assertions
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Sequencer logs ==="
+          docker compose -f tests/e2e/docker-compose.yml logs sequencer || true
+          echo ""
+          echo "=== Validator logs ==="
+          docker compose -f tests/e2e/docker-compose.yml logs validator || true
+          echo ""
+          echo "=== Customer app logs ==="
+          docker compose -f tests/e2e/docker-compose.yml logs customer_app || true
+          echo ""
+          echo "=== E2E assertions logs ==="
+          docker compose -f tests/e2e/docker-compose.yml logs e2e_assertions || true
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f tests/e2e/docker-compose.yml down --volumes --remove-orphans

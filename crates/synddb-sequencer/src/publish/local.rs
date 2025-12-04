@@ -173,8 +173,9 @@ impl LocalPublisher {
 
         match result {
             Some(data) => {
-                let batch: SignedBatch = serde_json::from_slice(&data)
-                    .map_err(|e| PublishError::Serialization(format!("Failed to parse batch: {e}")))?;
+                let batch: SignedBatch = serde_json::from_slice(&data).map_err(|e| {
+                    PublishError::Serialization(format!("Failed to parse batch: {e}"))
+                })?;
                 Ok(Some(batch))
             }
             None => Ok(None),
@@ -278,8 +279,7 @@ impl DAPublisher for LocalPublisher {
                 );
                 let reference = format!(
                     "local://batches/{}_{}",
-                    batch.start_sequence,
-                    batch.end_sequence
+                    batch.start_sequence, batch.end_sequence
                 );
                 PublishResult::success("local", reference)
             }
@@ -313,8 +313,9 @@ impl DAPublisher for LocalPublisher {
 
         match result {
             Some(data) => {
-                let batch: SignedBatch = serde_json::from_slice(&data)
-                    .map_err(|e| PublishError::Serialization(format!("Failed to parse batch: {e}")))?;
+                let batch: SignedBatch = serde_json::from_slice(&data).map_err(|e| {
+                    PublishError::Serialization(format!("Failed to parse batch: {e}"))
+                })?;
                 Ok(Some(batch))
             }
             None => Ok(None),
@@ -324,7 +325,9 @@ impl DAPublisher for LocalPublisher {
     async fn get_latest_sequence(&self) -> Result<Option<u64>, PublishError> {
         let conn = self.conn.lock().unwrap();
         let result: Option<u64> = conn
-            .query_row("SELECT MAX(end_sequence) FROM batches", [], |row| row.get(0))
+            .query_row("SELECT MAX(end_sequence) FROM batches", [], |row| {
+                row.get(0)
+            })
             .optional()
             .map_err(|e| PublishError::Storage(format!("Query failed: {e}")))?
             .flatten();
@@ -380,7 +383,10 @@ async fn get_message_handler(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     match publisher.get(sequence).await {
         Ok(Some(message)) => Ok(Json(message)),
-        Ok(None) => Err((StatusCode::NOT_FOUND, format!("Message {sequence} not found"))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            format!("Message {sequence} not found"),
+        )),
         Err(e) => {
             error!(sequence, error = %e, "Failed to get message");
             Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
@@ -543,8 +549,7 @@ mod tests {
     #[tokio::test]
     async fn test_local_publisher_sequence_zero() {
         let signer = test_signer();
-        let publisher =
-            LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
+        let publisher = LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
 
         let message = create_signed_message(&signer, 0, 1700000000).await;
 

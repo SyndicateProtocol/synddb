@@ -133,7 +133,10 @@ fn main() -> Result<()> {
         if let Err(e) = synddb.publish() {
             // Log but don't fail - network errors are expected without a real sequencer
             if iteration == 0 {
-                info!("Note: publish() returned error (expected without sequencer): {}", e);
+                info!(
+                    "Note: publish() returned error (expected without sequencer): {}",
+                    e
+                );
             }
         } else {
             changesets_published.fetch_add(1, Ordering::Relaxed);
@@ -169,8 +172,16 @@ fn main() -> Result<()> {
     info!("  Stress Test Complete - NO CRASH!");
     info!("===========================================");
     info!("Duration: {:.2}s", elapsed.as_secs_f64());
-    info!("Transactions: {} ({:.0}/s)", tx_count, tx_count as f64 / elapsed.as_secs_f64());
-    info!("Rows inserted: {} ({:.0}/s)", row_count, row_count as f64 / elapsed.as_secs_f64());
+    info!(
+        "Transactions: {} ({:.0}/s)",
+        tx_count,
+        tx_count as f64 / elapsed.as_secs_f64()
+    );
+    info!(
+        "Rows inserted: {} ({:.0}/s)",
+        row_count,
+        row_count as f64 / elapsed.as_secs_f64()
+    );
     info!("");
     info!("Test completed successfully!");
 

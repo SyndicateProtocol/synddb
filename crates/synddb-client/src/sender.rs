@@ -129,7 +129,8 @@ impl ChangesetSender {
 
         // Take changesets from buffer and convert to API format
         let changesets_raw = std::mem::take(&mut self.buffer);
-        let changesets: Vec<ChangesetData> = changesets_raw.iter().map(ChangesetData::from).collect();
+        let changesets: Vec<ChangesetData> =
+            changesets_raw.iter().map(ChangesetData::from).collect();
         let batch_id = uuid::Uuid::new_v4().to_string();
 
         let batch = ChangesetBatchRequest {

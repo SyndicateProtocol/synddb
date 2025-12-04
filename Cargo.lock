@@ -4250,6 +4250,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "synddb-e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "reqwest",
+ "serde",
+ "synddb-shared",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "synddb-sequencer"
 version = "0.1.0"
 dependencies = [

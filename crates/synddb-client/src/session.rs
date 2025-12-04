@@ -217,7 +217,11 @@ impl SessionMonitor {
     /// Check if timer has signaled that we should publish, and do so if needed.
     /// This should be called periodically from the main thread (e.g., in an event loop).
     fn check_and_publish(&self) {
-        if self.publish_signal.should_publish.swap(false, Ordering::AcqRel) {
+        if self
+            .publish_signal
+            .should_publish
+            .swap(false, Ordering::AcqRel)
+        {
             if let Err(e) = self.publish() {
                 error!("Failed to publish: {}", e);
             }
@@ -366,7 +370,9 @@ impl SessionMonitor {
     /// Must be called from the main thread.
     pub(crate) fn publish(&self) -> Result<()> {
         // Also check the timer signal in case it was set
-        self.publish_signal.should_publish.store(false, Ordering::Release);
+        self.publish_signal
+            .should_publish
+            .store(false, Ordering::Release);
 
         SESSION_STATE.with(|state| {
             let mut guard = state.borrow_mut();

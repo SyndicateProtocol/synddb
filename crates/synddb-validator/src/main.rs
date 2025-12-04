@@ -29,7 +29,10 @@ async fn main() -> Result<()> {
     );
 
     // Log supported fetcher types
-    let supported_types: Vec<_> = FetcherType::all_types().iter().map(|t| t.to_string()).collect();
+    let supported_types: Vec<_> = FetcherType::all_types()
+        .iter()
+        .map(|t| t.to_string())
+        .collect();
     info!(
         supported = %supported_types.join(", "),
         selected = %config.fetcher_type,
@@ -238,9 +241,10 @@ async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn DAFetcher>> 
             Ok(Arc::new(fetcher))
         }
         FetcherType::Gcs => {
-            let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("GCS_BUCKET is required when fetcher_type=gcs")
-            })?;
+            let bucket = config
+                .gcs_bucket
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("GCS_BUCKET is required when fetcher_type=gcs"))?;
             info!(bucket = %bucket, prefix = %config.gcs_prefix, "Using GCS fetcher");
             let fetcher = synddb_validator::sync::providers::gcs::GcsFetcher::new(
                 bucket.clone(),
