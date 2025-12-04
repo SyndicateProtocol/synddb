@@ -2,6 +2,7 @@ use anyhow::Result;
 use rand::Rng;
 use rusqlite::{params, Connection};
 use std::time::{Duration, Instant};
+use synddb_client::SyndDB;
 use tracing::info;
 
 use crate::load_patterns::{LoadConfig, LoadPattern};
@@ -9,21 +10,43 @@ use crate::load_patterns::{LoadConfig, LoadPattern};
 const SYMBOLS: &[&str] = &["BTC-USD", "ETH-USD", "SOL-USD", "ARB-USD"];
 const INITIAL_USERS: usize = 100;
 
+/// Orderbook simulator that operates on a `SQLite` connection
+///
+/// Uses a `'static` reference to the connection to support integration with
+/// `synddb-client`, which requires static lifetime for changeset capture.
 #[derive(Debug)]
-pub struct OrderbookSimulator {
-    conn: Connection,
+pub struct OrderbookSimulator<'a> {
+    conn: &'static Connection,
+    synddb: Option<&'a SyndDB>,
     user_ids: Vec<i64>,
     operation_count: u64,
     start_time: Option<Instant>,
 }
 
-impl OrderbookSimulator {
-    pub const fn new(conn: Connection) -> Self {
+impl<'a> OrderbookSimulator<'a> {
+    pub const fn new(conn: &'static Connection) -> Self {
         Self {
             conn,
+            synddb: None,
             user_ids: Vec::new(),
             operation_count: 0,
             start_time: None,
+        }
+    }
+
+    /// Set the `SyndDB` handle for changeset publishing
+    pub fn with_synddb(mut self, synddb: &'a SyndDB) -> Self {
+        self.synddb = Some(synddb);
+        self
+    }
+
+    /// Publish changesets if `SyndDB` is attached
+    fn try_publish(&self) {
+        if let Some(synddb) = self.synddb {
+            if let Err(e) = synddb.publish() {
+                // Log at trace level - network errors are expected without sequencer
+                tracing::trace!("Publish failed: {}", e);
+            }
         }
     }
 
@@ -109,8 +132,9 @@ impl OrderbookSimulator {
             }
 
             // Execute a batch of operations in a single transaction
+            // Uses unchecked_transaction() to work with &self (for SyndDB integration)
             {
-                let tx = self.conn.transaction()?;
+                let tx = self.conn.unchecked_transaction()?;
                 for _ in 0..batch_size {
                     if let Some(end) = end_time {
                         if Instant::now() >= end {
@@ -126,6 +150,9 @@ impl OrderbookSimulator {
                 }
                 tx.commit()?;
             }
+
+            // Publish changesets after commit (safe API pattern)
+            self.try_publish();
 
             // Log stats periodically
             if last_log.elapsed() >= log_interval {
@@ -169,7 +196,7 @@ impl OrderbookSimulator {
                     batch_size
                 };
 
-                let tx = self.conn.transaction()?;
+                let tx = self.conn.unchecked_transaction()?;
                 for _ in 0..batch_ops {
                     if simple_mode {
                         Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
@@ -179,6 +206,9 @@ impl OrderbookSimulator {
                     self.operation_count += 1;
                 }
                 tx.commit()?;
+
+                // Publish changesets after commit (safe API pattern)
+                self.try_publish();
             }
 
             let burst_duration = burst_start.elapsed();
@@ -248,7 +278,7 @@ impl OrderbookSimulator {
                 while Instant::now() < sample_end_time {
                     interval.tick().await;
 
-                    let tx = self.conn.transaction()?;
+                    let tx = self.conn.unchecked_transaction()?;
                     for _ in 0..batch_size {
                         if simple_mode {
                             Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
@@ -258,6 +288,9 @@ impl OrderbookSimulator {
                         self.operation_count += 1;
                     }
                     tx.commit()?;
+
+                    // Publish changesets after commit (safe API pattern)
+                    self.try_publish();
                 }
 
                 let sample_elapsed = sample_start.elapsed();
@@ -410,7 +443,7 @@ impl OrderbookSimulator {
             while Instant::now() < sample_end_time {
                 interval.tick().await;
 
-                let tx = self.conn.transaction()?;
+                let tx = self.conn.unchecked_transaction()?;
                 for _ in 0..batch_size {
                     if simple_mode {
                         Self::execute_simple_operation_in_tx_static(&self.user_ids, &tx)?;
@@ -420,6 +453,9 @@ impl OrderbookSimulator {
                     self.operation_count += 1;
                 }
                 tx.commit()?;
+
+                // Publish changesets after commit (safe API pattern)
+                self.try_publish();
             }
 
             let sample_elapsed = sample_start.elapsed();
@@ -444,7 +480,7 @@ impl OrderbookSimulator {
         if existing_count == 0 {
             info!("Creating {} initial users...", INITIAL_USERS);
 
-            let tx = self.conn.transaction()?;
+            let tx = self.conn.unchecked_transaction()?;
             for i in 0..INITIAL_USERS {
                 tx.execute(
                     "INSERT INTO users (username) VALUES (?1)",

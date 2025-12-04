@@ -2,11 +2,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use rusqlite::Connection;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::{info, warn};
 
 use load_patterns::{LoadConfig, LoadPattern};
 use orderbook::OrderbookSimulator;
 use synddb_benchmark::{load_patterns, orderbook, schema};
+use synddb_client::SyndDB;
 
 #[derive(Parser)]
 #[command(name = "orderbook-bench")]
@@ -29,6 +31,13 @@ enum Commands {
         /// Path to the `SQLite` database
         #[arg(short, long, default_value = "orderbook.db")]
         db: PathBuf,
+
+        /// Sequencer URL for sending changesets (enables `SyndDB` integration)
+        ///
+        /// When set, the benchmark will capture `SQLite` changesets and send them
+        /// to the sequencer for ordering and signing.
+        #[arg(long, env = "SEQUENCER_URL")]
+        sequencer_url: Option<String>,
 
         /// Clean all existing data before starting (default: resume with existing data)
         #[arg(long, default_value = "false")]
@@ -97,6 +106,7 @@ async fn main() -> Result<()> {
         }
         Commands::Run {
             db,
+            sequencer_url,
             clean,
             pattern,
             rate,
@@ -106,7 +116,10 @@ async fn main() -> Result<()> {
             batch_size,
             simple,
         } => {
-            info!("Starting orderbook simulation at {:?}", db);
+            info!("===========================================");
+            info!("  SyndDB Orderbook Benchmark");
+            info!("===========================================");
+            info!(database = ?db, "Database path");
 
             let load_pattern = if rate == 0 {
                 info!("Rate set to 0, enabling max throughput discovery mode");
@@ -136,27 +149,76 @@ async fn main() -> Result<()> {
                 simple_mode: simple,
             };
 
-            let conn = Connection::open(&db)?;
+            info!(
+                pattern = %pattern,
+                rate = rate,
+                duration = duration,
+                batch_size = batch_size,
+                simple_mode = simple,
+                "Configuration"
+            );
+
+            // Create connection with 'static lifetime for SyndDB integration
+            let conn: &'static Connection = Box::leak(Box::new(Connection::open(&db)?));
 
             // Ensure schema exists
-            schema::initialize_schema(&conn)?;
+            info!("Initializing database schema...");
+            schema::initialize_schema(conn)?;
+            info!("Schema ready: users, orders, trades, balances tables");
 
             // Clean data if requested
             if clean {
                 info!("Cleaning existing data...");
-                schema::clear_data(&conn)?;
+                schema::clear_data(conn)?;
                 info!("Data cleaned successfully");
             } else {
                 // Check if there's existing data
                 let user_count: i64 =
                     conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
                 if user_count > 0 {
-                    info!("Resuming with existing data ({} users found)", user_count);
+                    info!(users = user_count, "Resuming with existing data");
                 }
             }
 
+            // Attach SyndDB if sequencer URL is provided
+            info!("-------------------------------------------");
+            let synddb = if let Some(ref url) = sequencer_url {
+                info!(url = %url, "SyndDB Integration: ENABLED");
+                info!("Changesets will be captured and sent to sequencer");
+                match SyndDB::attach(conn, url) {
+                    Ok(synddb) => {
+                        info!("SyndDB client attached successfully");
+                        Some(synddb)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to attach SyndDB client, continuing without it");
+                        None
+                    }
+                }
+            } else {
+                info!("SyndDB Integration: DISABLED");
+                info!("Changesets will NOT be sent to sequencer");
+                None
+            };
+            info!("-------------------------------------------");
+
+            info!("Starting simulation...");
             let mut simulator = OrderbookSimulator::new(conn);
+            if let Some(ref sdb) = synddb {
+                simulator = simulator.with_synddb(sdb);
+            }
             simulator.run(config).await?;
+
+            // Give SyndDB time to flush any pending changesets before exit
+            if synddb.is_some() {
+                info!("Flushing pending changesets to sequencer...");
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                info!("Flush complete");
+            }
+
+            info!("===========================================");
+            info!("  Benchmark Complete");
+            info!("===========================================");
         }
         Commands::Stats { db } => {
             let conn = Connection::open(&db)?;

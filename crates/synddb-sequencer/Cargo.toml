@@ -51,6 +51,9 @@ reqwest = { workspace = true }
 # Compression
 zstd = { workspace = true }
 
+# Local SQLite storage
+rusqlite = { workspace = true }
+
 # Google Cloud Storage
 google-cloud-storage = { workspace = true, optional = true }
 

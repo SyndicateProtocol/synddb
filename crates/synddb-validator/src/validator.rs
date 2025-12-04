@@ -394,7 +394,7 @@ impl std::fmt::Debug for Validator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync::providers::MockFetcher;
+    use crate::sync::providers::mock::MockFetcher;
     use rusqlite::session::Session;
     use std::io::Write;
     use synddb_shared::types::message::{MessageType, SignedMessage};

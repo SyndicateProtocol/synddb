@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 use synddb_shared::runtime;
 use synddb_validator::bridge::signature_store::SignatureStore;
 use synddb_validator::bridge::signer::BridgeSigner;
-use synddb_validator::config::ValidatorConfig;
+use synddb_validator::config::{FetcherType, ValidatorConfig};
 use synddb_validator::http::api::{create_router, AppState};
 use synddb_validator::http::signatures::{create_signature_router, SignatureApiState};
 use synddb_validator::sync::fetcher::DAFetcher;
@@ -26,6 +26,14 @@ async fn main() -> Result<()> {
         database = %config.database_path,
         state_db = %config.state_db_path,
         "`SyndDB` Validator starting"
+    );
+
+    // Log supported fetcher types
+    let supported_types: Vec<_> = FetcherType::all_types().iter().map(|t| t.to_string()).collect();
+    info!(
+        supported = %supported_types.join(", "),
+        selected = %config.fetcher_type,
+        "Fetcher types"
     );
 
     config
@@ -220,19 +228,28 @@ fn request_id_to_message_id(request_id: &str) -> B256 {
 
 /// Create the appropriate DA fetcher based on configuration
 async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn DAFetcher>> {
-    if let Some(bucket) = &config.gcs_bucket {
-        info!(bucket = %bucket, prefix = %config.gcs_prefix, "Using GCS fetcher");
-        let fetcher = synddb_validator::sync::providers::GcsFetcher::new(
-            bucket.clone(),
-            config.gcs_prefix.clone(),
-        )
-        .await?;
-        return Ok(Arc::new(fetcher));
+    match config.fetcher_type {
+        FetcherType::Http => {
+            let url = config.sequencer_url.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("SEQUENCER_URL is required when fetcher_type=http")
+            })?;
+            info!(url = %url, "Using HTTP fetcher");
+            let fetcher = synddb_validator::sync::providers::http::HttpFetcher::new(url);
+            Ok(Arc::new(fetcher))
+        }
+        FetcherType::Gcs => {
+            let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("GCS_BUCKET is required when fetcher_type=gcs")
+            })?;
+            info!(bucket = %bucket, prefix = %config.gcs_prefix, "Using GCS fetcher");
+            let fetcher = synddb_validator::sync::providers::gcs::GcsFetcher::new(
+                bucket.clone(),
+                config.gcs_prefix.clone(),
+            )
+            .await?;
+            Ok(Arc::new(fetcher))
+        }
     }
-
-    anyhow::bail!(
-        "No DA fetcher configured. Set GCS_BUCKET environment variable or --gcs-bucket flag."
-    );
 }
 
 /// Get current Unix timestamp in seconds

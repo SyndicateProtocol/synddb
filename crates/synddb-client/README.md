@@ -23,17 +23,32 @@ use rusqlite::Connection;
 use synddb_client::SyndDB;
 
 fn main() -> Result<()> {
-    let conn = Connection::open("app.db")?;
+    // Connection must have 'static lifetime (Box::leak is the recommended pattern)
+    let conn = Box::leak(Box::new(Connection::open("app.db")?));
 
     // Single line to enable SyndDB
-    let _synddb = SyndDB::attach(&conn, "https://sequencer:8433")?;
+    let synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
 
     // Use SQLite normally
     conn.execute("INSERT INTO trades VALUES (?1, ?2)", params![1, 100])?;
 
+    // For transactions, use unchecked_transaction() instead of transaction()
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("INSERT INTO trades VALUES (?1, ?2)", params![2, 200])?;
+    tx.commit()?;
+
+    // Publish changesets to sequencer after committing
+    // This is called automatically every 1 second, but can be called manually
+    // for critical transactions that need immediate publishing
+    synddb.publish()?;
+
     Ok(())
 }
 ```
+
+> **Note on transactions:** Use `conn.unchecked_transaction()` instead of `conn.transaction()`.
+> This is required because SyndDB's session extension holds an immutable borrow of the connection.
+> See the [Transactions](#transactions) section for details.
 
 ### Python (via C FFI)
 
@@ -89,11 +104,16 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 ## What It Does
 
 1. **Attaches SQLite Session Extension** to the connection
-2. **Registers commit hooks** to capture changesets after each transaction
-3. **Buffers changesets** in memory (configurable size)
-4. **Background thread** sends batches to sequencer via HTTP
-5. **Automatic retries** with exponential backoff
-6. **Graceful shutdown** publishes pending changesets
+2. **Registers update hooks** to detect when changes occur
+3. **Extracts changesets** when `publish()` is called (automatically every 1 second, or manually)
+4. **Buffers changesets** in memory (configurable size)
+5. **Background thread** sends batches to sequencer via HTTP
+6. **Automatic retries** with exponential backoff
+7. **Graceful shutdown** publishes pending changesets
+
+> **Thread Safety:** The Session Extension is only accessed from the main thread.
+> Background threads only receive `Vec<u8>` bytes through channels - they never access SQLite directly.
+> This design eliminates race conditions and ensures safe operation.
 
 ## What It Does NOT Do
 
@@ -101,6 +121,55 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 - ❌ Publish to DA layers (sequencer's job)
 - ❌ Modify application behavior
 - ❌ Require schema changes
+
+## Transactions
+
+When using SyndDB, you must use `unchecked_transaction()` instead of `transaction()`:
+
+```rust
+// ❌ This won't compile - transaction() requires &mut self
+let tx = conn.transaction()?;
+
+// ✅ Use unchecked_transaction() instead
+let tx = conn.unchecked_transaction()?;
+tx.execute("INSERT INTO ...", params![...])?;
+tx.commit()?;
+```
+
+**Why?** SyndDB uses SQLite's Session Extension to capture changesets. The session holds an immutable borrow (`&Connection`) for its lifetime. Since `transaction()` requires a mutable borrow (`&mut Connection`), Rust's borrow checker prevents using both simultaneously.
+
+**What does "unchecked" mean?** The only difference between `transaction()` and `unchecked_transaction()` is *when* single-transaction semantics are enforced:
+
+| Method | Enforcement | What happens if you nest transactions |
+|--------|-------------|---------------------------------------|
+| `transaction()` | Compile-time (Rust borrow checker) | Won't compile |
+| `unchecked_transaction()` | Runtime (SQLite) | SQLite returns an error |
+
+**There is no functional difference** - both methods create identical transactions with the same isolation and behavior. SQLite only allows one active transaction per connection regardless of which method you use. The "unchecked" simply means Rust won't prevent the mistake at compile time, but SQLite will still catch it at runtime.
+
+## Publishing Changesets
+
+SyndDB automatically publishes changesets every 1 second (configurable). For critical transactions, you can publish immediately:
+
+```rust
+// Automatic publishing (default behavior)
+// Changesets are published every 1 second in the background
+
+// Manual publishing for critical transactions
+let tx = conn.unchecked_transaction()?;
+tx.execute("INSERT INTO critical_data VALUES (?1, ?2)", params![...])?;
+tx.commit()?;
+synddb.publish()?;  // Publish immediately, don't wait for timer
+```
+
+**When to call `publish()` manually:**
+- After critical transactions that must be sent immediately
+- Before application shutdown (handled automatically by `Drop`)
+- When you need to ensure data is sent before proceeding
+
+**When automatic publishing is sufficient:**
+- Normal application operations
+- High-throughput batch processing (publishing after every transaction would be wasteful)
 
 ## Configuration
 

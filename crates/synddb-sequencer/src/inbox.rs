@@ -40,9 +40,16 @@ impl Inbox {
 
     /// Create a new inbox starting from a specific sequence number (for recovery)
     pub fn with_start_sequence(signer: MessageSigner, start_sequence: u64) -> Self {
+        Self::with_start_sequence_arc(Arc::new(signer), start_sequence)
+    }
+
+    /// Create a new inbox with a shared signer, starting from a specific sequence
+    ///
+    /// Use this when the signer is shared with other components (e.g., publishers).
+    pub const fn with_start_sequence_arc(signer: Arc<MessageSigner>, start_sequence: u64) -> Self {
         Self {
             sequence: AtomicU64::new(start_sequence),
-            signer: Arc::new(signer),
+            signer,
         }
     }
 

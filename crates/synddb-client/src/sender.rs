@@ -7,18 +7,23 @@ use crate::retry::retry_with_backoff;
 use crate::session::Changeset;
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
+use synddb_shared::types::payloads::{ChangesetBatchRequest, ChangesetData};
 use tracing::{debug, error, info, warn};
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ChangesetBatch {
-    changesets: Vec<Changeset>,
-    batch_id: String,
-    /// Optional TEE attestation token (JWT) proving workload identity
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attestation_token: Option<String>,
+impl From<&Changeset> for ChangesetData {
+    fn from(cs: &Changeset) -> Self {
+        Self {
+            data: cs.data.clone(),
+            sequence: cs.sequence,
+            timestamp: cs
+                .timestamp
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -122,9 +127,14 @@ impl ChangesetSender {
             None
         };
 
-        let batch = ChangesetBatch {
-            changesets: std::mem::take(&mut self.buffer),
-            batch_id: uuid::Uuid::new_v4().to_string(),
+        // Take changesets from buffer and convert to API format
+        let changesets_raw = std::mem::take(&mut self.buffer);
+        let changesets: Vec<ChangesetData> = changesets_raw.iter().map(ChangesetData::from).collect();
+        let batch_id = uuid::Uuid::new_v4().to_string();
+
+        let batch = ChangesetBatchRequest {
+            batch_id: batch_id.clone(),
+            changesets,
             attestation_token,
         };
 
@@ -143,7 +153,7 @@ impl ChangesetSender {
             Ok(()) => {
                 info!(
                     "Successfully sent batch {} ({} changesets)",
-                    batch.batch_id,
+                    batch_id,
                     batch.changesets.len()
                 );
                 self.buffer_size = 0;
@@ -162,9 +172,9 @@ impl ChangesetSender {
         if let Some(ref recovery) = self.recovery {
             warn!(
                 "Saving {} changesets to recovery storage after failed send",
-                batch.changesets.len()
+                changesets_raw.len()
             );
-            for changeset in &batch.changesets {
+            for changeset in &changesets_raw {
                 if let Err(e) = recovery.save_failed_changeset(changeset, "Max retries exceeded") {
                     error!("Failed to save changeset to recovery storage: {}", e);
                 }
@@ -172,12 +182,12 @@ impl ChangesetSender {
         } else {
             error!(
                 "Dropping {} changesets after failed send (recovery disabled)",
-                batch.changesets.len()
+                changesets_raw.len()
             );
         }
     }
 
-    async fn send_batch(&self, batch: &ChangesetBatch) -> Result<(), reqwest::Error> {
+    async fn send_batch(&self, batch: &ChangesetBatchRequest) -> Result<(), reqwest::Error> {
         let url = self
             .config
             .sequencer_url
@@ -247,9 +257,9 @@ impl ChangesetSender {
                 None
             };
 
-            let batch = ChangesetBatch {
-                changesets: vec![changeset.clone()],
+            let batch = ChangesetBatchRequest {
                 batch_id: uuid::Uuid::new_v4().to_string(),
+                changesets: vec![ChangesetData::from(&changeset)],
                 attestation_token,
             };
 
