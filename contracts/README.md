@@ -8,7 +8,7 @@ Smart contracts for the SyndDB cross-chain message bridge system.
 
 | Contract | Address                                      | Explorer                                                                                                 |
 | -------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Bridge   | `0x294820F0B4ee2db8f3B0a868385C6311c457bD44` | [View on BaseScan](https://sepolia.basescan.org/address/0x294820F0B4ee2db8f3B0a868385C6311c457bD44#code) |
+| Bridge   | `0x7ddE947a7DF980fD00887371C527cBbcB4E92a4E` | [View on BaseScan](https://sepolia.basescan.org/address/0x7ddE947a7DF980fD00887371C527cBbcB4E92a4E#code) |
 
 ### Deploy
 
