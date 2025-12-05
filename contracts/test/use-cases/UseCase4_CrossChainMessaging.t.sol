@@ -37,7 +37,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
         destinationChain = new MockCrossChainReceiver();
 
-        bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);
+        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
         bridge.addPreModule(address(validatorModule));
 
         token.transfer(user, 1_000_000e18);

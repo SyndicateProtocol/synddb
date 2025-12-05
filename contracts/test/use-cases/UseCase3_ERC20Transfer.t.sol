@@ -40,7 +40,7 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         setupValidators(bridge);
         validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
 
-        bridge.grantRole(bridge.SEQUENCER_ROLE(), sequencer);
+        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
         bridge.addPreModule(address(validatorModule));
 
         usdc.transfer(user, INITIAL_BALANCE);
