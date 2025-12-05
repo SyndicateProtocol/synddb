@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(forge build:*)",
+      "Bash(forge test:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

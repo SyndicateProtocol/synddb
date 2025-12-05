@@ -82,6 +82,25 @@ contract BridgeTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
+                        CONSTRUCTOR TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_Constructor_RevertsOnZeroAdminAddress() public {
+        vm.expectRevert(Bridge.ZeroAddressNotAllowed.selector);
+        new Bridge(address(0), address(weth));
+    }
+
+    function test_Constructor_RevertsOnZeroWrappedNativeTokenAddress() public {
+        vm.expectRevert(Bridge.ZeroAddressNotAllowed.selector);
+        new Bridge(admin, address(0));
+    }
+
+    function test_Constructor_RevertsOnBothZeroAddresses() public {
+        vm.expectRevert(Bridge.ZeroAddressNotAllowed.selector);
+        new Bridge(address(0), address(0));
+    }
+
+    /*//////////////////////////////////////////////////////////////
                         BASIC MESSAGE LIFECYCLE
     //////////////////////////////////////////////////////////////*/
 
