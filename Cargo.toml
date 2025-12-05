@@ -7,7 +7,7 @@ members = [
   "crates/synddb-client",
   "crates/synddb-chain-monitor",
   "crates/synddb-shared",
-  "crates/synddb-e2e",
+  "tests/e2e/runner",
 ]
 
 [workspace.package]

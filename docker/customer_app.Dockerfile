@@ -24,8 +24,9 @@ WORKDIR /app
 # Copy workspace manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Copy all crates
+# Copy all crates and tests
 COPY crates/ ./crates/
+COPY tests/ ./tests/
 
 # Build the benchmark binary
 RUN cargo build --release -p synddb-benchmark

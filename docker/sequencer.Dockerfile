@@ -12,8 +12,9 @@ WORKDIR /app
 # Copy workspace manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Copy all crates
+# Copy all crates and tests
 COPY crates/ ./crates/
+COPY tests/ ./tests/
 
 # Build the sequencer binary
 RUN cargo build --release -p synddb-sequencer

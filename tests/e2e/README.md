@@ -29,7 +29,7 @@ End-to-end integration tests that validate the full SyndDB pipeline.
 | `sequencer` | Signs changesets and publishes to local DA storage |
 | `validator` | Syncs messages from sequencer via HTTP, validates signatures |
 | `customer_app` | Orderbook benchmark generating ~1000 changesets over 20s |
-| `e2e_assertions` | Rust test runner (`crates/synddb-e2e`) that validates the pipeline |
+| `e2e_assertions` | Rust test runner (`tests/e2e/runner`) that validates the pipeline |
 
 ## Tests
 
@@ -63,5 +63,5 @@ Runs on every PR and push to `main` via `.github/workflows/e2e.yml`. The workflo
 ## Files
 
 - `docker-compose.yml` - Orchestrates all services
+- `runner/` - Rust test runner source code
 - `../../docker/e2e.Dockerfile` - Builds the test runner
-- `../../crates/synddb-e2e/` - Test runner source code
