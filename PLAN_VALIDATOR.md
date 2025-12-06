@@ -89,6 +89,8 @@ See [`crates/synddb-validator/Cargo.toml`](crates/synddb-validator/Cargo.toml) f
 
 ## Directory Structure
 
+The current implementation has the following structure:
+
 ```
 synddb-validator/
 ├── Cargo.toml
@@ -96,48 +98,38 @@ synddb-validator/
 │   ├── main.rs                      # Entry point
 │   ├── lib.rs                       # Public API
 │   ├── config.rs                    # Configuration (clap + env vars)
+│   ├── error.rs                     # Error types
+│   ├── metrics.rs                   # Prometheus metrics
+│   ├── validator.rs                 # Main validator orchestration
 │   ├── sync/
 │   │   ├── mod.rs                   # DA syncing orchestration
 │   │   ├── fetcher.rs               # Fetch SignedMessage from DA
 │   │   ├── verifier.rs              # Verify sequencer signatures
-│   │   ├── state_manager.rs         # Track sync state (SQLite)
 │   │   └── providers/
 │   │       ├── mod.rs               # DAFetcher trait
 │   │       ├── gcs.rs               # GCS fetcher (primary)
-│   │       ├── celestia.rs          # Celestia fetcher
 │   │       └── mock.rs              # Mock for testing
 │   ├── apply/
 │   │   ├── mod.rs                   # Changeset application engine
-│   │   ├── applier.rs               # Apply SQLite changesets
-│   │   ├── snapshot.rs              # Restore from snapshots
-│   │   ├── invariants.rs            # Post-apply invariant checks
-│   │   └── types.rs                 # Shared types
-│   ├── database/
-│   │   ├── mod.rs                   # SQLite management
-│   │   ├── pool.rs                  # Read connection pool
-│   │   └── state.rs                 # Validator state tracking
-│   ├── api/
-│   │   ├── mod.rs                   # API servers
-│   │   ├── rest.rs                  # REST API (axum)
-│   │   ├── jsonrpc.rs               # JSON-RPC server
-│   │   └── websocket.rs             # WebSocket subscriptions
-│   ├── bridge/                      # Bridge signer functionality (--bridge-signer)
-│   │   ├── mod.rs                   # Bridge signer orchestration
-│   │   ├── withdrawal_signer.rs     # Sign withdrawal approvals
-│   │   ├── state_attestor.rs        # Sign state root attestations
-│   │   └── signature_store.rs       # Store/serve signatures for relayers
-│   ├── tee/
-│   │   ├── mod.rs                   # TEE integration
-│   │   ├── confidential_space.rs    # GCP Confidential Space
-│   │   └── attestation.rs           # Generate/verify attestations
-│   └── metrics.rs                   # Prometheus metrics
-├── tests/
-│   ├── integration/
-│   │   ├── sync_test.rs             # End-to-end sync tests
-│   │   └── apply_test.rs            # Changeset application tests
-│   └── fixtures/                    # Test data
+│   │   └── applier.rs               # Apply SQLite changesets
+│   ├── state/
+│   │   ├── mod.rs                   # State management
+│   │   └── store.rs                 # Validator state tracking (SQLite)
+│   ├── http/
+│   │   ├── mod.rs                   # HTTP server setup
+│   │   ├── api.rs                   # REST API endpoints (axum)
+│   │   └── signatures.rs            # Signature serving for relayers
+│   └── bridge/                      # Bridge signer functionality (--bridge-signer)
+│       ├── mod.rs                   # Bridge signer orchestration
+│       ├── signer.rs                # Sign withdrawal messages
+│       └── signature_store.rs       # Store/serve signatures for relayers
 └── README.md
 ```
+
+**Note**: The planned directories (`database/`, `api/`, `tee/`) have been consolidated or renamed:
+- Database state tracking is in `state/store.rs`
+- API is implemented in `http/` directory
+- TEE integration is documented but not yet implemented in the validator
 
 ## Core Components
 
@@ -163,25 +155,20 @@ See: [`crates/synddb-validator/src/apply/mod.rs`](crates/synddb-validator/src/ap
 
 ### 4. Query Server
 
-Serves queries via REST API. See [`crates/synddb-validator/src/http.rs`](crates/synddb-validator/src/http.rs) for current implementation.
+Serves queries via REST API. See [`crates/synddb-validator/src/http/`](crates/synddb-validator/src/http/) for current implementation.
 
 Future protocols: JSON-RPC, WebSocket subscriptions.
 
 ### 5. Bridge Signer Mode
 
-When `--bridge-signer` is enabled, the validator signs withdrawal approvals and state attestations for the bridge contract.
+When `--bridge-signer` is enabled, the validator signs withdrawal messages for the bridge contract.
 
-**Submission modes:**
-- **Relayer mode** (default, `--bridge-submit=false`): Validator signs and stores signatures. A separate relayer collects signatures from multiple validators via the signature API and submits to the bridge.
-- **Direct mode** (`--bridge-submit=true`): Validator signs and submits transactions directly to the bridge contract. Useful for single-validator setups or when running your own relayer.
+**Workflow:**
+- Validator signs withdrawal messages and stores them locally
+- Signatures are served via the signature API endpoint (default `:8081`)
+- A separate relayer collects signatures from multiple validators and submits to the bridge contract
 
-**Bridge contract interactions:**
-- Read validator registration status
-- Read signature threshold requirements
-- Submit withdrawals (direct mode only)
-- Submit state attestations (direct mode only)
-
-See: [`crates/synddb-validator/src/bridge/mod.rs`](crates/synddb-validator/src/bridge/mod.rs)
+See: [`crates/synddb-validator/src/bridge/`](crates/synddb-validator/src/bridge/)
 
 ### Signature API Reference
 
