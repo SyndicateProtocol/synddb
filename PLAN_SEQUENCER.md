@@ -136,57 +136,37 @@ crossbeam-channel = "0.5"  # Multi-producer multi-consumer channels
 
 ## Directory Structure
 
+The current implementation has a simplified structure compared to the full plan above. Below is the **actual** directory structure:
+
 ```
 synddb-sequencer/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs                    # Entry point, CLI args
-│   ├── lib.rs                     # Public API
-│   ├── config.rs                  # Configuration structures
-│   ├── http_api.rs                # HTTP receiver (Axum endpoints for receiving changesets/snapshots)
-│   ├── monitor/
-│   │   └── mod.rs                 # Changeset and SchemaChange type definitions
-│   ├── batch/
-│   │   ├── mod.rs                 # Batching logic
-│   │   ├── accumulator.rs         # Accumulate received operations
-│   │   └── timer.rs               # Time/size based triggers for publishing
-│   ├── attestor/
-│   │   ├── mod.rs                 # Attestation and signing
-│   │   ├── key_manager.rs         # Ethereum key management in TEE
-│   │   ├── signer.rs              # Sign batches with secp256k1
-│   │   └── compressor.rs          # Zstd compression (compress-then-sign)
-│   ├── publish/
-│   │   ├── mod.rs                 # Publishing orchestration
-│   │   ├── celestia.rs            # Celestia publisher
-│   │   ├── eigenda.rs             # EigenDA publisher
-│   │   ├── ipfs.rs                # IPFS publisher
-│   │   ├── arweave.rs             # Arweave publisher
-│   │   ├── retry.rs               # Retry logic
-│   │   └── manifest.rs            # Track published batches (sequence, DA location, hash)
-│   ├── messages/
-│   │   ├── mod.rs                 # Message passing module
-│   │   ├── inbound_monitor.rs     # Blockchain event monitoring for inbound messages
-│   │   ├── queue.rs               # Message queue management
-│   │   ├── api.rs                 # HTTP API for delivering messages to applications
-│   │   ├── consistency.rs         # Consistency enforcement between messages
-│   │   ├── degradation.rs         # Progressive degradation management
-│   │   ├── alerts.rs              # Application alerting mechanisms
-│   │   ├── state_commitments.rs   # Signed state commitments for validators
-│   │   └── recovery.rs            # Recovery protocols and validation
-│   ├── tee/
-│   │   ├── mod.rs                 # GCP Confidential Space TEE
-│   │   └── attestation.rs         # Fetch attestation tokens from metadata service
-│   └── utils/
-│       ├── mod.rs
-│       └── checksum.rs            # Data integrity
-├── config/
-│   ├── default.yaml               # Default configuration
-│   └── example.yaml               # Example with all options
-├── tests/
-│   ├── integration/               # Integration tests
-│   └── benchmarks/                # Performance benchmarks
+│   ├── main.rs                    # Entry point, CLI args, signing key management
+│   ├── lib.rs                     # Public API and module exports
+│   ├── config.rs                  # Configuration structures (clap + env vars)
+│   ├── http_api.rs                # HTTP receiver (Axum endpoints for changesets/snapshots)
+│   ├── http_errors.rs             # HTTP error handling
+│   ├── inbox.rs                   # Message sequencing and ordering
+│   ├── signer.rs                  # secp256k1 signing logic
+│   ├── attestation.rs             # TEE attestation token fetching and verification
+│   └── publish/
+│       ├── mod.rs                 # Publishing orchestration and DAPublisher trait re-exports
+│       ├── traits.rs              # DAPublisher trait definition
+│       ├── gcs.rs                 # Google Cloud Storage publisher
+│       ├── celestia.rs            # Celestia DA publisher
+│       ├── eigenda.rs             # EigenDA publisher
+│       ├── ipfs.rs                # IPFS publisher
+│       ├── arweave.rs             # Arweave publisher
+│       └── mock.rs                # Mock publisher for testing
 └── README.md
 ```
+
+**Note**: The planned directories (`batch/`, `attestor/`, `messages/`, `tee/`, `utils/`) have been consolidated:
+- Batching logic is in `inbox.rs`
+- Signing is in `signer.rs`
+- Attestation is in `attestation.rs`
+- Message passing details are described in `PLAN_MESSAGE_PASSING.md`
 
 ## Core Components
 

@@ -14,7 +14,9 @@ SyndDB is a SQLite replication system for blockchain-based applications. It capt
 crates/
 ├── synddb-client/        # Client library for changeset capture (Rust + FFI)
 ├── synddb-sequencer/     # Message ordering and signing service
+├── synddb-validator/     # State validation and replica reconstruction
 ├── synddb-chain-monitor/ # Blockchain event monitoring (WebSocket/RPC)
+├── synddb-shared/        # Shared types and utilities across crates
 └── synddb-benchmark/     # Orderbook simulator for performance testing
 ```
 
@@ -77,7 +79,7 @@ When working on large features or refactors, commit incrementally as you complet
 ## Feature Flags
 
 - `synddb-client`: `chain-monitor`, `ffi`
-- `synddb-sequencer`: `gcs`, `tee`, `celestia`, `eigenda`
+- `synddb-sequencer`: `gcs`, `tee`, `celestia`, `eigenda`, `ipfs`, `arweave`
 
 ## CI Validation
 
