@@ -4254,9 +4254,11 @@ name = "synddb-e2e"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "reqwest",
  "serde",
+ "serde_json",
  "synddb-shared",
  "tokio",
  "tracing",

@@ -41,6 +41,8 @@ impl TestRunner {
             self.test_validator_syncs().await,
             self.test_sync_consistency().await,
             self.test_da_fetch().await,
+            self.test_snapshot_sequenced().await,
+            self.test_snapshot_in_da().await,
         ];
 
         Ok(TestResult::from_results(results))
