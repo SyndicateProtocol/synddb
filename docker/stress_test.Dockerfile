@@ -1,7 +1,7 @@
-# Session Race Condition Stress Test Dockerfile
+# Session Stress Test Dockerfile
 #
-# This builds the session-stress-test binary which attempts to trigger
-# the SIGSEGV caused by unsafe impl Send for SessionState.
+# This builds the session-stress-test binary which validates the thread-safe
+# architecture using thread-local storage for session state management.
 #
 # Usage:
 #   docker build -f docker/stress_test.Dockerfile -t synddb-stress-test .

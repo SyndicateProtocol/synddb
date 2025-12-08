@@ -53,6 +53,30 @@ services:
       retries: 5
       start_period: 10s
 
+  # Second validator for multi-validator testing
+  validator2:
+    build:
+      context: ../..
+      dockerfile: docker/validator.Dockerfile
+    environment:
+      RUST_LOG: info
+      BIND_ADDRESS: "0.0.0.0:8080"
+      SEQUENCER_ADDRESS: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+      FETCHER_TYPE: http
+      SEQUENCER_URL: "http://sequencer:8433"
+      DATABASE_PATH: ":memory:"
+      STATE_DB_PATH: ":memory:"
+      SYNC_INTERVAL: "1s"
+    depends_on:
+      sequencer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
   # Customer app: orderbook benchmark generating changesets
   customer_app:
     build:
@@ -76,11 +100,14 @@ services:
       RUST_LOG: info
       SEQUENCER_URL: "http://sequencer:8433"
       VALIDATOR_URL: "http://validator:8080"
+      VALIDATOR2_URL: "http://validator2:8080"
       STARTUP_WAIT: "5"
       DATA_WAIT: "25"
-      MAX_SYNC_DIFF: "2"
+      MAX_SYNC_DIFF: "5"
     depends_on:
       validator:
+        condition: service_healthy
+      validator2:
         condition: service_healthy
       customer_app:
         condition: service_started

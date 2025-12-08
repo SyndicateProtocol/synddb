@@ -12,18 +12,21 @@ pub(crate) struct TestRunner {
     pub config: Config,
     pub sequencer: SequencerClient,
     pub validator: ValidatorClient,
+    pub validator2: ValidatorClient,
 }
 
 impl TestRunner {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         config: Config,
         sequencer: SequencerClient,
         validator: ValidatorClient,
+        validator2: ValidatorClient,
     ) -> Self {
         Self {
             config,
             sequencer,
             validator,
+            validator2,
         }
     }
 
@@ -43,6 +46,9 @@ impl TestRunner {
             self.test_da_fetch().await,
             self.test_snapshot_sequenced().await,
             self.test_snapshot_in_da().await,
+            // Multi-validator tests
+            self.test_multi_validator_sync().await,
+            self.test_validators_consistent().await,
         ];
 
         Ok(TestResult::from_results(results))
@@ -56,7 +62,10 @@ impl TestRunner {
         info!("  Sequencer is healthy");
 
         self.validator.wait_healthy(timeout).await?;
-        info!("  Validator is healthy");
+        info!("  Validator 1 is healthy");
+
+        self.validator2.wait_healthy(timeout).await?;
+        info!("  Validator 2 is healthy");
 
         info!(
             "Waiting {}s for customer app to generate data...",

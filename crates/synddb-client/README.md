@@ -136,7 +136,7 @@ tx.execute("INSERT INTO ...", params![...])?;
 tx.commit()?;
 ```
 
-**Why?** SyndDB uses SQLite's Session Extension to capture changesets. The session holds an immutable borrow (`&Connection`) for its lifetime. Since `transaction()` requires a mutable borrow (`&mut Connection`), Rust's borrow checker prevents using both simultaneously.
+**Why?** SyndDB uses SQLite's Session Extension, which requires holding a reference to the `Connection`. Since the session holds this reference, Rust's borrow checker prevents obtaining a mutable borrow (`&mut Connection`) needed by `transaction()`.
 
 **What does "unchecked" mean?** The only difference between `transaction()` and `unchecked_transaction()` is *when* single-transaction semantics are enforced:
 

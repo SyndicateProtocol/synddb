@@ -76,7 +76,8 @@ struct SessionState {
 
 thread_local! {
     /// Thread-local storage for session state.
-    /// This ensures the Session is only accessed from the main thread.
+    /// Note: This is thread-local, so each thread gets its own instance.
+    /// The SessionMonitor API is designed so that only the main thread accesses SESSION_STATE.
     static SESSION_STATE: RefCell<Option<SessionState>> = const { RefCell::new(None) };
 }
 

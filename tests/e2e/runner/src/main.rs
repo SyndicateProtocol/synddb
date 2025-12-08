@@ -19,9 +19,13 @@ pub struct Config {
     #[arg(long, env = "SEQUENCER_URL", default_value = "http://localhost:8433")]
     pub sequencer_url: String,
 
-    /// Validator URL
+    /// Primary validator URL
     #[arg(long, env = "VALIDATOR_URL", default_value = "http://localhost:8080")]
     pub validator_url: String,
+
+    /// Secondary validator URL (for multi-validator tests)
+    #[arg(long, env = "VALIDATOR2_URL", default_value = "http://localhost:8081")]
+    pub validator2_url: String,
 
     /// Seconds to wait for services to be ready
     #[arg(long, env = "STARTUP_WAIT", default_value = "5")]
@@ -50,12 +54,18 @@ async fn main() -> ExitCode {
     info!("  SyndDB E2E Smoke Test");
     info!("==================================");
     info!("");
-    info!(sequencer = %config.sequencer_url, validator = %config.validator_url, "Configuration");
+    info!(
+        sequencer = %config.sequencer_url,
+        validator = %config.validator_url,
+        validator2 = %config.validator2_url,
+        "Configuration"
+    );
 
     let sequencer = SequencerClient::new(&config.sequencer_url);
     let validator = ValidatorClient::new(&config.validator_url);
+    let validator2 = ValidatorClient::new(&config.validator2_url);
 
-    let runner = TestRunner::new(config, sequencer, validator);
+    let runner = TestRunner::new(config, sequencer, validator, validator2);
 
     match runner.run().await {
         Ok(result) => {
