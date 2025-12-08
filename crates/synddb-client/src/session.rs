@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, ThreadId};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, error, info, trace};
 
@@ -97,6 +97,8 @@ pub struct SessionMonitor {
     timer_handle: Option<thread::JoinHandle<()>>,
     /// Publish signal shared with timer
     publish_signal: Arc<PublishSignal>,
+    /// Thread that created this monitor (for debug assertions)
+    owner_thread: ThreadId,
 }
 
 impl SessionMonitor {
@@ -168,6 +170,7 @@ impl SessionMonitor {
             shutdown,
             timer_handle: Some(timer_handle),
             publish_signal,
+            owner_thread: thread::current().id(),
         })
     }
 
@@ -213,20 +216,6 @@ impl SessionMonitor {
 
         debug!("SessionMonitor started with change detection");
         Ok(())
-    }
-
-    /// Check if timer has signaled that we should publish, and do so if needed.
-    /// This should be called periodically from the main thread (e.g., in an event loop).
-    fn check_and_publish(&self) {
-        if self
-            .publish_signal
-            .should_publish
-            .swap(false, Ordering::AcqRel)
-        {
-            if let Err(e) = self.publish() {
-                error!("Failed to publish: {}", e);
-            }
-        }
     }
 
     /// Extract changeset from session and send to background thread.
@@ -368,8 +357,14 @@ impl SessionMonitor {
 
     /// Manually trigger changeset extraction and publishing.
     /// This can be called to publish immediately after critical transactions.
-    /// Must be called from the main thread.
+    /// Must be called from the same thread that created the SessionMonitor.
     pub(crate) fn publish(&self) -> Result<()> {
+        debug_assert_eq!(
+            thread::current().id(),
+            self.owner_thread,
+            "publish() must be called from the same thread that created SyndDB"
+        );
+
         // Also check the timer signal in case it was set
         self.publish_signal
             .should_publish
@@ -377,16 +372,19 @@ impl SessionMonitor {
 
         SESSION_STATE.with(|state| {
             let mut guard = state.borrow_mut();
-            if let Some(ref mut s) = *guard {
-                Self::extract_and_send_changeset(s)
-            } else {
-                Err(anyhow::anyhow!("Session state not initialized"))
-            }
+            guard.as_mut().map_or_else(|| Err(anyhow::anyhow!("Session state not initialized - internal error" )), Self::extract_and_send_changeset)
         })
     }
 
-    /// Create a complete snapshot of the database
+    /// Create a complete snapshot of the database.
+    /// Must be called from the same thread that created the SessionMonitor.
     pub(crate) fn snapshot(&self) -> Result<Snapshot> {
+        debug_assert_eq!(
+            thread::current().id(),
+            self.owner_thread,
+            "snapshot() must be called from the same thread that created SyndDB"
+        );
+
         info!("Creating manual database snapshot");
 
         SESSION_STATE.with(|state| {
@@ -400,7 +398,7 @@ impl SessionMonitor {
                 );
                 Ok(snapshot)
             } else {
-                Err(anyhow::anyhow!("Session state not initialized"))
+                Err(anyhow::anyhow!("Session state not initialized - internal error"))
             }
         })
     }
@@ -429,6 +427,8 @@ impl Drop for SessionMonitor {
                         debug!("Final changeset extraction: {}", e);
                     }
                 }
+            } else {
+                error!("Failed to borrow session state during drop - concurrent access detected");
             }
         });
 

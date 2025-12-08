@@ -99,7 +99,7 @@ The client library embeds in applications and captures SQL changes:
 - **Snapshot Sender**: Creates and sends periodic snapshots and schema-triggered snapshots
 - **TEE Attestation**: Includes GCP Confidential Space attestation tokens
 - **Recovery**: Persists failed batches for retry after network issues
-- **Thread Safety**: All Session access happens on the main thread; background threads only handle network I/O
+- **Single-Threaded**: SQLite's Session Extension is not thread-safe; all SyndDB calls must be on one thread ([details](crates/synddb-client/README.md#thread-safety))
 
 [Client Library Documentation →](crates/synddb-client/README.md)
 

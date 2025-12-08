@@ -111,9 +111,47 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 6. **Automatic retries** with exponential backoff
 7. **Graceful shutdown** publishes pending changesets
 
-> **Thread Safety:** The Session Extension is only accessed from the main thread.
-> Background threads only receive `Vec<u8>` bytes through channels - they never access SQLite directly.
-> This design eliminates race conditions and ensures safe operation.
+## Thread Safety
+
+**SyndDB is single-threaded by design** because SQLite's Session Extension (used for changeset capture) is not thread-safe. All SQLite operations and SyndDB method calls (`publish()`, `snapshot()`) must happen on the same thread that created the `SyndDB` instance.
+
+### What runs in the background?
+
+Background threads handle **network I/O only**:
+- Sending changeset batches to the sequencer
+- Sending snapshots to the sequencer
+- Retry logic for failed requests
+
+These threads only receive `Vec<u8>` bytes through channels - they never access SQLite or the Session Extension directly.
+
+### Correct usage
+
+```rust
+// All of this happens on one thread (e.g., main thread)
+let conn = Box::leak(Box::new(Connection::open("app.db")?));
+let synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
+
+conn.execute("INSERT INTO ...", params![...])?;
+synddb.publish()?;  // Must be same thread as attach()
+```
+
+### Incorrect usage
+
+```rust
+let conn = Box::leak(Box::new(Connection::open("app.db")?));
+let synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
+
+// DON'T DO THIS - calling from a different thread
+std::thread::spawn(move || {
+    synddb.publish().unwrap();  // Wrong thread!
+});
+```
+
+### FFI users
+
+If using SyndDB from Python, Node.js, or other languages via FFI:
+- Create `SyndDB` and call all methods from the same thread
+- Do not pass the handle to worker threads or async runtimes that may execute on different threads
 
 ## What It Does NOT Do
 

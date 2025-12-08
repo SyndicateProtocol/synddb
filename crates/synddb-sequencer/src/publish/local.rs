@@ -254,11 +254,11 @@ impl DAPublisher for LocalPublisher {
             }
         };
 
-        // Store in SQLite
+        // Store in SQLite (use INSERT to detect duplicates for idempotency)
         let result = {
             let conn = self.conn.lock().unwrap();
             conn.execute(
-                "INSERT OR REPLACE INTO batches (start_sequence, end_sequence, data, created_at)
+                "INSERT INTO batches (start_sequence, end_sequence, data, created_at)
                  VALUES (?1, ?2, ?3, ?4)",
                 (
                     batch.start_sequence,
@@ -269,6 +269,11 @@ impl DAPublisher for LocalPublisher {
             )
         };
 
+        let reference = format!(
+            "local://batches/{}_{}",
+            batch.start_sequence, batch.end_sequence
+        );
+
         match result {
             Ok(_) => {
                 info!(
@@ -277,9 +282,15 @@ impl DAPublisher for LocalPublisher {
                     messages = batch.messages.len(),
                     "Batch published to local storage"
                 );
-                let reference = format!(
-                    "local://batches/{}_{}",
-                    batch.start_sequence, batch.end_sequence
+                PublishResult::success("local", reference)
+            }
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                warn!(
+                    start = batch.start_sequence,
+                    end = batch.end_sequence,
+                    "Batch already exists (duplicate ignored for idempotency)"
                 );
                 PublishResult::success("local", reference)
             }
@@ -569,5 +580,30 @@ mod tests {
         // Check latest sequence
         let latest = publisher.get_latest_sequence().await.unwrap();
         assert_eq!(latest, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_local_publisher_duplicate_idempotent() {
+        let signer = test_signer();
+        let publisher = LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
+
+        let message = create_signed_message(&signer, 1, 1700000000).await;
+
+        // First publish should succeed
+        let result1 = publisher.publish(&message).await;
+        assert!(result1.success, "First publish failed: {:?}", result1.error);
+
+        // Second publish of same message should also succeed (idempotency)
+        let result2 = publisher.publish(&message).await;
+        assert!(
+            result2.success,
+            "Duplicate publish should succeed for idempotency: {:?}",
+            result2.error
+        );
+
+        // Data should still be retrievable
+        let retrieved = publisher.get(1).await.unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().sequence, 1);
     }
 }
