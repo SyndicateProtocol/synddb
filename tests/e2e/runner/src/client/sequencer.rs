@@ -30,7 +30,8 @@ pub(crate) struct SequenceResponse {
 }
 
 /// HTTP client for sequencer API
-pub(crate) struct SequencerClient {
+#[derive(Debug)]
+pub struct SequencerClient {
     base_url: Url,
     client: reqwest::Client,
 }

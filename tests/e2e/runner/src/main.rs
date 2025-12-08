@@ -1,16 +1,16 @@
 use std::process::ExitCode;
 
+use crate::client::sequencer::SequencerClient;
+use crate::client::validator::ValidatorClient;
+use crate::runner::TestRunner;
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-mod client;
-mod result;
-mod runner;
-mod tests;
-
-use client::{SequencerClient, ValidatorClient};
-use runner::TestRunner;
+pub mod client;
+pub mod result;
+pub mod runner;
+pub mod tests;
 
 #[derive(Parser, Debug)]
 #[command(name = "synddb-e2e", about = "End-to-end test runner for SyndDB")]

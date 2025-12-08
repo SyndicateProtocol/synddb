@@ -501,6 +501,7 @@ impl Drop for SyndDB {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::default::Default;
 
     #[test]
     fn test_attach() {
@@ -628,9 +629,12 @@ mod tests {
         .unwrap();
 
         // Configure with automatic snapshots every 10 changesets (low for testing)
-        let mut config = Config::default();
-        config.sequencer_url = "http://localhost:8433".parse().unwrap();
-        config.snapshot_interval = 10;
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            snapshot_interval: 10,
+            ..Default::default()
+        };
+
         let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
 
         eprintln!("Starting with auto-snapshot every 10 changesets...");

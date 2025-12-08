@@ -6,7 +6,7 @@ use url::Url;
 
 /// Validator status response
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct ValidatorStatus {
+pub struct ValidatorStatus {
     pub running: bool,
     pub last_sequence: Option<u64>,
     pub last_sync_time: u64,
@@ -14,13 +14,14 @@ pub(crate) struct ValidatorStatus {
 }
 
 /// HTTP client for validator API
-pub(crate) struct ValidatorClient {
+#[derive(Debug)]
+pub struct ValidatorClient {
     base_url: Url,
     client: reqwest::Client,
 }
 
 impl ValidatorClient {
-    pub(crate) fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str) -> Self {
         let base_url = Url::parse(base_url).expect("Invalid validator URL");
         Self {
             base_url,
@@ -29,7 +30,7 @@ impl ValidatorClient {
     }
 
     /// Get validator status
-    pub(crate) async fn status(&self) -> Result<ValidatorStatus> {
+    pub async fn status(&self) -> Result<ValidatorStatus> {
         let url = self.base_url.join("/status")?;
         self.client
             .get(url)
@@ -42,7 +43,7 @@ impl ValidatorClient {
     }
 
     /// Wait for the validator to be healthy
-    pub(crate) async fn wait_healthy(&self, timeout: Duration) -> Result<()> {
+    pub async fn wait_healthy(&self, timeout: Duration) -> Result<()> {
         let start = Instant::now();
         let url = self.base_url.join("/health")?;
 

@@ -357,7 +357,7 @@ impl SessionMonitor {
 
     /// Manually trigger changeset extraction and publishing.
     /// This can be called to publish immediately after critical transactions.
-    /// Must be called from the same thread that created the SessionMonitor.
+    /// Must be called from the same thread that created the `SessionMonitor`.
     pub(crate) fn publish(&self) -> Result<()> {
         debug_assert_eq!(
             thread::current().id(),
@@ -384,7 +384,7 @@ impl SessionMonitor {
     }
 
     /// Create a complete snapshot of the database.
-    /// Must be called from the same thread that created the SessionMonitor.
+    /// Must be called from the same thread that created the `SessionMonitor`.
     pub(crate) fn snapshot(&self) -> Result<Snapshot> {
         debug_assert_eq!(
             thread::current().id(),

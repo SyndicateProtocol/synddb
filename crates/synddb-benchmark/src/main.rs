@@ -182,7 +182,11 @@ async fn main() -> Result<()> {
 
             // Attach SyndDB if sequencer URL is provided
             info!("-------------------------------------------");
-            let synddb = if let Some(ref url) = sequencer_url {
+            let synddb = sequencer_url.as_ref().map_or_else(|| {
+                info!("SyndDB Integration: DISABLED");
+                info!("Changesets will NOT be sent to sequencer");
+                None
+            }, |url| {
                 info!(url = %url, "SyndDB Integration: ENABLED");
                 info!("Changesets will be captured and sent to sequencer");
                 match SyndDB::attach(conn, url) {
@@ -195,11 +199,7 @@ async fn main() -> Result<()> {
                         None
                     }
                 }
-            } else {
-                info!("SyndDB Integration: DISABLED");
-                info!("Changesets will NOT be sent to sequencer");
-                None
-            };
+            });
             info!("-------------------------------------------");
 
             info!("Starting simulation...");

@@ -1,6 +1,6 @@
 //! Session Stress Test
 //!
-//! This binary stress-tests the SyndDB client by running continuous transactions
+//! This binary stress-tests the `SyndDB` client by running continuous transactions
 //! with changeset publishing. It verifies that:
 //!
 //! 1. High-volume transactions work correctly
@@ -10,7 +10,7 @@
 //! The test publishes changesets after each transaction to simulate real-world usage.
 //!
 //! Usage:
-//!   SEQUENCER_URL=http://localhost:8433 session-stress-test
+//!   `SEQUENCER_URL=http://localhost:8433` session-stress-test
 //!
 //! Expected behavior:
 //!   - Should always complete successfully
@@ -147,7 +147,9 @@ fn main() -> Result<()> {
         iteration += 1;
 
         // Periodic progress report
-        if iteration % args.report_interval == 0 && last_report.elapsed() > Duration::from_secs(1) {
+        if iteration.is_multiple_of(args.report_interval)
+            && last_report.elapsed() > Duration::from_secs(1)
+        {
             let elapsed = start.elapsed().as_secs_f64();
             let tx_count = transactions.load(Ordering::Relaxed);
             let row_count = rows_inserted.load(Ordering::Relaxed);

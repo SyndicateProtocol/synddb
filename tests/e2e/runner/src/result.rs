@@ -25,11 +25,11 @@ pub(crate) enum TestCaseResult {
 }
 
 impl TestCaseResult {
-    pub(crate) fn is_pass(&self) -> bool {
+    pub(crate) const fn is_pass(&self) -> bool {
         matches!(self, Self::Pass(_))
     }
 
-    pub(crate) fn is_fail(&self) -> bool {
+    pub(crate) const fn is_fail(&self) -> bool {
         matches!(self, Self::Fail(_, _))
     }
 }

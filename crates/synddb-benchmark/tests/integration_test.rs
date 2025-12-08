@@ -74,7 +74,7 @@ fn test_clear_data_preserves_schema() {
         .unwrap();
 
     // Clear data
-    synddb_benchmark::schema::clear_data(&conn).unwrap();
+    synddb_benchmark::schema::clear_data(conn).unwrap();
 
     // Schema should still exist
     let table_count: i64 = conn

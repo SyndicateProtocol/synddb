@@ -35,7 +35,7 @@ impl<'a> OrderbookSimulator<'a> {
     }
 
     /// Set the `SyndDB` handle for changeset publishing
-    pub fn with_synddb(mut self, synddb: &'a SyndDB) -> Self {
+    pub const fn with_synddb(mut self, synddb: &'a SyndDB) -> Self {
         self.synddb = Some(synddb);
         self
     }

@@ -1,14 +1,15 @@
 use std::time::Duration;
 
+use crate::client::sequencer::SequencerClient;
+use crate::client::validator::ValidatorClient;
+use crate::result::TestResult;
+use crate::Config;
 use anyhow::Result;
 use tracing::info;
 
-use crate::client::{SequencerClient, ValidatorClient};
-use crate::result::TestResult;
-use crate::Config;
-
 /// Test runner for E2E tests
-pub(crate) struct TestRunner {
+#[derive(Debug)]
+pub struct TestRunner {
     pub config: Config,
     pub sequencer: SequencerClient,
     pub validator: ValidatorClient,
