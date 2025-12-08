@@ -372,7 +372,14 @@ impl SessionMonitor {
 
         SESSION_STATE.with(|state| {
             let mut guard = state.borrow_mut();
-            guard.as_mut().map_or_else(|| Err(anyhow::anyhow!("Session state not initialized - internal error" )), Self::extract_and_send_changeset)
+            guard.as_mut().map_or_else(
+                || {
+                    Err(anyhow::anyhow!(
+                        "Session state not initialized - internal error"
+                    ))
+                },
+                Self::extract_and_send_changeset,
+            )
         })
     }
 
@@ -398,7 +405,9 @@ impl SessionMonitor {
                 );
                 Ok(snapshot)
             } else {
-                Err(anyhow::anyhow!("Session state not initialized - internal error"))
+                Err(anyhow::anyhow!(
+                    "Session state not initialized - internal error"
+                ))
             }
         })
     }
