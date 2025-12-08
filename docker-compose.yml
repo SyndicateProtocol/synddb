@@ -1,30 +1,31 @@
-# Docker Compose for SyndDB E2E testing
+# Docker Compose for SyndDB Local Development
 #
 # This setup runs:
 # 1. Sequencer with local SQLite storage (exposes /da/* API)
 # 2. Validator fetching from sequencer via HTTP
-# 3. Customer SQLite app (pluggable - swap Dockerfile for your own app)
+# 3. Customer SQLite app (pluggable - swap target for your own app)
 #
 # Usage:
 #   docker compose up --build
 #   docker compose down -v
-#
-# To use your own app:
-#   Replace docker/customer_app.Dockerfile with your application's Dockerfile.
-#   Your app should use synddb-client to wrap SQLite and send changesets to
-#   the sequencer at http://sequencer:8433.
 #
 # Test endpoints:
 #   curl http://localhost:8433/health    # Sequencer health
 #   curl http://localhost:8433/status    # Sequencer status (sequence number)
 #   curl http://localhost:8080/health    # Validator health
 #   curl http://localhost:8080/status    # Validator sync status
+#
+# Build optimization:
+#   All services use a single multi-stage Dockerfile (docker/Dockerfile).
+#   Docker BuildKit builds the shared 'builder' stage once and reuses it
+#   for all service targets, reducing build time by ~4x.
 
 services:
   sequencer:
     build:
       context: .
-      dockerfile: docker/sequencer.Dockerfile
+      dockerfile: docker/Dockerfile
+      target: sequencer
     ports:
       - "8433:8433"
     environment:
@@ -45,7 +46,8 @@ services:
   validator:
     build:
       context: .
-      dockerfile: docker/validator.Dockerfile
+      dockerfile: docker/Dockerfile
+      target: validator
     ports:
       - "8080:8080"
     environment:
@@ -72,12 +74,12 @@ services:
       start_period: 10s
 
   # Pluggable customer SQLite application
-  # Replace docker/customer_app.Dockerfile with your own app's Dockerfile.
   # Currently uses the orderbook benchmark with full SyndDB integration.
   customer_sqlite_app:
     build:
       context: .
-      dockerfile: docker/customer_app.Dockerfile
+      dockerfile: docker/Dockerfile
+      target: customer-app
     environment:
       RUST_LOG: info
       # Sequencer URL - the benchmark automatically uses synddb-client when this is set
@@ -97,7 +99,8 @@ services:
   stress_test:
     build:
       context: .
-      dockerfile: docker/stress_test.Dockerfile
+      dockerfile: docker/Dockerfile
+      target: stress-test
     environment:
       RUST_LOG: info
       SEQUENCER_URL: "http://sequencer:8433"

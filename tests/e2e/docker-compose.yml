@@ -11,12 +11,18 @@
 # Exit codes:
 #   0 = All assertions passed
 #   1 = Assertions failed
+#
+# Build optimization:
+#   All services use a single multi-stage Dockerfile (docker/Dockerfile).
+#   Docker BuildKit builds the shared 'builder' stage once and reuses it
+#   for all service targets, reducing build time by ~4x.
 
 services:
   sequencer:
     build:
       context: ../..
-      dockerfile: docker/sequencer.Dockerfile
+      dockerfile: docker/Dockerfile
+      target: sequencer
     environment:
       RUST_LOG: info
       BIND_ADDRESS: "0.0.0.0:8433"
@@ -33,7 +39,8 @@ services:
   validator:
     build:
       context: ../..
-      dockerfile: docker/validator.Dockerfile
+      dockerfile: docker/Dockerfile
+      target: validator
     environment:
       RUST_LOG: info
       BIND_ADDRESS: "0.0.0.0:8080"
@@ -57,7 +64,8 @@ services:
   validator2:
     build:
       context: ../..
-      dockerfile: docker/validator.Dockerfile
+      dockerfile: docker/Dockerfile
+      target: validator
     environment:
       RUST_LOG: info
       BIND_ADDRESS: "0.0.0.0:8080"
@@ -81,7 +89,8 @@ services:
   customer_app:
     build:
       context: ../..
-      dockerfile: docker/customer_app.Dockerfile
+      dockerfile: docker/Dockerfile
+      target: customer-app
     environment:
       RUST_LOG: info
       SEQUENCER_URL: "http://sequencer:8433"
@@ -95,7 +104,8 @@ services:
   e2e_assertions:
     build:
       context: ../..
-      dockerfile: docker/e2e.Dockerfile
+      dockerfile: docker/Dockerfile
+      target: e2e
     environment:
       RUST_LOG: info
       SEQUENCER_URL: "http://sequencer:8433"

@@ -24,7 +24,7 @@ env:
   # Make sure CI fails on all warnings, including Clippy lints
   RUSTFLAGS: "-Dwarnings"
   # Rust version for consistency across jobs
-  RUST_VERSION: "1.83.0"
+  RUST_VERSION: "1.91.0"
 
 jobs:
   taplo:
