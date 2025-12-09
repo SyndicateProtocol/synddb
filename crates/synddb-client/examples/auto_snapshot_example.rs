@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
         flush_interval: Duration::from_millis(500), // Publish every 500ms
-        snapshot_interval: 5,                         // Snapshot every 5 changesets
+        snapshot_interval: 5,                       // Snapshot every 5 changesets
         ..Default::default()
     };
 

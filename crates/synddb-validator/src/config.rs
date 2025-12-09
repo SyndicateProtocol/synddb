@@ -8,7 +8,9 @@ use std::time::Duration;
 use strum::{EnumIter, IntoEnumIterator};
 
 /// Available fetcher types for retrieving messages from DA layer
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum FetcherType {
     /// HTTP fetcher for sequencer's local DA API

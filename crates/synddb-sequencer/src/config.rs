@@ -11,7 +11,9 @@ use std::time::Duration;
 use strum::{EnumIter, IntoEnumIterator};
 
 /// Available publisher types for message persistence
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum PublisherType {
     /// No persistence (messages only kept in memory during request)

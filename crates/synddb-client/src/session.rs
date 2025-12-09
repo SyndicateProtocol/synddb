@@ -10,7 +10,7 @@
 //! # Publishing
 //!
 //! Changesets must be published explicitly via `publish()`. Automatic publishing via
-//! UPDATE or COMMIT hooks is not possible because SQLite's session extension requires reading from
+//! UPDATE or COMMIT hooks is not possible because `SQLite`'s session extension requires reading from
 //! the database during extraction, which is not allowed inside hook callbacks.
 
 use anyhow::{Context, Result};
@@ -140,8 +140,8 @@ impl SessionMonitor {
     /// in batch operations, flags are checked before writing (read is cheaper than write).
     /// E.g. for a 10,000 row batch: 1 write + 9,999 reads instead of 10,000 writes.
     ///
-    /// **Note**: Changeset extraction cannot happen inside hooks (update_hook or commit_hook)
-    /// because SQLite's session extension requires reading from the database, which is not
+    /// **Note**: Changeset extraction cannot happen inside hooks (`update_hook` or `commit_hook`)
+    /// because `SQLite`'s session extension requires reading from the database, which is not
     /// allowed during hook callbacks. Instead, call `publish()` after transactions complete.
     pub(crate) fn start(&self, conn: &Connection) -> Result<()> {
         debug!("Installing hooks for change detection");
