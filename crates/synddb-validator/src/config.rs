@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
+use strum::{EnumIter, IntoEnumIterator};
 
 /// Available fetcher types for retrieving messages from DA layer
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter)]
 #[serde(rename_all = "lowercase")]
 pub enum FetcherType {
     /// HTTP fetcher for sequencer's local DA API
@@ -18,9 +19,9 @@ pub enum FetcherType {
 }
 
 impl FetcherType {
-    /// Get all supported fetcher types
-    pub const fn all_types() -> &'static [Self] {
-        &[Self::Http, Self::Gcs]
+    /// Get all supported fetcher types as strings
+    pub fn supported_types() -> Vec<String> {
+        Self::iter().map(|t| t.to_string()).collect()
     }
 }
 

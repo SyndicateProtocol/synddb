@@ -196,7 +196,7 @@ Most examples use default configuration. For custom settings:
 
 ```rust
 let config = Config {
-    publish_interval: Duration::from_millis(500),
+    flush_interval: Duration::from_millis(500),
     snapshot_interval: 5, // Every 5 changesets
 };
 let synddb = SyndDB::attach_with_config(conn, sequencer_url, config)?;

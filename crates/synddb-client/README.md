@@ -28,8 +28,7 @@ fn main() -> Result<()> {
     tx.execute("INSERT INTO trades VALUES (?1, ?2)", params![2, 200])?;
     tx.commit()?;
 
-    // Changesets publish automatically every 1 second.
-    // For critical transactions, publish immediately:
+    // IMPORTANT: Call publish() after commits to send changesets to sequencer
     synddb.publish()?;
 
     Ok(())
@@ -90,12 +89,34 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 ## What It Does
 
 1. **Attaches SQLite Session Extension** to the connection
-2. **Registers update hooks** to detect when changes occur
-3. **Extracts changesets** when `publish()` is called (automatically every 1 second, or manually)
-4. **Buffers changesets** in memory (configurable size)
-5. **Background thread** sends batches to sequencer via HTTP
-6. **Automatic retries** with exponential backoff
-7. **Graceful shutdown** publishes pending changesets
+2. **Captures changesets** automatically via update hooks
+3. **Background thread** sends batches to sequencer via HTTP
+4. **Automatic retries** with exponential backoff
+5. **Graceful shutdown** publishes any remaining pending changesets
+
+## Publishing Changesets
+
+You **must** call `synddb.publish()` to send captured changesets to the sequencer:
+
+```rust
+// After a transaction or batch of operations
+let tx = conn.unchecked_transaction()?;
+tx.execute("INSERT INTO orders ...", params![...])?;
+tx.execute("UPDATE balances ...", params![...])?;
+tx.commit()?;
+
+// Publish the changesets
+synddb.publish()?;
+```
+
+**When to call `publish()`:**
+- After committing a transaction
+- After a batch of related operations
+- Periodically in long-running applications (e.g., every second)
+
+**Why manual publishing?** SQLite's Session Extension cannot safely extract changesets from within database hooks. The application must call `publish()` when the database is in a stable state (not mid-operation).
+
+Changesets are also automatically published when `SyndDB` is dropped (graceful shutdown).
 
 ## What It Does NOT Do
 
@@ -117,11 +138,10 @@ use synddb_client::{SyndDB, Config};
 
 let config = Config {
     sequencer_url: "http://sequencer:8433".parse().unwrap(),
-    buffer_size: 100,                         // Max changesets before publish
-    publish_interval: Duration::from_secs(1), // Auto-publish interval
-    max_batch_size: 1024 * 1024,              // 1MB
-    max_retries: 3,
-    request_timeout: Duration::from_secs(10),
+    buffer_size: 100,              // Max changesets to buffer
+    max_batch_size: 1024 * 1024,   // 1MB max batch size
+    max_retries: 3,                // Retry count for failed sends
+    snapshot_interval: 100,        // Snapshot every 100 changesets (0 to disable)
     ..Default::default()
 };
 

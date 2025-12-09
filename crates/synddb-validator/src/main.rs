@@ -29,12 +29,8 @@ async fn main() -> Result<()> {
     );
 
     // Log supported fetcher types
-    let supported_types: Vec<_> = FetcherType::all_types()
-        .iter()
-        .map(|t| t.to_string())
-        .collect();
     info!(
-        supported = %supported_types.join(", "),
+        supported = %FetcherType::supported_types().join(", "),
         selected = %config.fetcher_type,
         "Fetcher types"
     );

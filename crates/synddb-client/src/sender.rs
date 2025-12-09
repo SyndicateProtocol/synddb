@@ -103,7 +103,7 @@ impl ChangesetSender {
     fn should_flush(&self) -> bool {
         self.buffer.len() >= self.config.buffer_size
             || self.buffer_size >= self.config.max_batch_size
-            || self.last_flush.elapsed() >= self.config.publish_interval
+            || self.last_flush.elapsed() >= self.config.flush_interval
     }
 
     async fn flush(&mut self) {

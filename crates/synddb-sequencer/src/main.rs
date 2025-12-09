@@ -30,12 +30,8 @@ async fn main() -> Result<()> {
     info!("SyndDB Sequencer starting...");
 
     // Log supported publisher types
-    let supported_types: Vec<_> = PublisherType::all_types()
-        .iter()
-        .map(|t| t.to_string())
-        .collect();
     info!(
-        supported = %supported_types.join(", "),
+        supported = %PublisherType::supported_types().join(", "),
         selected = %config.publisher_type,
         "Publisher types"
     );

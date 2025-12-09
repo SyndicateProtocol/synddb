@@ -4,9 +4,14 @@
 //!
 //! The Session Extension contains raw pointers that are NOT thread-safe. To avoid races:
 //! - `SessionState` is stored in thread-local storage, accessed only from the main thread
-//! - Timer thread only sets an `AtomicBool` flag, never touches the Session
 //! - Background threads only receive `Vec<u8>` bytes through channels
 //! - `publish()` and `snapshot()` have debug assertions verifying the calling thread
+//!
+//! # Publishing
+//!
+//! Changesets must be published explicitly via `publish()`. Automatic publishing via
+//! UPDATE or COMMIT hooks is not possible because SQLite's session extension requires reading from
+//! the database during extraction, which is not allowed inside hook callbacks.
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
@@ -16,8 +21,6 @@ use rusqlite::session::Session;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::thread::{self, ThreadId};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, error, info, trace};
@@ -65,7 +68,6 @@ struct SessionState {
     has_changes: bool,
 }
 
-
 thread_local! {
     /// Thread-local storage for session state.
     /// Note: This is thread-local, so each thread gets its own instance.
@@ -73,22 +75,10 @@ thread_local! {
     static SESSION_STATE: RefCell<Option<SessionState>> = const { RefCell::new(None) };
 }
 
-/// Signal type for publish requests from timer thread
-#[derive(Debug)]
-struct PublishSignal {
-    should_publish: AtomicBool,
-}
-
 #[derive(Debug)]
 pub struct SessionMonitor {
     /// Connection reference for snapshot creation
     conn: &'static Connection,
-    /// Shutdown flag for timer thread
-    shutdown: Arc<AtomicBool>,
-    /// Timer thread handle
-    timer_handle: Option<thread::JoinHandle<()>>,
-    /// Publish signal shared with timer
-    publish_signal: Arc<PublishSignal>,
     /// Thread that created this monitor (for debug assertions)
     owner_thread: ThreadId,
 }
@@ -97,7 +87,6 @@ impl SessionMonitor {
     pub(crate) fn new(
         conn: &'static Connection,
         changeset_tx: Sender<Changeset>,
-        publish_interval: Duration,
         snapshot_interval: u64,
         snapshot_tx: Option<Sender<Snapshot>>,
     ) -> Result<Self> {
@@ -137,31 +126,10 @@ impl SessionMonitor {
             });
         });
 
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let publish_signal = Arc::new(PublishSignal {
-            should_publish: AtomicBool::new(false),
-        });
-
-        // Start a timer thread that just sets a flag periodically
-        // The actual changeset extraction happens when the main thread checks this flag
-        let shutdown_clone = Arc::clone(&shutdown);
-        let signal_clone = Arc::clone(&publish_signal);
-        let timer_handle = thread::spawn(move || {
-            debug!("Timer thread started with interval {:?}", publish_interval);
-            while !shutdown_clone.load(Ordering::Relaxed) {
-                thread::sleep(publish_interval);
-                signal_clone.should_publish.store(true, Ordering::Release);
-            }
-            debug!("Timer thread stopped");
-        });
-
         debug!("SessionMonitor created");
 
         Ok(Self {
             conn,
-            shutdown,
-            timer_handle: Some(timer_handle),
-            publish_signal,
             owner_thread: thread::current().id(),
         })
     }
@@ -171,6 +139,10 @@ impl SessionMonitor {
     /// The hook fires for every row modified (INSERT/UPDATE/DELETE). To minimize overhead
     /// in batch operations, flags are checked before writing (read is cheaper than write).
     /// E.g. for a 10,000 row batch: 1 write + 9,999 reads instead of 10,000 writes.
+    ///
+    /// **Note**: Changeset extraction cannot happen inside hooks (update_hook or commit_hook)
+    /// because SQLite's session extension requires reading from the database, which is not
+    /// allowed during hook callbacks. Instead, call `publish()` after transactions complete.
     pub(crate) fn start(&self, conn: &Connection) -> Result<()> {
         debug!("Installing hooks for change detection");
 
@@ -349,8 +321,8 @@ impl SessionMonitor {
         })
     }
 
-    /// Manually trigger changeset extraction and publishing.
-    /// This can be called to publish immediately after critical transactions.
+    /// Trigger changeset extraction and publishing.
+    /// Call this after committing transactions to send changesets to the sequencer.
     /// Must be called from the same thread that created the `SessionMonitor`.
     pub(crate) fn publish(&self) -> Result<()> {
         debug_assert_eq!(
@@ -358,11 +330,6 @@ impl SessionMonitor {
             self.owner_thread,
             "publish() must be called from the same thread that created SyndDB"
         );
-
-        // Also check the timer signal in case it was set
-        self.publish_signal
-            .should_publish
-            .store(false, Ordering::Release);
 
         SESSION_STATE.with(|state| {
             let mut guard = state.borrow_mut();
@@ -410,14 +377,6 @@ impl SessionMonitor {
 impl Drop for SessionMonitor {
     fn drop(&mut self) {
         debug!("Dropping SessionMonitor");
-
-        // Signal timer thread to stop
-        self.shutdown.store(true, Ordering::Release);
-
-        // Wait for timer thread
-        if let Some(handle) = self.timer_handle.take() {
-            let _ = handle.join();
-        }
 
         // Clear the update hook
         self.conn.update_hook(None::<fn(Action, &str, &str, i64)>);

@@ -1,8 +1,8 @@
-//! Local `SQLite`-based publisher for self-hosted deployments
+//! Local `SQLite`-based publisher for local testing or self-hosted deployments
 //!
 //! This publisher stores signed batches in a local `SQLite` database, providing
-//! a simple alternative to external DA layers like GCS for customers who don't
-//! need distributed storage.
+//! a simple alternative to external Storage Layers like GCS for customers who don't
+//! need distributed storage. It can also be used to simulate Storage Layers locally
 //!
 //! # Storage Schema
 //!

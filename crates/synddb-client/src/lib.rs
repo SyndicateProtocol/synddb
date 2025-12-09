@@ -22,19 +22,24 @@
 //! tx.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![2, 200])?;
 //! tx.commit()?;
 //!
-//! // Changesets are published automatically every 1 second.
-//! // For critical transactions, publish immediately:
+//! // Publish changesets to sequencer
 //! synddb.publish()?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! # Publishing
+//!
+//! You must call [`SyndDB::publish()`] to send captured changesets to the sequencer:
+//! - After committing a transaction
+//! - After a batch of related operations
+//! - Periodically in long-running applications
+//!
+//! Changesets are also published when `SyndDB` is dropped (graceful shutdown).
 //!
 //! # Transactions
 //!
 //! Use [`Connection::unchecked_transaction()`] instead of [`Connection::transaction()`]
 //! because `SyndDB` holds an immutable borrow of the connection for the Session Extension.
-//!
-//! Both methods are functionally identical - `SQLite` enforces single-transaction
-//! semantics at runtime regardless of which you use.
 //!
 //! # Thread Safety
 //!
@@ -157,7 +162,6 @@ impl SyndDB {
     pub fn attach_with_config(conn: &'static Connection, config: Config) -> Result<Self> {
         info!("Attaching SyndDB client to SQLite connection");
         info!("Sequencer URL: {}", config.sequencer_url);
-        info!("Publish interval: {:?}", config.publish_interval);
 
         // Create channels for communication
         let (changeset_tx, changeset_rx) = bounded(config.buffer_size);
@@ -166,11 +170,10 @@ impl SyndDB {
         // Create snapshot channel if automatic snapshots are enabled
         let snapshot_channel = (config.snapshot_interval > 0).then(|| bounded(10)); // Buffer up to 10 snapshots
 
-        // Start session monitor (includes automatic publish thread)
+        // Start session monitor
         let monitor = SessionMonitor::new(
             conn,
             changeset_tx,
-            config.publish_interval,
             config.snapshot_interval,
             snapshot_channel.as_ref().map(|(tx, _)| tx).cloned(),
         )?;
@@ -300,8 +303,8 @@ impl SyndDB {
 
     /// Publish all pending changesets to the sequencer
     ///
-    /// This is called automatically every `publish_interval` (default 1 second),
-    /// but can also be called manually to publish immediately (e.g., after critical transactions).
+    /// Call this after committing transactions to send changesets to the sequencer.
+    /// Also called automatically on `Drop` for graceful shutdown.
     pub fn publish(&self) -> Result<()> {
         self.monitor
             .as_ref()

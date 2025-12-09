@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
+use strum::{EnumIter, IntoEnumIterator};
 
 /// Available publisher types for message persistence
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter)]
 #[serde(rename_all = "lowercase")]
 pub enum PublisherType {
     /// No persistence (messages only kept in memory during request)
@@ -23,9 +24,9 @@ pub enum PublisherType {
 }
 
 impl PublisherType {
-    /// Get all supported publisher types
-    pub const fn all_types() -> &'static [Self] {
-        &[Self::None, Self::Local, Self::Gcs]
+    /// Get all supported publisher types as strings
+    pub fn supported_types() -> Vec<String> {
+        Self::iter().map(|t| t.to_string()).collect()
     }
 }
 
