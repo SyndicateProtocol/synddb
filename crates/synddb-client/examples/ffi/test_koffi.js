@@ -81,7 +81,7 @@ const synddb_attach = lib.func('synddb_attach', 'int', ['str', 'str', SyndDBHand
 const synddb_attach_with_config = lib.func('synddb_attach_with_config', 'int', [
     'str',      // db_path
     'str',      // sequencer_url
-    'uint64',   // publish_interval_ms
+    'uint64',   // flush_interval_ms
     'uint64',   // snapshot_interval
     SyndDBHandlePtrPtr  // out_handle
 ]);
@@ -161,7 +161,7 @@ async function main() {
         result = synddb_attach_with_config(
             dbPath2,
             sequencerUrl,
-            500,  // publish_interval_ms
+            500,  // flush_interval_ms
             10,   // snapshot_interval
             handle2
         );

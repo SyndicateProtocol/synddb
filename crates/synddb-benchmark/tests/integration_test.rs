@@ -1,9 +1,9 @@
 use rusqlite::Connection;
 
-// Helper function to create a test connection
-fn setup_test_db() -> Connection {
-    let conn = Connection::open_in_memory().unwrap();
-    synddb_benchmark::schema::initialize_schema(&conn).unwrap();
+// Helper function to create a test connection with `'static` lifetime
+fn setup_test_db() -> &'static Connection {
+    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    synddb_benchmark::schema::initialize_schema(conn).unwrap();
     conn
 }
 
@@ -74,7 +74,7 @@ fn test_clear_data_preserves_schema() {
         .unwrap();
 
     // Clear data
-    synddb_benchmark::schema::clear_data(&conn).unwrap();
+    synddb_benchmark::schema::clear_data(conn).unwrap();
 
     // Schema should still exist
     let table_count: i64 = conn

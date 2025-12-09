@@ -55,7 +55,7 @@ SyndDBError synddb_attach(
  *
  * @param db_path Path to SQLite database file
  * @param sequencer_url URL of sequencer TEE
- * @param publish_interval_ms Milliseconds between automatic publishes
+ * @param flush_interval_ms Milliseconds between sender flushes (batching interval)
  * @param snapshot_interval Number of changesets between snapshots (0 = disabled)
  * @param out_handle Output pointer to receive SyndDB handle
  * @return SYNDDB_SUCCESS on success, error code otherwise
@@ -63,16 +63,16 @@ SyndDBError synddb_attach(
 SyndDBError synddb_attach_with_config(
     const char* db_path,
     const char* sequencer_url,
-    uint64_t publish_interval_ms,
+    uint64_t flush_interval_ms,
     uint64_t snapshot_interval,
     SyndDBHandle** out_handle
 );
 
 /**
- * Manually publish all pending changesets
+ * Publish all pending changesets to the sequencer
  *
- * This is called automatically every publish_interval,
- * but can be called manually for critical transactions.
+ * Call this after committing transactions to send changesets to the sequencer.
+ * Also called automatically on detach for graceful shutdown.
  *
  * @param handle SyndDB handle from synddb_attach()
  * @return SYNDDB_SUCCESS on success, error code otherwise

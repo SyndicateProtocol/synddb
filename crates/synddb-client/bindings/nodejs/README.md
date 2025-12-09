@@ -65,17 +65,28 @@ const synddb = SyndDB.attachWithConfig(
 
 ### Manual Publishing
 
+Changesets are published automatically every 1 second. For critical transactions, publish immediately:
+
 ```javascript
 const { attach } = require('./synddb');
 const Database = require('better-sqlite3');
 
 const synddb = attach('app.db', 'http://localhost:8433');
 
-// Critical transaction - publish immediately
+// Critical transaction - publish immediately after commit
 const db = new Database('app.db');
 db.prepare('INSERT INTO trades VALUES (?, ?)').run(1, 1000000);
 synddb.publish();  // Don't wait for automatic publish
 ```
+
+**When to call `publish()` manually:**
+- After critical transactions that must be sent immediately
+- Before application shutdown (handled automatically by `detach()`)
+- When you need to ensure data is sent before proceeding
+
+**When automatic publishing is sufficient:**
+- Normal application operations
+- High-throughput batch processing
 
 ### Using Disposable Pattern (Node.js 20+)
 

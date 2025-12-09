@@ -49,6 +49,10 @@ zstd = { workspace = true }
 
 # Utilities
 async-trait = { workspace = true }
+strum = { workspace = true }
+
+# HTTP client (for HttpFetcher)
+reqwest = { workspace = true }
 
 # Google Cloud Storage
 google-cloud-storage = { workspace = true }

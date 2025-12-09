@@ -1,0 +1,123 @@
+# E2E Smoke Test for SyndDB
+#
+# Validates that all components can communicate:
+# 1. Customer app sends changesets to sequencer
+# 2. Sequencer signs and stores to local DA
+# 3. Validator fetches and validates from sequencer
+#
+# Usage:
+#   docker compose -f tests/e2e/docker-compose.yml up --build --abort-on-container-exit --exit-code-from e2e_assertions
+#
+# Exit codes:
+#   0 = All assertions passed
+#   1 = Assertions failed
+#
+# Build optimization:
+#   All services use a single multi-stage Dockerfile (docker/Dockerfile).
+#   Docker BuildKit builds the shared 'builder' stage once and reuses it
+#   for all service targets, reducing build time by ~4x.
+
+services:
+  sequencer:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: sequencer
+    environment:
+      RUST_LOG: info
+      BIND_ADDRESS: "0.0.0.0:8433"
+      SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      PUBLISHER_TYPE: local
+      LOCAL_STORAGE_PATH: ":memory:"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8433/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  validator:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: validator
+    environment:
+      RUST_LOG: info
+      BIND_ADDRESS: "0.0.0.0:8080"
+      SEQUENCER_ADDRESS: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+      FETCHER_TYPE: http
+      SEQUENCER_URL: "http://sequencer:8433"
+      DATABASE_PATH: ":memory:"
+      STATE_DB_PATH: ":memory:"
+      SYNC_INTERVAL: "1s"
+    depends_on:
+      sequencer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Second validator for multi-validator testing
+  validator2:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: validator
+    environment:
+      RUST_LOG: info
+      BIND_ADDRESS: "0.0.0.0:8080"
+      SEQUENCER_ADDRESS: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+      FETCHER_TYPE: http
+      SEQUENCER_URL: "http://sequencer:8433"
+      DATABASE_PATH: ":memory:"
+      STATE_DB_PATH: ":memory:"
+      SYNC_INTERVAL: "1s"
+    depends_on:
+      sequencer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Customer app: orderbook benchmark generating changesets
+  customer_app:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: customer-app
+    environment:
+      RUST_LOG: info
+      SEQUENCER_URL: "http://sequencer:8433"
+    depends_on:
+      sequencer:
+        condition: service_healthy
+    # Run for 20 seconds at 50 ops/sec = ~1000 changesets
+    command: ["run", "--db", "/tmp/orderbook.db", "--simple", "--duration", "20", "--rate", "50"]
+
+  # E2E test runner: Rust-based assertions
+  e2e_assertions:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: e2e
+    environment:
+      RUST_LOG: info
+      SEQUENCER_URL: "http://sequencer:8433"
+      VALIDATOR_URL: "http://validator:8080"
+      VALIDATOR2_URL: "http://validator2:8080"
+      STARTUP_WAIT: "5"
+      DATA_WAIT: "25"
+      MAX_SYNC_DIFF: "5"
+    depends_on:
+      validator:
+        condition: service_healthy
+      validator2:
+        condition: service_healthy
+      customer_app:
+        condition: service_started

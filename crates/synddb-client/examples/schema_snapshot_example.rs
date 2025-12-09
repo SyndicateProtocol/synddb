@@ -35,13 +35,13 @@ fn main() -> Result<()> {
     // Configure with high snapshot_interval to show schema changes override it
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
-        publish_interval: Duration::from_millis(300),
+        flush_interval: Duration::from_millis(300),
         snapshot_interval: 100, // High interval - schema changes should trigger snapshots anyway
         ..Default::default()
     };
 
     println!("Config:");
-    println!("  - Publish interval: {:?}", config.publish_interval);
+    println!("  - Flush interval: {:?}", config.flush_interval);
     println!(
         "  - Snapshot interval: {} changesets (high on purpose)\n",
         config.snapshot_interval

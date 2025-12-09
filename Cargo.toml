@@ -7,6 +7,7 @@ members = [
   "crates/synddb-client",
   "crates/synddb-chain-monitor",
   "crates/synddb-shared",
+  "tests/e2e/runner",
 ]
 
 [workspace.package]
@@ -41,7 +42,7 @@ clap = { version = "4.5", features = ["derive"] }
 
 # HTTP
 reqwest = { version = "0.12", features = ["json"] }
-axum = { version = "0.7", features = ["json"] }
+axum = { version = "0.8", features = ["json"] }
 tower = "0.5"
 
 # Unix domain socket support
@@ -50,6 +51,9 @@ hyper = { version = "0.14", features = ["client", "http1"] }
 
 # Channels and concurrency
 crossbeam-channel = "0.5"
+
+# Enum utilities
+strum = { version = "0.26", features = ["derive"] }
 
 # Utils
 rand = "0.8"
@@ -136,7 +140,7 @@ needless_collect = "warn"
 needless_continue = "warn"
 needless_for_each = "warn"
 needless_pass_by_ref_mut = "warn"
-non_send_fields_in_send_ty = "allow"       # intentionally sending an unsafe `Session`
+non_send_fields_in_send_ty = "warn"
 nonstandard_macro_braces = "warn"
 option_as_ref_cloned = "warn"
 option_if_let_else = "warn"

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+default-run = "orderbook-bench"
 
 [lints]
 workspace = true
@@ -17,6 +18,10 @@ path = "src/lib.rs"
 name = "orderbook-bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "session-stress-test"
+path = "src/session_stress.rs"
+
 [dependencies]
 tokio = { workspace = true }
 rusqlite = { workspace = true }
@@ -27,3 +32,4 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }
+synddb-client = { path = "../synddb-client" }

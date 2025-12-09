@@ -23,7 +23,7 @@ env:
   # Make sure CI fails on all warnings, including Clippy lints
   RUSTFLAGS: "-Dwarnings"
   # Rust version for consistency across jobs
-  RUST_VERSION: "1.83.0"
+  RUST_VERSION: "1.91.0"
   # Benchmark configuration
   BENCHMARK_SIMPLE_BATCH_SIZE: 5000
   BENCHMARK_FULL_BATCH_SIZE: 1000

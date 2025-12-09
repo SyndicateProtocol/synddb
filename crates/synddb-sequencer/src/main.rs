@@ -11,6 +11,8 @@ use tokio::signal;
 use tracing::{error, info, warn};
 
 use synddb_sequencer::attestation::{AttestationConfig, AttestationVerifier};
+use synddb_sequencer::config::PublisherType;
+use synddb_sequencer::publish::local::{LocalConfig, LocalPublisher};
 use synddb_sequencer::publish::traits::DAPublisher;
 use synddb_sequencer::{
     config::SequencerConfig,
@@ -26,6 +28,14 @@ async fn main() -> Result<()> {
     runtime::init_logging(config.log_json);
 
     info!("SyndDB Sequencer starting...");
+
+    // Log supported publisher types
+    info!(
+        supported = %PublisherType::supported_types().join(", "),
+        selected = %config.publisher_type,
+        "Publisher types"
+    );
+
     info!(bind_address = %config.bind_address, "Configuration loaded");
 
     // Initialize the message signer
@@ -34,19 +44,52 @@ async fn main() -> Result<()> {
 
     info!(signer_address = %format!("{:?}", signer.address()), "Signer initialized");
 
-    // Initialize publisher if GCS is configured
-    let publisher: Option<Arc<dyn DAPublisher>> = config.gcs_bucket.as_ref().map_or_else(
-        || {
-            info!("No publisher configured (messages will not be persisted)");
-            None
-        },
-        |_bucket| {
-            warn!(
-                "GCS_BUCKET specified but `gcs` feature not enabled. Compile with `--features gcs`"
-            );
-            None
-        },
-    );
+    let signer = Arc::new(signer);
+
+    // Initialize publisher based on publisher_type
+    let (publisher, local_publisher): (Option<Arc<dyn DAPublisher>>, Option<Arc<LocalPublisher>>) =
+        match config.publisher_type {
+            PublisherType::None => {
+                info!("Publisher disabled (messages will not be persisted)");
+                (None, None)
+            }
+            PublisherType::Local => {
+                let path = config.local_storage_path.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("LOCAL_STORAGE_PATH is required when publisher_type=local")
+                })?;
+                let local_config = if path == ":memory:" {
+                    LocalConfig::in_memory()
+                } else {
+                    LocalConfig::file(path)
+                };
+                let local_pub = LocalPublisher::new_arc(local_config, Arc::clone(&signer))
+                    .context("Failed to initialize local publisher")?;
+                (
+                    Some(local_pub.clone() as Arc<dyn DAPublisher>),
+                    Some(local_pub),
+                )
+            }
+            PublisherType::Gcs => {
+                #[cfg(feature = "gcs")]
+                {
+                    use synddb_sequencer::publish::gcs::{GcsConfig, GcsPublisher};
+                    let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
+                    })?;
+                    let gcs_config = GcsConfig::new(bucket).with_prefix(&config.gcs_prefix);
+                    let gcs_pub = GcsPublisher::new(gcs_config, Arc::clone(&signer))
+                        .await
+                        .context("Failed to initialize GCS publisher")?;
+                    (Some(Arc::new(gcs_pub) as Arc<dyn DAPublisher>), None)
+                }
+                #[cfg(not(feature = "gcs"))]
+                {
+                    anyhow::bail!(
+                        "publisher_type=gcs requires the 'gcs' feature. Compile with --features gcs"
+                    );
+                }
+            }
+        };
 
     // Try to recover sequence from publisher
     let start_sequence = match &publisher {
@@ -67,8 +110,11 @@ async fn main() -> Result<()> {
         None => 0,
     };
 
-    // Create the inbox
-    let inbox = Arc::new(Inbox::with_start_sequence(signer, start_sequence));
+    // Create the inbox (shares signer with publisher)
+    let inbox = Arc::new(Inbox::with_start_sequence_arc(
+        Arc::clone(&signer),
+        start_sequence,
+    ));
 
     // Initialize attestation verifier if configured
     let attestation_verifier = if config.verify_attestation {
@@ -96,7 +142,13 @@ async fn main() -> Result<()> {
     };
 
     // Create the HTTP router
-    let app = create_router(state);
+    let mut app = create_router(state);
+
+    // Mount local publisher's DA fetch API if configured
+    if let Some(ref local_pub) = local_publisher {
+        info!("Mounting local DA fetch API at /da/*");
+        app = app.nest("/da", local_pub.routes());
+    }
 
     // Bind and serve
     info!(address = %config.bind_address, "Sequencer listening");

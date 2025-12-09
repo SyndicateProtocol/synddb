@@ -6,14 +6,6 @@ Lightweight client library for sending SQLite changesets to the SyndDB sequencer
 
 Runs **in the application's TEE** to capture SQLite changesets and send them to the sequencer TEE (separate VM for key isolation). **Does NOT contain signing keys.**
 
-## Architecture Decision: C FFI (Not PyO3/Neon)
-
-We use **Rust compiled to C ABI** with thin language wrappers (~50 lines each). This gives:
-- ✅ Instant install (<10s vs 2-5min compilation)
-- ✅ Single binary for all languages
-- ✅ No build tools required for users
-- ✅ Same approach as SQLite, libcurl, OpenSSL
-
 ## Usage
 
 ### Rust
@@ -23,13 +15,21 @@ use rusqlite::Connection;
 use synddb_client::SyndDB;
 
 fn main() -> Result<()> {
-    let conn = Connection::open("app.db")?;
+    // Connection requires 'static lifetime
+    let conn = Box::leak(Box::new(Connection::open("app.db")?));
+    let synddb = SyndDB::attach(conn, "http://sequencer:8433")?;
 
-    // Single line to enable SyndDB
-    let _synddb = SyndDB::attach(&conn, "https://sequencer:8433")?;
-
-    // Use SQLite normally
+    // Use SQLite normally - changesets are captured automatically
     conn.execute("INSERT INTO trades VALUES (?1, ?2)", params![1, 100])?;
+
+    // For transactions, use unchecked_transaction() instead of transaction()
+    // (required because SyndDB holds a reference to the connection)
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("INSERT INTO trades VALUES (?1, ?2)", params![2, 200])?;
+    tx.commit()?;
+
+    // IMPORTANT: Call publish() after commits to send changesets to sequencer
+    synddb.publish()?;
 
     Ok(())
 }
@@ -42,7 +42,7 @@ import sqlite3
 from synddb import attach  # Pure Python wrapper, no compilation
 
 conn = sqlite3.connect('app.db')
-attach(conn, sequencer_url='https://sequencer:8433')
+attach(conn, sequencer_url='http://sequencer:8433')
 
 # Use SQLite normally
 conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 100))
@@ -55,7 +55,7 @@ const Database = require('better-sqlite3');
 const { attach } = require('@synddb/client');  // Pure JS wrapper
 
 const db = new Database('app.db');
-attach(db, { sequencerUrl: 'https://sequencer:8433' });
+attach(db, { sequencerUrl: 'http://sequencer:8433' });
 
 // Use SQLite normally
 db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
@@ -89,11 +89,34 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 ## What It Does
 
 1. **Attaches SQLite Session Extension** to the connection
-2. **Registers commit hooks** to capture changesets after each transaction
-3. **Buffers changesets** in memory (configurable size)
-4. **Background thread** sends batches to sequencer via HTTP
-5. **Automatic retries** with exponential backoff
-6. **Graceful shutdown** publishes pending changesets
+2. **Captures changesets** automatically via update hooks
+3. **Background thread** sends batches to sequencer via HTTP
+4. **Automatic retries** with exponential backoff
+5. **Graceful shutdown** publishes any remaining pending changesets
+
+## Publishing Changesets
+
+You **must** call `synddb.publish()` to send captured changesets to the sequencer:
+
+```rust
+// After a transaction or batch of operations
+let tx = conn.unchecked_transaction()?;
+tx.execute("INSERT INTO orders ...", params![...])?;
+tx.execute("UPDATE balances ...", params![...])?;
+tx.commit()?;
+
+// Publish the changesets
+synddb.publish()?;
+```
+
+**When to call `publish()`:**
+- After committing a transaction
+- After a batch of related operations
+- Periodically in long-running applications (e.g., every second)
+
+**Why manual publishing?** SQLite's Session Extension cannot safely extract changesets from within database hooks. The application must call `publish()` when the database is in a stable state (not mid-operation).
+
+Changesets are also automatically published when `SyndDB` is dropped (graceful shutdown).
 
 ## What It Does NOT Do
 
@@ -102,38 +125,67 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 - ❌ Modify application behavior
 - ❌ Require schema changes
 
+## Thread Safety
+
+SyndDB is single-threaded by design because SQLite's Session Extension is not thread-safe. All SQLite operations and SyndDB calls must happen on the same thread that created the instance.
+
+Background threads handle **network I/O only** (sending changesets/snapshots). They receive `Vec<u8>` bytes through channels and never access SQLite directly.
+
+## Why `'static` Lifetime?
+
+`SyndDB::attach()` requires `&'static Connection` because the SQLite Session Extension is stored in thread-local storage, which requires `'static` bounds. We use `Box::leak` to satisfy this:
+
+```rust
+let conn = Box::leak(Box::new(Connection::open("app.db")?));
+```
+
+**Trade-offs:**
+- The `Connection` is intentionally leaked (never dropped by Rust)
+- SQLite cleanup (closing file handles, WAL checkpoint) happens at process exit
+- This is acceptable for typical single-connection-per-process usage
+
+**Note:** `SyndDB` itself is dropped normally and performs graceful shutdown (publishing pending changesets, joining background threads).
+
+**Manual Connection cleanup:** If you need to explicitly close the Connection (e.g., to flush WAL), you can reclaim ownership after shutting down SyndDB:
+
+```rust
+// Shutdown SyndDB first
+synddb.shutdown()?;
+
+// Then unsafely reclaim and close the connection
+unsafe {
+    let boxed = Box::from_raw(conn as *const Connection as *mut Connection);
+    let _ = boxed.close();
+}
+```
+
 ## Configuration
 
 ```rust
 use synddb_client::{SyndDB, Config};
 
 let config = Config {
-    sequencer_url: "https://sequencer:8433".to_string(),
-    buffer_size: 100,           // Max changesets before publish
-    publish_interval: Duration::from_secs(1),  // Max time before publish
-    max_batch_size: 1024 * 1024,  // 1MB
-    max_retries: 3,
-    request_timeout: Duration::from_secs(10),
+    sequencer_url: "http://sequencer:8433".parse().unwrap(),
+    buffer_size: 100,              // Max changesets to buffer
+    max_batch_size: 1024 * 1024,   // 1MB max batch size
+    max_retries: 3,                // Retry count for failed sends
+    snapshot_interval: 100,        // Snapshot every 100 changesets (0 to disable)
+    ..Default::default()
 };
 
-let _synddb = SyndDB::attach_with_config(&conn, config)?;
+let synddb = SyndDB::attach_with_config(conn, config)?;
 ```
 
 ## Performance
 
-- **Overhead**: ~1-2% CPU overhead for session tracking
+- **Overhead**: ~1-2% CPU for session tracking
 - **Memory**: Buffers changesets (configurable, default 1MB)
 - **Network**: Batched sends reduce round trips
 - **Latency**: Background thread, non-blocking to application
 
-## Security
-
-- Runs in application TEE (same attestation)
-- No signing keys stored
-- HTTPS + mTLS to sequencer TEE
-- Sequencer validates application's TEE attestation
-
 ## Cross-Language Support
+
+We use **Rust compiled to C ABI** with thin language wrappers (~50 lines each):
 
 | Language | Binding Type | Install Time | Status |
 |----------|--------------|--------------|--------|
@@ -142,14 +194,8 @@ let _synddb = SyndDB::attach_with_config(&conn, config)?;
 | **Node.js** | C FFI (ffi-napi) | <10s | 🚧 Wrapper in `bindings/nodejs/` |
 | **Go** | C FFI (cgo) | <10s | 🚧 Wrapper in `bindings/go/` |
 
-All non-Rust languages use **pure wrappers** (~50 lines) over `libsynddb.so` - no compilation needed!
-
-## How It Works
-
-We compile Rust to `libsynddb.so` (C ABI), then use trivial wrappers (~50 lines) in each language. Same model as SQLite.
-
 **Why C FFI instead of PyO3/Neon?**
-- Simple API (3 functions) doesn't justify PyO3/Neon complexity
-- Users get instant install (<10s) vs 2-5min compilation
-- Single binary works for all languages
-- No build tools required
+- Instant install (<10s vs 2-5min compilation)
+- Single binary for all languages
+- No build tools required for users
+- Same approach as SQLite, libcurl, OpenSSL
