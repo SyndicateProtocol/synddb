@@ -9,7 +9,7 @@
 //! use rusqlite::Connection;
 //! use synddb_client::SyndDB;
 //!
-//! // Connection must have 'static lifetime. Box::leak is the recommended pattern.
+//! // Connection requires 'static lifetime (see "Why 'static?" section below)
 //! let conn = Box::leak(Box::new(Connection::open("app.db")?));
 //! let synddb = SyndDB::attach(conn, "http://sequencer:8433")?;
 //!
@@ -48,9 +48,14 @@
 //!
 //! # Why `'static` lifetime?
 //!
-//! The Session Extension requires a stable connection reference. Using `Box::leak`
-//! is safe because the connection typically lives for the application's lifetime.
-//! Use [`SyndDB::shutdown()`] for explicit cleanup.
+//! `SyndDB` requires `&'static Connection` because the `SQLite` Session Extension is stored
+//! in thread-local storage, which requires `'static` bounds. We use `Box::leak` to satisfy
+//! this requirement. This means the Connection is intentionally never dropped - cleanup
+//! happens at process exit. This is acceptable for typical single-connection-per-process
+//! usage but means `SQLite`'s `Drop` cleanup (closing file handles, WAL checkpoint) won't run.
+//!
+//! `SyndDB` itself is dropped normally and performs graceful shutdown (publishing pending
+//! changesets, joining background threads).
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};

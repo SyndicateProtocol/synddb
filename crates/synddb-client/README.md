@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use synddb_client::SyndDB;
 
 fn main() -> Result<()> {
-    // Connection must have 'static lifetime (Box::leak is the recommended pattern)
+    // Connection requires 'static lifetime (see "Why 'static?" section below)
     let conn = Box::leak(Box::new(Connection::open("app.db")?));
     let synddb = SyndDB::attach(conn, "http://sequencer:8433")?;
 
@@ -130,6 +130,34 @@ Changesets are also automatically published when `SyndDB` is dropped (graceful s
 SyndDB is single-threaded by design because SQLite's Session Extension is not thread-safe. All SQLite operations and SyndDB calls must happen on the same thread that created the instance.
 
 Background threads handle **network I/O only** (sending changesets/snapshots). They receive `Vec<u8>` bytes through channels and never access SQLite directly.
+
+## Why `'static` Lifetime?
+
+`SyndDB::attach()` requires `&'static Connection` because the SQLite Session Extension is stored in thread-local storage, which requires `'static` bounds. We use `Box::leak` to satisfy this:
+
+```rust
+let conn = Box::leak(Box::new(Connection::open("app.db")?));
+```
+
+**Trade-offs:**
+- The `Connection` is intentionally leaked (never dropped by Rust)
+- SQLite cleanup (closing file handles, WAL checkpoint) happens at process exit
+- This is acceptable for typical single-connection-per-process usage
+
+**Note:** `SyndDB` itself is dropped normally and performs graceful shutdown (publishing pending changesets, joining background threads).
+
+**Manual Connection cleanup:** If you need to explicitly close the Connection (e.g., to flush WAL), you can reclaim ownership after shutting down SyndDB:
+
+```rust
+// Shutdown SyndDB first
+synddb.shutdown()?;
+
+// Then unsafely reclaim and close the connection
+unsafe {
+    let boxed = Box::from_raw(conn as *const Connection as *mut Connection);
+    let _ = boxed.close();
+}
+```
 
 ## Configuration
 
