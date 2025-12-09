@@ -9,7 +9,7 @@
 //! use rusqlite::Connection;
 //! use synddb_client::SyndDB;
 //!
-//! // Connection requires 'static lifetime (see "Why 'static?" section below)
+//! // Connection requires 'static lifetime (see "Why `'static` lifetime?" section below)
 //! let conn = Box::leak(Box::new(Connection::open("app.db")?));
 //! let synddb = SyndDB::attach(conn, "http://sequencer:8433")?;
 //!
