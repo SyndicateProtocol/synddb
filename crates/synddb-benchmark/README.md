@@ -544,7 +544,7 @@ cargo run --package synddb-benchmark --release -- run \
 
 ### Docker Compose
 
-The easiest way to run the full stack is with Docker Compose:
+The easiest way to run the full stack is with Docker Compose from the repository root:
 
 ```bash
 docker compose up --build
@@ -555,6 +555,12 @@ This starts:
 - **validator**: Fetches from sequencer and validates signatures
 - **customer_sqlite_app**: The orderbook benchmark with SyndDB integration
 - **stress_test**: Session stress test to verify no race conditions
+
+For E2E tests with assertions, use:
+
+```bash
+docker compose -f tests/e2e/docker-compose.yml up --build --abort-on-container-exit --exit-code-from e2e_assertions
+```
 
 ### How It Works
 

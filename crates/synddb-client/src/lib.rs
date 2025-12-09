@@ -1,8 +1,7 @@
-//! `SyndDB` Client Library - Lightweight `SQLite` Session Extension Wrapper
+//! `SyndDB` Client Library - `SQLite` Session Extension Wrapper
 //!
-//! This library provides a minimal integration layer for applications to send
-//! changesets to the `SyndDB` sequencer. It runs in the application's TEE and
-//! does NOT contain any signing keys.
+//! This library captures `SQLite` changesets and sends them to the `SyndDB` sequencer.
+//! It runs in the application's TEE and does NOT contain any signing keys.
 //!
 //! # Usage
 //!
@@ -10,12 +9,12 @@
 //! use rusqlite::Connection;
 //! use synddb_client::SyndDB;
 //!
-//! // The connection must have 'static lifetime because SyndDB needs a stable
-//! // reference for the Session Extension. Box::leak is the recommended pattern.
+//! // Connection must have 'static lifetime. Box::leak is the recommended pattern.
 //! let conn = Box::leak(Box::new(Connection::open("app.db")?));
-//! let synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
+//! let synddb = SyndDB::attach(conn, "http://sequencer:8433")?;
 //!
 //! // Use SQLite normally - changesets are captured automatically
+//! conn.execute("CREATE TABLE trades (id INTEGER, amount INTEGER)", [])?;
 //! conn.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![1, 100])?;
 //!
 //! // For transactions, use unchecked_transaction() instead of transaction()
@@ -29,52 +28,24 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Publishing Changesets
+//! # Transactions
 //!
-//! Changesets are published automatically every 1 second (configurable via
-//! [`Config::publish_interval`]). For critical transactions that need immediate
-//! publishing, call [`SyndDB::publish()`] after committing.
+//! Use [`Connection::unchecked_transaction()`] instead of [`Connection::transaction()`]
+//! because `SyndDB` holds an immutable borrow of the connection for the Session Extension.
 //!
-//! The automatic timer and manual `publish()` calls are safe to use concurrently -
-//! both trigger the same extraction logic which only runs when no transaction is active.
+//! Both methods are functionally identical - `SQLite` enforces single-transaction
+//! semantics at runtime regardless of which you use.
 //!
 //! # Thread Safety
 //!
-//! The `SQLite` Session Extension is only accessed from the main thread. Background
-//! threads handle network I/O for sending changesets/snapshots, but they only receive
-//! `Vec<u8>` bytes through channels - they never access the Session directly.
-//!
-//! This design eliminates race conditions and ensures safe operation under high load.
-//!
-//! # Transactions
-//!
-//! Because `SyndDB` uses the `SQLite` Session Extension, which holds an immutable
-//! borrow of the connection, you must use [`Connection::unchecked_transaction()`]
-//! instead of [`Connection::transaction()`].
-//!
-//! **There is no functional difference** between the two methods - both create
-//! identical transactions. The only difference is when single-transaction semantics
-//! are enforced:
-//! - `transaction()` - enforced at compile time by Rust's borrow checker
-//! - `unchecked_transaction()` - enforced at runtime by `SQLite`
-//!
-//! `SQLite` only allows one active transaction per connection regardless of which
-//! method you use. The "unchecked" simply means Rust won't prevent nested transactions
-//! at compile time, but `SQLite` will still return an error at runtime.
+//! The Session Extension is only accessed from the main thread. Background threads
+//! handle network I/O but only receive `Vec<u8>` bytes through channels.
 //!
 //! # Why `'static` lifetime?
 //!
-//! The `SQLite` Session Extension requires a stable reference to the connection.
-//! Background threads handle network I/O for sending changesets/snapshots, but they
-//! only receive `Vec<u8>` bytes through channels - they never access the Session directly.
-//!
-//! Using `Box::leak` is safe here because:
-//! - The connection should live for the entire application lifetime anyway
-//! - `SyndDB` is typically attached once at startup and detached at shutdown
-//! - The small memory "leak" is reclaimed when the process exits
-//!
-//! If you need more control over the connection lifetime, consider using
-//! `SyndDB::shutdown()` for explicit cleanup before your application exits.
+//! The Session Extension requires a stable connection reference. Using `Box::leak`
+//! is safe because the connection typically lives for the application's lifetime.
+//! Use [`SyndDB::shutdown()`] for explicit cleanup.
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};

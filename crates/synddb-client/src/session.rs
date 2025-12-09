@@ -1,21 +1,12 @@
 //! `SQLite` Session Extension integration
 //!
-//! This module provides thread-safe changeset capture using `SQLite`'s Session Extension.
+//! # Thread Safety
 //!
-//! # Thread Safety Architecture
-//!
-//! The Session Extension contains raw pointers that are NOT safe to access from multiple
-//! threads, even with a Mutex. The Mutex only protects Rust-level data races, but `SQLite`'s
-//! internal state can be corrupted when:
-//! - Main thread is executing SQL via `conn.execute()`
-//! - Background thread calls `session.changeset_strm()`
-//!
-//! To avoid this race condition, we ensure all Session operations happen on the main thread:
-//! - Changeset extraction happens only when `publish()` is called from the main thread
-//! - The `publish()` call is triggered by the application after completing transactions
-//! - Only `Vec<u8>` bytes (which are safe to Send) are sent to background threads
-//!
-//! This eliminates the need for `unsafe impl Send` on any Session-containing type.
+//! The Session Extension contains raw pointers that are NOT thread-safe. To avoid races:
+//! - `SessionState` is stored in thread-local storage, accessed only from the main thread
+//! - Timer thread only sets an `AtomicBool` flag, never touches the Session
+//! - Background threads only receive `Vec<u8>` bytes through channels
+//! - `publish()` and `snapshot()` have debug assertions verifying the calling thread
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
@@ -57,6 +48,10 @@ pub struct Snapshot {
 /// This is stored in a thread-local `RefCell` and accessed only from the main thread.
 /// The Session is never shared across threads - only the extracted `Vec<u8>` bytes
 /// are sent to background threads via channels.
+///
+/// Note: We intentionally do NOT implement `Send` for `SessionState`.
+/// The Session contains raw pointers that are not safe to share across threads.
+/// All Session access happens on the main thread.
 struct SessionState {
     session: Session<'static>,
     changeset_tx: Sender<Changeset>,
@@ -70,9 +65,6 @@ struct SessionState {
     has_changes: bool,
 }
 
-// Note: We intentionally do NOT implement Send for SessionState.
-// The Session contains raw pointers that are not safe to share across threads.
-// All Session access happens on the main thread.
 
 thread_local! {
     /// Thread-local storage for session state.
@@ -174,6 +166,11 @@ impl SessionMonitor {
         })
     }
 
+    /// Install update hooks for change detection.
+    ///
+    /// The hook fires for every row modified (INSERT/UPDATE/DELETE). To minimize overhead
+    /// in batch operations, flags are checked before writing (read is cheaper than write).
+    /// E.g. for a 10,000 row batch: 1 write + 9,999 reads instead of 10,000 writes.
     pub(crate) fn start(&self, conn: &Connection) -> Result<()> {
         debug!("Installing hooks for change detection");
 
@@ -187,27 +184,24 @@ impl SessionMonitor {
                     rowid
                 );
 
-                // Detect schema changes by monitoring sqlite_schema table
-                if table == "sqlite_schema" || table == "sqlite_master" {
-                    info!(
-                        "Schema change detected ({:?} on {}), will trigger snapshot",
-                        action, table
-                    );
-
-                    SESSION_STATE.with(|state| {
-                        if let Ok(mut guard) = state.try_borrow_mut() {
-                            if let Some(ref mut s) = *guard {
-                                s.schema_changed = true;
-                            }
-                        }
-                    });
-                }
-
-                // Mark that changes have occurred
                 SESSION_STATE.with(|state| {
                     if let Ok(mut guard) = state.try_borrow_mut() {
                         if let Some(ref mut s) = *guard {
-                            s.has_changes = true;
+                            // Skip if already marked (avoid redundant writes in batch operations)
+                            if !s.has_changes {
+                                s.has_changes = true;
+                            }
+
+                            // Detect schema changes by monitoring sqlite_schema table
+                            if !s.schema_changed
+                                && (table == "sqlite_schema" || table == "sqlite_master")
+                            {
+                                info!(
+                                    "Schema change detected ({:?} on {}), will trigger snapshot",
+                                    action, table
+                                );
+                                s.schema_changed = true;
+                            }
                         }
                     }
                 });

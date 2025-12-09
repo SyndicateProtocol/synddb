@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-// Helper function to create a test connection with 'static lifetime
+// Helper function to create a test connection with `'static` lifetime
 fn setup_test_db() -> &'static Connection {
     let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
     synddb_benchmark::schema::initialize_schema(conn).unwrap();
