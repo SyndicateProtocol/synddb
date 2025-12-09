@@ -7,15 +7,16 @@ Usage:
     # Attach to database file
     synddb = SyndDB.attach('app.db', 'http://localhost:8433')
 
-    # Now use SQLite normally - changesets are automatically captured
+    # Use SQLite normally - changesets are automatically captured
     import sqlite3
     conn = sqlite3.connect('app.db')
     conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 100))
+    conn.commit()
 
-    # Manually publish for critical transactions
+    # IMPORTANT: Call publish() after commits to send changesets
     synddb.publish()
 
-    # Create a snapshot
+    # Create a snapshot (optional)
     synddb.snapshot()
 
     # Clean up (or let Python garbage collector handle it)
@@ -207,10 +208,10 @@ class SyndDB:
 
     def publish(self):
         """
-        Manually publish all pending changesets
+        Publish all pending changesets to the sequencer
 
-        This is called automatically every flush_interval,
-        but can be called manually for critical transactions.
+        Call this after committing transactions to send changesets to the sequencer.
+        Also called automatically on detach for graceful shutdown.
 
         Raises:
             RuntimeError: If publish fails
