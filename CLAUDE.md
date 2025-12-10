@@ -63,9 +63,9 @@ When working on large features or refactors, commit incrementally as you complet
 - Reduces risk of losing work
 - Creates a clear history of changes
 
-### Documentation (SPEC_ and PLAN_ files)
-The `SPEC_*.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
-- After making major implementation changes, update the corresponding SPEC_ and PLAN_ files to reflect the new state
+### Documentation (SPEC and PLAN files)
+The `SPEC.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
+- After making major implementation changes, update the corresponding SPEC and PLAN files to reflect the new state
 - When adding new features or modifying existing behavior, ensure the documentation matches the actual code
 - Review these files before starting work on a component to understand the intended design
 
