@@ -136,57 +136,92 @@ crossbeam-channel = "0.5"  # Multi-producer multi-consumer channels
 
 ## Directory Structure
 
+The current implementation has a simplified structure compared to the full plan above. Below is the **actual** directory structure:
+
 ```
 synddb-sequencer/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs                    # Entry point, CLI args
-│   ├── lib.rs                     # Public API
-│   ├── config.rs                  # Configuration structures
-│   ├── http_api.rs                # HTTP receiver (Axum endpoints for receiving changesets/snapshots)
-│   ├── monitor/
-│   │   └── mod.rs                 # Changeset and SchemaChange type definitions
-│   ├── batch/
-│   │   ├── mod.rs                 # Batching logic
-│   │   ├── accumulator.rs         # Accumulate received operations
-│   │   └── timer.rs               # Time/size based triggers for publishing
-│   ├── attestor/
-│   │   ├── mod.rs                 # Attestation and signing
-│   │   ├── key_manager.rs         # Ethereum key management in TEE
-│   │   ├── signer.rs              # Sign batches with secp256k1
-│   │   └── compressor.rs          # Zstd compression (compress-then-sign)
-│   ├── publish/
-│   │   ├── mod.rs                 # Publishing orchestration
-│   │   ├── celestia.rs            # Celestia publisher
-│   │   ├── eigenda.rs             # EigenDA publisher
-│   │   ├── ipfs.rs                # IPFS publisher
-│   │   ├── arweave.rs             # Arweave publisher
-│   │   ├── retry.rs               # Retry logic
-│   │   └── manifest.rs            # Track published batches (sequence, DA location, hash)
-│   ├── messages/
-│   │   ├── mod.rs                 # Message passing module
-│   │   ├── inbound_monitor.rs     # Blockchain event monitoring for inbound messages
-│   │   ├── queue.rs               # Message queue management
-│   │   ├── api.rs                 # HTTP API for delivering messages to applications
-│   │   ├── consistency.rs         # Consistency enforcement between messages
-│   │   ├── degradation.rs         # Progressive degradation management
-│   │   ├── alerts.rs              # Application alerting mechanisms
-│   │   ├── state_commitments.rs   # Signed state commitments for validators
-│   │   └── recovery.rs            # Recovery protocols and validation
-│   ├── tee/
-│   │   ├── mod.rs                 # GCP Confidential Space TEE
-│   │   └── attestation.rs         # Fetch attestation tokens from metadata service
-│   └── utils/
-│       ├── mod.rs
-│       └── checksum.rs            # Data integrity
-├── config/
-│   ├── default.yaml               # Default configuration
-│   └── example.yaml               # Example with all options
-├── tests/
-│   ├── integration/               # Integration tests
-│   └── benchmarks/                # Performance benchmarks
+│   ├── main.rs                    # Entry point, CLI args, signing key management
+│   ├── lib.rs                     # Public API and module exports
+│   ├── config.rs                  # Configuration structures (clap + env vars)
+│   ├── http_api.rs                # HTTP receiver (Axum endpoints for changesets/snapshots)
+│   ├── http_errors.rs             # HTTP error handling
+│   ├── inbox.rs                   # Message sequencing and ordering
+│   ├── signer.rs                  # secp256k1 signing logic
+│   ├── attestation.rs             # TEE attestation token fetching and verification
+│   └── publish/
+│       ├── mod.rs                 # Publishing orchestration and DAPublisher trait re-exports
+│       ├── traits.rs              # DAPublisher trait definition
+│       ├── local.rs               # Local SQLite publisher with HTTP fetch API (✅ implemented)
+│       ├── gcs.rs                 # Google Cloud Storage publisher (requires `gcs` feature)
+│       ├── celestia.rs            # Celestia DA publisher (planned)
+│       ├── eigenda.rs             # EigenDA publisher (planned)
+│       ├── ipfs.rs                # IPFS publisher (planned)
+│       ├── arweave.rs             # Arweave publisher (planned)
+│       └── mock.rs                # Mock publisher for testing
 └── README.md
 ```
+
+**Note**: The planned directories (`batch/`, `attestor/`, `messages/`, `tee/`, `utils/`) have been consolidated:
+- Batching logic is in `inbox.rs`
+- Signing is in `signer.rs`
+- Attestation is in `attestation.rs`
+- Message passing details are described in `PLAN_MESSAGE_PASSING.md`
+
+## Publisher Types
+
+The sequencer supports multiple publisher backends via the `--publisher-type` flag:
+
+| Type | Description | Status |
+|------|-------------|--------|
+| `none` | No persistence (messages kept in memory) | Default |
+| `local` | Local SQLite storage with HTTP fetch API | ✅ Implemented |
+| `gcs` | Google Cloud Storage | ✅ Implemented (requires `gcs` feature) |
+| `celestia` | Celestia DA | Planned |
+| `eigenda` | EigenDA | Planned |
+| `ipfs` | IPFS | Planned |
+| `arweave` | Arweave | Planned |
+
+### Local Publisher
+
+The local publisher (`--publisher-type=local`) stores signed batches in a local SQLite database and exposes an HTTP API for validators to fetch messages. This is ideal for:
+- Local development and testing
+- Self-hosted deployments that don't need external DA
+- E2E testing infrastructure
+
+**Configuration:**
+```bash
+synddb-sequencer \
+  --signing-key=<hex-key> \
+  --publisher-type=local \
+  --local-storage-path=/data/local_da.db  # or ":memory:" for ephemeral
+```
+
+**HTTP Fetch API (mounted under `/da/`):**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/da/batches/{start}` | GET | Retrieve batch by start sequence |
+| `/da/messages/{sequence}` | GET | Retrieve message by sequence number |
+| `/da/latest` | GET | Get latest published sequence number |
+
+**Example:**
+```bash
+# Get latest sequence
+curl http://localhost:8433/da/latest
+# {"sequence": 42}
+
+# Get specific message
+curl http://localhost:8433/da/messages/42
+# Returns SignedMessage JSON
+
+# Get batch
+curl http://localhost:8433/da/batches/40
+# Returns SignedBatch JSON with multiple messages
+```
+
+See [`crates/synddb-sequencer/src/publish/local.rs`](crates/synddb-sequencer/src/publish/local.rs) for implementation details.
 
 ## Core Components
 

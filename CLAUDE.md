@@ -8,13 +8,17 @@ SyndDB is a SQLite replication system for blockchain-based applications. It capt
 
 **Architecture**: Two-VM security model where the application (VM1) captures changes and the sequencer (VM2) signs them with isolated keys.
 
+**Status**: Greenfield codebase not yet in production. No backwards compatibility requirements - feel free to make breaking changes to APIs, data formats, or interfaces as needed.
+
 ## Crate Structure
 
 ```
 crates/
 ├── synddb-client/        # Client library for changeset capture (Rust + FFI)
 ├── synddb-sequencer/     # Message ordering and signing service
+├── synddb-validator/     # State validation and replica reconstruction
 ├── synddb-chain-monitor/ # Blockchain event monitoring (WebSocket/RPC)
+├── synddb-shared/        # Shared types and utilities across crates
 └── synddb-benchmark/     # Orderbook simulator for performance testing
 ```
 
@@ -61,6 +65,12 @@ When working on large features or refactors, commit incrementally as you complet
 - Reduces risk of losing work
 - Creates a clear history of changes
 
+### Documentation (SPEC and PLAN files)
+The `SPEC.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
+- After making major implementation changes, update the corresponding SPEC and PLAN files to reflect the new state
+- When adding new features or modifying existing behavior, ensure the documentation matches the actual code
+- Review these files before starting work on a component to understand the intended design
+
 ## Key Dependencies
 
 | Category | Crates |
@@ -77,7 +87,7 @@ When working on large features or refactors, commit incrementally as you complet
 ## Feature Flags
 
 - `synddb-client`: `chain-monitor`, `ffi`
-- `synddb-sequencer`: `gcs`, `tee`, `celestia`, `eigenda`
+- `synddb-sequencer`: `gcs`, `tee`, `celestia`, `eigenda`, `ipfs`, `arweave`
 
 ## CI Validation
 

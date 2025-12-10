@@ -128,7 +128,8 @@ contracts/src/
 │   ├── IBridge.sol                              # Bridge interface
 │   ├── IModuleCheck.sol                         # Unified module check interface
 │   ├── IModuleCheckRegistry.sol                 # Module registry interface
-│   └── IValidatorSigningAndQuery.sol            # Validator signing and querying interface
+│   ├── IValidatorSigningAndQuery.sol            # Validator signing and querying interface
+│   └── IWrappedNativeToken.sol                  # WETH interface for native token wrapping
 │
 ├── types/
 │   └── DataTypes.sol                            # Shared data structures
