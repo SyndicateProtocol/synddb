@@ -8,6 +8,8 @@ SyndDB is a SQLite replication system for blockchain-based applications. It capt
 
 **Architecture**: Two-VM security model where the application (VM1) captures changes and the sequencer (VM2) signs them with isolated keys.
 
+**Status**: Greenfield codebase not yet in production. No backwards compatibility requirements - feel free to make breaking changes to APIs, data formats, or interfaces as needed.
+
 ## Crate Structure
 
 ```
