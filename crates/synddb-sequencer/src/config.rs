@@ -3,10 +3,44 @@
 //! Supports both CLI arguments and environment variables following the
 //! same pattern as synddb-client.
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
+use strum::{EnumIter, IntoEnumIterator};
+
+/// Available publisher types for message persistence
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum PublisherType {
+    /// No persistence (messages only kept in memory during request)
+    #[default]
+    None,
+    /// Local `SQLite` storage with HTTP fetch API
+    Local,
+    /// Google Cloud Storage
+    Gcs,
+}
+
+impl PublisherType {
+    /// Get all supported publisher types as strings
+    pub fn supported_types() -> Vec<String> {
+        Self::iter().map(|t| t.to_string()).collect()
+    }
+}
+
+impl fmt::Display for PublisherType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => write!(f, "none"),
+            Self::Local => write!(f, "local"),
+            Self::Gcs => write!(f, "gcs"),
+        }
+    }
+}
 
 /// Sequencer node configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
@@ -39,7 +73,17 @@ pub struct SequencerConfig {
     #[arg(long, env = "VERIFY_ATTESTATION", default_value = "false")]
     pub verify_attestation: bool,
 
-    /// GCS bucket for message persistence (enables GCS publisher)
+    /// Publisher type for message persistence
+    #[arg(long, env = "PUBLISHER_TYPE", value_enum, default_value = "none")]
+    pub publisher_type: PublisherType,
+
+    /// Local `SQLite` database path (required when `publisher_type=local`)
+    ///
+    /// Use `:memory:` for in-memory storage (ephemeral, for testing).
+    #[arg(long, env = "LOCAL_STORAGE_PATH")]
+    pub local_storage_path: Option<String>,
+
+    /// GCS bucket name (required when `publisher_type=gcs`)
     #[arg(long, env = "GCS_BUCKET")]
     pub gcs_bucket: Option<String>,
 

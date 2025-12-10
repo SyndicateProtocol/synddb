@@ -7,15 +7,15 @@
  *   // Attach to database file
  *   const synddb = SyndDB.attach('app.db', 'http://localhost:8433');
  *
- *   // Now use SQLite normally - changesets are automatically captured
+ *   // Use SQLite normally - changesets are automatically captured
  *   const Database = require('better-sqlite3');
  *   const db = new Database('app.db');
  *   db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
  *
- *   // Manually publish for critical transactions
+ *   // IMPORTANT: Call publish() after commits to send changesets
  *   synddb.publish();
  *
- *   // Create a snapshot
+ *   // Create a snapshot (optional)
  *   const size = synddb.snapshot();
  *
  *   // Clean up (or let Node.js garbage collector handle it)
@@ -136,7 +136,7 @@ class SyndDB {
    * @param {string} dbPath - Path to SQLite database file
    * @param {string} sequencerUrl - URL of sequencer TEE
    * @param {Object} options - Configuration options
-   * @param {number} options.publishIntervalMs - Milliseconds between automatic publishes (default: 1000)
+   * @param {number} options.flushIntervalMs - Milliseconds between sender flushes (default: 1000)
    * @param {number} options.snapshotInterval - Changesets between snapshots (default: 0 = disabled)
    * @returns {SyndDB} SyndDB instance
    *
@@ -145,20 +145,20 @@ class SyndDB {
    *   'app.db',
    *   'http://localhost:8433',
    *   {
-   *     publishIntervalMs: 500,  // Publish every 500ms
-   *     snapshotInterval: 100     // Snapshot every 100 changesets
+   *     flushIntervalMs: 500,   // Flush sender every 500ms
+   *     snapshotInterval: 100   // Snapshot every 100 changesets
    *   }
    * );
    */
   static attachWithConfig(dbPath, sequencerUrl, options = {}) {
-    const publishIntervalMs = options.publishIntervalMs || 1000;
+    const flushIntervalMs = options.flushIntervalMs || 1000;
     const snapshotInterval = options.snapshotInterval || 0;
 
     const handlePtr = ref.alloc(VoidPtr);
     const result = lib.synddb_attach_with_config(
       dbPath,
       sequencerUrl,
-      publishIntervalMs,
+      flushIntervalMs,
       snapshotInterval,
       handlePtr
     );
@@ -173,10 +173,10 @@ class SyndDB {
   }
 
   /**
-   * Manually publish all pending changesets
+   * Publish all pending changesets to the sequencer
    *
-   * This is called automatically every publishInterval,
-   * but can be called manually for critical transactions.
+   * Call this after committing transactions to send changesets to the sequencer.
+   * Also called automatically on detach for graceful shutdown.
    *
    * @throws {Error} If publish fails
    *
@@ -273,7 +273,7 @@ function lastError() {
  *
  * @param {string} dbPath - Path to SQLite database file
  * @param {string} sequencerUrl - URL of sequencer TEE
- * @param {Object} options - Optional config (publishIntervalMs, snapshotInterval)
+ * @param {Object} options - Optional config (flushIntervalMs, snapshotInterval)
  * @returns {SyndDB} SyndDB instance
  *
  * @example

@@ -62,14 +62,14 @@ impl SignatureApiState {
 /// - `GET /health` - Health check
 /// - `GET /info` - Signer information
 /// - `GET /pending` - List pending message IDs
-/// - `GET /signature/:message_id` - Get signature for a message
+/// - `GET /signature/{message_id}` - Get signature for a message
 /// - `GET /signatures` - Get all pending signatures
 pub fn create_signature_router(state: SignatureApiState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/info", get(info_handler))
         .route("/pending", get(pending_handler))
-        .route("/signature/:message_id", get(get_signature_handler))
+        .route("/signature/{message_id}", get(get_signature_handler))
         .route("/signatures", get(list_signatures_handler))
         .with_state(state)
 }

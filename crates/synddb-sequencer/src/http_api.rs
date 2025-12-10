@@ -59,7 +59,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/changesets", post(receive_changesets))
         .route("/withdrawals", post(receive_withdrawal))
         .route("/snapshots", post(receive_snapshot))
-        .route("/messages/:sequence", get(get_message))
+        .route("/messages/{sequence}", get(get_message))
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
         .route("/status", get(status))

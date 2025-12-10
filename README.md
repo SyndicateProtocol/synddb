@@ -94,11 +94,12 @@ A high-performance orderbook simulator for testing and developing the sequencer:
 
 The client library embeds in applications and captures SQL changes:
 
-- **Session Monitor**: Captures changesets via SQLite Session Extension
+- **Session Monitor**: Captures changesets via SQLite Session Extension (thread-safe architecture)
 - **Changeset Sender**: Batches and sends changesets to sequencer service via HTTP
 - **Snapshot Sender**: Creates and sends periodic snapshots and schema-triggered snapshots
 - **TEE Attestation**: Includes GCP Confidential Space attestation tokens
 - **Recovery**: Persists failed batches for retry after network issues
+- **Single-Threaded**: SQLite's Session Extension is not thread-safe; all SyndDB calls must be on one thread ([details](crates/synddb-client/README.md#thread-safety))
 
 [Client Library Documentation →](crates/synddb-client/README.md)
 
@@ -188,14 +189,15 @@ cargo test --workspace --doc
 SyndDB uses SQLite's Session Extension to capture row-level changes deterministically. The client library:
 
 1. Attaches to your SQLite database via Session Extension
-2. Captures changesets automatically on commit
-3. Batches changesets and sends to sequencer service via HTTP
-4. Creates periodic snapshots and snapshots on schema changes
-5. Includes TEE attestation tokens with all data
+2. Detects changes via SQLite update hooks
+3. Extracts changesets when `publish()` is called (automatically every 1 second, or manually)
+4. Batches changesets and sends to sequencer service via HTTP
+5. Creates periodic snapshots and snapshots on schema changes
+6. Includes TEE attestation tokens with all data
 
 The sequencer service receives changesets from clients, compresses and signs them, then publishes to configured DA layers.
 
-Applications continue using SQLite normally - the client library operates transparently in the background.
+Applications continue using SQLite normally - the client library operates transparently in the background. For critical transactions, applications can call `publish()` immediately after committing.
 
 ## Requirements
 

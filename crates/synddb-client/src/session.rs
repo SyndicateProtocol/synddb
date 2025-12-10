@@ -1,4 +1,17 @@
 //! `SQLite` Session Extension integration
+//!
+//! # Thread Safety
+//!
+//! The Session Extension contains raw pointers that are NOT thread-safe. To avoid races:
+//! - `SessionState` is stored in thread-local storage, accessed only from the main thread
+//! - Background threads only receive `Vec<u8>` bytes through channels
+//! - `publish()` and `snapshot()` have debug assertions verifying the calling thread
+//!
+//! # Publishing
+//!
+//! Changesets must be published explicitly via `publish()`. Automatic publishing via
+//! UPDATE or COMMIT hooks is not possible because `SQLite`'s session extension requires reading from
+//! the database during extraction, which is not allowed inside hook callbacks.
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
@@ -7,8 +20,8 @@ use rusqlite::hooks::Action;
 use rusqlite::session::Session;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::cell::RefCell;
+use std::thread::{self, ThreadId};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, error, info, trace};
 
@@ -33,7 +46,15 @@ pub struct Snapshot {
     pub sequence: u64,
 }
 
-/// Shared state between session monitor and publish thread
+/// Session state that lives on the main thread only.
+///
+/// This is stored in a thread-local `RefCell` and accessed only from the main thread.
+/// The Session is never shared across threads - only the extracted `Vec<u8>` bytes
+/// are sent to background threads via channels.
+///
+/// Note: We intentionally do NOT implement `Send` for `SessionState`.
+/// The Session contains raw pointers that are not safe to share across threads.
+/// All Session access happens on the main thread.
 struct SessionState {
     session: Session<'static>,
     changeset_tx: Sender<Changeset>,
@@ -43,69 +64,29 @@ struct SessionState {
     changesets_since_snapshot: u64,
     snapshot_tx: Option<Sender<Snapshot>>,
     schema_changed: bool,
-    last_schema_hash: Option<u64>,
+    /// Flag to indicate changes have occurred since last publish
+    has_changes: bool,
 }
 
-impl std::fmt::Debug for SessionState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        #[derive(Debug)]
-        struct SessionState<'a> {
-            changeset_tx: &'a Sender<Changeset>,
-            sequence: &'a u64,
-            conn: &'a &'static Connection,
-            snapshot_interval: &'a u64,
-            changesets_since_snapshot: &'a u64,
-            snapshot_tx: &'a Option<Sender<Snapshot>>,
-            schema_changed: &'a bool,
-            last_schema_hash: &'a Option<u64>,
-        }
-
-        let Self {
-            session: _,
-            changeset_tx,
-            sequence,
-            conn,
-            snapshot_interval,
-            changesets_since_snapshot,
-            snapshot_tx,
-            schema_changed,
-            last_schema_hash,
-        } = self;
-
-        std::fmt::Debug::fmt(
-            &SessionState {
-                changeset_tx,
-                sequence,
-                conn,
-                snapshot_interval,
-                changesets_since_snapshot,
-                snapshot_tx,
-                schema_changed,
-                last_schema_hash,
-            },
-            f,
-        )
-    }
+thread_local! {
+    /// Thread-local storage for session state.
+    /// Note: This is thread-local, so each thread gets its own instance.
+    /// The SessionMonitor API is designed so that only the main thread accesses SESSION_STATE.
+    static SESSION_STATE: RefCell<Option<SessionState>> = const { RefCell::new(None) };
 }
-
-// SAFETY: SQLite sessions are thread-safe when used with a thread-safe connection.
-// We're using a 'static Connection and protecting access with a Mutex, so this is safe.
-// The Session contains raw pointers that rusqlite doesn't mark as Send, but SQLite's
-// session extension is designed to be thread-safe when properly synchronized.
-unsafe impl Send for SessionState {}
 
 #[derive(Debug)]
 pub struct SessionMonitor {
-    state: Arc<Mutex<SessionState>>,
-    publish_shutdown_tx: Sender<()>,
-    publish_handle: Option<thread::JoinHandle<()>>,
+    /// Connection reference for snapshot creation
+    conn: &'static Connection,
+    /// Thread that created this monitor (for debug assertions)
+    owner_thread: ThreadId,
 }
 
 impl SessionMonitor {
     pub(crate) fn new(
         conn: &'static Connection,
         changeset_tx: Sender<Changeset>,
-        publish_interval: Duration,
         snapshot_interval: u64,
         snapshot_tx: Option<Sender<Snapshot>>,
     ) -> Result<Self> {
@@ -130,73 +111,44 @@ impl SessionMonitor {
 
         debug!("Session attached to all tables");
 
-        let state = Arc::new(Mutex::new(SessionState {
-            session,
-            changeset_tx,
-            sequence: 0,
-            conn,
-            snapshot_interval,
-            changesets_since_snapshot: 0,
-            snapshot_tx,
-            schema_changed: false,
-            last_schema_hash: None,
-        }));
-
-        // Create channel for publish thread shutdown
-        let (publish_shutdown_tx, publish_shutdown_rx) = crossbeam_channel::bounded(1);
-
-        // Start periodic publish thread
-        let state_clone = Arc::clone(&state);
-        let publish_handle = thread::spawn(move || {
-            debug!(
-                "Publish thread started with interval {:?}",
-                publish_interval
-            );
-
-            loop {
-                // Wait for publish interval or shutdown signal
-                match publish_shutdown_rx.recv_timeout(publish_interval) {
-                    Ok(()) => {
-                        debug!("Publish thread received shutdown signal");
-                        // Final publish before shutdown
-                        if let Err(e) = Self::publish_internal(&state_clone) {
-                            error!("Failed to publish on shutdown: {}", e);
-                        }
-                        break;
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                        // Periodic publish
-                        if let Err(e) = Self::publish_internal(&state_clone) {
-                            error!("Failed to publish periodically: {}", e);
-                        }
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        debug!("Publish thread channel disconnected");
-                        break;
-                    }
-                }
-            }
-
-            debug!("Publish thread stopped");
+        // Store session state in thread-local storage
+        SESSION_STATE.with(|state| {
+            *state.borrow_mut() = Some(SessionState {
+                session,
+                changeset_tx,
+                sequence: 0,
+                conn,
+                snapshot_interval,
+                changesets_since_snapshot: 0,
+                snapshot_tx,
+                schema_changed: false,
+                has_changes: false,
+            });
         });
 
         debug!("SessionMonitor created");
 
         Ok(Self {
-            state,
-            publish_shutdown_tx,
-            publish_handle: Some(publish_handle),
+            conn,
+            owner_thread: thread::current().id(),
         })
     }
 
+    /// Install update hooks for change detection.
+    ///
+    /// The hook fires for every row modified (INSERT/UPDATE/DELETE). To minimize overhead
+    /// in batch operations, flags are checked before writing (read is cheaper than write).
+    /// E.g. for a 10,000 row batch: 1 write + 9,999 reads instead of 10,000 writes.
+    ///
+    /// **Note**: Changeset extraction cannot happen inside hooks (`update_hook` or `commit_hook`)
+    /// because `SQLite`'s session extension requires reading from the database, which is not
+    /// allowed during hook callbacks. Instead, call `publish()` after transactions complete.
     pub(crate) fn start(&self, conn: &Connection) -> Result<()> {
-        debug!("Installing update hook for schema change detection");
+        debug!("Installing hooks for change detection");
 
-        let state = Arc::clone(&self.state);
-
-        // Install update hook that gets called on INSERT, UPDATE, DELETE
+        // Install update hook to detect when changes occur
         conn.update_hook(Some(
-            move |action: Action, _db: &str, table: &str, rowid: i64| {
+            |action: Action, _db: &str, table: &str, rowid: i64| {
                 trace!(
                     "Update hook: {:?} on table {} rowid {}",
                     action,
@@ -204,107 +156,80 @@ impl SessionMonitor {
                     rowid
                 );
 
-                // Detect schema changes by monitoring sqlite_schema table
-                // DDL operations (CREATE TABLE, ALTER TABLE, DROP TABLE) modify this table
-                if table == "sqlite_schema" || table == "sqlite_master" {
-                    info!(
-                        "Schema change detected ({:?} on {}), will trigger snapshot",
-                        action, table
-                    );
+                SESSION_STATE.with(|state| {
+                    if let Ok(mut guard) = state.try_borrow_mut() {
+                        if let Some(ref mut s) = *guard {
+                            // Skip if already marked (avoid redundant writes in batch operations)
+                            if !s.has_changes {
+                                s.has_changes = true;
+                            }
 
-                    // Mark that schema changed so next publish creates a snapshot
-                    if let Ok(mut state) = state.lock() {
-                        state.schema_changed = true;
+                            // Detect schema changes by monitoring sqlite_schema table
+                            if !s.schema_changed
+                                && (table == "sqlite_schema" || table == "sqlite_master")
+                            {
+                                info!(
+                                    "Schema change detected ({:?} on {}), will trigger snapshot",
+                                    action, table
+                                );
+                                s.schema_changed = true;
+                            }
+                        }
                     }
-                }
-
-                // Note: We can't capture changesets in the hook itself because:
-                // 1. Hooks are called during transaction
-                // 2. Session::changeset() should be called after transaction commits
-                //
-                // The hook just serves as a signal that changes occurred.
-                // We'll rely on periodic publishing (automatic via publish thread).
+                });
             },
         ));
 
-        debug!("SessionMonitor started with schema change detection");
+        debug!("SessionMonitor started with change detection");
         Ok(())
     }
 
-    /// Get hash of schema to detect changes
-    fn get_schema_hash(conn: &Connection) -> Result<u64> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        // Query sqlite_schema for all CREATE statements
-        let mut stmt =
-            conn.prepare("SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name")?;
-        let schema_statements: Vec<String> = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        // Hash all schema SQL statements
-        let mut hasher = DefaultHasher::new();
-        for sql in schema_statements {
-            sql.hash(&mut hasher);
-        }
-        Ok(hasher.finish())
-    }
-
-    /// Internal publish implementation used by both manual and automatic publishing
-    fn publish_internal(state: &Arc<Mutex<SessionState>>) -> Result<()> {
-        trace!("Publishing session changes");
-
-        let mut state = state.lock().unwrap();
-
-        // CRITICAL: Check schema changes BEFORE capturing changesets
-        // Schema snapshots must be sent before any changesets that depend on the new schema,
-        // otherwise validators cannot apply those changesets (missing columns/tables)
-        let current_schema_hash = Self::get_schema_hash(state.conn)?;
-        if let Some(last_hash) = state.last_schema_hash {
-            if current_schema_hash != last_hash {
-                info!(
-                    "Schema change detected (hash changed from {} to {})",
-                    last_hash, current_schema_hash
-                );
-                state.schema_changed = true;
-            }
-        }
-        state.last_schema_hash = Some(current_schema_hash);
-
+    /// Extract changeset from session and send to background thread.
+    /// This must be called from the main thread.
+    fn extract_and_send_changeset(state: &mut SessionState) -> Result<()> {
         // If schema changed, create and send snapshot BEFORE capturing changesets
-        // This ensures validators receive schema updates before data changes that depend on them
-        if state.schema_changed {
+        if state.schema_changed && state.conn.is_autocommit() {
             info!("Creating immediate snapshot for schema change");
-            let snapshot_result = Self::create_snapshot_internal(&state);
 
-            match snapshot_result {
+            match Self::create_snapshot_internal(state) {
                 Ok(snapshot) => {
                     if let Some(ref snapshot_tx) = state.snapshot_tx {
-                        if let Err(e) = snapshot_tx.send(snapshot) {
+                        if let Err(e) = snapshot_tx.try_send(snapshot) {
                             error!("Failed to send schema change snapshot: {}", e);
                         } else {
                             info!("Schema change snapshot sent at sequence {}", state.sequence);
                             state.changesets_since_snapshot = 0;
-                            state.schema_changed = false;
                         }
-                    } else {
-                        state.schema_changed = false;
                     }
+                    state.schema_changed = false;
                 }
                 Err(e) => {
                     error!("Failed to create schema change snapshot: {}", e);
-                    // Don't reset schema_changed flag - retry on next publish
                 }
             }
         }
 
-        // Now capture and send changesets (after schema snapshot if needed)
+        // Only extract if there might be changes and we're not in a transaction
+        if !state.has_changes {
+            return Ok(());
+        }
+
+        // Check if we're in autocommit mode (no active transaction)
+        // If a transaction is active, we can't safely extract changesets
+        if !state.conn.is_autocommit() {
+            trace!("Skipping changeset extraction - transaction active");
+            return Ok(());
+        }
+
+        // Extract changeset bytes from session
         let mut changeset_data = Vec::new();
         state
             .session
             .changeset_strm(&mut changeset_data)
             .context("Failed to get changeset from session")?;
+
+        // Reset change flag now that we've extracted
+        state.has_changes = false;
 
         if changeset_data.is_empty() {
             trace!("No changes to publish");
@@ -322,26 +247,25 @@ impl SessionMonitor {
         state.sequence += 1;
         state.changesets_since_snapshot += 1;
 
-        // Send changeset to background thread
-        state
-            .changeset_tx
-            .send(changeset)
-            .context("Failed to send changeset to background thread")?;
+        // Send changeset to background thread (non-blocking)
+        if let Err(e) = state.changeset_tx.try_send(changeset) {
+            error!("Failed to send changeset: {}", e);
+        }
 
         // Check if we should create a regular interval-based snapshot
-        if state.snapshot_interval > 0 && state.changesets_since_snapshot >= state.snapshot_interval
+        if state.snapshot_interval > 0
+            && state.changesets_since_snapshot >= state.snapshot_interval
+            && state.conn.is_autocommit()
         {
             info!(
                 "Snapshot threshold reached ({} changesets), creating automatic snapshot",
                 state.changesets_since_snapshot
             );
 
-            let snapshot_result = Self::create_snapshot_internal(&state);
-
-            match snapshot_result {
+            match Self::create_snapshot_internal(state) {
                 Ok(snapshot) => {
                     if let Some(ref snapshot_tx) = state.snapshot_tx {
-                        if let Err(e) = snapshot_tx.send(snapshot) {
+                        if let Err(e) = snapshot_tx.try_send(snapshot) {
                             error!("Failed to send interval snapshot: {}", e);
                         } else {
                             info!("Automatic snapshot sent at sequence {}", state.sequence);
@@ -358,8 +282,15 @@ impl SessionMonitor {
         Ok(())
     }
 
-    /// Internal method to create snapshot from locked state
+    /// Internal method to create snapshot
     fn create_snapshot_internal(state: &SessionState) -> Result<Snapshot> {
+        // Check if the connection is in auto-commit mode (no active transaction)
+        if !state.conn.is_autocommit() {
+            return Err(anyhow::anyhow!(
+                "Cannot create snapshot while a transaction is active"
+            ));
+        }
+
         // Serialize database to bytes using a temporary file
         let temp_path =
             std::env::temp_dir().join(format!("synddb_snapshot_{}.db", uuid::Uuid::new_v4()));
@@ -390,54 +321,56 @@ impl SessionMonitor {
         })
     }
 
-    /// Capture and send all changes since last publish
-    ///
-    /// This is called automatically by the publish thread, but can also be called
-    /// manually to publish immediately (e.g., after critical transactions).
+    /// Trigger changeset extraction and publishing.
+    /// Call this after committing transactions to send changesets to the sequencer.
+    /// Must be called from the same thread that created the `SessionMonitor`.
     pub(crate) fn publish(&self) -> Result<()> {
-        Self::publish_internal(&self.state)
-    }
-
-    /// Create a complete snapshot of the database
-    ///
-    /// This captures the full current state of the database as a portable `SQLite` file.
-    /// The snapshot includes the current sequence number, so replicas can know which
-    /// changesets to apply after restoring from this snapshot.
-    ///
-    /// # Returns
-    ///
-    /// A `Snapshot` containing:
-    /// - Complete database file as bytes (cross-platform portable)
-    /// - Current sequence number (changesets with seq >= this apply after snapshot)
-    /// - Timestamp of snapshot creation
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use rusqlite::Connection;
-    /// # use synddb_client::SyndDB;
-    /// # let conn = Box::leak(Box::new(Connection::open("app.db").unwrap()));
-    /// # let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
-    /// // Create snapshot for new replicas
-    /// let snapshot = synddb.snapshot()?;
-    ///
-    /// // Send to sequencer or new replica
-    /// // Replicas restore from snapshot, then apply changesets with seq >= snapshot.sequence
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub(crate) fn snapshot(&self) -> Result<Snapshot> {
-        info!("Creating manual database snapshot");
-
-        let state = self.state.lock().unwrap();
-        let snapshot = Self::create_snapshot_internal(&state)?;
-
-        info!(
-            "Manual snapshot created: {} bytes at sequence {}",
-            snapshot.data.len(),
-            snapshot.sequence
+        debug_assert_eq!(
+            thread::current().id(),
+            self.owner_thread,
+            "publish() must be called from the same thread that created SyndDB"
         );
 
-        Ok(snapshot)
+        SESSION_STATE.with(|state| {
+            let mut guard = state.borrow_mut();
+            guard.as_mut().map_or_else(
+                || {
+                    Err(anyhow::anyhow!(
+                        "Session state not initialized - internal error"
+                    ))
+                },
+                Self::extract_and_send_changeset,
+            )
+        })
+    }
+
+    /// Create a complete snapshot of the database.
+    /// Must be called from the same thread that created the `SessionMonitor`.
+    pub(crate) fn snapshot(&self) -> Result<Snapshot> {
+        debug_assert_eq!(
+            thread::current().id(),
+            self.owner_thread,
+            "snapshot() must be called from the same thread that created SyndDB"
+        );
+
+        info!("Creating manual database snapshot");
+
+        SESSION_STATE.with(|state| {
+            let guard = state.borrow();
+            if let Some(ref s) = *guard {
+                let snapshot = Self::create_snapshot_internal(s)?;
+                info!(
+                    "Manual snapshot created: {} bytes at sequence {}",
+                    snapshot.data.len(),
+                    snapshot.sequence
+                );
+                Ok(snapshot)
+            } else {
+                Err(anyhow::anyhow!(
+                    "Session state not initialized - internal error"
+                ))
+            }
+        })
     }
 }
 
@@ -445,14 +378,29 @@ impl Drop for SessionMonitor {
     fn drop(&mut self) {
         debug!("Dropping SessionMonitor");
 
-        // Signal publish thread to stop
-        let _ = self.publish_shutdown_tx.send(());
+        // Clear the update hook
+        self.conn.update_hook(None::<fn(Action, &str, &str, i64)>);
 
-        // Wait for publish thread to finish
-        if let Some(handle) = self.publish_handle.take() {
-            if let Err(e) = handle.join() {
-                error!("Publish thread panicked: {:?}", e);
+        // Final extraction of any pending changesets
+        SESSION_STATE.with(|state| {
+            if let Ok(mut guard) = state.try_borrow_mut() {
+                if let Some(ref mut s) = *guard {
+                    if let Err(e) = Self::extract_and_send_changeset(s) {
+                        debug!("Final changeset extraction: {}", e);
+                    }
+                }
+            } else {
+                error!("Failed to borrow session state during drop - concurrent access detected");
             }
-        }
+        });
+
+        // Clear the thread-local state
+        SESSION_STATE.with(|state| {
+            if let Ok(mut guard) = state.try_borrow_mut() {
+                *guard = None;
+            }
+        });
+
+        debug!("SessionMonitor dropped");
     }
 }

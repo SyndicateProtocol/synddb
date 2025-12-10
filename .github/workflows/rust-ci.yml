@@ -24,7 +24,7 @@ env:
   # Make sure CI fails on all warnings, including Clippy lints
   RUSTFLAGS: "-Dwarnings"
   # Rust version for consistency across jobs
-  RUST_VERSION: "1.83.0"
+  RUST_VERSION: "1.91.0"
 
 jobs:
   taplo:
@@ -153,3 +153,28 @@ jobs:
 
       - name: Run tests (tests/confidential-space)
         run: cargo test --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
+
+  stress-test:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Session Stress Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build stress test
+        run: cargo build --package synddb-benchmark --bin session-stress-test --release
+
+      - name: Run session stress test
+        run: |
+          ./target/release/session-stress-test --duration 15
+        env:
+          RUST_LOG: info

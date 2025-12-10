@@ -7,15 +7,16 @@ Usage:
     # Attach to database file
     synddb = SyndDB.attach('app.db', 'http://localhost:8433')
 
-    # Now use SQLite normally - changesets are automatically captured
+    # Use SQLite normally - changesets are automatically captured
     import sqlite3
     conn = sqlite3.connect('app.db')
     conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 100))
+    conn.commit()
 
-    # Manually publish for critical transactions
+    # IMPORTANT: Call publish() after commits to send changesets
     synddb.publish()
 
-    # Create a snapshot
+    # Create a snapshot (optional)
     synddb.snapshot()
 
     # Clean up (or let Python garbage collector handle it)
@@ -93,7 +94,7 @@ _lib.synddb_attach.restype = ctypes.c_int
 _lib.synddb_attach_with_config.argtypes = [
     ctypes.c_char_p,  # db_path
     ctypes.c_char_p,  # sequencer_url
-    ctypes.c_uint64,  # publish_interval_ms
+    ctypes.c_uint64,  # flush_interval_ms
     ctypes.c_uint64,  # snapshot_interval
     ctypes.POINTER(ctypes.POINTER(_SyndDBHandle))  # out_handle
 ]
@@ -166,7 +167,7 @@ class SyndDB:
         cls,
         db_path: str,
         sequencer_url: str,
-        publish_interval_ms: int = 1000,
+        flush_interval_ms: int = 1000,
         snapshot_interval: int = 0
     ) -> 'SyndDB':
         """
@@ -175,7 +176,7 @@ class SyndDB:
         Args:
             db_path: Path to SQLite database file
             sequencer_url: URL of sequencer TEE
-            publish_interval_ms: Milliseconds between automatic publishes (default: 1000)
+            flush_interval_ms: Milliseconds between automatic publishes (default: 1000)
             snapshot_interval: Changesets between snapshots (default: 0 = disabled)
 
         Returns:
@@ -185,7 +186,7 @@ class SyndDB:
             >>> synddb = SyndDB.attach_with_config(
             ...     'app.db',
             ...     'http://localhost:8433',
-            ...     publish_interval_ms=500,  # Publish every 500ms
+            ...     flush_interval_ms=500,  # Publish every 500ms
             ...     snapshot_interval=100      # Snapshot every 100 changesets
             ... )
         """
@@ -193,7 +194,7 @@ class SyndDB:
         result = _lib.synddb_attach_with_config(
             db_path.encode('utf-8'),
             sequencer_url.encode('utf-8'),
-            publish_interval_ms,
+            flush_interval_ms,
             snapshot_interval,
             ctypes.byref(handle)
         )
@@ -207,10 +208,10 @@ class SyndDB:
 
     def publish(self):
         """
-        Manually publish all pending changesets
+        Publish all pending changesets to the sequencer
 
-        This is called automatically every publish_interval,
-        but can be called manually for critical transactions.
+        Call this after committing transactions to send changesets to the sequencer.
+        Also called automatically on detach for graceful shutdown.
 
         Raises:
             RuntimeError: If publish fails
@@ -317,7 +318,7 @@ def attach(db_path: str, sequencer_url: str, **kwargs) -> SyndDB:
     Args:
         db_path: Path to SQLite database file
         sequencer_url: URL of sequencer TEE
-        **kwargs: Optional config (publish_interval_ms, snapshot_interval)
+        **kwargs: Optional config (flush_interval_ms, snapshot_interval)
 
     Returns:
         SyndDB instance

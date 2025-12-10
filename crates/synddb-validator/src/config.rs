@@ -1,9 +1,40 @@
 //! Configuration for the validator
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
+use strum::{EnumIter, IntoEnumIterator};
+
+/// Available fetcher types for retrieving messages from DA layer
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum FetcherType {
+    /// HTTP fetcher for sequencer's local DA API
+    #[default]
+    Http,
+    /// Google Cloud Storage fetcher
+    Gcs,
+}
+
+impl FetcherType {
+    /// Get all supported fetcher types as strings
+    pub fn supported_types() -> Vec<String> {
+        Self::iter().map(|t| t.to_string()).collect()
+    }
+}
+
+impl fmt::Display for FetcherType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Http => write!(f, "http"),
+            Self::Gcs => write!(f, "gcs"),
+        }
+    }
+}
 
 /// `SyndDB` Validator configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
@@ -26,7 +57,15 @@ pub struct ValidatorConfig {
     #[arg(long, env = "SEQUENCER_ADDRESS")]
     pub sequencer_address: String,
 
-    /// GCS bucket for fetching messages
+    /// Fetcher type for retrieving messages from DA layer
+    #[arg(long, env = "FETCHER_TYPE", value_enum, default_value = "http")]
+    pub fetcher_type: FetcherType,
+
+    /// Sequencer URL for fetching messages via HTTP (required when `fetcher_type=http`)
+    #[arg(long, env = "SEQUENCER_URL")]
+    pub sequencer_url: Option<String>,
+
+    /// GCS bucket for fetching messages (required when `fetcher_type=gcs`)
     #[arg(long, env = "GCS_BUCKET")]
     pub gcs_bucket: Option<String>,
 

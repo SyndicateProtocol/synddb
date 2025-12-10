@@ -44,12 +44,16 @@ hex = { workspace = true }
 # Utilities
 base64 = { workspace = true }
 async-trait = { workspace = true }
+strum = { workspace = true }
 
 # HTTP client (for attestation verification)
 reqwest = { workspace = true }
 
 # Compression
 zstd = { workspace = true }
+
+# Local SQLite storage
+rusqlite = { workspace = true }
 
 # Google Cloud Storage
 google-cloud-storage = { workspace = true, optional = true }

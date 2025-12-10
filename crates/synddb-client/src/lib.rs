@@ -1,8 +1,7 @@
-//! `SyndDB` Client Library - Lightweight `SQLite` Session Extension Wrapper
+//! `SyndDB` Client Library - `SQLite` Session Extension Wrapper
 //!
-//! This library provides a minimal integration layer for applications to send
-//! changesets to the `SyndDB` sequencer. It runs in the application's TEE and
-//! does NOT contain any signing keys.
+//! This library captures `SQLite` changesets and sends them to the `SyndDB` sequencer.
+//! It runs in the application's TEE and does NOT contain any signing keys.
 //!
 //! # Usage
 //!
@@ -10,32 +9,53 @@
 //! use rusqlite::Connection;
 //! use synddb_client::SyndDB;
 //!
-//! // The connection must have 'static lifetime because SyndDB spawns background
-//! // threads that need access to it. Box::leak is the recommended pattern for
-//! // application-lifetime database connections.
+//! // Connection requires 'static lifetime (see "Why `'static` lifetime?" section below)
 //! let conn = Box::leak(Box::new(Connection::open("app.db")?));
-//! let _synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
+//! let synddb = SyndDB::attach(conn, "http://sequencer:8433")?;
 //!
-//! // Use SQLite normally - changesets are automatically captured and published every 1 second
+//! // Use SQLite normally - changesets are captured automatically
+//! conn.execute("CREATE TABLE trades (id INTEGER, amount INTEGER)", [])?;
 //! conn.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![1, 100])?;
+//!
+//! // For transactions, use unchecked_transaction() instead of transaction()
+//! let tx = conn.unchecked_transaction()?;
+//! tx.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![2, 200])?;
+//! tx.commit()?;
+//!
+//! // Publish changesets to sequencer
+//! synddb.publish()?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! # Publishing
+//!
+//! You must call [`SyndDB::publish()`] to send captured changesets to the sequencer:
+//! - After committing a transaction
+//! - After a batch of related operations
+//! - Periodically in long-running applications
+//!
+//! Changesets are also published when `SyndDB` is dropped (graceful shutdown).
+//!
+//! # Transactions
+//!
+//! Use [`Connection::unchecked_transaction()`] instead of [`Connection::transaction()`]
+//! because `SyndDB` holds an immutable borrow of the connection for the Session Extension.
+//!
+//! # Thread Safety
+//!
+//! The Session Extension is only accessed from the main thread. Background threads
+//! handle network I/O but only receive `Vec<u8>` bytes through channels.
+//!
 //! # Why `'static` lifetime?
 //!
-//! `SyndDB` uses background threads to:
-//! - Periodically publish changesets to the sequencer
-//! - Send snapshots when configured
-//! - Monitor blockchain events (with `chain-monitor` feature)
+//! `SyndDB` requires `&'static Connection` because the `SQLite` Session Extension is stored
+//! in thread-local storage, which requires `'static` bounds. We use `Box::leak` to satisfy
+//! this requirement. This means the Connection is intentionally never dropped - cleanup
+//! happens at process exit. This is acceptable for typical single-connection-per-process
+//! usage but means `SQLite`'s `Drop` cleanup (closing file handles, WAL checkpoint) won't run.
 //!
-//! These threads need to access the `SQLite` connection, which requires `'static` lifetime.
-//! Using `Box::leak` is safe here because:
-//! - The connection should live for the entire application lifetime anyway
-//! - `SyndDB` is typically attached once at startup and detached at shutdown
-//! - The small memory "leak" is reclaimed when the process exits
-//!
-//! If you need more control over the connection lifetime, consider using
-//! `SyndDB::shutdown()` for explicit cleanup before your application exits.
+//! `SyndDB` itself is dropped normally and performs graceful shutdown (publishing pending
+//! changesets, joining background threads).
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
@@ -147,7 +167,6 @@ impl SyndDB {
     pub fn attach_with_config(conn: &'static Connection, config: Config) -> Result<Self> {
         info!("Attaching SyndDB client to SQLite connection");
         info!("Sequencer URL: {}", config.sequencer_url);
-        info!("Publish interval: {:?}", config.publish_interval);
 
         // Create channels for communication
         let (changeset_tx, changeset_rx) = bounded(config.buffer_size);
@@ -156,11 +175,10 @@ impl SyndDB {
         // Create snapshot channel if automatic snapshots are enabled
         let snapshot_channel = (config.snapshot_interval > 0).then(|| bounded(10)); // Buffer up to 10 snapshots
 
-        // Start session monitor (includes automatic publish thread)
+        // Start session monitor
         let monitor = SessionMonitor::new(
             conn,
             changeset_tx,
-            config.publish_interval,
             config.snapshot_interval,
             snapshot_channel.as_ref().map(|(tx, _)| tx).cloned(),
         )?;
@@ -290,8 +308,8 @@ impl SyndDB {
 
     /// Publish all pending changesets to the sequencer
     ///
-    /// This is called automatically every `publish_interval` (default 1 second),
-    /// but can also be called manually to publish immediately (e.g., after critical transactions).
+    /// Call this after committing transactions to send changesets to the sequencer.
+    /// Also called automatically on `Drop` for graceful shutdown.
     pub fn publish(&self) -> Result<()> {
         self.monitor
             .as_ref()
@@ -462,6 +480,7 @@ impl Drop for SyndDB {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::default::Default;
 
     #[test]
     fn test_attach() {
@@ -528,5 +547,106 @@ mod tests {
 
         // Explicit shutdown should work without error
         synddb.shutdown().unwrap();
+    }
+
+    #[test]
+    fn test_concurrent_transactions() {
+        // This test simulates the orderbook benchmark usage pattern
+        // where transactions are run repeatedly while SyndDB is publishing
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        let _synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        eprintln!("Starting transaction loop...");
+
+        // Run multiple transaction batches, similar to orderbook benchmark
+        for batch in 0..10 {
+            eprintln!("Batch {}: starting transaction", batch);
+
+            // Use unchecked_transaction like the benchmark does
+            let tx = conn.unchecked_transaction().unwrap();
+
+            for i in 0..10 {
+                tx.execute(
+                    "INSERT INTO orders (user_id, amount) VALUES (?1, ?2)",
+                    rusqlite::params![batch * 10 + i, 1000],
+                )
+                .unwrap();
+            }
+
+            eprintln!("Batch {}: committing", batch);
+            tx.commit().unwrap();
+            eprintln!("Batch {}: committed", batch);
+
+            // Small delay between batches to allow publish thread to run
+            thread::sleep(std::time::Duration::from_millis(200));
+        }
+
+        eprintln!("All batches complete, checking row count...");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 100);
+
+        eprintln!("Test passed with {} rows", count);
+    }
+
+    #[test]
+    fn test_with_automatic_snapshots() {
+        // Test with automatic snapshot enabled (like Docker config)
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        // Configure with automatic snapshots every 10 changesets (low for testing)
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            snapshot_interval: 10,
+            ..Default::default()
+        };
+
+        let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        eprintln!("Starting with auto-snapshot every 10 changesets...");
+
+        // Run many transactions to trigger automatic snapshots
+        for batch in 0..20 {
+            eprintln!("Batch {}: starting transaction", batch);
+
+            let tx = conn.unchecked_transaction().unwrap();
+
+            for i in 0..5 {
+                tx.execute(
+                    "INSERT INTO orders (user_id, amount) VALUES (?1, ?2)",
+                    rusqlite::params![batch * 5 + i, 1000],
+                )
+                .unwrap();
+            }
+
+            eprintln!("Batch {}: committing", batch);
+            tx.commit().unwrap();
+            eprintln!("Batch {}: committed", batch);
+
+            // Small delay to allow publish thread
+            thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        eprintln!("All batches complete");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 100);
+
+        eprintln!("Test passed with {} rows", count);
     }
 }
