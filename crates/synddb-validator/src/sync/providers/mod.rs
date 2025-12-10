@@ -1,8 +1,8 @@
-//! DA provider implementations
+//! Storage provider implementations
 //!
 //! # Implemented Fetchers
 //!
-//! - [`HttpFetcher`] - HTTP fetcher for sequencer's local DA API
+//! - [`HttpFetcher`] - HTTP fetcher for sequencer's local storage API
 //! - [`GcsFetcher`] - Google Cloud Storage
 //! - [`MockFetcher`] - In-memory mock for testing
 

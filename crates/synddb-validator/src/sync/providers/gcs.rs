@@ -1,20 +1,31 @@
 //! Google Cloud Storage fetcher implementation
 //!
-//! Fetches signed messages from GCS with the same path structure used by the sequencer:
+//! Fetches signed batches from GCS with the same path structure used by the sequencer:
 //! ```text
 //! gs://{bucket}/{prefix}/
-//! ├── messages/
-//! │   ├── 000000000001.json
-//! │   ├── 000000000002.json
-//! │   └── ...
-//! └── state/
-//!     └── sequence.json
+//! └── batches/
+//!     ├── 000000000001_000000000050.json   # messages 1-50
+//!     ├── 000000000051_000000000100.json   # messages 51-100
+//!     └── ...
 //! ```
+//!
+//! Batch filenames follow the pattern `{start:012}_{end:012}.json` where:
+//! - `start` is the first sequence number in the batch (inclusive)
+//! - `end` is the last sequence number in the batch (inclusive)
+//! - Both are zero-padded to 12 digits
+//!
+//! TODO revisit this
+//! # Performance Note
+//!
+//! The `get()` method for single messages is inefficient as it lists all batches
+//! to find the containing batch. Use batch sync mode (via `BatchIndex`) for
+//! efficient sequential fetching. The validator's `run_batched()` handles this
+//! automatically.
 
-use crate::sync::fetcher::DAFetcher;
+use crate::sync::fetcher::{BatchInfo, StorageFetcher};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use synddb_shared::types::message::SignedMessage;
+use synddb_shared::types::message::{SignedBatch, SignedMessage};
 use tracing::{debug, info, warn};
 
 /// Google Cloud Storage fetcher
@@ -57,26 +68,40 @@ impl GcsFetcher {
         })
     }
 
-    /// Get the full path for a message (must match sequencer format exactly)
-    fn message_path(&self, sequence: u64) -> String {
-        format!("{}/messages/{:012}.json", self.prefix, sequence)
-    }
-}
-
-#[async_trait]
-impl DAFetcher for GcsFetcher {
-    fn name(&self) -> &str {
-        "gcs"
+    /// Get the path for a batch file
+    ///
+    /// Format: `{prefix}/batches/{start:012}_{end:012}.json`
+    fn batch_path(&self, start_sequence: u64, end_sequence: u64) -> String {
+        format!(
+            "{}/batches/{:012}_{:012}.json",
+            self.prefix, start_sequence, end_sequence
+        )
     }
 
-    async fn get(&self, sequence: u64) -> Result<Option<SignedMessage>> {
+    /// Parse a batch filename to extract start and end sequence numbers
+    ///
+    /// Expected format: `{start:012}_{end:012}.json`
+    /// Returns `Some((start, end))` if valid, `None` otherwise
+    fn parse_batch_filename(filename: &str) -> Option<(u64, u64)> {
+        let without_ext = filename.strip_suffix(".json")?;
+        let mut parts = without_ext.split('_');
+        let start = parts.next()?.parse::<u64>().ok()?;
+        let end = parts.next()?.parse::<u64>().ok()?;
+        // Ensure no extra parts
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((start, end))
+    }
+
+    /// Download data from GCS
+    async fn download(&self, path: &str) -> Result<Option<Vec<u8>>> {
         use google_cloud_storage::http::objects::download::Range;
         use google_cloud_storage::http::objects::get::GetObjectRequest;
 
-        let path = self.message_path(sequence);
         let request = GetObjectRequest {
             bucket: self.bucket.clone(),
-            object: path.clone(),
+            object: path.to_string(),
             ..Default::default()
         };
 
@@ -85,16 +110,10 @@ impl DAFetcher for GcsFetcher {
             .download_object(&request, &Range::default())
             .await
         {
-            Ok(data) => {
-                let message: SignedMessage = serde_json::from_slice(&data)
-                    .with_context(|| format!("Failed to parse message at {path}"))?;
-                debug!(sequence, "Fetched message from GCS");
-                Ok(Some(message))
-            }
+            Ok(data) => Ok(Some(data)),
             Err(e) => {
                 let error_str = e.to_string();
                 if error_str.contains("404") || error_str.contains("No such object") {
-                    debug!(sequence, "Message not found in GCS");
                     Ok(None)
                 } else {
                     Err(anyhow::anyhow!("Failed to download from GCS: {e}"))
@@ -103,10 +122,64 @@ impl DAFetcher for GcsFetcher {
         }
     }
 
+    /// Find the batch containing a specific sequence number
+    async fn find_batch_containing(&self, sequence: u64) -> Result<Option<SignedBatch>> {
+        let batches = self.list_batches().await?;
+        for info in batches {
+            if info.contains(sequence) {
+                return self.get_batch_by_path(&info.path).await;
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl StorageFetcher for GcsFetcher {
+    fn name(&self) -> &str {
+        "gcs"
+    }
+
+    fn supports_batches(&self) -> bool {
+        true
+    }
+
+    async fn get(&self, sequence: u64) -> Result<Option<SignedMessage>> {
+        // Find the batch containing this sequence and extract the message
+        match self.find_batch_containing(sequence).await? {
+            Some(batch) => {
+                let msg = batch.messages.into_iter().find(|m| m.sequence == sequence);
+                if msg.is_some() {
+                    debug!(sequence, "Fetched message from GCS batch");
+                } else {
+                    debug!(sequence, "Message not found in batch");
+                }
+                Ok(msg)
+            }
+            None => {
+                debug!(sequence, "No batch containing sequence found in GCS");
+                Ok(None)
+            }
+        }
+    }
+
     async fn get_latest_sequence(&self) -> Result<Option<u64>> {
+        let batches = self.list_batches().await?;
+        let max_seq = batches.iter().map(|b| b.end_sequence).max();
+
+        if let Some(seq) = max_seq {
+            debug!(sequence = seq, "Found latest sequence in GCS");
+        } else {
+            warn!("No batches found in GCS");
+        }
+
+        Ok(max_seq)
+    }
+
+    async fn list_batches(&self) -> Result<Vec<BatchInfo>> {
         use google_cloud_storage::http::objects::list::ListObjectsRequest;
 
-        let prefix = format!("{}/messages/", self.prefix);
+        let prefix = format!("{}/batches/", self.prefix);
         let request = ListObjectsRequest {
             bucket: self.bucket.clone(),
             prefix: Some(prefix),
@@ -115,46 +188,153 @@ impl DAFetcher for GcsFetcher {
 
         match self.client.list_objects(&request).await {
             Ok(response) => {
-                let max_seq = response
+                let mut batches: Vec<BatchInfo> = response
                     .items
                     .unwrap_or_default()
                     .iter()
                     .filter_map(|obj| {
-                        // Extract sequence from path like "prefix/messages/000000000042.json"
-                        let name: &str = &obj.name;
-                        name.rsplit('/')
-                            .next()
-                            .and_then(|filename| filename.strip_suffix(".json"))
-                            .and_then(|seq_str| seq_str.parse::<u64>().ok())
+                        let filename = obj.name.rsplit('/').next()?;
+                        let (start, end) = Self::parse_batch_filename(filename)?;
+                        Some(BatchInfo::new(start, end, obj.name.clone()))
                     })
-                    .max();
+                    .collect();
 
-                if let Some(seq) = max_seq {
-                    debug!(sequence = seq, "Found latest sequence in GCS");
-                } else {
-                    warn!("No messages found in GCS");
-                }
+                // Sort by start sequence
+                batches.sort_by_key(|b| b.start_sequence);
 
-                Ok(max_seq)
+                debug!(count = batches.len(), "Listed batches from GCS");
+                Ok(batches)
             }
-            Err(e) => Err(anyhow::anyhow!("Failed to list objects: {e}")),
+            Err(e) => Err(anyhow::anyhow!("Failed to list batch objects: {e}")),
+        }
+    }
+
+    async fn get_batch(&self, start_sequence: u64) -> Result<Option<SignedBatch>> {
+        use google_cloud_storage::http::objects::list::ListObjectsRequest;
+
+        // Find batch that starts with this sequence
+        let prefix = format!("{}/batches/{:012}_", self.prefix, start_sequence);
+        let request = ListObjectsRequest {
+            bucket: self.bucket.clone(),
+            prefix: Some(prefix),
+            ..Default::default()
+        };
+
+        match self.client.list_objects(&request).await {
+            Ok(response) => {
+                if let Some(obj) = response.items.and_then(|items| items.into_iter().next()) {
+                    return self.get_batch_by_path(&obj.name).await;
+                }
+                Ok(None)
+            }
+            Err(e) => Err(anyhow::anyhow!("Failed to list batch objects: {e}")),
+        }
+    }
+
+    async fn get_batch_by_path(&self, path: &str) -> Result<Option<SignedBatch>> {
+        match self.download(path).await? {
+            Some(data) => {
+                let batch: SignedBatch = serde_json::from_slice(&data)
+                    .with_context(|| format!("Failed to parse batch at {path}"))?;
+                debug!(
+                    start = batch.start_sequence,
+                    end = batch.end_sequence,
+                    messages = batch.messages.len(),
+                    "Fetched batch from GCS"
+                );
+                Ok(Some(batch))
+            }
+            None => {
+                debug!(path, "Batch not found in GCS");
+                Ok(None)
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn test_message_path_format() {
-        // We can't create a real GcsFetcher without GCS, but we can verify the path format
+    fn test_batch_path_format() {
         let prefix = "sequencer";
-        let path = format!("{}/messages/{:012}.json", prefix, 42);
-        assert_eq!(path, "sequencer/messages/000000000042.json");
+        let path = format!("{}/batches/{:012}_{:012}.json", prefix, 1, 50);
+        assert_eq!(path, "sequencer/batches/000000000001_000000000050.json");
 
-        let path = format!("{}/messages/{:012}.json", prefix, 0);
-        assert_eq!(path, "sequencer/messages/000000000000.json");
+        let path = format!("{}/batches/{:012}_{:012}.json", prefix, 0, 0);
+        assert_eq!(path, "sequencer/batches/000000000000_000000000000.json");
 
-        let path = format!("{}/messages/{:012}.json", prefix, 999_999_999_999_u64);
-        assert_eq!(path, "sequencer/messages/999999999999.json");
+        let path = format!(
+            "{}/batches/{:012}_{:012}.json",
+            prefix, 999_999_999_999_u64, 999_999_999_999_u64
+        );
+        assert_eq!(path, "sequencer/batches/999999999999_999999999999.json");
+    }
+
+    #[test]
+    fn test_parse_batch_filename_valid() {
+        let result = GcsFetcher::parse_batch_filename("000000000001_000000000050.json");
+        assert_eq!(result, Some((1, 50)));
+
+        let result = GcsFetcher::parse_batch_filename("000000001000_000000002000.json");
+        assert_eq!(result, Some((1000, 2000)));
+
+        // Single message batch
+        let result = GcsFetcher::parse_batch_filename("000000000042_000000000042.json");
+        assert_eq!(result, Some((42, 42)));
+    }
+
+    #[test]
+    fn test_parse_batch_filename_invalid() {
+        // Missing .json extension
+        assert_eq!(
+            GcsFetcher::parse_batch_filename("000000000001_000000000050"),
+            None
+        );
+
+        // Wrong extension
+        assert_eq!(
+            GcsFetcher::parse_batch_filename("000000000001_000000000050.txt"),
+            None
+        );
+
+        // Missing underscore
+        assert_eq!(
+            GcsFetcher::parse_batch_filename("000000000001000000000050.json"),
+            None
+        );
+
+        // Extra underscore
+        assert_eq!(
+            GcsFetcher::parse_batch_filename("000000000001_000000000050_extra.json"),
+            None
+        );
+
+        // Non-numeric
+        assert_eq!(GcsFetcher::parse_batch_filename("abcdef_ghijkl.json"), None);
+
+        // Empty
+        assert_eq!(GcsFetcher::parse_batch_filename(""), None);
+    }
+
+    #[test]
+    fn test_batch_filename_sorting() {
+        // Verify that batch filenames sort correctly lexicographically
+        let mut filenames = vec![
+            "000000000051_000000000100.json",
+            "000000000001_000000000050.json",
+            "000000000101_000000000150.json",
+        ];
+        filenames.sort();
+
+        assert_eq!(
+            filenames,
+            vec![
+                "000000000001_000000000050.json",
+                "000000000051_000000000100.json",
+                "000000000101_000000000150.json",
+            ]
+        );
     }
 }

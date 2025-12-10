@@ -9,11 +9,11 @@ End-to-end integration tests that validate the full SyndDB pipeline.
 │ customer_app │ ─────────────────► │ sequencer │
 │  (benchmark) │                    │           │
 └──────────────┘                    └─────┬─────┘
-                                          │ DA messages
+                                          │ storage messages
                                           ▼
-┌──────────────┐     fetch/sync     ┌───────────┐
-│  validator   │ ◄────────────────  │ local DA  │
-└──────────────┘                    └───────────┘
+┌──────────────┐     fetch/sync     ┌───────────────┐
+│  validator   │ ◄────────────────  │ local storage │
+└──────────────┘                    └───────────────┘
         │
         │ HTTP API
         ▼
@@ -26,7 +26,7 @@ End-to-end integration tests that validate the full SyndDB pipeline.
 
 | Service | Description |
 |---------|-------------|
-| `sequencer` | Signs changesets and publishes to local DA storage |
+| `sequencer` | Signs changesets and publishes to local storage |
 | `validator` | Syncs messages from sequencer via HTTP, validates signatures |
 | `validator2` | Second validator for multi-validator sync testing |
 | `customer_app` | Orderbook benchmark generating ~1000 changesets over 20s |
@@ -35,9 +35,9 @@ End-to-end integration tests that validate the full SyndDB pipeline.
 ## Tests
 
 - **sequencer_received** - Sequencer received and processed messages
-- **validator_synced** - Validator synced messages from DA
+- **validator_synced** - Validator synced messages from storage
 - **sync_consistency** - Validator caught up with sequencer (within tolerance)
-- **da_fetch** - DA message fetch API returns valid signed messages
+- **storage_fetch** - Storage message fetch API returns valid signed messages
 - **multi_validator** - Multiple validators sync to the same state
 - **snapshot** - Snapshot functionality works correctly
 

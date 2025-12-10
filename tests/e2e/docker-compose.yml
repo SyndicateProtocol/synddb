@@ -112,7 +112,7 @@ services:
       VALIDATOR_URL: "http://validator:8080"
       VALIDATOR2_URL: "http://validator2:8080"
       STARTUP_WAIT: "5"
-      DATA_WAIT: "25"
+      DATA_WAIT: "15"
       MAX_SYNC_DIFF: "5"
     depends_on:
       validator:

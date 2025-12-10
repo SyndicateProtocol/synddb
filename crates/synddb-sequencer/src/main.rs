@@ -13,7 +13,7 @@ use tracing::{error, info, warn};
 use synddb_sequencer::attestation::{AttestationConfig, AttestationVerifier};
 use synddb_sequencer::config::PublisherType;
 use synddb_sequencer::publish::local::{LocalConfig, LocalPublisher};
-use synddb_sequencer::publish::traits::DAPublisher;
+use synddb_sequencer::publish::traits::StoragePublisher;
 use synddb_sequencer::{
     config::SequencerConfig,
     http_api::{create_router, AppState},
@@ -47,49 +47,51 @@ async fn main() -> Result<()> {
     let signer = Arc::new(signer);
 
     // Initialize publisher based on publisher_type
-    let (publisher, local_publisher): (Option<Arc<dyn DAPublisher>>, Option<Arc<LocalPublisher>>) =
-        match config.publisher_type {
-            PublisherType::None => {
-                info!("Publisher disabled (messages will not be persisted)");
-                (None, None)
-            }
-            PublisherType::Local => {
-                let path = config.local_storage_path.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("LOCAL_STORAGE_PATH is required when publisher_type=local")
+    let (publisher, local_publisher): (
+        Option<Arc<dyn StoragePublisher>>,
+        Option<Arc<LocalPublisher>>,
+    ) = match config.publisher_type {
+        PublisherType::None => {
+            info!("Publisher disabled (messages will not be persisted)");
+            (None, None)
+        }
+        PublisherType::Local => {
+            let path = config.local_storage_path.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("LOCAL_STORAGE_PATH is required when publisher_type=local")
+            })?;
+            let local_config = if path == ":memory:" {
+                LocalConfig::in_memory()
+            } else {
+                LocalConfig::file(path)
+            };
+            let local_pub = LocalPublisher::new_arc(local_config, Arc::clone(&signer))
+                .context("Failed to initialize local publisher")?;
+            (
+                Some(local_pub.clone() as Arc<dyn StoragePublisher>),
+                Some(local_pub),
+            )
+        }
+        PublisherType::Gcs => {
+            #[cfg(feature = "gcs")]
+            {
+                use synddb_sequencer::publish::gcs::{GcsConfig, GcsPublisher};
+                let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
                 })?;
-                let local_config = if path == ":memory:" {
-                    LocalConfig::in_memory()
-                } else {
-                    LocalConfig::file(path)
-                };
-                let local_pub = LocalPublisher::new_arc(local_config, Arc::clone(&signer))
-                    .context("Failed to initialize local publisher")?;
-                (
-                    Some(local_pub.clone() as Arc<dyn DAPublisher>),
-                    Some(local_pub),
-                )
+                let gcs_config = GcsConfig::new(bucket).with_prefix(&config.gcs_prefix);
+                let gcs_pub = GcsPublisher::new(gcs_config, Arc::clone(&signer))
+                    .await
+                    .context("Failed to initialize GCS publisher")?;
+                (Some(Arc::new(gcs_pub) as Arc<dyn StoragePublisher>), None)
             }
-            PublisherType::Gcs => {
-                #[cfg(feature = "gcs")]
-                {
-                    use synddb_sequencer::publish::gcs::{GcsConfig, GcsPublisher};
-                    let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
-                    })?;
-                    let gcs_config = GcsConfig::new(bucket).with_prefix(&config.gcs_prefix);
-                    let gcs_pub = GcsPublisher::new(gcs_config, Arc::clone(&signer))
-                        .await
-                        .context("Failed to initialize GCS publisher")?;
-                    (Some(Arc::new(gcs_pub) as Arc<dyn DAPublisher>), None)
-                }
-                #[cfg(not(feature = "gcs"))]
-                {
-                    anyhow::bail!(
-                        "publisher_type=gcs requires the 'gcs' feature. Compile with --features gcs"
-                    );
-                }
+            #[cfg(not(feature = "gcs"))]
+            {
+                anyhow::bail!(
+                    "publisher_type=gcs requires the 'gcs' feature. Compile with --features gcs"
+                );
             }
-        };
+        }
+    };
 
     // Try to recover sequence from publisher
     let start_sequence = match &publisher {
@@ -144,10 +146,10 @@ async fn main() -> Result<()> {
     // Create the HTTP router
     let mut app = create_router(state);
 
-    // Mount local publisher's DA fetch API if configured
+    // Mount local publisher's storage fetch API if configured
     if let Some(ref local_pub) = local_publisher {
-        info!("Mounting local DA fetch API at /da/*");
-        app = app.nest("/da", local_pub.routes());
+        info!("Mounting local storage fetch API at /storage/*");
+        app = app.nest("/storage", local_pub.routes());
     }
 
     // Bind and serve
@@ -174,7 +176,7 @@ async fn main() -> Result<()> {
 /// Wait for shutdown signal and perform graceful shutdown
 async fn shutdown_signal(
     inbox: Arc<Inbox>,
-    publisher: Option<Arc<dyn DAPublisher>>,
+    publisher: Option<Arc<dyn StoragePublisher>>,
     timeout: std::time::Duration,
 ) {
     let ctrl_c = async {

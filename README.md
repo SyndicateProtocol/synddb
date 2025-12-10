@@ -74,7 +74,7 @@ See [crates/synddb-client/README.md](crates/synddb-client/README.md) for integra
 - **Language Agnostic**: Works with any language that has SQLite bindings (Python, JavaScript, Go, Rust, etc.)
 - **High Performance**: Sub-millisecond writes, 50,000-100,000+ ops/sec throughput
 - **Deterministic Replication**: Session Extension changesets for validators
-- **Automatic Publishing**: Client library automatically sends changesets to sequencer service for DA layer publishing
+- **Automatic Publishing**: Client library automatically sends changesets to sequencer service for storage layer publishing
 - **Minimal Integration**: Just import the client library and attach to your SQLite connection
 
 ## Components
@@ -105,12 +105,12 @@ The client library embeds in applications and captures SQL changes:
 
 ### Sequencer Service (Planned)
 
-The sequencer service receives changesets from clients and publishes to DA layers:
+The sequencer service receives changesets from clients and publishes to storage layers:
 
 - **HTTP Receiver**: Receives changesets/snapshots from client libraries
 - **Batcher**: Accumulates and batches received changesets
 - **Attestor**: Compresses and signs batches with TEE-protected keys
-- **Publisher**: Publishes to multiple DA layers (Celestia, EigenDA, IPFS, Arweave)
+- **Publisher**: Publishes to multiple storage layers (Celestia, EigenDA, IPFS, Arweave)
 - **Message Monitor**: Handles bidirectional bridge message passing
 
 [Sequencer Implementation Plan →](PLAN_SEQUENCER.md)
@@ -195,7 +195,7 @@ SyndDB uses SQLite's Session Extension to capture row-level changes deterministi
 5. Creates periodic snapshots and snapshots on schema changes
 6. Includes TEE attestation tokens with all data
 
-The sequencer service receives changesets from clients, compresses and signs them, then publishes to configured DA layers.
+The sequencer service receives changesets from clients, compresses and signs them, then publishes to configured storage layers.
 
 Applications continue using SQLite normally - the client library operates transparently in the background. For critical transactions, applications can call `publish()` immediately after committing.
 

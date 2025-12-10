@@ -7,13 +7,13 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use strum::{EnumIter, IntoEnumIterator};
 
-/// Available fetcher types for retrieving messages from DA layer
+/// Available fetcher types for retrieving messages from the storage layer
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum FetcherType {
-    /// HTTP fetcher for sequencer's local DA API
+    /// HTTP fetcher for sequencer's local storage API
     #[default]
     Http,
     /// Google Cloud Storage fetcher
@@ -57,7 +57,7 @@ pub struct ValidatorConfig {
     #[arg(long, env = "SEQUENCER_ADDRESS")]
     pub sequencer_address: String,
 
-    /// Fetcher type for retrieving messages from DA layer
+    /// Fetcher type for retrieving messages from storage layer
     #[arg(long, env = "FETCHER_TYPE", value_enum, default_value = "http")]
     pub fetcher_type: FetcherType,
 
@@ -133,6 +133,16 @@ pub struct ValidatorConfig {
     /// Skip gaps after max retries instead of erroring (use with caution)
     #[arg(long, env = "GAP_SKIP_ON_FAILURE", default_value = "false")]
     pub gap_skip_on_failure: bool,
+
+    // === Batch Sync ===
+    /// Enable batch sync mode when the fetcher supports it (default: true)
+    #[arg(long, env = "BATCH_SYNC_ENABLED", default_value = "true", action = clap::ArgAction::Set)]
+    pub batch_sync_enabled: bool,
+
+    /// How often to refresh the batch index when syncing in batch mode
+    #[arg(long, env = "BATCH_INDEX_REFRESH_INTERVAL", default_value = "10s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub batch_index_refresh_interval: Duration,
 }
 
 impl ValidatorConfig {
@@ -196,6 +206,9 @@ mod tests {
         assert_eq!(config.start_sequence, 0);
         assert!(!config.log_json);
         assert!(!config.bridge_signer);
+        // Batch sync defaults
+        assert!(config.batch_sync_enabled);
+        assert_eq!(config.batch_index_refresh_interval, Duration::from_secs(10));
     }
 
     #[test]
@@ -272,5 +285,21 @@ mod tests {
         ]);
 
         assert!(config.validate_bridge_config().is_ok());
+    }
+
+    #[test]
+    fn test_batch_sync_config() {
+        let config = ValidatorConfig::parse_from([
+            "synddb-validator",
+            "--sequencer-address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--batch-sync-enabled",
+            "false",
+            "--batch-index-refresh-interval",
+            "30s",
+        ]);
+
+        assert!(!config.batch_sync_enabled);
+        assert_eq!(config.batch_index_refresh_interval, Duration::from_secs(30));
     }
 }

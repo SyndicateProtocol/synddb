@@ -384,15 +384,20 @@ Validators **must** run in Trusted Execution Environments to ensure they are run
 Deploy the default validator in a TEE:
 
 ```bash
-# Run the default validator in TEE
+# Run the validator (fetching from sequencer's HTTP API)
 synddb-validator \
-    --da-layer celestia \
-    --chain-rpc https://... \
-    --mode default \
-    --tee-attestation-key /path/to/key
+    --fetcher-type http \
+    --sequencer-url http://sequencer:8433 \
+    --sequencer-address 0x...
+
+# Or fetch from GCS
+synddb-validator \
+    --fetcher-type gcs \
+    --gcs-bucket my-bucket \
+    --sequencer-address 0x...
 ```
 
-The default validator will sync SQL operations (changesets and snapshots) from DA layers, apply them to rebuild state, and verify basic invariants before signing for settlement.
+The default validator will sync SQL operations (changesets and snapshots) from storage layers, apply them to rebuild state, and verify basic invariants before signing for settlement.
 
 Applications can be in any language, while validators share the same implementation to ensure consistent verification across the network.
 
@@ -508,7 +513,7 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
    ```
 
    **Security Note**: The application and sequencer run in **separate TEEs**. This is critical because:
-   - The sequencer holds signing keys for DA layer publishing
+   - The sequencer holds signing keys for storage layer publishing
    - Deploying multiple containers in a single TEE is complex and increases attack surface
    - TEE separation provides defense in depth - even if the application is compromised, signing keys remain isolated
 
@@ -545,7 +550,7 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
 - **Client Library Integration**: Import lightweight SyndDB client library (Rust/Python/Node.js or C FFI)
 - **SQL as Truth**: All state changes must go through SQLite for capture
 - **Automatic Capture**: Client library automatically captures changesets and snapshots
-- **Automatic Publishing**: Sequencer service handles all DA layer and blockchain interaction
+- **Automatic Publishing**: Sequencer service handles all storage layer and blockchain interaction
 - **TEE Isolation**: Application and sequencer run in separate TEEs for key isolation
 - **Consistent Validation**: Validators use the same implementation for verification
 - **Permissionless Replication**: Anyone can sync and query the data
@@ -574,7 +579,7 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 
 - **SyndDB** - Infrastructure that enables applications (any language) using SQLite to publish SQL operations to blockchain
 - **SyndDB Client Library** - Lightweight library (Rust/Python/Node.js or C FFI) that embeds in applications, captures changesets/snapshots via SQLite Session Extension, and sends them to the sequencer service
-- **Sequencer Service** - Server process (running in a separate TEE) that receives changesets/snapshots from client libraries and publishes them to DA layers and blockchain
+- **Sequencer Service** - Server process (running in a separate TEE) that receives changesets/snapshots from client libraries and publishes them to storage layers and blockchain
 - **SQL Operations** - Database modifications (INSERT/UPDATE/DELETE) that form the verifiable audit trail. Captured as changesets for efficient replication.
 - **Changesets** - The technical mechanism for capturing SQL operations: deterministic logical database changes via SQLite Session Extension, more compact and auditable than physical page changes
 - **Snapshots** - Complete database state at a point in time, published periodically for recovery/bootstrapping and immediately on schema changes
@@ -582,18 +587,18 @@ This approach makes SyndDB a drop-in solution for adding blockchain verifiabilit
 ### Node Types
 
 - **Application** - Your application (any language) running inside a TEE with SQLite and SyndDB client library, sending SQL operations to sequencer service
-- **Sequencer** - Service running in a separate TEE that receives operations from applications and publishes to DA layers (holds signing keys, isolated from application)
+- **Sequencer** - Service running in a separate TEE that receives operations from applications and publishes to storage layers (holds signing keys, isolated from application)
 - **Read Replica** - Any node that syncs published SQL operations to serve queries (anyone can run permissionlessly)
 - **Validator** - Read replica with additional validation logic that runs in a TEE and verifies SQL operations before signing for settlement
 
 ### State Management Terms
 
-- **State Diff** - Batched SQL operations (captured as changesets) representing incremental database changes, published to DA layers
-- **State Snapshot** - Complete SQLite database file at a specific version, published to DA layers for bootstrapping and recovery (also published immediately on schema changes)
+- **State Diff** - Batched SQL operations (captured as changesets) representing incremental database changes, published to storage layers
+- **State Snapshot** - Complete SQLite database file at a specific version, published to storage layers for bootstrapping and recovery (also published immediately on schema changes)
 - **State Update** - Generic term for either a changeset or snapshot. The cryptographic hash of a state update uniquely identifies that version of the database. This term replaces "state root" used in Merkle-based blockchains, since SyndDB uses changesets/snapshots rather than Merkle trees.
 - **State Commitment** - Signed message published by the sequencer containing a state update hash, system status (Healthy/Degraded/Halted), and metadata. This TEE-signed attestation allows validators to verify the sequencer's view of the system state. Similar to how rollups publish "state commitments" that include state roots plus metadata, but adapted for SyndDB's non-Merkle architecture.
 - **Sequence Number** - Monotonically increasing counter ensuring strict ordering of SQL operations
-- **Settlement** - Process where validators publish verified state to blockchain after reading from DA layers
+- **Settlement** - Process where validators publish verified state to blockchain after reading from storage layers
 
 ### Message Passing Components
 

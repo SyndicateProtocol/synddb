@@ -7,19 +7,21 @@ use crate::apply::applier::ChangesetApplier;
 use crate::config::ValidatorConfig;
 use crate::error::ValidatorError;
 use crate::state::store::StateStore;
-use crate::sync::fetcher::DAFetcher;
+use crate::sync::batch_index::{BatchIndex, BatchIterator};
+use crate::sync::fetcher::StorageFetcher;
 use crate::sync::verifier::SignatureVerifier;
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Duration;
+use synddb_shared::types::message::SignedBatch;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
 /// Core validator that syncs and applies state from the sequencer
 pub struct Validator {
-    /// DA fetcher for retrieving messages
-    fetcher: Arc<dyn DAFetcher>,
+    /// Storage fetcher for retrieving messages
+    fetcher: Arc<dyn StorageFetcher>,
     /// Signature verifier for message authentication
     verifier: SignatureVerifier,
     /// Changeset applier for state reconstruction
@@ -36,13 +38,17 @@ pub struct Validator {
     gap_retry_delay: Duration,
     /// Skip gaps after max retries
     gap_skip_on_failure: bool,
+    /// Whether batch sync is enabled
+    batch_sync_enabled: bool,
+    /// How often to refresh the batch index
+    batch_index_refresh_interval: Duration,
 }
 
 impl Validator {
     /// Create a new validator from configuration
     pub fn new(
         config: &ValidatorConfig,
-        fetcher: Arc<dyn DAFetcher>,
+        fetcher: Arc<dyn StorageFetcher>,
         shutdown_rx: watch::Receiver<bool>,
     ) -> Result<Self> {
         // Parse sequencer address
@@ -61,6 +67,7 @@ impl Validator {
             database = %config.database_path,
             gap_retry_count = config.gap_retry_count,
             gap_skip_on_failure = config.gap_skip_on_failure,
+            batch_sync_enabled = config.batch_sync_enabled,
             "Validator initialized"
         );
 
@@ -74,12 +81,14 @@ impl Validator {
             gap_retry_count: config.gap_retry_count,
             gap_retry_delay: config.gap_retry_delay,
             gap_skip_on_failure: config.gap_skip_on_failure,
+            batch_sync_enabled: config.batch_sync_enabled,
+            batch_index_refresh_interval: config.batch_index_refresh_interval,
         })
     }
 
     /// Create a validator for testing with in-memory storage
     pub fn in_memory(
-        fetcher: Arc<dyn DAFetcher>,
+        fetcher: Arc<dyn StorageFetcher>,
         sequencer_address: Address,
         shutdown_rx: watch::Receiver<bool>,
     ) -> Result<Self> {
@@ -97,6 +106,8 @@ impl Validator {
             gap_retry_count: 3,
             gap_retry_delay: Duration::from_millis(100),
             gap_skip_on_failure: false,
+            batch_sync_enabled: true,
+            batch_index_refresh_interval: Duration::from_secs(1),
         })
     }
 
@@ -259,7 +270,7 @@ impl Validator {
     /// Returns `Some(sequence)` if a message exists at a higher sequence number,
     /// indicating a gap. Returns `None` if no future messages are found.
     async fn detect_gap(
-        fetcher: &Arc<dyn DAFetcher>,
+        fetcher: &Arc<dyn StorageFetcher>,
         expected_sequence: u64,
     ) -> Result<Option<u64>> {
         // Check a few future sequences to see if data exists
@@ -379,6 +390,300 @@ impl Validator {
         }
 
         Ok(synced)
+    }
+
+    // =========================================================================
+    // Batch sync methods (for fetchers that support batch operations)
+    // =========================================================================
+
+    /// Check if the fetcher supports batch operations
+    pub fn supports_batch_sync(&self) -> bool {
+        self.fetcher.supports_batches()
+    }
+
+    /// Build or refresh a batch index from the fetcher
+    pub async fn build_batch_index(&self) -> Result<BatchIndex> {
+        BatchIndex::build(&self.fetcher).await
+    }
+
+    /// Sync all messages from a batch, verifying and applying each
+    ///
+    /// Returns the number of messages synced from this batch.
+    pub async fn sync_batch<F>(&mut self, batch: &SignedBatch, on_withdrawal: &mut F) -> Result<u64>
+    where
+        F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
+    {
+        let next_sequence = self.state.next_sequence()?;
+        let mut synced = 0;
+
+        for message in &batch.messages {
+            // Skip messages we've already processed
+            if message.sequence < next_sequence {
+                debug!(
+                    sequence = message.sequence,
+                    next_sequence, "Skipping already-synced message"
+                );
+                continue;
+            }
+
+            // Verify signature
+            self.verifier
+                .verify(message)
+                .map_err(|e| ValidatorError::SignatureVerification(e.to_string()))?;
+
+            debug!(sequence = message.sequence, "Signature verified");
+
+            // Check for withdrawal and call callback
+            if let Some(withdrawal) = ChangesetApplier::extract_withdrawal(message)? {
+                debug!(
+                    sequence = message.sequence,
+                    request_id = %withdrawal.request_id,
+                    "Processing withdrawal message"
+                );
+                on_withdrawal(&withdrawal);
+            }
+
+            // Apply to database
+            self.applier.apply_message(message)?;
+
+            debug!(sequence = message.sequence, "Message applied");
+
+            // Update state
+            self.state.record_sync(message.sequence)?;
+            synced += 1;
+        }
+
+        if synced > 0 {
+            info!(
+                batch_start = batch.start_sequence,
+                batch_end = batch.end_sequence,
+                synced,
+                "Synced batch"
+            );
+        }
+
+        Ok(synced)
+    }
+
+    /// Sync to head using batch fetching (more efficient for sequential sync)
+    ///
+    /// Uses batch index to efficiently fetch and process messages in batches.
+    /// Falls back to single-message fetching if batch sync is not supported.
+    pub async fn sync_to_head_batched(&mut self) -> Result<u64> {
+        if !self.fetcher.supports_batches() {
+            debug!("Fetcher doesn't support batches, falling back to single-message sync");
+            return self.sync_to_head().await;
+        }
+
+        let index = self.build_batch_index().await?;
+        let next_sequence = self.state.next_sequence()?;
+        let mut total_synced = 0;
+
+        // Create iterator starting at our next sequence
+        let mut iter = BatchIterator::starting_at(&index, next_sequence);
+
+        while !iter.is_exhausted(&index) {
+            let batch_info = match iter.current_batch(&index) {
+                Some(info) => info.clone(),
+                None => break,
+            };
+
+            // Fetch the batch
+            match self.fetcher.get_batch_by_path(&batch_info.path).await? {
+                Some(batch) => {
+                    let synced = self.sync_batch(&batch, &mut |_| {}).await?;
+                    total_synced += synced;
+                }
+                None => {
+                    warn!(
+                        path = batch_info.path,
+                        start = batch_info.start_sequence,
+                        "Batch not found"
+                    );
+                }
+            }
+
+            // Move to next batch
+            iter.advance_to_next_batch();
+        }
+
+        if total_synced > 0 {
+            info!(
+                total_synced,
+                batches_processed = iter.batch_index(),
+                "Batched sync complete"
+            );
+        }
+
+        Ok(total_synced)
+    }
+
+    /// Run the sync loop using batch mode when available
+    ///
+    /// This is the recommended sync loop for production use. It:
+    /// - Uses batch fetching when the fetcher supports it
+    /// - Falls back to single-message fetching otherwise
+    /// - Handles gap detection and recovery
+    pub async fn run_batched<W, S>(&mut self, mut on_withdrawal: W, mut on_sync: S) -> Result<()>
+    where
+        W: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
+        S: FnMut(u64),
+    {
+        let use_batch_mode = self.batch_sync_enabled && self.fetcher.supports_batches();
+        info!(
+            batch_mode = use_batch_mode,
+            batch_sync_enabled = self.batch_sync_enabled,
+            fetcher_supports_batches = self.fetcher.supports_batches(),
+            "Starting validator sync loop"
+        );
+
+        // If batch mode isn't supported or disabled, use the original loop
+        if !use_batch_mode {
+            return self.run_with_callbacks(on_withdrawal, on_sync).await;
+        }
+
+        // Build initial batch index
+        let mut index = self.build_batch_index().await?;
+        let mut last_index_refresh = std::time::Instant::now();
+        let index_refresh_interval = self.batch_index_refresh_interval;
+
+        // Get starting sequence
+        let mut next_sequence = self.state.next_sequence()?;
+        info!(next_sequence, "Resuming from sequence");
+
+        // Track if we're caught up (no new batches to process)
+        let mut caught_up = false;
+
+        // Extract config values
+        let sync_interval = self.sync_interval;
+        let gap_retry_delay = self.gap_retry_delay;
+
+        loop {
+            // Check for shutdown
+            if *self.shutdown_rx.borrow() {
+                info!("Shutdown signal received, stopping sync loop");
+                break;
+            }
+
+            // Refresh index periodically
+            if last_index_refresh.elapsed() >= index_refresh_interval || caught_up {
+                if let Ok(new_batches) = index.refresh(&self.fetcher).await {
+                    if new_batches > 0 {
+                        debug!(new_batches, "Discovered new batches");
+                        caught_up = false;
+                    }
+                }
+                last_index_refresh = std::time::Instant::now();
+            }
+
+            // Find batch containing our next sequence
+            if let Some(batch_info) = index.find_batch_containing(next_sequence) {
+                let batch_info = batch_info.clone();
+
+                // Fetch and process the batch
+                match self.fetcher.get_batch_by_path(&batch_info.path).await {
+                    Ok(Some(batch)) => {
+                        for message in &batch.messages {
+                            if message.sequence < next_sequence {
+                                continue;
+                            }
+
+                            // Verify
+                            if let Err(e) = self.verifier.verify(message) {
+                                error!(
+                                    sequence = message.sequence,
+                                    error = %e,
+                                    "Signature verification failed"
+                                );
+                                return Err(
+                                    ValidatorError::SignatureVerification(e.to_string()).into()
+                                );
+                            }
+
+                            // Handle withdrawal
+                            if let Ok(Some(withdrawal)) =
+                                ChangesetApplier::extract_withdrawal(message)
+                            {
+                                on_withdrawal(&withdrawal);
+                            }
+
+                            // Apply
+                            if let Err(e) = self.applier.apply_message(message) {
+                                error!(
+                                    sequence = message.sequence,
+                                    error = %e,
+                                    "Failed to apply message"
+                                );
+                                return Err(e);
+                            }
+
+                            // Record sync
+                            self.state.record_sync(message.sequence)?;
+                            on_sync(message.sequence);
+                            next_sequence = message.sequence + 1;
+                        }
+
+                        // Immediately try next batch
+                        continue;
+                    }
+                    Ok(None) => {
+                        warn!(path = batch_info.path, "Batch not found in DA");
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Error fetching batch");
+                    }
+                }
+            } else if let Some(next_batch) =
+                index.find_first_batch_starting_at_or_after(next_sequence)
+            {
+                // Gap detected: no batch contains our sequence but there are future batches
+                let gap_start = next_sequence;
+                let gap_end = next_batch.start_sequence;
+
+                warn!(
+                    gap_start,
+                    gap_end,
+                    gap_size = gap_end - gap_start,
+                    "Sequence gap detected in batch index"
+                );
+
+                if !self.gap_skip_on_failure {
+                    return Err(ValidatorError::SequenceGap {
+                        expected: gap_start,
+                        actual: gap_end,
+                    }
+                    .into());
+                }
+
+                // Skip the gap
+                self.state.record_gap(gap_start, gap_end)?;
+                next_sequence = gap_end;
+                continue;
+            } else {
+                // No more batches - we're caught up
+                caught_up = true;
+            }
+
+            // Wait before polling again
+            let wait_duration = if caught_up {
+                sync_interval
+            } else {
+                gap_retry_delay
+            };
+
+            tokio::select! {
+                _ = tokio::time::sleep(wait_duration) => {}
+                _ = self.shutdown_rx.changed() => {
+                    if *self.shutdown_rx.borrow() {
+                        info!("Shutdown signal received during wait");
+                        break;
+                    }
+                }
+            }
+        }
+
+        info!("Sync loop stopped");
+        Ok(())
     }
 }
 
@@ -629,5 +934,319 @@ mod tests {
             .await
             .expect("Validator should shut down within timeout")
             .unwrap();
+    }
+
+    // =========================================================================
+    // Batch sync tests
+    // =========================================================================
+
+    async fn create_signed_batch(start_sequence: u64, messages: Vec<SignedMessage>) -> SignedBatch {
+        use alloy::primitives::keccak256;
+        use alloy::signers::local::PrivateKeySigner;
+        use alloy::signers::Signer;
+
+        let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
+        let end_sequence = messages.last().map_or(start_sequence, |m| m.sequence);
+
+        // Create batch signature (hash of all message hashes)
+        let mut batch_data = Vec::new();
+        for msg in &messages {
+            batch_data.extend_from_slice(&msg.sequence.to_be_bytes());
+        }
+        let batch_hash = keccak256(&batch_data);
+        let signature = signer.sign_hash(&batch_hash).await.unwrap();
+
+        let mut sig_bytes = [0u8; 65];
+        sig_bytes[..32].copy_from_slice(&signature.r().to_be_bytes::<32>());
+        sig_bytes[32..64].copy_from_slice(&signature.s().to_be_bytes::<32>());
+        sig_bytes[64] = if signature.v() { 28 } else { 27 };
+
+        SignedBatch {
+            start_sequence,
+            end_sequence,
+            messages,
+            batch_signature: format!("0x{}", hex::encode(sig_bytes)),
+            signer: format!("{:?}", signer.address()),
+            created_at: 1700000000,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validator_batch_mode_detection() {
+        // Non-batch mode fetcher
+        let fetcher = MockFetcher::new();
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+        assert!(!validator.supports_batch_sync());
+
+        // Batch mode fetcher
+        let fetcher = MockFetcher::new_batch_mode();
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+        assert!(validator.supports_batch_sync());
+    }
+
+    #[tokio::test]
+    async fn test_validator_sync_batch() {
+        // Setup source database
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Create multiple changesets
+        let changeset0 = create_update_changeset(&source, "Bob");
+        let changeset1 = create_update_changeset(&source, "Charlie");
+
+        // Create signed messages
+        let msg0 = create_signed_changeset_message(0, changeset0).await;
+        let msg1 = create_signed_changeset_message(1, changeset1).await;
+
+        // Create a batch containing both messages
+        let batch = create_signed_batch(0, vec![msg0, msg1]).await;
+
+        // Create mock fetcher in batch mode
+        let fetcher = MockFetcher::new_batch_mode();
+        fetcher.add_batch(batch.clone());
+
+        // Create validator
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+
+        // Setup target database
+        validator
+            .connection()
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        validator
+            .connection()
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Sync the batch
+        let synced = validator.sync_batch(&batch, &mut |_| {}).await.unwrap();
+        assert_eq!(synced, 2);
+
+        // Verify final state
+        let name: String = validator
+            .connection()
+            .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "Charlie");
+
+        // Verify last sequence
+        assert_eq!(validator.last_sequence().unwrap(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_validator_sync_to_head_batched() {
+        // Setup source database
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Create changesets for two batches
+        let changeset0 = create_update_changeset(&source, "Bob");
+        let changeset1 = create_update_changeset(&source, "Charlie");
+        let changeset2 = create_update_changeset(&source, "Dave");
+
+        // Create signed messages
+        let msg0 = create_signed_changeset_message(0, changeset0).await;
+        let msg1 = create_signed_changeset_message(1, changeset1).await;
+        let msg2 = create_signed_changeset_message(2, changeset2).await;
+
+        // Create two batches
+        let batch1 = create_signed_batch(0, vec![msg0, msg1]).await;
+        let batch2 = create_signed_batch(2, vec![msg2]).await;
+
+        // Create mock fetcher in batch mode
+        let fetcher = MockFetcher::new_batch_mode();
+        fetcher.add_batch(batch1);
+        fetcher.add_batch(batch2);
+
+        // Create validator
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+
+        // Setup target database
+        validator
+            .connection()
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        validator
+            .connection()
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Sync to head using batched mode
+        let synced = validator.sync_to_head_batched().await.unwrap();
+        assert_eq!(synced, 3);
+
+        // Verify final state
+        let name: String = validator
+            .connection()
+            .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "Dave");
+
+        // Verify last sequence
+        assert_eq!(validator.last_sequence().unwrap(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_validator_sync_to_head_batched_fallback() {
+        // Setup source database
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Create changeset
+        let changeset = create_update_changeset(&source, "Bob");
+
+        // Create mock fetcher in NON-batch mode (should fallback to single-message)
+        let fetcher = MockFetcher::new();
+        let message = create_signed_changeset_message(0, changeset).await;
+        fetcher.add_message(message);
+
+        // Create validator
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+
+        // Setup target database
+        validator
+            .connection()
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        validator
+            .connection()
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // sync_to_head_batched should fallback to single-message mode
+        let synced = validator.sync_to_head_batched().await.unwrap();
+        assert_eq!(synced, 1);
+
+        // Verify state
+        let name: String = validator
+            .connection()
+            .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "Bob");
+    }
+
+    #[tokio::test]
+    async fn test_validator_batch_index_building() {
+        let fetcher = MockFetcher::new_batch_mode();
+
+        // Add some batches
+        let batch1 = SignedBatch {
+            start_sequence: 0,
+            end_sequence: 49,
+            messages: vec![],
+            batch_signature: "0x00".to_string(),
+            signer: "0x00".to_string(),
+            created_at: 1700000000,
+        };
+        let batch2 = SignedBatch {
+            start_sequence: 50,
+            end_sequence: 99,
+            messages: vec![],
+            batch_signature: "0x00".to_string(),
+            signer: "0x00".to_string(),
+            created_at: 1700000001,
+        };
+        fetcher.add_batch(batch1);
+        fetcher.add_batch(batch2);
+
+        // Create validator
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+
+        // Build batch index
+        let index = validator.build_batch_index().await.unwrap();
+        assert_eq!(index.len(), 2);
+        assert_eq!(index.earliest_sequence(), Some(0));
+        assert_eq!(index.latest_sequence(), Some(99));
+
+        // Test batch lookup
+        assert!(index.find_batch_containing(25).is_some());
+        assert!(index.find_batch_containing(75).is_some());
+        assert!(index.find_batch_containing(100).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_validator_batch_skip_already_synced() {
+        // Setup source database
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Create changesets
+        let changeset0 = create_update_changeset(&source, "Bob");
+        let changeset1 = create_update_changeset(&source, "Charlie");
+
+        // Create signed messages
+        let msg0 = create_signed_changeset_message(0, changeset0).await;
+        let msg1 = create_signed_changeset_message(1, changeset1).await;
+
+        // Create batch with both messages
+        let batch = create_signed_batch(0, vec![msg0.clone(), msg1]).await;
+
+        // Create mock fetcher
+        let fetcher = MockFetcher::new_batch_mode();
+        fetcher.add_message(msg0); // Also add as single message for initial sync
+        fetcher.add_batch(batch.clone());
+
+        // Create validator
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+
+        // Setup target database
+        validator
+            .connection()
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        validator
+            .connection()
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // First, sync message 0 individually
+        let synced = validator.sync_one(0).await.unwrap();
+        assert!(synced);
+        assert_eq!(validator.last_sequence().unwrap(), Some(0));
+
+        // Now sync the batch - should skip message 0 and only sync message 1
+        let synced = validator.sync_batch(&batch, &mut |_| {}).await.unwrap();
+        assert_eq!(synced, 1); // Only message 1 should be synced
+
+        // Verify final state
+        let name: String = validator
+            .connection()
+            .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "Charlie");
     }
 }

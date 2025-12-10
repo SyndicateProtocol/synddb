@@ -19,7 +19,7 @@
 //! across all batch files. This ensures atomic publication of messages
 //! with state, preventing partial publication failures.
 
-use crate::publish::traits::{DAPublisher, PublishError, PublishResult};
+use crate::publish::traits::{PublishError, PublishResult, StoragePublisher};
 use crate::signer::MessageSigner;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -246,7 +246,7 @@ impl GcsPublisher {
 }
 
 #[async_trait]
-impl DAPublisher for GcsPublisher {
+impl StoragePublisher for GcsPublisher {
     fn name(&self) -> &str {
         "gcs"
     }

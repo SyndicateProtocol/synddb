@@ -55,26 +55,29 @@ impl TestRunner {
             .await
     }
 
-    /// Test that snapshot appears in DA and can be fetched
-    pub(crate) async fn test_snapshot_in_da(&self) -> TestCaseResult {
-        TestCase::new("snapshot_in_da", "Snapshot appears in DA layer")
+    /// Test that snapshot appears in storage and can be fetched
+    pub(crate) async fn test_snapshot_in_storage(&self) -> TestCaseResult {
+        TestCase::new("snapshot_in_storage", "Snapshot appears in storage layer")
             .run(|| async {
-                // Get current DA latest
-                let da_before = self.sequencer.da_latest().await?;
-                let seq_before = da_before.sequence.unwrap_or(0);
+                // Get current storage latest
+                let storage_before = self.sequencer.storage_latest().await?;
+                let seq_before = storage_before.sequence.unwrap_or(0);
 
                 // Send a snapshot
-                let snapshot_data = b"SQLite format 3\x00snapshot for DA test";
+                let snapshot_data = b"SQLite format 3\x00snapshot for storage test";
                 let response = self
                     .sequencer
-                    .send_snapshot("e2e-snapshot-da", snapshot_data, 1000)
+                    .send_snapshot("e2e-snapshot-storage", snapshot_data, 1000)
                     .await?;
 
-                // Small delay for DA propagation
+                // Small delay for storage propagation
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-                // Fetch the message from DA
-                let message = self.sequencer.fetch_da_message(response.sequence).await?;
+                // Fetch the message from storage
+                let message = self
+                    .sequencer
+                    .fetch_storage_message(response.sequence)
+                    .await?;
 
                 // Verify message type is snapshot
                 ensure!(
@@ -91,20 +94,20 @@ impl TestRunner {
                     message.sequence
                 );
 
-                // Verify DA latest updated
-                let da_after = self.sequencer.da_latest().await?;
-                let seq_after = da_after.sequence.unwrap_or(0);
+                // Verify storage latest updated
+                let storage_after = self.sequencer.storage_latest().await?;
+                let seq_after = storage_after.sequence.unwrap_or(0);
 
                 ensure!(
                     seq_after > seq_before,
-                    "DA latest did not update: before={}, after={}",
+                    "Storage latest did not update: before={}, after={}",
                     seq_before,
                     seq_after
                 );
 
                 info!(
                     sequence = response.sequence,
-                    "Snapshot found in DA with correct message type"
+                    "Snapshot found in storage with correct message type"
                 );
 
                 Ok(())

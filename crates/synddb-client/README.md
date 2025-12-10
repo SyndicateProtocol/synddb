@@ -121,7 +121,7 @@ Changesets are also automatically published when `SyndDB` is dropped (graceful s
 ## What It Does NOT Do
 
 - ❌ Sign changesets (no keys in application TEE)
-- ❌ Publish to DA layers (sequencer's job)
+- ❌ Publish to storage layers (sequencer's job)
 - ❌ Modify application behavior
 - ❌ Require schema changes
 

@@ -35,3 +35,6 @@ target
 .env
 .env.*
 !.env.example
+
+# Claude
+.claude/settings.local.json

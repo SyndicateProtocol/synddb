@@ -1,6 +1,6 @@
 //! `SyndDB` Validator - validates sequencer messages and applies changesets
 //!
-//! The validator syncs state from DA layers, verifies sequencer signatures,
+//! The validator syncs state from storage layers, verifies sequencer signatures,
 //! and applies `SQLite` changesets to maintain a replica of the sequenced state.
 //!
 //! # Features

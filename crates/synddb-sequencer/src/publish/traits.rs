@@ -1,4 +1,4 @@
-//! `DAPublisher` trait and related types
+//! `StoragePublisher` trait and related types
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use synddb_shared::types::message::{SignedBatch, SignedMessage};
 
 // TODO: Implement a batching layer that accumulates messages and flushes based on
 // whichever threshold is hit first. This would sit between the HTTP handlers and
-// the DAPublisher, providing efficient batching without changing the publisher interface.
+// the `StoragePublisher`, providing efficient batching without changing the publisher interface.
 //
 // Two possible modes:
 // - Fire-and-forget: HTTP handler returns immediately after sequencing, batch publishes async
@@ -29,10 +29,10 @@ use synddb_shared::types::message::{SignedBatch, SignedMessage};
 // }
 // ```
 
-/// Result of publishing to a DA layer
+/// Result of publishing to a storage layer
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PublishResult {
-    /// Name of the DA layer (e.g., "gcs", "celestia", "eigenda")
+    /// Name of the storage layer (e.g., "gcs", "celestia", "eigenda")
     pub layer: String,
     /// Whether the publish succeeded
     pub success: bool,
@@ -64,7 +64,7 @@ impl PublishResult {
     }
 }
 
-/// Trait for Data Availability publishers
+/// Trait for storage layer publishers
 ///
 /// Implement this trait to add support for new storage backends.
 ///
@@ -78,7 +78,7 @@ impl PublishResult {
 /// State is implicit in the batch filenames - the highest `end` sequence
 /// across all batches represents the latest published state.
 #[async_trait]
-pub trait DAPublisher: Send + Sync + Debug {
+pub trait StoragePublisher: Send + Sync + Debug {
     /// Name of this publisher (e.g., "gcs", "celestia")
     fn name(&self) -> &str;
 

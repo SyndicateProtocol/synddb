@@ -13,7 +13,7 @@ use synddb_validator::bridge::signer::BridgeSigner;
 use synddb_validator::config::{FetcherType, ValidatorConfig};
 use synddb_validator::http::api::{create_router, AppState};
 use synddb_validator::http::signatures::{create_signature_router, SignatureApiState};
-use synddb_validator::sync::fetcher::DAFetcher;
+use synddb_validator::sync::fetcher::StorageFetcher;
 use synddb_validator::validator::Validator;
 
 #[tokio::main]
@@ -225,8 +225,8 @@ fn request_id_to_message_id(request_id: &str) -> B256 {
     keccak256(request_id.as_bytes())
 }
 
-/// Create the appropriate DA fetcher based on configuration
-async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn DAFetcher>> {
+/// Create the appropriate storage fetcher based on configuration
+async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn StorageFetcher>> {
     match config.fetcher_type {
         FetcherType::Http => {
             let url = config.sequencer_url.as_ref().ok_or_else(|| {

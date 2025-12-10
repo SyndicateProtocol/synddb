@@ -484,10 +484,10 @@ SIGNING_KEY=<hex-private-key> ./synddb-sequencer
 
 ### Phase 2: GCS Persistence ✅ COMPLETE
 
-**Goal**: Persist all signed messages to GCS with pluggable DA backends.
+**Goal**: Persist all signed messages to GCS with pluggable storage backends.
 
 **Implemented**:
-- `src/publish/mod.rs` - `DAPublisher` trait for pluggable backends
+- `src/publish/mod.rs` - `StoragePublisher` trait for pluggable backends
 - `src/publish/gcs.rs` - Google Cloud Storage implementation
 - Publisher integration in HTTP handlers
 - State recovery on startup from GCS
