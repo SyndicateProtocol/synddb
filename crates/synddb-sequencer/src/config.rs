@@ -91,6 +91,16 @@ pub struct SequencerConfig {
     #[arg(long, env = "GCS_PREFIX", default_value = "sequencer")]
     pub gcs_prefix: String,
 
+    /// GCS emulator host URL for local testing.
+    ///
+    /// This is a standard Google Cloud environment variable recognized by GCS client
+    /// libraries. When set, the client uses anonymous authentication and connects to
+    /// the specified emulator (e.g., `fake-gcs-server`) instead of real GCS.
+    ///
+    /// Example: `http://localhost:4443` or `http://fake-gcs:4443` in Docker.
+    #[arg(long, env = "STORAGE_EMULATOR_HOST")]
+    pub storage_emulator_host: Option<String>,
+
     /// Output logs in JSON format (for production log aggregation)
     #[arg(long, env = "RUST_LOG_JSON", default_value = "false")]
     pub log_json: bool,

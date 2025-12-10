@@ -245,6 +245,7 @@ async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn StorageFetch
             let fetcher = synddb_validator::sync::providers::gcs::GcsFetcher::new(
                 bucket.clone(),
                 config.gcs_prefix.clone(),
+                config.storage_emulator_host.clone(),
             )
             .await?;
             Ok(Arc::new(fetcher))
