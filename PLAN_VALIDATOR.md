@@ -103,11 +103,12 @@ synddb-validator/
 │   ├── validator.rs                 # Main validator orchestration
 │   ├── sync/
 │   │   ├── mod.rs                   # DA syncing orchestration
-│   │   ├── fetcher.rs               # Fetch SignedMessage from DA
+│   │   ├── fetcher.rs               # Fetch SignedMessage from DA (DAFetcher trait)
 │   │   ├── verifier.rs              # Verify sequencer signatures
 │   │   └── providers/
-│   │       ├── mod.rs               # DAFetcher trait
-│   │       ├── gcs.rs               # GCS fetcher (primary)
+│   │       ├── mod.rs               # Provider re-exports
+│   │       ├── http.rs              # HTTP fetcher for sequencer's local DA API (✅ implemented)
+│   │       ├── gcs.rs               # GCS fetcher (✅ implemented)
 │   │       └── mock.rs              # Mock for testing
 │   ├── apply/
 │   │   ├── mod.rs                   # Changeset application engine
@@ -130,6 +131,51 @@ synddb-validator/
 - Database state tracking is in `state/store.rs`
 - API is implemented in `http/` directory
 - TEE integration is documented but not yet implemented in the validator
+
+## Fetcher Types
+
+The validator supports multiple fetcher backends via the `--fetcher-type` flag:
+
+| Type | Description | Status |
+|------|-------------|--------|
+| `http` | HTTP fetcher for sequencer's local DA API | ✅ Implemented (default) |
+| `gcs` | Google Cloud Storage | ✅ Implemented |
+
+### HTTP Fetcher
+
+The HTTP fetcher (`--fetcher-type=http`) fetches signed messages directly from a sequencer running with `--publisher-type=local`. This is ideal for:
+- Local development and testing (paired with sequencer's local publisher)
+- Self-hosted deployments
+- E2E testing infrastructure
+
+**Configuration:**
+```bash
+synddb-validator \
+  --sequencer-address=0x... \
+  --fetcher-type=http \
+  --sequencer-url=http://localhost:8433
+```
+
+**Consumed Endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/da/messages/{sequence}` | GET | Fetch a single message |
+| `/da/latest` | GET | Get the latest published sequence number |
+
+See [`crates/synddb-validator/src/sync/providers/http.rs`](crates/synddb-validator/src/sync/providers/http.rs) for implementation details.
+
+### GCS Fetcher
+
+The GCS fetcher (`--fetcher-type=gcs`) fetches signed messages from Google Cloud Storage. This is the recommended option for production deployments.
+
+**Configuration:**
+```bash
+synddb-validator \
+  --sequencer-address=0x... \
+  --fetcher-type=gcs \
+  --gcs-bucket=synddb-messages \
+  --gcs-prefix=sequencer
+```
 
 ## Core Components
 
@@ -259,156 +305,71 @@ Configuration follows the project pattern: clap derive with env var support, ser
 
 ### Validator Configuration (src/config.rs)
 
-The configuration below reflects the **current implementation**:
+The configuration below reflects the **current implementation**. See [`crates/synddb-validator/src/config.rs`](crates/synddb-validator/src/config.rs) for the full source.
 
 ```rust
-use clap::Parser;
-use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
-use std::time::Duration;
-
-/// SyndDB Validator - syncs, validates, and optionally signs for bridge
-#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
-#[command(name = "synddb-validator")]
-#[command(about = "SyndDB Validator - validates sequencer messages and applies changesets")]
-pub struct ValidatorConfig {
-    // === Core Validation (always required) ===
-
-    /// Path to the SQLite database file for replicated state
-    #[arg(long, env = "DATABASE_PATH", default_value = "/data/validator.db")]
-    pub database_path: String,
-
-    /// Path to the SQLite database file for validator state (sequences, etc.)
-    #[arg(long, env = "STATE_DB_PATH", default_value = "/data/validator_state.db")]
-    pub state_db_path: String,
-
-    /// Expected sequencer address (for signature verification)
-    #[arg(long, env = "SEQUENCER_ADDRESS")]
-    pub sequencer_address: String,
-
-    /// GCS bucket for fetching messages
-    #[arg(long, env = "GCS_BUCKET")]
-    pub gcs_bucket: Option<String>,
-
-    /// GCS path prefix (must match sequencer)
-    #[arg(long, env = "GCS_PREFIX", default_value = "sequencer")]
-    pub gcs_prefix: String,
-
-    // === HTTP Server ===
-
-    /// HTTP API bind address
-    #[arg(long, env = "BIND_ADDRESS", default_value = "0.0.0.0:8080")]
-    pub bind_address: SocketAddr,
-
-    // === Timing ===
-
-    /// Sync poll interval
-    #[arg(long, env = "SYNC_INTERVAL", default_value = "1s", value_parser = humantime::parse_duration)]
-    #[serde(with = "humantime_serde")]
-    pub sync_interval: Duration,
-
-    /// Sequence number to start syncing from (0 means start from beginning)
-    #[arg(long, env = "START_SEQUENCE", default_value = "0")]
-    pub start_sequence: u64,
-
-    /// Graceful shutdown timeout
-    #[arg(long, env = "SHUTDOWN_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
-    #[serde(with = "humantime_serde")]
-    pub shutdown_timeout: Duration,
-
-    // === Bridge Signer Mode ===
-
-    /// Enable bridge signer mode - signs withdrawal messages for bridge contract
-    #[arg(long, env = "BRIDGE_SIGNER")]
-    pub bridge_signer: bool,
-
-    /// Bridge contract address (required if --bridge-signer)
-    #[arg(long, env = "BRIDGE_CONTRACT")]
-    pub bridge_contract: Option<String>,
-
-    /// Chain ID for the bridge contract (required if --bridge-signer)
-    #[arg(long, env = "BRIDGE_CHAIN_ID")]
-    pub bridge_chain_id: Option<u64>,
-
-    /// Signing key for bridge operations (hex private key, required if --bridge-signer)
-    #[arg(long, env = "BRIDGE_SIGNING_KEY")]
-    pub bridge_signing_key: Option<String>,
-
-    /// Endpoint to serve signatures for relayers
-    #[arg(long, env = "BRIDGE_SIGNATURE_ENDPOINT", default_value = "0.0.0.0:8081")]
-    pub bridge_signature_endpoint: SocketAddr,
-
-    // === Gap Detection ===
-
-    /// Maximum number of retries when a sequence gap is detected
-    #[arg(long, env = "GAP_RETRY_COUNT", default_value = "5")]
-    pub gap_retry_count: u32,
-
-    /// Delay between gap retry attempts
-    #[arg(long, env = "GAP_RETRY_DELAY", default_value = "5s", value_parser = humantime::parse_duration)]
-    #[serde(with = "humantime_serde")]
-    pub gap_retry_delay: Duration,
-
-    /// Skip gaps after max retries instead of erroring (use with caution)
-    #[arg(long, env = "GAP_SKIP_ON_FAILURE", default_value = "false")]
-    pub gap_skip_on_failure: bool,
-
-    // === Logging ===
-
-    /// Enable JSON log format (for production log aggregation)
-    #[arg(long, env = "LOG_JSON", default_value = "false")]
-    pub log_json: bool,
+/// Available fetcher types for retrieving messages from DA layer
+pub enum FetcherType {
+    Http,  // HTTP fetcher for sequencer's local DA API (default)
+    Gcs,   // Google Cloud Storage fetcher
 }
 
-impl ValidatorConfig {
-    /// Create a config for testing with a specific sequencer address
-    pub fn with_sequencer_address(address: &str) -> Self {
-        Self::parse_from([
-            "synddb-validator",
-            "--sequencer-address",
-            address,
-            "--database-path",
-            ":memory:",
-            "--state-db-path",
-            ":memory:",
-        ])
-    }
+pub struct ValidatorConfig {
+    // === Core Validation ===
+    pub database_path: String,           // Path to replicated SQLite DB
+    pub state_db_path: String,           // Path to validator state DB
+    pub sequencer_address: String,       // Expected sequencer address
 
-    /// Check if bridge signer mode is enabled
-    pub const fn is_bridge_signer(&self) -> bool {
-        self.bridge_signer
-    }
+    // === Fetcher Configuration ===
+    pub fetcher_type: FetcherType,       // http or gcs (default: http)
+    pub sequencer_url: Option<String>,   // Required when fetcher_type=http
+    pub gcs_bucket: Option<String>,      // Required when fetcher_type=gcs
+    pub gcs_prefix: String,              // GCS path prefix
 
-    /// Validate bridge signer configuration
-    pub fn validate_bridge_config(&self) -> Result<(), String> {
-        if !self.bridge_signer {
-            return Ok(());
-        }
-        if self.bridge_contract.is_none() {
-            return Err("--bridge-contract is required when --bridge-signer is enabled".into());
-        }
-        if self.bridge_chain_id.is_none() {
-            return Err("--bridge-chain-id is required when --bridge-signer is enabled".into());
-        }
-        if self.bridge_signing_key.is_none() {
-            return Err("--bridge-signing-key is required when --bridge-signer is enabled".into());
-        }
-        Ok(())
-    }
+    // === HTTP Server ===
+    pub bind_address: SocketAddr,        // HTTP API bind address (default: 0.0.0.0:8080)
+
+    // === Timing ===
+    pub sync_interval: Duration,         // Sync poll interval (default: 1s)
+    pub start_sequence: u64,             // Starting sequence (default: 0)
+    pub shutdown_timeout: Duration,      // Graceful shutdown timeout
+
+    // === Bridge Signer Mode ===
+    pub bridge_signer: bool,             // Enable bridge signer mode
+    pub bridge_contract: Option<String>, // Bridge contract address
+    pub bridge_chain_id: Option<u64>,    // Bridge chain ID
+    pub bridge_signing_key: Option<String>, // Signing key for bridge
+    pub bridge_signature_endpoint: SocketAddr, // Signature serving endpoint
+
+    // === Gap Detection ===
+    pub gap_retry_count: u32,            // Max retries for sequence gaps
+    pub gap_retry_delay: Duration,       // Delay between gap retries
+    pub gap_skip_on_failure: bool,       // Skip gaps after max retries
+
+    // === Logging ===
+    pub log_json: bool,                  // JSON log format
 }
 ```
 
 ### Usage Examples
 
 ```bash
-# Basic validator - syncs, validates, serves queries
+# HTTP fetcher mode (default) - for local development or self-hosted deployments
 synddb-validator \
   --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
+  --fetcher-type=http \
+  --sequencer-url=http://localhost:8433
+
+# GCS fetcher mode - for production deployments
+synddb-validator \
+  --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
+  --fetcher-type=gcs \
   --gcs-bucket=synddb-messages
 
 # Bridge signer mode - signs withdrawal messages for relayers
 synddb-validator \
   --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
+  --fetcher-type=gcs \
   --gcs-bucket=synddb-messages \
   --bridge-signer \
   --bridge-contract=0x1234567890abcdef1234567890abcdef12345678 \
@@ -418,6 +379,7 @@ synddb-validator \
 # With custom gap handling for unreliable DA sources
 synddb-validator \
   --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
+  --fetcher-type=gcs \
   --gcs-bucket=synddb-messages \
   --gap-retry-count=10 \
   --gap-retry-delay=10s
@@ -428,12 +390,16 @@ synddb-validator \
 ```bash
 # Required for all validators
 export SEQUENCER_ADDRESS="0x..."      # Sequencer's Ethereum address
-export GCS_BUCKET="synddb-messages"   # GCS bucket with sequenced messages
+
+# Fetcher configuration (choose one mode)
+export FETCHER_TYPE="http"            # "http" (default) or "gcs"
+export SEQUENCER_URL="http://..."     # Required when FETCHER_TYPE=http
+export GCS_BUCKET="synddb-messages"   # Required when FETCHER_TYPE=gcs
+export GCS_PREFIX="sequencer"         # GCS path prefix (default: "sequencer")
 
 # Optional (with defaults)
 export DATABASE_PATH="/data/validator.db"
 export STATE_DB_PATH="/data/validator_state.db"
-export GCS_PREFIX="sequencer"
 export START_SEQUENCE="0"
 export BIND_ADDRESS="0.0.0.0:8080"
 export SYNC_INTERVAL="1s"
