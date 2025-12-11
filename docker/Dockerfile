@@ -38,7 +38,12 @@ COPY crates/ ./crates/
 COPY tests/ ./tests/
 
 # Build all workspace binaries in release mode
-RUN cargo build --release --workspace
+# Uses BuildKit cache mounts to persist cargo registry and target dir across builds
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --workspace && \
+    cp -r /app/target/release /app/release-binaries
 
 # =============================================================================
 # Builder Stage (GCS) - Compiles sequencer with GCS feature
@@ -46,7 +51,11 @@ RUN cargo build --release --workspace
 FROM builder AS builder-gcs
 
 # Build sequencer with GCS feature enabled
-RUN cargo build --release -p synddb-sequencer --features gcs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release -p synddb-sequencer --features gcs && \
+    cp /app/target/release/synddb-sequencer /app/release-binaries/synddb-sequencer-gcs
 
 # =============================================================================
 # Runtime Base - Common runtime dependencies
@@ -68,7 +77,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/synddb-sequencer /app/synddb-sequencer
+COPY --from=builder /app/release-binaries/synddb-sequencer /app/synddb-sequencer
 
 RUN mkdir -p /data
 
@@ -88,7 +97,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder-gcs /app/target/release/synddb-sequencer /app/synddb-sequencer
+COPY --from=builder-gcs /app/release-binaries/synddb-sequencer-gcs /app/synddb-sequencer
 
 RUN mkdir -p /data
 
@@ -108,7 +117,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/synddb-validator /app/synddb-validator
+COPY --from=builder /app/release-binaries/synddb-validator /app/synddb-validator
 
 RUN mkdir -p /data
 
@@ -126,7 +135,7 @@ ENTRYPOINT ["/app/synddb-validator"]
 # =============================================================================
 FROM runtime-base AS customer-app
 
-COPY --from=builder /app/target/release/orderbook-bench /app/orderbook-bench
+COPY --from=builder /app/release-binaries/orderbook-bench /app/orderbook-bench
 
 RUN mkdir -p /data
 
@@ -139,7 +148,7 @@ ENTRYPOINT ["/app/orderbook-bench"]
 # =============================================================================
 FROM runtime-base AS e2e
 
-COPY --from=builder /app/target/release/synddb-e2e /app/synddb-e2e
+COPY --from=builder /app/release-binaries/synddb-e2e /app/synddb-e2e
 
 ENV RUST_LOG=info
 
@@ -150,7 +159,7 @@ ENTRYPOINT ["/app/synddb-e2e"]
 # =============================================================================
 FROM runtime-base AS stress-test
 
-COPY --from=builder /app/target/release/session-stress-test /app/session-stress-test
+COPY --from=builder /app/release-binaries/session-stress-test /app/session-stress-test
 
 ENV RUST_LOG=info
 
