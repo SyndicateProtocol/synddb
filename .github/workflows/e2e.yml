@@ -39,8 +39,6 @@ jobs:
             --build \
             --abort-on-container-exit \
             --exit-code-from e2e_assertions
-        env:
-          DOCKER_BUILDKIT: 1
 
       - name: Show logs on failure
         if: failure()
@@ -79,8 +77,6 @@ jobs:
             --build \
             --abort-on-container-exit \
             --exit-code-from e2e_assertions
-        env:
-          DOCKER_BUILDKIT: 1
 
       - name: Show logs on failure
         if: failure()
