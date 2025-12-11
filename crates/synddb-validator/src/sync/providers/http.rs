@@ -75,16 +75,6 @@ impl HttpFetcher {
     fn batch_url(&self, start_sequence: u64) -> String {
         format!("{}/storage/batches/{}", self.base_url, start_sequence)
     }
-
-    /// Get the URL for listing batches
-    fn batches_url(&self) -> String {
-        format!("{}/da/batches", self.base_url)
-    }
-
-    /// Get the URL for fetching a specific batch
-    fn batch_url(&self, start_sequence: u64) -> String {
-        format!("{}/da/batches/{}", self.base_url, start_sequence)
-    }
 }
 
 #[async_trait]
