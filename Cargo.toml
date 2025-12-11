@@ -8,6 +8,7 @@ members = [
   "crates/synddb-chain-monitor",
   "crates/synddb-shared",
   "tests/e2e/runner",
+  "tests/e2e-gcs/runner",
 ]
 
 [workspace.package]

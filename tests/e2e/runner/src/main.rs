@@ -38,6 +38,10 @@ pub struct Config {
     /// Maximum allowed sync difference between sequencer and validator
     #[arg(long, env = "MAX_SYNC_DIFF", default_value = "2")]
     pub max_sync_diff: u64,
+
+    /// Skip DA API tests (for external DA layers like GCS that don't expose /da/* endpoints)
+    #[arg(long, env = "SKIP_DA_TESTS", default_value = "false")]
+    pub skip_da_tests: bool,
 }
 
 #[tokio::main]
@@ -69,10 +73,7 @@ async fn main() -> ExitCode {
 
     match runner.run().await {
         Ok(result) => {
-            info!("");
-            info!("==================================");
-            info!("  {} passed, {} failed", result.passed, result.failed);
-            info!("==================================");
+            result.print_summary();
 
             if result.failed > 0 {
                 ExitCode::FAILURE

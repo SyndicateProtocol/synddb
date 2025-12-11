@@ -1,5 +1,6 @@
 //! Core message types for sequencer wire format
 
+use super::serde_helpers::base64_serde;
 use alloy::primitives::{keccak256, Address, B256};
 use alloy::signers::Signature;
 use serde::{Deserialize, Serialize};
@@ -59,14 +60,14 @@ pub enum MessageType {
 ///   "sequence": 42,
 ///   "timestamp": 1700000000,
 ///   "message_type": {"type": "changeset"},
-///   "payload": [40, 181, 47, 253, ...],
+///   "payload": "KLUv/QAAA...",
 ///   "message_hash": "0x1234abcd...",
 ///   "signature": "0xabcd1234...(130 hex chars)...",
 ///   "signer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 /// }
 /// ```
 ///
-/// Note: `payload` is serialized as a JSON array of bytes (serde's default for `Vec<u8>`),
+/// Note: `payload` is serialized as a base64-encoded string for compactness,
 /// and `message_type` is a tagged enum.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedMessage {
@@ -76,7 +77,8 @@ pub struct SignedMessage {
     pub timestamp: u64,
     /// Type of message
     pub message_type: MessageType,
-    /// Compressed message payload (`zstd`-compressed JSON)
+    /// Compressed message payload (`zstd`-compressed JSON), base64-encoded in JSON
+    #[serde(with = "base64_serde")]
     pub payload: Vec<u8>,
     /// Hash of the compressed payload: `keccak256(compressed_payload)`
     pub message_hash: String,
@@ -163,7 +165,7 @@ impl SignedMessage {
 ///       "sequence": 1,
 ///       "timestamp": 1700000000,
 ///       "message_type": {"type": "changeset"},
-///       "payload": [40, 181, 47, 253, ...],
+///       "payload": "KLUv/QAAA...",
 ///       "message_hash": "0x...",
 ///       "signature": "0x...",
 ///       "signer": "0x..."

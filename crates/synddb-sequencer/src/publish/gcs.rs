@@ -36,6 +36,18 @@ pub struct GcsConfig {
     /// Path prefix within the bucket (default: "sequencer")
     #[serde(default = "default_prefix")]
     pub prefix: String,
+    /// GCS emulator host URL for local testing.
+    ///
+    /// When set, the client uses anonymous
+    /// authentication and connects to the specified emulator (e.g., `fake-gcs-server`)
+    /// instead of real GCS.
+    ///
+    /// Example: `http://localhost:4443` or `http://fake-gcs:4443` in Docker.
+    ///
+    /// Leave unset (or empty) to use real GCS with standard authentication
+    /// (`GOOGLE_APPLICATION_CREDENTIALS`, workload identity, or metadata server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emulator_host: Option<String>,
 }
 
 fn default_prefix() -> String {
@@ -47,11 +59,18 @@ impl GcsConfig {
         Self {
             bucket: bucket.into(),
             prefix: default_prefix(),
+            emulator_host: None,
         }
     }
 
     pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.prefix = prefix.into();
+        self
+    }
+
+    pub fn with_emulator_host(mut self, host: impl Into<String>) -> Self {
+        let host = host.into();
+        self.emulator_host = if host.is_empty() { None } else { Some(host) };
         self
     }
 }
@@ -80,14 +99,26 @@ impl GcsPublisher {
     /// Uses default credentials (`GOOGLE_APPLICATION_CREDENTIALS` env var,
     /// workload identity, or metadata server).
     ///
+    /// If `config.emulator_host` is set, uses anonymous authentication and
+    /// connects to the specified emulator instead of real GCS.
+    ///
     /// The signer is used to create batch signatures when publishing.
     pub async fn new(config: GcsConfig, signer: Arc<MessageSigner>) -> Result<Self, PublishError> {
         use google_cloud_storage::client::{Client, ClientConfig};
 
-        let client_config = ClientConfig::default()
-            .with_auth()
-            .await
-            .map_err(|e| PublishError::Config(format!("Failed to configure GCS auth: {e}")))?;
+        let client_config = if let Some(ref emulator_host) = config.emulator_host {
+            // Emulator mode: use anonymous auth and custom endpoint
+            info!(emulator_host = %emulator_host, "Using GCS emulator");
+            let mut cfg = ClientConfig::default().anonymous();
+            cfg.storage_endpoint = emulator_host.clone();
+            cfg
+        } else {
+            // Production mode: use real GCS with authentication
+            ClientConfig::default()
+                .with_auth()
+                .await
+                .map_err(|e| PublishError::Config(format!("Failed to configure GCS auth: {e}")))?
+        };
 
         let client = Client::new(client_config);
 

@@ -73,6 +73,19 @@ pub struct ValidatorConfig {
     #[arg(long, env = "GCS_PREFIX", default_value = "sequencer")]
     pub gcs_prefix: String,
 
+    /// GCS emulator host URL for local testing.
+    ///
+    /// This is analogous to the standard `STORAGE_EMULATOR_HOST` environment variable
+    /// recognized by Google Cloud client libraries. See <https://docs.cloud.google.com/go/docs/reference/cloud.google.com/go/storage/latest#hdr-Creating_a_Client>
+    ///
+    /// When set, the client uses anonymous
+    /// authentication and connects to the specified emulator (e.g., `fake-gcs-server`)
+    /// instead of real GCS.
+    ///
+    /// Example: `http://localhost:4443` or `http://fake-gcs:4443` in Docker.
+    #[arg(long, env = "GCS_STORAGE_EMULATOR_HOST")]
+    pub gcs_storage_emulator_host: Option<String>,
+
     /// HTTP API bind address
     #[arg(long, env = "BIND_ADDRESS", default_value = "0.0.0.0:8080")]
     pub bind_address: SocketAddr,

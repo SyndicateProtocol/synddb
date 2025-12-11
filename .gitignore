@@ -38,3 +38,6 @@ target
 
 # Claude
 .claude/settings.local.json
+
+# GCS test credentials
+tests/e2e-gcs/.credentials/

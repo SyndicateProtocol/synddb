@@ -203,6 +203,7 @@ Applications continue using SQLite normally - the client library operates transp
 
 - Rust 1.90.0 or later
 - SQLite 3.x (bundled with rusqlite)
+- Docker (for running E2E tests: `cargo test -p synddb-e2e` and `cargo test -p synddb-e2e-gcs`)
 
 ## License
 

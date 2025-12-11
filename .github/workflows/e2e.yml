@@ -7,6 +7,7 @@ on:
       - "crates/**"
       - "docker/**"
       - "tests/e2e/**"
+      - "tests/e2e-gcs/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/e2e.yml"
@@ -19,25 +20,32 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
+env:
+  RUST_VERSION: "1.91"
+
 jobs:
-  e2e-smoke-test:
+  e2e-local-publisher:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
-    name: E2E Smoke Test
+    name: E2E Local Publisher
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Run E2E smoke test
-        run: |
-          docker compose -f tests/e2e/docker-compose.yml up \
-            --build \
-            --abort-on-container-exit \
-            --exit-code-from e2e_assertions
+        run: cargo test -p synddb-e2e --test e2e -- --nocapture
 
       - name: Show logs on failure
         if: failure()
@@ -57,3 +65,51 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker compose -f tests/e2e/docker-compose.yml down --volumes --remove-orphans
+
+  e2e-gcs:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: E2E GCS Publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run GCS E2E test
+        run: cargo test -p synddb-e2e-gcs --test e2e_gcs -- --nocapture
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Sequencer logs ==="
+          docker compose -f tests/e2e-gcs/docker-compose.yml logs sequencer || true
+          echo ""
+          echo "=== Validator logs ==="
+          docker compose -f tests/e2e-gcs/docker-compose.yml logs validator || true
+          echo ""
+          echo "=== Validator 2 logs ==="
+          docker compose -f tests/e2e-gcs/docker-compose.yml logs validator2 || true
+          echo ""
+          echo "=== Customer app logs ==="
+          docker compose -f tests/e2e-gcs/docker-compose.yml logs customer_app || true
+          echo ""
+          echo "=== E2E assertions logs ==="
+          docker compose -f tests/e2e-gcs/docker-compose.yml logs e2e_assertions || true
+          echo ""
+          echo "=== Fake GCS logs ==="
+          docker compose -f tests/e2e-gcs/docker-compose.yml logs fake-gcs || true
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f tests/e2e-gcs/docker-compose.yml down --volumes --remove-orphans || true

@@ -49,13 +49,32 @@ impl GcsFetcher {
     ///
     /// Uses default credentials (`GOOGLE_APPLICATION_CREDENTIALS` env var,
     /// workload identity, or metadata server).
-    pub async fn new(bucket: String, prefix: String) -> Result<Self> {
+    ///
+    /// If `emulator_host` is provided, uses anonymous authentication and
+    /// connects to the specified emulator instead of real GCS.
+    pub async fn new(
+        bucket: String,
+        prefix: String,
+        emulator_host: Option<String>,
+    ) -> Result<Self> {
         use google_cloud_storage::client::{Client, ClientConfig};
 
-        let client_config = ClientConfig::default()
-            .with_auth()
-            .await
-            .context("Failed to configure GCS auth")?;
+        // Normalize emulator_host: treat empty strings as None
+        let emulator_host = emulator_host.filter(|s| !s.is_empty());
+
+        let client_config = if let Some(ref emulator_host) = emulator_host {
+            // Emulator mode: use anonymous auth and custom endpoint
+            info!(emulator_host = %emulator_host, "Using GCS emulator");
+            let mut cfg = ClientConfig::default().anonymous();
+            cfg.storage_endpoint = emulator_host.clone();
+            cfg
+        } else {
+            // Production mode: use real GCS with authentication
+            ClientConfig::default()
+                .with_auth()
+                .await
+                .context("Failed to configure GCS auth")?
+        };
 
         let client = Client::new(client_config);
 
@@ -66,16 +85,6 @@ impl GcsFetcher {
             bucket,
             prefix,
         })
-    }
-
-    /// Get the path for a batch file
-    ///
-    /// Format: `{prefix}/batches/{start:012}_{end:012}.json`
-    fn batch_path(&self, start_sequence: u64, end_sequence: u64) -> String {
-        format!(
-            "{}/batches/{:012}_{:012}.json",
-            self.prefix, start_sequence, end_sequence
-        )
     }
 
     /// Parse a batch filename to extract start and end sequence numbers
@@ -176,6 +185,11 @@ impl StorageFetcher for GcsFetcher {
         Ok(max_seq)
     }
 
+    //TODO: GCS returns max 1000 objects per request. This implementation does not
+    // handle pagination, so batches beyond the first 1000 will be silently missed.
+    // At scale (~50k+ messages), consider either:
+    // 1. Implementing pagination via `next_page_token`
+    // 2. A smarter sync strategy that checkpoints batch boundaries locally
     async fn list_batches(&self) -> Result<Vec<BatchInfo>> {
         use google_cloud_storage::http::objects::list::ListObjectsRequest;
 
