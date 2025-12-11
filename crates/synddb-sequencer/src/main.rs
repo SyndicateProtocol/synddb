@@ -78,7 +78,10 @@ async fn main() -> Result<()> {
                 let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
                     anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
                 })?;
-                let gcs_config = GcsConfig::new(bucket).with_prefix(&config.gcs_prefix);
+                let mut gcs_config = GcsConfig::new(bucket).with_prefix(&config.gcs_prefix);
+                if let Some(ref emulator_host) = config.storage_emulator_host {
+                    gcs_config = gcs_config.with_emulator_host(emulator_host);
+                }
                 let gcs_pub = GcsPublisher::new(gcs_config, Arc::clone(&signer))
                     .await
                     .context("Failed to initialize GCS publisher")?;
