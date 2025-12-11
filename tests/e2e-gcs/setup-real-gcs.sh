@@ -86,6 +86,9 @@ echo "  Permissions granted"
 mkdir -p "${CREDENTIALS_DIR}"
 
 # Create service account key if it doesn't exist
+# WARNING: Service account keys are long-lived credentials intended for LOCAL TESTING ONLY.
+# In production, use Workload Identity instead of service account keys.
+# Keys should be rotated regularly and never committed to version control.
 echo ""
 echo "Checking credentials..."
 if [[ -f "${KEY_FILE}" ]]; then
@@ -96,6 +99,9 @@ else
     gcloud iam service-accounts keys create "${KEY_FILE}" \
         --iam-account="${SERVICE_ACCOUNT_EMAIL}"
     echo "  Key saved to ${KEY_FILE}"
+    echo ""
+    echo "  WARNING: This key is for local testing only."
+    echo "  Do not commit to version control. Use Workload Identity in production."
 fi
 
 echo ""
@@ -103,8 +109,7 @@ echo "=== Setup Complete ==="
 echo ""
 echo "To run the real GCS E2E test:"
 echo ""
-echo "  REAL_GCS=true \\"
 echo "  GCS_BUCKET=${BUCKET_NAME} \\"
 echo "  GOOGLE_APPLICATION_CREDENTIALS=${KEY_FILE} \\"
-echo "    cargo test -p synddb-e2e-gcs"
+echo "    cargo test -p synddb-e2e-gcs test_gcs_real -- --ignored"
 echo ""

@@ -3,7 +3,7 @@
 //! Runs end-to-end tests for the SyndDB GCS storage layer integration.
 //!
 //! Modes:
-//!   - Emulator (default): `cargo test -p synddb-e2e-gcs`
+//!   - Local emulator (default): `cargo test -p synddb-e2e-gcs`
 //!   - Real GCS: `REAL_GCS=true GCS_BUCKET=... GOOGLE_APPLICATION_CREDENTIALS=... cargo test -p synddb-e2e-gcs`
 
 use std::path::PathBuf;
@@ -48,19 +48,15 @@ fn run_docker_compose_with_env(args: &[&str], env: &[(&str, &str)]) -> Result<i3
     Ok(status.code().unwrap_or(1))
 }
 
-fn is_real_gcs_mode() -> bool {
-    std::env::var("REAL_GCS")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false)
+#[test]
+fn test_gcs_emulator() {
+    run_emulator_test();
 }
 
 #[test]
-fn test_gcs() {
-    if is_real_gcs_mode() {
-        run_real_gcs_test();
-    } else {
-        run_emulator_test();
-    }
+#[ignore] // Requires GCS_BUCKET=... GOOGLE_APPLICATION_CREDENTIALS=...
+fn test_gcs_real() {
+    run_real_gcs_test();
 }
 
 fn run_emulator_test() {

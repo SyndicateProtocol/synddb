@@ -61,7 +61,7 @@ impl GcsFetcher {
     ) -> Result<Self> {
         use google_cloud_storage::client::{Client, ClientConfig};
 
-        // Filter out empty strings
+        // Normalize emulator_host: treat empty strings as None
         let emulator_host = emulator_host.filter(|s| !s.is_empty());
 
         let client_config = if let Some(ref emulator_host) = emulator_host {

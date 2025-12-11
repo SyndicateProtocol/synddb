@@ -24,6 +24,8 @@ cargo test -p synddb-e2e-gcs
 
 Tests against an actual GCS bucket. Useful for validating real GCS behavior before deploying to Confidential Space.
 
+> **Note:** This mode uses service account keys which are long-lived credentials intended for local testing only. In production, use Workload Identity instead. Keys should be rotated regularly and never committed to version control.
+
 #### Setup
 
 Run the setup script to create the bucket, service account, and credentials:
@@ -45,10 +47,9 @@ The script is idempotent - safe to run multiple times. It will:
 #### Running Tests
 
 ```bash
-REAL_GCS=true \
 GCS_BUCKET=synddb-e2e-test \
 GOOGLE_APPLICATION_CREDENTIALS=tests/e2e-gcs/.credentials/service-account.json \
-  cargo test -p synddb-e2e-gcs
+  cargo test -p synddb-e2e-gcs test_gcs_real -- --ignored
 ```
 
 Each test run creates data under a unique prefix (`sequencer-test-<timestamp>`). Old test data is automatically deleted after 7 days by the bucket lifecycle policy.
@@ -64,42 +65,42 @@ gsutil -m rm -r gs://synddb-e2e-test/sequencer-test-<timestamp>/
 ## Architecture
 
 ```
-+------------------------------------------------------------------+
-|                     Docker Compose Network                        |
-+------------------------------------------------------------------+
-|                                                                   |
-|   +-------------+    +--------------+    +---------------------+  |
-|   | fake-gcs    |<---| init-bucket  |    |                     |  |
-|   | (emulator)  |    | (creates     |    |  e2e_assertions     |  |
-|   |             |    |  bucket)     |    |  (test runner)      |  |
-|   +------^------+    +--------------+    +---------------------+  |
-|          |                                        |               |
-|          | GCS API                                | HTTP          |
-|          |                                        v               |
-|   +------+-------------------------------------------+            |
-|   |                                                   |           |
-|   |              +-------------+                      |           |
-|   |              |  sequencer  |<---- customer_app    |           |
-|   |              |  (GCS pub)  |      (changesets)    |           |
-|   |              +------+------+                      |           |
-|   |                     |                             |           |
-|   |                     | publishes batches           |           |
-|   |                     v                             |           |
-|   |              GCS Bucket                           |           |
-|   |              (synddb-test)                        |           |
-|   |                     |                             |           |
-|   |                     | fetches batches             |           |
-|   |                     v                             |           |
-|   |         +-----------+-----------+                 |           |
-|   |         |                       |                 |           |
-|   |    +----v----+            +-----v---+             |           |
-|   |    |validator|            |validator2|            |           |
-|   |    |(GCS fet)|            |(GCS fet) |            |           |
-|   |    +---------+            +----------+            |           |
-|   |                                                   |           |
-|   +---------------------------------------------------+           |
-|                                                                   |
-+-------------------------------------------------------------------+
+┌──────────────────────────────────────────────────────────────────┐
+│                     Docker Compose Network                       │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌───────────┐   ┌─────────────┐   ┌───────────────────────┐     │
+│  │ fake-gcs  │◄──│ init-bucket │   │                       │     │
+│  │ (emulator)│   │ (creates    │   │    e2e_assertions     │     │
+│  │           │   │  bucket)    │   │    (test runner)      │     │
+│  └─────▲─────┘   └─────────────┘   └───────────┬───────────┘     │
+│        │                                       │                 │
+│        │ GCS API                               │ HTTP            │
+│        │                                       ▼                 │
+│  ┌─────┴───────────────────────────────────────────────────┐     │
+│  │                                                         │     │
+│  │               ┌─────────────┐                           │     │
+│  │               │  sequencer  │◄──── customer_app         │     │
+│  │               │  (GCS pub)  │      (changesets)         │     │
+│  │               └──────┬──────┘                           │     │
+│  │                      │                                  │     │
+│  │                      │ publishes batches                │     │
+│  │                      ▼                                  │     │
+│  │               GCS Bucket                                │     │
+│  │              (synddb-test)                              │     │
+│  │                      │                                  │     │
+│  │                      │ fetches batches                  │     │
+│  │                      ▼                                  │     │
+│  │          ┌───────────┴───────────┐                      │     │
+│  │          │                       │                      │     │
+│  │     ┌────▼────┐           ┌──────▼─────┐                │     │
+│  │     │validator│           │ validator2 │                │     │
+│  │     │(GCS fet)│           │ (GCS fet)  │                │     │
+│  │     └─────────┘           └────────────┘                │     │
+│  │                                                         │     │
+│  └─────────────────────────────────────────────────────────┘     │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Files
@@ -118,7 +119,6 @@ All configuration is embedded in `docker-compose.yml`. No environment variables 
 ### Real GCS Mode
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `REAL_GCS` | Yes | Set to `true` to enable real GCS mode |
 | `GCS_BUCKET` | Yes | GCS bucket name |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Yes | Path to service account JSON |
 | `TEST_RUN_ID` | No | Unique prefix for test data (default: timestamp) |

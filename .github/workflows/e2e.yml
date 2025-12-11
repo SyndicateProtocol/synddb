@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e-local:
+  e2e-local-publisher:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: E2E Local Publisher
     runs-on: ubuntu-latest

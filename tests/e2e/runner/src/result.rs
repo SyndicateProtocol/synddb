@@ -31,6 +31,9 @@ impl TestResult {
         }
     }
 
+    /// Prints a summary of the test results, including the number of passed and failed tests,
+    /// and details of any failures. Should be called after all E2E tests have been executed to
+    /// provide a concise overview in the logs. Intended for use within the crate.
     pub(crate) fn print_summary(&self) {
         info!("");
         info!("==================================");
