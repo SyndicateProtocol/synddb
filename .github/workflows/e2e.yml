@@ -20,6 +20,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
+env:
+  RUST_VERSION: "1.91"
+
 jobs:
   e2e-local-publisher:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
@@ -30,15 +33,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Run E2E smoke test
-        run: |
-          docker compose -f tests/e2e/docker-compose.yml up \
-            --build \
-            --abort-on-container-exit \
-            --exit-code-from e2e_assertions
+        run: cargo test -p synddb-e2e --test e2e -- --nocapture
 
       - name: Show logs on failure
         if: failure()
@@ -68,15 +75,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Run GCS E2E test
-        run: |
-          docker compose -f tests/e2e-gcs/docker-compose.yml up \
-            --build \
-            --abort-on-container-exit \
-            --exit-code-from e2e_assertions
+        run: cargo test -p synddb-e2e-gcs --test e2e_gcs -- --nocapture
 
       - name: Show logs on failure
         if: failure()
@@ -101,4 +112,4 @@ jobs:
 
       - name: Cleanup
         if: always()
-        run: docker compose -f tests/e2e-gcs/docker-compose.yml down --volumes --remove-orphans
+        run: docker compose -f tests/e2e-gcs/docker-compose.yml down --volumes --remove-orphans || true

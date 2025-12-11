@@ -10,6 +10,10 @@ description = "End-to-end test runner for SyndDB"
 name = "synddb-e2e"
 path = "src/main.rs"
 
+[[test]]
+name = "e2e"
+path = "tests/e2e.rs"
+
 [dependencies]
 tokio = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
@@ -22,6 +26,9 @@ clap = { workspace = true, features = ["env"] }
 url = { workspace = true }
 base64 = { workspace = true }
 synddb-shared = { path = "../../../crates/synddb-shared" }
+
+[dev-dependencies]
+anyhow = { workspace = true }
 
 [lints]
 workspace = true
