@@ -8,12 +8,12 @@ This library verifies JWT attestation tokens from Google's Confidential Space TE
 
 ## Key Differences from AWS Nitro
 
-| Feature | AWS Nitro | GCP Confidential Space |
-|---------|-----------|------------------------|
-| Format | CBOR/COSE_Sign1 | JWT (JSON Web Token) |
-| Signature | P-384 ECDSA | RS256 (RSA-2048 + SHA-256) |
-| Identity | PCR values (SHA-384) | image_digest (SHA-256) |
-| Trust anchor | AWS root certificate | Google JWKS public keys |
+| Feature      | AWS Nitro            | GCP Confidential Space     |
+| ------------ | -------------------- | -------------------------- |
+| Format       | CBOR/COSE_Sign1      | JWT (JSON Web Token)       |
+| Signature    | P-384 ECDSA          | RS256 (RSA-2048 + SHA-256) |
+| Identity     | PCR values (SHA-384) | image_digest (SHA-256)     |
+| Trust anchor | AWS root certificate | Google JWKS public keys    |
 
 ## Features
 
@@ -85,14 +85,14 @@ Attestation samples are available in `../samples/`. These contain:
 
 ## Important Claims
 
-| Claim | Description |
-|-------|-------------|
-| `iss` | Must be `https://confidentialcomputing.googleapis.com` |
-| `aud` | Audience requested by workload |
-| `exp` | Token expiration (Unix timestamp) |
-| `secboot` | Secure boot enabled (should be true) |
-| `swname` | Should be `CONFIDENTIAL_SPACE` |
-| `submods.container.image_digest` | Container image SHA256 hash |
+| Claim                            | Description                                            |
+| -------------------------------- | ------------------------------------------------------ |
+| `iss`                            | Must be `https://confidentialcomputing.googleapis.com` |
+| `aud`                            | Audience requested by workload                         |
+| `exp`                            | Token expiration (Unix timestamp)                      |
+| `secboot`                        | Secure boot enabled (should be true)                   |
+| `swname`                         | Should be `CONFIDENTIAL_SPACE`                         |
+| `submods.container.image_digest` | Container image SHA256 hash                            |
 
 ## Solidity Verifier Contract
 
@@ -111,7 +111,7 @@ Example pattern:
 
 ```solidity,norun
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
 
