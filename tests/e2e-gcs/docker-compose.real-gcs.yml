@@ -54,7 +54,7 @@ services:
       GCS_PREFIX: sequencer-test-${TEST_RUN_ID:-default}
       GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
       # Unset emulator host to use real GCS
-      STORAGE_EMULATOR_HOST: ""
+      GCS_STORAGE_EMULATOR_HOST: ""
     volumes:
       - ${GOOGLE_APPLICATION_CREDENTIALS:?GOOGLE_APPLICATION_CREDENTIALS must be set}:/app/credentials.json:ro
 
@@ -74,7 +74,7 @@ services:
       BATCH_INDEX_REFRESH_INTERVAL: "5s"
       GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
       # Unset emulator host to use real GCS
-      STORAGE_EMULATOR_HOST: ""
+      GCS_STORAGE_EMULATOR_HOST: ""
     volumes:
       - ${GOOGLE_APPLICATION_CREDENTIALS}:/app/credentials.json:ro
 
@@ -94,6 +94,6 @@ services:
       BATCH_INDEX_REFRESH_INTERVAL: "5s"
       GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
       # Unset emulator host to use real GCS
-      STORAGE_EMULATOR_HOST: ""
+      GCS_STORAGE_EMULATOR_HOST: ""
     volumes:
       - ${GOOGLE_APPLICATION_CREDENTIALS}:/app/credentials.json:ro

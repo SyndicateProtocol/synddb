@@ -38,8 +38,7 @@ pub struct GcsConfig {
     pub prefix: String,
     /// GCS emulator host URL for local testing.
     ///
-    /// This is a standard Google Cloud environment variable (`STORAGE_EMULATOR_HOST`)
-    /// recognized by GCS client libraries. When set, the client uses anonymous
+    /// When set, the client uses anonymous
     /// authentication and connects to the specified emulator (e.g., `fake-gcs-server`)
     /// instead of real GCS.
     ///

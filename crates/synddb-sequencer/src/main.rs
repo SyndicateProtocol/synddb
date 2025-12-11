@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
                     anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
                 })?;
                 let mut gcs_config = GcsConfig::new(bucket).with_prefix(&config.gcs_prefix);
-                if let Some(ref emulator_host) = config.storage_emulator_host {
+                if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
                     gcs_config = gcs_config.with_emulator_host(emulator_host);
                 }
                 let gcs_pub = GcsPublisher::new(gcs_config, Arc::clone(&signer))

@@ -71,7 +71,7 @@ services:
       PUBLISHER_TYPE: gcs
       GCS_BUCKET: synddb-test
       GCS_PREFIX: sequencer
-      STORAGE_EMULATOR_HOST: "http://fake-gcs:4443"
+      GCS_STORAGE_EMULATOR_HOST: "http://fake-gcs:4443"
     depends_on:
       init-bucket:
         condition: service_healthy
@@ -100,7 +100,7 @@ services:
       SYNC_INTERVAL: "1s"
       BATCH_SYNC_ENABLED: "true"
       BATCH_INDEX_REFRESH_INTERVAL: "5s"
-      STORAGE_EMULATOR_HOST: "http://fake-gcs:4443"
+      GCS_STORAGE_EMULATOR_HOST: "http://fake-gcs:4443"
     depends_on:
       sequencer:
         condition: service_healthy
@@ -129,7 +129,7 @@ services:
       SYNC_INTERVAL: "1s"
       BATCH_SYNC_ENABLED: "true"
       BATCH_INDEX_REFRESH_INTERVAL: "5s"
-      STORAGE_EMULATOR_HOST: "http://fake-gcs:4443"
+      GCS_STORAGE_EMULATOR_HOST: "http://fake-gcs:4443"
     depends_on:
       sequencer:
         condition: service_healthy

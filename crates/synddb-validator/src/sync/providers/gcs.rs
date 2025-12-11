@@ -51,9 +51,7 @@ impl GcsFetcher {
     /// workload identity, or metadata server).
     ///
     /// If `emulator_host` is provided, uses anonymous authentication and
-    /// connects to the specified emulator instead of real GCS. This corresponds
-    /// to the `STORAGE_EMULATOR_HOST` environment variable recognized by GCS
-    /// client libraries.
+    /// connects to the specified emulator instead of real GCS.
     pub async fn new(
         bucket: String,
         prefix: String,

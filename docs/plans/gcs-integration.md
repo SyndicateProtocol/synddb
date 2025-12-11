@@ -34,7 +34,7 @@ Enable end-to-end testing of the GCS storage layer for the sequencer publish and
 ```yaml
 # All GCS-using services need:
 environment:
-  STORAGE_EMULATOR_HOST: "http://fake-gcs:4443"
+  GCS_STORAGE_EMULATOR_HOST: "http://fake-gcs:4443"
   GCS_BUCKET: "synddb-test"
   GCS_PREFIX: "sequencer"
 ```

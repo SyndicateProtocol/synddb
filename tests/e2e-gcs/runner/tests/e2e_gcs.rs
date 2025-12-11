@@ -54,7 +54,7 @@ fn test_gcs_emulator() {
 }
 
 #[test]
-#[ignore] // Requires GCS_BUCKET=... GOOGLE_APPLICATION_CREDENTIALS=...
+#[ignore = "Requires GCS_BUCKET=... GOOGLE_APPLICATION_CREDENTIALS=..."]
 fn test_gcs_real() {
     run_real_gcs_test();
 }
