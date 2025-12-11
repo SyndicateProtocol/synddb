@@ -32,24 +32,15 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: network=host
-
-      - name: Build images with cache
-        uses: docker/bake-action@v6
-        with:
-          source: .
-          files: tests/e2e/docker-compose.yml
-          load: true
-          set: |
-            *.cache-from=type=gha
-            *.cache-to=type=gha,mode=max
 
       - name: Run E2E smoke test
         run: |
           docker compose -f tests/e2e/docker-compose.yml up \
+            --build \
             --abort-on-container-exit \
             --exit-code-from e2e_assertions
+        env:
+          DOCKER_BUILDKIT: 1
 
       - name: Show logs on failure
         if: failure()
@@ -81,24 +72,15 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: network=host
-
-      - name: Build images with cache
-        uses: docker/bake-action@v6
-        with:
-          source: .
-          files: tests/e2e-gcs/docker-compose.yml
-          load: true
-          set: |
-            *.cache-from=type=gha
-            *.cache-to=type=gha,mode=max
 
       - name: Run GCS E2E test
         run: |
           docker compose -f tests/e2e-gcs/docker-compose.yml up \
+            --build \
             --abort-on-container-exit \
             --exit-code-from e2e_assertions
+        env:
+          DOCKER_BUILDKIT: 1
 
       - name: Show logs on failure
         if: failure()
