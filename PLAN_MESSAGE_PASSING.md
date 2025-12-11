@@ -194,7 +194,7 @@ Optionally acknowledge that a message has been processed. This is for monitoring
 
 #### Outbound Messages (Application → Blockchain)
 
-The sequencer monitors designated SQLite tables for outbound messages. When the application writes to these tables, the sequencer automatically detects the changes and publishes them to DA layers for validator processing.
+The sequencer monitors designated SQLite tables for outbound messages. When the application writes to these tables, the sequencer automatically detects the changes and publishes them to storage layers for validator processing.
 
 ##### Message Table Schemas
 
@@ -1567,7 +1567,7 @@ The sequencer's progressive degradation strategy ensures system integrity while 
 
 #### State Commitment Publishing
 
-The sequencer publishes signed state commitments to DA layers that include:
+The sequencer publishes signed state commitments to storage layers that include:
 - Current system status (Healthy/Degraded/Halted)
 - Error codes for specific issues
 - Reference to committed state with state update hash

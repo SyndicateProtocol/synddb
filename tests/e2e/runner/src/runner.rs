@@ -44,9 +44,15 @@ impl TestRunner {
             self.test_sequencer_receives_messages().await,
             self.test_validator_syncs().await,
             self.test_sync_consistency().await,
-            self.test_da_fetch().await,
+            self.test_storage_fetch().await,
             self.test_snapshot_sequenced().await,
-            self.test_snapshot_in_da().await,
+            self.test_snapshot_in_storage().await,
+            // Batch storage tests
+            self.test_storage_batch_list().await,
+            self.test_storage_batch_fetch().await,
+            self.test_storage_message_not_found().await,
+            self.test_storage_batch_not_found().await,
+            self.test_storage_batch_message_consistency().await,
             // Multi-validator tests
             self.test_multi_validator_sync().await,
             self.test_validators_consistent().await,

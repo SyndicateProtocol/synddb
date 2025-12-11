@@ -2,14 +2,14 @@
 
 ## Overview
 
-The `synddb-validator` syncs state from DA layers, validates all sequenced messages, and serves queries. All validators perform the same core validation - the `--bridge-signer` flag enables additional functionality for signing withdrawal approvals and state attestations for the bridge contract.
+The `synddb-validator` syncs state from storage layers, validates all sequenced messages, and serves queries. All validators perform the same core validation - the `--bridge-signer` flag enables additional functionality for signing withdrawal approvals and state attestations for the bridge contract.
 
 **Modes:**
 - **Default**: Sync, validate, serve queries (read-only replica functionality)
 - **`--bridge-signer`**: Additionally sign for bridge contract (withdrawals, state roots)
 
 **Key Integration Points:**
-- Consumes `SignedMessage` from sequencer's DA publishers (GCS, Celestia, etc.)
+- Consumes `SignedMessage` from sequencer's storage publishers (GCS, Celestia, etc.)
 - Applies SQLite changesets (binary format from Session Extension), not SQL statements
 - Verifies sequencer signatures using secp256k1 (same scheme as sequencer)
 - Reuses `synddb-chain-monitor` for blockchain event handling
@@ -19,7 +19,7 @@ The `synddb-validator` syncs state from DA layers, validates all sequenced messa
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                        DA Layers                             │
+│                        Storage Layers                        │
 │  ┌──────────┐ ┌──────────┐ ┌──────┐ ┌──────────┐           │
 │  │   GCS    │ │ Celestia │ │ IPFS │ │ EigenDA  │           │
 │  └──────────┘ └──────────┘ └──────┘ └──────────┘           │
@@ -28,10 +28,10 @@ The `synddb-validator` syncs state from DA layers, validates all sequenced messa
 ┌──────────────────────────────────────────────────────────────┐
 │                   synddb-validator                           │
 │ ┌──────────────────────────────────────────────────────────┐│
-│ │                    DA Syncer                             ││
+│ │                    Storage Syncer                        ││
 │ │  ┌────────────┐  ┌────────────┐  ┌────────────┐         ││
 │ │  │ Fetcher    │→ │ Verifier   │→ │  Orderer   │         ││
-│ │  │(GCS/DA)    │  │(Signature) │  │ (Sequence) │         ││
+│ │  │(GCS/etc.)  │  │(Signature) │  │ (Sequence) │         ││
 │ │  └────────────┘  └────────────┘  └────────────┘         ││
 │ └──────────────────────────────────────────────────────────┘│
 │                           ↓                                  │
@@ -71,7 +71,7 @@ The `synddb-validator` syncs state from DA layers, validates all sequenced messa
 
 ### SignedMessage (from sequencer)
 
-The replica fetches `SignedMessage` objects from DA layers. This is the exact format produced by `synddb-sequencer`.
+The replica fetches `SignedMessage` objects from storage layers. This is the exact format produced by `synddb-sequencer`.
 
 See: [`crates/synddb-shared/src/types/message.rs`](crates/synddb-shared/src/types/message.rs)
 
@@ -102,13 +102,13 @@ synddb-validator/
 │   ├── metrics.rs                   # Prometheus metrics
 │   ├── validator.rs                 # Main validator orchestration
 │   ├── sync/
-│   │   ├── mod.rs                   # DA syncing orchestration
-│   │   ├── fetcher.rs               # Fetch SignedMessage from DA (DAFetcher trait)
+│   │   ├── mod.rs                   # Storage syncing orchestration
+│   │   ├── fetcher.rs               # Fetch SignedMessage from storage
 │   │   ├── verifier.rs              # Verify sequencer signatures
 │   │   └── providers/
-│   │       ├── mod.rs               # Provider re-exports
-│   │       ├── http.rs              # HTTP fetcher for sequencer's local DA API (✅ implemented)
-│   │       ├── gcs.rs               # GCS fetcher (✅ implemented)
+│   │       ├── mod.rs               # StorageFetcher trait
+│   │       ├── gcs.rs               # GCS fetcher (primary)
+│   │       ├── celestia.rs          # Celestia fetcher
 │   │       └── mock.rs              # Mock for testing
 │   ├── apply/
 │   │   ├── mod.rs                   # Changeset application engine
@@ -179,12 +179,12 @@ synddb-validator \
 
 ## Core Components
 
-### 1. DA Syncer
+### 1. Storage Syncer
 
-Fetches `SignedMessage` from DA layers and verifies sequencer signatures. The trait mirrors the sequencer's `DAPublisher` interface for consistency.
+Fetches `SignedMessage` from storage layers and verifies sequencer signatures. The trait mirrors the sequencer's `StoragePublisher` interface for consistency.
 
 See:
-- [`crates/synddb-validator/src/sync/mod.rs`](crates/synddb-validator/src/sync/mod.rs) - DAFetcher trait and sync logic
+- [`crates/synddb-validator/src/sync/mod.rs`](crates/synddb-validator/src/sync/mod.rs) - StorageFetcher trait and sync logic
 - [`crates/synddb-validator/src/sync/providers/gcs.rs`](crates/synddb-validator/src/sync/providers/gcs.rs) - GCS fetcher implementation
 
 ### 2. Signature Verifier
@@ -1080,8 +1080,8 @@ mod tests {
 ```rust
 #[tokio::test]
 async fn test_full_sync() {
-    // Start mock DA fetcher
-    let mock_fetcher = Arc::new(MockDAFetcher::new());
+    // Start mock storage fetcher
+    let mock_fetcher = Arc::new(MockStorageFetcher::new());
     mock_fetcher.add_message(create_test_signed_message(1));
     mock_fetcher.add_message(create_test_signed_message(2));
 
@@ -1092,7 +1092,7 @@ async fn test_full_sync() {
     // Start syncer
     let state_manager = StateManager::new(":memory:").unwrap();
     let expected_signer = config.sequencer_address.parse().unwrap();
-    let syncer = DaSyncer::new(vec![mock_fetcher], state_manager, expected_signer);
+    let syncer = StorageSyncer::new(vec![mock_fetcher], state_manager, expected_signer);
 
     // Start applier in background
     let mut applier = ChangesetApplier::new(":memory:", None).unwrap();
@@ -1223,7 +1223,7 @@ spec:
 
 ## Performance Optimizations
 
-### 1. Parallel DA Fetching
+### 1. Parallel Storage Fetching
 ```rust
 let futures = providers.iter().map(|p| p.fetch_latest());
 let results = futures::future::join_all(futures).await;

@@ -19,7 +19,7 @@ use tracing::{error, info, warn};
 use crate::attestation::AttestationVerifier;
 use crate::http_errors::{HttpError, SequencerError};
 use crate::inbox::Inbox;
-use crate::publish::traits::DAPublisher;
+use crate::publish::traits::StoragePublisher;
 use synddb_shared::types::message::{MessageType, SequenceReceipt, SignedMessage};
 use synddb_shared::types::payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest};
 use synddb_shared::types::serde_helpers::base64_serde;
@@ -29,7 +29,7 @@ use synddb_shared::types::serde_helpers::base64_serde;
 pub struct AppState {
     pub inbox: Arc<Inbox>,
     /// Optional publisher for persisting messages
-    pub publisher: Option<Arc<dyn DAPublisher>>,
+    pub publisher: Option<Arc<dyn StoragePublisher>>,
     /// Optional attestation verifier for TEE token validation
     pub attestation_verifier: Option<Arc<AttestationVerifier>>,
 }
@@ -216,7 +216,7 @@ async fn receive_changesets(
             SequencerError::from(e)
         })?;
 
-    // Publish to DA layer if configured
+    // Publish to storage layer if configured
     if let Some(publisher) = &state.publisher {
         let publish_result = publisher.publish(&signed_message).await;
         if !publish_result.success {
@@ -290,7 +290,7 @@ async fn receive_withdrawal(
             SequencerError::from(e)
         })?;
 
-    // Publish to DA layer if configured
+    // Publish to storage layer if configured
     if let Some(publisher) = &state.publisher {
         let publish_result = publisher.publish(&signed_message).await;
         if !publish_result.success {
@@ -359,7 +359,7 @@ async fn receive_snapshot(
             SequencerError::from(e)
         })?;
 
-    // Publish to DA layer if configured
+    // Publish to storage layer if configured
     if let Some(publisher) = &state.publisher {
         let publish_result = publisher.publish(&signed_message).await;
         if !publish_result.success {

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::publish::traits::{DAPublisher, PublishError, PublishResult};
+use crate::publish::traits::{PublishError, PublishResult, StoragePublisher};
 use crate::signer::MessageSigner;
 use synddb_shared::types::message::{SignedBatch, SignedMessage};
 
@@ -40,7 +40,7 @@ impl MockPublisher {
 }
 
 #[async_trait]
-impl DAPublisher for MockPublisher {
+impl StoragePublisher for MockPublisher {
     fn name(&self) -> &str {
         "mock"
     }

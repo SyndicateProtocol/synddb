@@ -3,7 +3,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use synddb_shared::types::message::SignedMessage;
+use synddb_shared::types::message::{SignedBatch, SignedMessage};
 use url::Url;
 
 /// Sequencer status response
@@ -13,10 +13,17 @@ pub(crate) struct SequencerStatus {
     pub signer_address: String,
 }
 
-/// DA latest response
+/// Storage latest response
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct DaLatest {
+pub(crate) struct StorageLatest {
     pub sequence: Option<u64>,
+}
+
+/// Batch info response from /storage/batches
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct BatchInfo {
+    pub start_sequence: u64,
+    pub end_sequence: u64,
 }
 
 /// Sequence response from sequencer
@@ -58,9 +65,11 @@ impl SequencerClient {
             .context("Failed to parse sequencer status")
     }
 
-    /// Fetch a message from the DA layer
-    pub(crate) async fn fetch_da_message(&self, sequence: u64) -> Result<SignedMessage> {
-        let url = self.base_url.join(&format!("/da/messages/{}", sequence))?;
+    /// Fetch a message from the storage layer
+    pub(crate) async fn fetch_storage_message(&self, sequence: u64) -> Result<SignedMessage> {
+        let url = self
+            .base_url
+            .join(&format!("/storage/messages/{}", sequence))?;
         self.client
             .get(url)
             .send()
@@ -68,12 +77,12 @@ impl SequencerClient {
             .error_for_status()?
             .json()
             .await
-            .context("Failed to fetch DA message")
+            .context("Failed to fetch storage message")
     }
 
-    /// Get the latest DA sequence
-    pub(crate) async fn da_latest(&self) -> Result<DaLatest> {
-        let url = self.base_url.join("/da/latest")?;
+    /// Get the latest storage sequence
+    pub(crate) async fn storage_latest(&self) -> Result<StorageLatest> {
+        let url = self.base_url.join("/storage/latest")?;
         self.client
             .get(url)
             .send()
@@ -81,7 +90,78 @@ impl SequencerClient {
             .error_for_status()?
             .json()
             .await
-            .context("Failed to get DA latest")
+            .context("Failed to get storage latest")
+    }
+
+    /// List all batches from the storage layer
+    pub(crate) async fn list_batches(&self) -> Result<Vec<BatchInfo>> {
+        let url = self.base_url.join("/storage/batches")?;
+        self.client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("Failed to list storage batches")
+    }
+
+    /// Fetch a batch by start sequence
+    pub(crate) async fn fetch_batch(&self, start_sequence: u64) -> Result<SignedBatch> {
+        let url = self
+            .base_url
+            .join(&format!("/storage/batches/{}", start_sequence))?;
+        self.client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("Failed to fetch storage batch")
+    }
+
+    /// Try to fetch a batch, returning None if not found (404)
+    pub(crate) async fn try_fetch_batch(&self, start_sequence: u64) -> Result<Option<SignedBatch>> {
+        let url = self
+            .base_url
+            .join(&format!("/storage/batches/{}", start_sequence))?;
+        let response = self.client.get(url).send().await?;
+
+        match response.status() {
+            status if status.is_success() => {
+                let batch = response.json().await?;
+                Ok(Some(batch))
+            }
+            reqwest::StatusCode::NOT_FOUND => Ok(None),
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                bail!("HTTP error {}: {}", status, body)
+            }
+        }
+    }
+
+    /// Try to fetch a message, returning None if not found (404)
+    pub(crate) async fn try_fetch_storage_message(
+        &self,
+        sequence: u64,
+    ) -> Result<Option<SignedMessage>> {
+        let url = self
+            .base_url
+            .join(&format!("/storage/messages/{}", sequence))?;
+        let response = self.client.get(url).send().await?;
+
+        match response.status() {
+            status if status.is_success() => {
+                let message = response.json().await?;
+                Ok(Some(message))
+            }
+            reqwest::StatusCode::NOT_FOUND => Ok(None),
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                bail!("HTTP error {}: {}", status, body)
+            }
+        }
     }
 
     /// Wait for the sequencer to be healthy

@@ -568,7 +568,7 @@ When `SEQUENCER_URL` is set, the benchmark:
 1. Attaches `SyndDB` client to the SQLite connection
 2. Runs transactions normally (inserts, updates, etc.)
 3. Calls `synddb.publish()` after each transaction batch to send changesets
-4. Changesets are signed by the sequencer and published to the DA layer
+4. Changesets are signed by the sequencer and published to the storage layer
 
 The benchmark uses the safe API pattern where `publish()` is called explicitly after transactions complete, ensuring thread-safe changeset extraction.
 

@@ -1,5 +1,6 @@
-//! Sync module for fetching and processing messages from DA layers
+//! Sync module for fetching and processing messages from storage layers
 
+pub mod batch_index;
 pub mod fetcher;
 pub mod providers;
 pub mod verifier;

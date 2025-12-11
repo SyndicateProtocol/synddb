@@ -1,3 +1,4 @@
+mod batch;
 mod da;
 mod multi_validator;
 mod sequencer;

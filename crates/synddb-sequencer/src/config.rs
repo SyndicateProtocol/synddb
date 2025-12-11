@@ -46,7 +46,7 @@ impl fmt::Display for PublisherType {
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[command(name = "synddb-sequencer")]
 #[command(
-    about = "SyndDB Sequencer - HTTP server that receives changesets from client libraries and publishes to DA layers"
+    about = "SyndDB Sequencer - HTTP server that receives changesets from client libraries and publishes to storage layers"
 )]
 pub struct SequencerConfig {
     /// HTTP server bind address

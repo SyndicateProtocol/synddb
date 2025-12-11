@@ -1,4 +1,4 @@
-//! DA fetch tests
+//! Storage layer fetch tests
 
 use anyhow::ensure;
 use synddb_shared::types::message::MessageType;
@@ -7,16 +7,16 @@ use crate::result::{TestCase, TestCaseResult};
 use crate::runner::TestRunner;
 
 impl TestRunner {
-    /// Test: Can fetch messages from the DA layer
-    pub(crate) async fn test_da_fetch(&self) -> TestCaseResult {
-        TestCase::new("da_fetch", "DA message fetch works")
+    /// Test: Can fetch messages from the storage layer
+    pub(crate) async fn test_storage_fetch(&self) -> TestCaseResult {
+        TestCase::new("storage_fetch", "Storage message fetch works")
             .run(|| async {
-                // Get the latest sequence from DA
-                let latest = self.sequencer.da_latest().await?;
-                ensure!(latest.sequence.is_some(), "No messages in DA layer");
+                // Get the latest sequence from storage
+                let latest = self.sequencer.storage_latest().await?;
+                ensure!(latest.sequence.is_some(), "No messages in storage layer");
 
                 // Fetch message at sequence 0 (first message)
-                let message = self.sequencer.fetch_da_message(0).await?;
+                let message = self.sequencer.fetch_storage_message(0).await?;
 
                 // Verify basic message structure
                 ensure!(

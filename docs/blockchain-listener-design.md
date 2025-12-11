@@ -15,7 +15,7 @@ VM1 (Application + Chain Monitor)          VM2 (Sequencer)
 ├─ synddb-client                           ├─ synddb-sequencer
 ├─ synddb-chain-monitor                    │  - Signs transactions
 ├─ Application SQLite DB                   │  - 🔐 Signing keys (isolated)
-└─ NO signing keys                         └─ Publishes to DA layer
+└─ NO signing keys                         └─ Publishes to storage layer
 ```
 
 **Security Properties**:

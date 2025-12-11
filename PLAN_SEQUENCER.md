@@ -1,13 +1,13 @@
-# PLAN_SEQUENCER.md - Sequencer Service for Publishing to DA Layers
+# PLAN_SEQUENCER.md - Sequencer Service for Publishing to Storage Layers
 
 ## Overview
 
-The synddb-sequencer is a service that receives changesets and snapshots from application client libraries and publishes them to multiple DA layers.
+The synddb-sequencer is a service that receives changesets and snapshots from application client libraries and publishes them to multiple storage layers.
 
 **Architecture Note**: The original plan described the sequencer as a sidecar process that directly monitors SQLite databases. We have since evolved to a **client library architecture**:
 
 - **Client Library** (`synddb-client` crate): Embeds in applications, captures changesets/snapshots via SQLite Session Extension, sends to sequencer via HTTP
-- **Sequencer Service** (`synddb-sequencer` crate - this document): Receives from client libraries, publishes to DA layers, monitors blockchain for inbound messages
+- **Sequencer Service** (`synddb-sequencer` crate - this document): Receives from client libraries, publishes to storage layers, monitors blockchain for inbound messages
 - **Security**: Client and sequencer run in **separate TEEs** to isolate signing keys from the application
 
 This document focuses on the **sequencer service** implementation. For client library details, see `crates/synddb-client/`.
@@ -51,10 +51,10 @@ This document focuses on the **sequencer service** implementation. For client li
 │ └──────────────────────────────────────────────────┘        │
 │                          ↓                                   │
 │ ┌──────────────────────────────────────────────────┐        │
-│ │         Multi-DA Publisher                       │        │
-│ │  ┌─────────┐ ┌─────────┐ ┌──────┐ ┌─────────┐  │        │
-│ │  │Celestia │ │EigenDA  │ │ IPFS │ │ Arweave │  │        │
-│ │  └─────────┘ └─────────┘ └──────┘ └─────────┘  │        │
+│ │         Multi-Storage Publisher                  │        │
+│ │  ┌──────┐ ┌─────────┐ ┌─────────┐ ┌──────────┐ │        │
+│ │  │ GCS  │ │Celestia │ │EigenDA  │ │ Arweave  │ │        │
+│ │  └──────┘ └─────────┘ └─────────┘ └──────────┘ │        │
 │ └──────────────────────────────────────────────────┘        │
 │                                                              │
 │ ┌──────────────────────────────────────────────────┐        │
@@ -242,7 +242,7 @@ The original plan included a Session Monitor component that would directly monit
 - HTTP endpoint to receive changesets and snapshots from client libraries
 - Verify TEE attestation tokens from clients
 - Validate received data (checksums, sequence numbers)
-- Queue operations for batching and DA publishing
+- Queue operations for batching and storage publishing
 
 ### 2. Batcher
 
@@ -572,10 +572,10 @@ impl Attestor {
 }
 ```
 
-### 4. Multi-DA Publisher
+### 4. Multi-Storage Publisher
 
-Publishes attested payloads to multiple DA layers in parallel with retry logic.
-The Publisher waits for successful DA publication before acknowledging, ensuring reliable delivery.
+Publishes attested payloads to multiple storage layers in parallel with retry logic.
+The Publisher waits for successful storage publication before acknowledging, ensuring reliable delivery.
 
 ```rust
 // src/publish/mod.rs
@@ -594,10 +594,10 @@ pub trait DaPublisher: Send + Sync {
 impl Publisher {
     pub async fn run(self, rx: Receiver<AttestedPayload>) {
         while let Some(payload) = rx.recv().await {
-            // Block until successfully published to all configured DA layers
+            // Block until successfully published to all configured storage layers
             let results = self.publish_all(payload).await;
 
-            // Record manifest (sequence -> DA locations mapping)
+            // Record manifest (sequence -> storage locations mapping)
             self.manifest_store.record(results).await?;
 
             // Only after successful publication do we process next batch
@@ -606,7 +606,7 @@ impl Publisher {
     }
 
     async fn publish_all(&self, payload: AttestedPayload) -> Vec<PublishResult> {
-        // Publish to all DA layers in parallel
+        // Publish to all storage layers in parallel
         let futures = self.publishers.iter().map(|publisher| {
             self.publish_with_retry(publisher, &payload)
         });
@@ -634,9 +634,9 @@ impl Publisher {
 }
 ```
 
-### 5. DA Layer Implementations
+### 5. Storage Layer Implementations
 
-Each DA layer has its own implementation:
+Each storage layer has its own implementation:
 
 ```rust
 // src/publish/celestia.rs
@@ -647,7 +647,7 @@ pub struct CelestiaPublisher {
 }
 
 #[async_trait]
-impl DaPublisher for CelestiaPublisher {
+impl StoragePublisher for CelestiaPublisher {
     async fn publish(&self, payload: &PublishPayload) -> Result<PublishReceipt> {
         let blob = match payload {
             PublishPayload::Diff(diff) => {
@@ -686,7 +686,7 @@ pub struct IpfsPublisher {
 }
 
 #[async_trait]
-impl DaPublisher for IpfsPublisher {
+impl StoragePublisher for IpfsPublisher {
     async fn publish(&self, payload: &PublishPayload) -> Result<PublishReceipt> {
         let data = payload.as_bytes();
 
@@ -715,7 +715,7 @@ impl DaPublisher for IpfsPublisher {
 
 Message passing implementation has been extracted to a separate document for detailed coverage.
 
-See **PLAN_MESSAGE_PASSING.md** for:
+See **[PLAN_MESSAGE_PASSING.md](PLAN_MESSAGE_PASSING.md)** for:
 - Bidirectional message flow (blockchain ↔ application)
 - Single writer model and read-only sequencer monitoring
 - HTTP API specifications for inbound message delivery
@@ -1587,7 +1587,7 @@ All metrics and logs are sent to GCP Cloud Logging for centralized monitoring:
 **Structured Log Events:**
 - `wal_frames_processed` - WAL frame count and processing latency
 - `batch_published` - Batch sequence, size, DA layer, publish latency
-- `da_publish_latency` - Per-DA layer publish times
+- `storage_publish_latency` - Per-storage layer publish times
 - `compression_ratio` - Compression effectiveness metrics
 - `attestation_refresh` - Attestation token refresh events
 - `key_loaded` - Ethereum key loaded from Secret Manager

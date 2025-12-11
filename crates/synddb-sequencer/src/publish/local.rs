@@ -18,11 +18,12 @@
 //!
 //! # HTTP API
 //!
-//! When mounted on the sequencer, exposes these endpoints under `/da/`:
+//! When mounted on the sequencer, exposes these endpoints under `/storage/`:
 //!
-//! - `GET /da/batches/{start}` - Retrieve batch by start sequence
-//! - `GET /da/messages/{sequence}` - Retrieve message by sequence
-//! - `GET /da/latest` - Get latest published sequence number
+//! - `GET /storage/batches` - List all batches (for building batch index)
+//! - `GET /storage/batches/{start}` - Retrieve batch by start sequence
+//! - `GET /storage/messages/{sequence}` - Retrieve message by sequence
+//! - `GET /storage/latest` - Get latest published sequence number
 //!
 //! # Usage
 //!
@@ -31,10 +32,10 @@
 //! let publisher = LocalPublisher::new(LocalConfig::in_memory(), signer)?;
 //!
 //! // File-backed (for production)
-//! let publisher = LocalPublisher::new(LocalConfig::file("/data/local_da.db"), signer)?;
+//! let publisher = LocalPublisher::new(LocalConfig::file("/data/local_storage.db"), signer)?;
 //!
 //! // Mount HTTP routes
-//! let router = sequencer_router.nest("/da", publisher.routes());
+//! let router = sequencer_router.nest("/storage", publisher.routes());
 //! ```
 
 use async_trait::async_trait;
@@ -50,7 +51,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
-use crate::publish::traits::{DAPublisher, PublishError, PublishResult};
+use crate::publish::traits::{PublishError, PublishResult, StoragePublisher};
 use crate::signer::MessageSigner;
 use synddb_shared::types::message::{SignedBatch, SignedMessage};
 
@@ -141,18 +142,40 @@ impl LocalPublisher {
         Ok(Arc::new(Self::new(config, signer)?))
     }
 
-    /// Get HTTP routes for the DA fetch API
+    /// Get HTTP routes for the storage fetch API
     ///
-    /// Mount these under `/da/` on the sequencer router:
+    /// Mount these under `/storage/` on the sequencer router:
     /// ```ignore
-    /// let router = sequencer_router.nest("/da", publisher.routes());
+    /// let router = sequencer_router.nest("/storage", publisher.routes());
     /// ```
     pub fn routes(self: &Arc<Self>) -> Router {
         Router::new()
+            .route("/batches", get(list_batches_handler))
             .route("/batches/{start}", get(get_batch_handler))
             .route("/messages/{sequence}", get(get_message_handler))
             .route("/latest", get(get_latest_handler))
             .with_state(Arc::clone(self))
+    }
+
+    /// List all batches with their sequence ranges
+    pub fn list_batches(&self) -> Result<Vec<BatchInfoResponse>, PublishError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT start_sequence, end_sequence FROM batches ORDER BY start_sequence")
+            .map_err(|e| PublishError::Storage(format!("Query prepare failed: {e}")))?;
+
+        let batches = stmt
+            .query_map([], |row| {
+                Ok(BatchInfoResponse {
+                    start_sequence: row.get(0)?,
+                    end_sequence: row.get(1)?,
+                })
+            })
+            .map_err(|e| PublishError::Storage(format!("Query failed: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| PublishError::Storage(format!("Row mapping failed: {e}")))?;
+
+        Ok(batches)
     }
 
     /// Find the batch containing a specific sequence number
@@ -184,7 +207,7 @@ impl LocalPublisher {
 }
 
 #[async_trait]
-impl DAPublisher for LocalPublisher {
+impl StoragePublisher for LocalPublisher {
     fn name(&self) -> &str {
         "local"
     }
@@ -370,6 +393,26 @@ impl DAPublisher for LocalPublisher {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LatestSequenceResponse {
     pub sequence: Option<u64>,
+}
+
+/// Response for batch info in list endpoint
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchInfoResponse {
+    pub start_sequence: u64,
+    pub end_sequence: u64,
+}
+
+/// List all batches
+async fn list_batches_handler(
+    State(publisher): State<Arc<LocalPublisher>>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    match publisher.list_batches() {
+        Ok(batches) => Ok(Json(batches)),
+        Err(e) => {
+            error!(error = %e, "Failed to list batches");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        }
+    }
 }
 
 /// Get batch by start sequence
@@ -605,5 +648,69 @@ mod tests {
         let retrieved = publisher.get(1).await.unwrap();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().sequence, 1);
+    }
+
+    #[tokio::test]
+    async fn test_local_publisher_list_batches() {
+        let signer = test_signer();
+        let publisher = LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
+
+        // Initially empty
+        let batches = publisher.list_batches().unwrap();
+        assert!(batches.is_empty());
+
+        // Publish some messages (each becomes its own batch)
+        let msg1 = create_signed_message(&signer, 1, 1700000000).await;
+        let msg2 = create_signed_message(&signer, 2, 1700000001).await;
+        let msg3 = create_signed_message(&signer, 5, 1700000002).await;
+
+        publisher.publish(&msg1).await;
+        publisher.publish(&msg2).await;
+        publisher.publish(&msg3).await;
+
+        // List should return 3 batches, sorted by start_sequence
+        let batches = publisher.list_batches().unwrap();
+        assert_eq!(batches.len(), 3);
+
+        assert_eq!(batches[0].start_sequence, 1);
+        assert_eq!(batches[0].end_sequence, 1);
+
+        assert_eq!(batches[1].start_sequence, 2);
+        assert_eq!(batches[1].end_sequence, 2);
+
+        assert_eq!(batches[2].start_sequence, 5);
+        assert_eq!(batches[2].end_sequence, 5);
+    }
+
+    #[tokio::test]
+    async fn test_local_publisher_list_batches_multi_message() {
+        let signer = test_signer();
+        let publisher = LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
+
+        // Create a multi-message batch
+        let msg1 = create_signed_message(&signer, 1, 1700000000).await;
+        let msg2 = create_signed_message(&signer, 2, 1700000001).await;
+        let messages = vec![msg1, msg2];
+
+        let messages_hash = SignedBatch::compute_messages_hash(&messages).unwrap();
+        let batch_payload = SignedBatch::compute_signing_payload(1, 2, messages_hash);
+        let batch_sig = signer.sign(batch_payload).await.unwrap();
+
+        let batch = SignedBatch {
+            start_sequence: 1,
+            end_sequence: 2,
+            messages,
+            batch_signature: batch_sig.to_hex_prefixed(),
+            signer: format!("{:?}", signer.address()),
+            created_at: 1700000002,
+        };
+
+        publisher.publish_batch(&batch).await;
+
+        // List should return 1 batch with range 1-2
+        let batches = publisher.list_batches().unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].start_sequence, 1);
+        assert_eq!(batches[0].end_sequence, 2);
     }
 }

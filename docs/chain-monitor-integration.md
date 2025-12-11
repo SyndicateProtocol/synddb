@@ -51,7 +51,7 @@ End-to-end guide for integrating blockchain monitoring into SyndDB applications.
 1. Application writes to SQLite
 2. SessionMonitor captures changeset
 3. ChangesetSender publishes to sequencer
-4. Sequencer signs and publishes to DA layer
+4. Sequencer signs and publishes to storage layer
 5. Replicas apply changesets
 
 ## Configuration
