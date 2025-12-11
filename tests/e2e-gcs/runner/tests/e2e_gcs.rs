@@ -89,7 +89,10 @@ fn run_emulator_test() {
     println!("Cleaning up containers...");
     let _ = run_docker_compose(&["-f", compose_file.to_str().unwrap(), "down", "-v"]);
 
-    assert_eq!(exit_code, 0, "GCS E2E tests failed with exit code {exit_code}");
+    assert_eq!(
+        exit_code, 0,
+        "GCS E2E tests failed with exit code {exit_code}"
+    );
 }
 
 fn run_real_gcs_test() {
@@ -101,8 +104,9 @@ fn run_real_gcs_test() {
     let bucket = std::env::var("GCS_BUCKET")
         .expect("GCS_BUCKET environment variable must be set for real GCS mode");
 
-    let credentials = std::env::var("GOOGLE_APPLICATION_CREDENTIALS")
-        .expect("GOOGLE_APPLICATION_CREDENTIALS environment variable must be set for real GCS mode");
+    let credentials = std::env::var("GOOGLE_APPLICATION_CREDENTIALS").expect(
+        "GOOGLE_APPLICATION_CREDENTIALS environment variable must be set for real GCS mode",
+    );
 
     // Resolve credentials path relative to project root if not absolute
     let credentials_path = PathBuf::from(&credentials);
@@ -173,5 +177,8 @@ fn run_real_gcs_test() {
     println!("Test data was written to: gs://{bucket}/sequencer-test-{test_run_id}/");
     println!("To clean up: gsutil -m rm -r gs://{bucket}/sequencer-test-{test_run_id}/");
 
-    assert_eq!(exit_code, 0, "GCS E2E tests failed with exit code {exit_code}");
+    assert_eq!(
+        exit_code, 0,
+        "GCS E2E tests failed with exit code {exit_code}"
+    );
 }
