@@ -64,6 +64,12 @@ humantime = "2"
 hex = "0.4"
 base64 = "0.22"
 zstd = "0.13"
+sha2 = "0.10"
+
+# CBOR/COSE serialization
+ciborium = "0.2"
+coset = "0.3"
+serde_bytes = "0.11"
 
 # Blockchain / Cryptography
 alloy = { version = "1.0.25", features = [
