@@ -19,9 +19,13 @@
 use anyhow::Result;
 use clap::Parser;
 use rusqlite::Connection;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 use synddb_client::{Config, SyndDB};
 use tracing::info;
 

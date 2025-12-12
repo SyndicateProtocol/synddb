@@ -1,8 +1,10 @@
 use anyhow::ensure;
 use tracing::info;
 
-use crate::result::{TestCase, TestCaseResult};
-use crate::runner::TestRunner;
+use crate::{
+    result::{TestCase, TestCaseResult},
+    runner::TestRunner,
+};
 
 impl TestRunner {
     /// Test that the sequencer can receive and sequence a snapshot

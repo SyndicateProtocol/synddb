@@ -71,8 +71,10 @@ sol! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{Address, Bytes, B256, U256};
-    use alloy::sol_types::SolEvent;
+    use alloy::{
+        primitives::{Address, Bytes, B256, U256},
+        sol_types::SolEvent,
+    };
 
     #[test]
     fn test_deposit_event_signature() {

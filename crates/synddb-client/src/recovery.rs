@@ -6,8 +6,7 @@
 use crate::session::{Changeset, Snapshot};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::{path::PathBuf, sync::Mutex};
 use tracing::{debug, info};
 
 /// Manages recovery storage for failed changesets and snapshots

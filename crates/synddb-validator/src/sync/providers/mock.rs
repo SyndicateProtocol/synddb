@@ -3,8 +3,7 @@
 use crate::sync::fetcher::{BatchInfo, StorageFetcher};
 use anyhow::Result;
 use async_trait::async_trait;
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Mutex};
 use synddb_shared::types::message::{SignedBatch, SignedMessage};
 
 /// Mock fetcher for testing

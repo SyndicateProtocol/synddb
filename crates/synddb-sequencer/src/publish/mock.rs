@@ -1,11 +1,15 @@
 //! Mock publisher for testing
 
 use async_trait::async_trait;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
-use crate::publish::traits::{PublishError, PublishResult, StoragePublisher};
-use crate::signer::MessageSigner;
+use crate::{
+    publish::traits::{PublishError, PublishResult, StoragePublisher},
+    signer::MessageSigner,
+};
 use synddb_shared::types::message::{SignedBatch, SignedMessage};
 
 /// Internal state for `MockPublisher`

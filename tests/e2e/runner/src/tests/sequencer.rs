@@ -1,7 +1,9 @@
 use anyhow::ensure;
 
-use crate::result::{TestCase, TestCaseResult};
-use crate::runner::TestRunner;
+use crate::{
+    result::{TestCase, TestCaseResult},
+    runner::TestRunner,
+};
 
 impl TestRunner {
     /// Test that the sequencer has received messages from the customer app

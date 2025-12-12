@@ -2,9 +2,7 @@
 
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::net::SocketAddr;
-use std::time::Duration;
+use std::{fmt, net::SocketAddr, time::Duration};
 use strum::{EnumIter, IntoEnumIterator};
 
 /// Available fetcher types for retrieving messages from the storage layer

@@ -6,9 +6,10 @@
 //! This module uses the signing payload computation functions from `synddb_shared`
 //! to ensure consistency with signature verification.
 
-use alloy::primitives::{keccak256, Address, B256};
-use alloy::signers::local::PrivateKeySigner;
-use alloy::signers::Signer;
+use alloy::{
+    primitives::{keccak256, Address, B256},
+    signers::{local::PrivateKeySigner, Signer},
+};
 use synddb_shared::types::message::{SignedBatch, SignedMessage};
 use thiserror::Error;
 

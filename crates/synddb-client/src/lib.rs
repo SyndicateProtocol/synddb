@@ -60,9 +60,11 @@
 use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
 use rusqlite::Connection;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::thread;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    thread,
+};
 use tracing::{debug, info, warn};
 
 pub mod attestation;

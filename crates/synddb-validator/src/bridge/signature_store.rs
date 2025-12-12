@@ -4,8 +4,10 @@
 //! and submit them to the bridge contract.
 
 use super::signer::MessageSignature;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 use tracing::{debug, info};
 
 /// Thread-safe storage for bridge message signatures

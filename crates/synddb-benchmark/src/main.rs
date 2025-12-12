@@ -1,8 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use rusqlite::Connection;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 use tracing::{info, warn};
 
 use load_patterns::{LoadConfig, LoadPattern};

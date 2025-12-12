@@ -3,17 +3,20 @@
 //! The `Validator` orchestrates fetching, verification, and application of
 //! sequenced messages to maintain a replica of the sequenced state.
 
-use crate::apply::applier::ChangesetApplier;
-use crate::config::ValidatorConfig;
-use crate::error::ValidatorError;
-use crate::state::store::StateStore;
-use crate::sync::batch_index::{BatchIndex, BatchIterator};
-use crate::sync::fetcher::StorageFetcher;
-use crate::sync::verifier::SignatureVerifier;
+use crate::{
+    apply::applier::ChangesetApplier,
+    config::ValidatorConfig,
+    error::ValidatorError,
+    state::store::StateStore,
+    sync::{
+        batch_index::{BatchIndex, BatchIterator},
+        fetcher::StorageFetcher,
+        verifier::SignatureVerifier,
+    },
+};
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use synddb_shared::types::message::SignedBatch;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
@@ -702,8 +705,10 @@ mod tests {
     use crate::sync::providers::mock::MockFetcher;
     use rusqlite::session::Session;
     use std::io::Write;
-    use synddb_shared::types::message::{MessageType, SignedMessage};
-    use synddb_shared::types::payloads::{ChangesetBatchRequest, ChangesetData};
+    use synddb_shared::types::{
+        message::{MessageType, SignedMessage},
+        payloads::{ChangesetBatchRequest, ChangesetData},
+    };
 
     /// Test-only helper: run the sync loop until shutdown
     impl Validator {
@@ -727,9 +732,10 @@ mod tests {
         sequence: u64,
         changeset_data: Vec<u8>,
     ) -> SignedMessage {
-        use alloy::primitives::keccak256;
-        use alloy::signers::local::PrivateKeySigner;
-        use alloy::signers::Signer;
+        use alloy::{
+            primitives::keccak256,
+            signers::{local::PrivateKeySigner, Signer},
+        };
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let timestamp = 1700000000 + sequence;
@@ -941,9 +947,10 @@ mod tests {
     // =========================================================================
 
     async fn create_signed_batch(start_sequence: u64, messages: Vec<SignedMessage>) -> SignedBatch {
-        use alloy::primitives::keccak256;
-        use alloy::signers::local::PrivateKeySigner;
-        use alloy::signers::Signer;
+        use alloy::{
+            primitives::keccak256,
+            signers::{local::PrivateKeySigner, Signer},
+        };
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let end_sequence = messages.last().map_or(start_sequence, |m| m.sequence);

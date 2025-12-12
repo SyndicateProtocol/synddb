@@ -1,8 +1,9 @@
 use std::process::ExitCode;
 
-use crate::client::sequencer::SequencerClient;
-use crate::client::validator::ValidatorClient;
-use crate::runner::TestRunner;
+use crate::{
+    client::{sequencer::SequencerClient, validator::ValidatorClient},
+    runner::TestRunner,
+};
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber::EnvFilter;

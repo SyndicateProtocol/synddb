@@ -1,15 +1,18 @@
 //! Changeset applier for reconstructing state from sequenced messages
 
-use std::fs;
-use std::io::{Cursor, Read, Write};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    fs,
+    io::{Cursor, Read, Write},
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use anyhow::{Context, Result};
-use rusqlite::session::ConflictAction;
-use rusqlite::Connection;
-use synddb_shared::types::message::{MessageType, SignedMessage};
-use synddb_shared::types::payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest};
+use rusqlite::{session::ConflictAction, Connection};
+use synddb_shared::types::{
+    message::{MessageType, SignedMessage},
+    payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest},
+};
 use tracing::{debug, error, info, warn};
 
 use crate::error::ValidatorError;
@@ -463,8 +466,10 @@ mod tests {
 
     /// Create an in-memory database and return its bytes
     fn create_test_database_bytes() -> Vec<u8> {
-        use std::fs;
-        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::{
+            fs,
+            sync::atomic::{AtomicU64, Ordering},
+        };
 
         // Use atomic counter for unique file names in parallel tests
         static COUNTER: AtomicU64 = AtomicU64::new(0);

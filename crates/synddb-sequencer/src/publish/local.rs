@@ -51,8 +51,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
-use crate::publish::traits::{PublishError, PublishResult, StoragePublisher};
-use crate::signer::MessageSigner;
+use crate::{
+    publish::traits::{PublishError, PublishResult, StoragePublisher},
+    signer::MessageSigner,
+};
 use synddb_shared::types::message::{SignedBatch, SignedMessage};
 
 /// Configuration for the local publisher

@@ -6,8 +6,10 @@
 //!   - Local emulator (default): `cargo test -p synddb-e2e-gcs`
 //!   - Real GCS: `REAL_GCS=true GCS_BUCKET=... GOOGLE_APPLICATION_CREDENTIALS=... cargo test -p synddb-e2e-gcs`
 
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::{
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;

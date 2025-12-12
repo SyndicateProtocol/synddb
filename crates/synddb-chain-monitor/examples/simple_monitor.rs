@@ -13,9 +13,9 @@ use alloy::{primitives::B256, rpc::types::Log};
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
-use synddb_chain_monitor::config::ChainMonitorConfig;
-use synddb_chain_monitor::handler::MessageHandler;
-use synddb_chain_monitor::monitor::ChainMonitor;
+use synddb_chain_monitor::{
+    config::ChainMonitorConfig, handler::MessageHandler, monitor::ChainMonitor,
+};
 use tracing::info;
 
 /// A simple handler that just logs all events it receives.

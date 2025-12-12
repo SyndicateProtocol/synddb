@@ -1,8 +1,10 @@
 //! Core message types for sequencer wire format
 
 use super::serde_helpers::base64_serde;
-use alloy::primitives::{keccak256, Address, B256};
-use alloy::signers::Signature;
+use alloy::{
+    primitives::{keccak256, Address, B256},
+    signers::Signature,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -453,8 +455,7 @@ mod tests {
     // Signature verification tests
     // ========================================================================
 
-    use alloy::signers::local::PrivateKeySigner;
-    use alloy::signers::Signer;
+    use alloy::signers::{local::PrivateKeySigner, Signer};
 
     // Test private key (Anvil default, DO NOT use in production!)
     // Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266

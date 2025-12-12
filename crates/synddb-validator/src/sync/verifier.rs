@@ -125,8 +125,7 @@ impl SignatureVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::signers::local::PrivateKeySigner;
-    use alloy::signers::Signer;
+    use alloy::signers::{local::PrivateKeySigner, Signer};
     use synddb_shared::types::message::MessageType;
 
     // Test private key (DO NOT use in production!)
