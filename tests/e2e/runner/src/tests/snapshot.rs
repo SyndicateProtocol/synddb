@@ -1,4 +1,5 @@
 use anyhow::ensure;
+use rusqlite::Connection;
 use tracing::info;
 
 use crate::{
@@ -6,13 +7,39 @@ use crate::{
     runner::TestRunner,
 };
 
+/// Create a minimal valid `SQLite` database and return its bytes
+fn create_minimal_sqlite_db() -> anyhow::Result<Vec<u8>> {
+    let conn = Connection::open_in_memory()?;
+
+    // Create a simple table with one row
+    conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])?;
+    conn.execute("INSERT INTO test (value) VALUES ('snapshot test')", [])?;
+
+    // Export to bytes using backup API
+    let temp_path = std::env::temp_dir().join(format!(
+        "synddb_e2e_minimal_snapshot_{}.db",
+        std::process::id()
+    ));
+
+    {
+        let mut dest = Connection::open(&temp_path)?;
+        let backup = rusqlite::backup::Backup::new(&conn, &mut dest)?;
+        backup.run_to_completion(100, std::time::Duration::from_millis(10), None)?;
+    }
+
+    let bytes = std::fs::read(&temp_path)?;
+    let _ = std::fs::remove_file(&temp_path);
+
+    Ok(bytes)
+}
+
 impl TestRunner {
     /// Test that the sequencer can receive and sequence a snapshot
     pub(crate) async fn test_snapshot_sequenced(&self) -> TestCaseResult {
         TestCase::new("snapshot_sequenced", "Snapshot is sequenced and signed")
             .run(|| async {
-                // Create a minimal SQLite database header as test data
-                let snapshot_data = b"SQLite format 3\x00test snapshot data for e2e";
+                // Create a real minimal SQLite database
+                let snapshot_data = create_minimal_sqlite_db()?;
 
                 // Get current sequence before sending snapshot
                 let status_before = self.sequencer.status().await?;
@@ -21,12 +48,13 @@ impl TestRunner {
                 // Send snapshot
                 let response = self
                     .sequencer
-                    .send_snapshot("e2e-snapshot-1", snapshot_data, 999)
+                    .send_snapshot("e2e-snapshot-1", &snapshot_data, 999)
                     .await?;
 
                 info!(
                     sequence = response.sequence,
                     message_hash = %response.message_hash,
+                    db_size = snapshot_data.len(),
                     "Snapshot sequenced"
                 );
 
@@ -65,11 +93,12 @@ impl TestRunner {
                 let storage_before = self.sequencer.storage_latest().await?;
                 let seq_before = storage_before.sequence.unwrap_or(0);
 
-                // Send a snapshot
-                let snapshot_data = b"SQLite format 3\x00snapshot for storage test";
+                // Create a real minimal SQLite database
+                let snapshot_data = create_minimal_sqlite_db()?;
+
                 let response = self
                     .sequencer
-                    .send_snapshot("e2e-snapshot-storage", snapshot_data, 1000)
+                    .send_snapshot("e2e-snapshot-storage", &snapshot_data, 1000)
                     .await?;
 
                 // Wait for the message to appear in storage (may need to wait for batch flush)
@@ -122,6 +151,7 @@ impl TestRunner {
 
                 info!(
                     sequence = response.sequence,
+                    db_size = snapshot_data.len(),
                     "Snapshot found in storage with correct message type"
                 );
 

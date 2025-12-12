@@ -4342,6 +4342,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "synddb-shared",
@@ -4349,6 +4350,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "zstd",
 ]
 
 [[package]]

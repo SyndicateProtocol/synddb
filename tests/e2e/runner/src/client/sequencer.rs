@@ -195,6 +195,42 @@ impl SequencerClient {
         bail!("Sequencer did not become healthy within {:?}", timeout)
     }
 
+    /// Send a changeset batch to the sequencer
+    pub(crate) async fn send_changeset(
+        &self,
+        batch_id: &str,
+        changeset_data: &[u8],
+        client_sequence: u64,
+    ) -> Result<SequenceResponse> {
+        let url = self.base_url.join("/changesets")?;
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let body = serde_json::json!({
+            "batch_id": batch_id,
+            "changesets": [
+                {
+                    "data": base64::engine::general_purpose::STANDARD.encode(changeset_data),
+                    "sequence": client_sequence,
+                    "timestamp": timestamp
+                }
+            ]
+        });
+
+        self.client
+            .post(url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("Failed to send changeset")
+    }
+
     /// Send a snapshot to the sequencer
     pub(crate) async fn send_snapshot(
         &self,

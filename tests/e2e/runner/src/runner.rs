@@ -72,6 +72,15 @@ impl TestRunner {
                 self.test_cose_signature_format().await,
                 self.test_cbor_batch_fetch().await,
             ]);
+
+            info!("");
+            info!("--- Running SQLite Snapshot Tests ---");
+            results.extend(vec![
+                self.test_real_sqlite_snapshot().await,
+                self.test_validator_processes_sqlite_snapshot().await,
+                self.test_large_sqlite_snapshot().await,
+                self.test_snapshot_then_changesets().await,
+            ]);
         }
 
         Ok(TestResult::from_results(results))
