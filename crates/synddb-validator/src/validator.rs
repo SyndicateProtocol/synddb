@@ -420,6 +420,13 @@ impl Validator {
     where
         F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
     {
+        // Verify batch signature before processing any messages
+        batch.verify_batch_signature().map_err(|e| {
+            ValidatorError::SignatureVerification(format!(
+                "Batch signature verification failed: {e}"
+            ))
+        })?;
+
         let next_sequence = self.state.next_sequence()?;
         let mut synced = 0;
 
@@ -593,6 +600,20 @@ impl Validator {
                 // Fetch and process the batch
                 match fetcher.get_batch_by_path(&batch_info.path).await {
                     Ok(Some(batch)) => {
+                        // Verify batch signature before processing messages
+                        if let Err(e) = batch.verify_batch_signature() {
+                            error!(
+                                start_sequence = batch.start_sequence,
+                                end_sequence = batch.end_sequence,
+                                error = %e,
+                                "Batch signature verification failed"
+                            );
+                            return Err(ValidatorError::SignatureVerification(format!(
+                                "Batch signature verification failed: {e}"
+                            ))
+                            .into());
+                        }
+
                         for message in &batch.messages {
                             if message.sequence < next_sequence {
                                 continue;
@@ -955,22 +976,22 @@ mod tests {
     // =========================================================================
 
     async fn create_signed_batch(start_sequence: u64, messages: Vec<SignedMessage>) -> SignedBatch {
-        use alloy::{
-            primitives::keccak256,
-            signers::{local::PrivateKeySigner, Signer},
-        };
+        use alloy::signers::{local::PrivateKeySigner, Signer};
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let end_sequence = messages.last().map_or(start_sequence, |m| m.sequence);
 
-        // Create batch signature (hash of all message hashes)
-        let mut batch_data = Vec::new();
-        for msg in &messages {
-            batch_data.extend_from_slice(&msg.sequence.to_be_bytes());
-        }
-        let batch_hash = keccak256(&batch_data);
-        let signature = signer.sign_hash(&batch_hash).await.unwrap();
+        // Compute messages hash using the proper method
+        let messages_hash = SignedBatch::compute_messages_hash(&messages).unwrap();
 
+        // Compute signing payload: keccak256(start_sequence || end_sequence || messages_hash)
+        let signing_payload =
+            SignedBatch::compute_signing_payload(start_sequence, end_sequence, messages_hash);
+
+        // Sign with the signer's private key
+        let signature = signer.sign_hash(&signing_payload).await.unwrap();
+
+        // Format as 65-byte signature (r || s || v)
         let mut sig_bytes = [0u8; 65];
         sig_bytes[..32].copy_from_slice(&signature.r().to_be_bytes::<32>());
         sig_bytes[32..64].copy_from_slice(&signature.s().to_be_bytes::<32>());
@@ -1263,5 +1284,120 @@ mod tests {
             .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
             .unwrap();
         assert_eq!(name, "Charlie");
+    }
+
+    #[tokio::test]
+    async fn test_validator_rejects_invalid_batch_signature() {
+        // Setup source database
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Create changeset
+        let changeset = create_update_changeset(&source, "Bob");
+
+        // Create signed message
+        let msg = create_signed_changeset_message(0, changeset).await;
+
+        // Create a valid batch first, then tamper with the signature
+        let mut batch = create_signed_batch(0, vec![msg]).await;
+
+        // Tamper with the batch signature (change last byte)
+        let mut sig_bytes = hex::decode(&batch.batch_signature[2..]).unwrap();
+        sig_bytes[63] ^= 0xFF; // Flip bits in the last byte
+        batch.batch_signature = format!("0x{}", hex::encode(sig_bytes));
+
+        // Create mock fetcher in batch mode
+        let fetcher = MockFetcher::new_batch_mode();
+        fetcher.add_batch(batch);
+
+        // Create validator
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+
+        // Setup target database
+        validator
+            .connection()
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        validator
+            .connection()
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Sync should fail due to invalid batch signature
+        let result = validator.sync_to_head_batched().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Batch signature verification failed"),
+            "Expected batch signature error, got: {err}"
+        );
+
+        // Verify no state was changed (still Alice, not Bob)
+        let name: String = validator
+            .connection()
+            .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "Alice");
+    }
+
+    #[tokio::test]
+    async fn test_validator_rejects_tampered_batch_messages() {
+        // Setup source database
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Create changeset
+        let changeset = create_update_changeset(&source, "Bob");
+
+        // Create signed message
+        let msg = create_signed_changeset_message(0, changeset).await;
+
+        // Create a valid batch first
+        let mut batch = create_signed_batch(0, vec![msg]).await;
+
+        // Tamper with the message inside the batch (change the sequence)
+        // This should cause the batch signature verification to fail because
+        // the messages_hash will be different
+        batch.messages[0].sequence = 999;
+
+        // Create mock fetcher in batch mode
+        let fetcher = MockFetcher::new_batch_mode();
+        fetcher.add_batch(batch);
+
+        // Create validator
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+
+        // Setup target database
+        validator
+            .connection()
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        validator
+            .connection()
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Sync should fail due to tampered message (batch signature won't match)
+        let result = validator.sync_to_head_batched().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("signature") || err.contains("Signer"),
+            "Expected signature-related error, got: {err}"
+        );
     }
 }

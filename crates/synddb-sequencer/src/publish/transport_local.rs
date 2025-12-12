@@ -26,9 +26,8 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, RwLock},
 };
-use synddb_shared::types::cbor::batch::CborBatch;
+use synddb_shared::types::{cbor::batch::CborBatch, message::SignedMessage};
 use tracing::{debug, info};
-use synddb_shared::types::message::SignedMessage;
 
 /// Stored batch data
 #[derive(Clone)]
@@ -144,10 +143,7 @@ impl LocalTransport {
     ///
     /// Searches all batches to find the message, converts to JSON `SignedMessage`.
     /// Note: This doesn't re-verify signatures since they were verified at publish time.
-    pub fn get_message(
-        &self,
-        sequence: u64,
-    ) -> Option<SignedMessage> {
+    pub fn get_message(&self, sequence: u64) -> Option<SignedMessage> {
         let state = self.state.read().unwrap();
 
         // Find the batch containing this sequence
@@ -296,12 +292,17 @@ async fn get_batch_cbor(
     State(transport): State<Arc<LocalTransport>>,
     Path(start): Path<u64>,
 ) -> Response {
-    transport.get_batch_compressed(start).map_or_else(|| StatusCode::NOT_FOUND.into_response(), |data| (
-            StatusCode::OK,
-            [("content-type", "application/cbor+zstd")],
-            data,
-        )
-            .into_response())
+    transport.get_batch_compressed(start).map_or_else(
+        || StatusCode::NOT_FOUND.into_response(),
+        |data| {
+            (
+                StatusCode::OK,
+                [("content-type", "application/cbor+zstd")],
+                data,
+            )
+                .into_response()
+        },
+    )
 }
 
 /// Get batch as JSON (for debugging/compatibility)
@@ -309,14 +310,17 @@ async fn get_batch_json(
     State(transport): State<Arc<LocalTransport>>,
     Path(start): Path<u64>,
 ) -> Response {
-    transport.get_batch(start).map_or_else(|| StatusCode::NOT_FOUND.into_response(), |batch| match batch.to_signed_batch() {
-                Ok(signed_batch) => Json(signed_batch).into_response(),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to convert batch: {e}"),
-                )
-                    .into_response(),
-            })
+    transport.get_batch(start).map_or_else(
+        || StatusCode::NOT_FOUND.into_response(),
+        |batch| match batch.to_signed_batch() {
+            Ok(signed_batch) => Json(signed_batch).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to convert batch: {e}"),
+            )
+                .into_response(),
+        },
+    )
 }
 
 /// Get message by sequence (returns JSON `SignedMessage`)
@@ -324,7 +328,10 @@ async fn get_message(
     State(transport): State<Arc<LocalTransport>>,
     Path(sequence): Path<u64>,
 ) -> Response {
-    transport.get_message(sequence).map_or_else(|| StatusCode::NOT_FOUND.into_response(), |msg| Json(msg).into_response())
+    transport.get_message(sequence).map_or_else(
+        || StatusCode::NOT_FOUND.into_response(),
+        |msg| Json(msg).into_response(),
+    )
 }
 
 /// Get latest sequence number

@@ -28,6 +28,18 @@ pub enum VerificationError {
 
     #[error("Serialization failed: {0}")]
     SerializationFailed(String),
+
+    #[error(
+        "Header mismatch: {field} in message ({outer}) differs from protected header ({header})"
+    )]
+    HeaderMismatch {
+        field: String,
+        outer: String,
+        header: String,
+    },
+
+    #[error("Protected header parse error: {0}")]
+    ProtectedHeaderParse(String),
 }
 
 /// Message types that can be sequenced
@@ -131,11 +143,10 @@ impl SignedMessage {
     /// - If `cose_protected_header` is present: verifies using COSE `Sig_structure`
     /// - Otherwise: verifies using the legacy format
     pub fn verify_signature(&self) -> Result<(), VerificationError> {
-        if let Some(protected_header) = &self.cose_protected_header {
-            self.verify_cose_signature(protected_header)
-        } else {
-            self.verify_legacy_signature()
-        }
+        self.cose_protected_header.as_ref().map_or_else(
+            || self.verify_legacy_signature(),
+            |protected_header| self.verify_cose_signature(protected_header),
+        )
     }
 
     /// Verify using legacy format: signature over `keccak256(sequence || timestamp || message_hash)`
@@ -169,7 +180,30 @@ impl SignedMessage {
     /// Verify using COSE format: signature over COSE `Sig_structure`
     ///
     /// The `Sig_structure` is: `["Signature1", protected_header, external_aad, payload]`
+    ///
+    /// This function also validates that the outer message fields (sequence, timestamp)
+    /// match the values in the protected header, preventing field substitution attacks.
     fn verify_cose_signature(&self, protected_header: &[u8]) -> Result<(), VerificationError> {
+        // Parse and validate protected header fields match outer fields
+        let (header_sequence, header_timestamp) =
+            parse_cose_protected_header_fields(protected_header)?;
+
+        if self.sequence != header_sequence {
+            return Err(VerificationError::HeaderMismatch {
+                field: "sequence".to_string(),
+                outer: self.sequence.to_string(),
+                header: header_sequence.to_string(),
+            });
+        }
+
+        if self.timestamp != header_timestamp {
+            return Err(VerificationError::HeaderMismatch {
+                field: "timestamp".to_string(),
+                outer: self.timestamp.to_string(),
+                header: header_timestamp.to_string(),
+            });
+        }
+
         // Build the COSE Sig_structure that was signed
         // Format: ["Signature1", protected, external_aad, payload]
         let sig_structure = build_cose_sig_structure(protected_header, &self.payload);
@@ -481,6 +515,64 @@ fn verify_secp256k1_without_recovery_id(
     Err(VerificationError::RecoveryFailed(
         "Could not recover matching signer address from COSE signature".to_string(),
     ))
+}
+
+/// Parse sequence and timestamp from a COSE protected header.
+///
+/// The protected header is CBOR-encoded and contains custom fields:
+/// - Sequence: label -65537
+/// - Timestamp: label -65538
+fn parse_cose_protected_header_fields(
+    protected_header: &[u8],
+) -> Result<(u64, u64), VerificationError> {
+    use ciborium::Value;
+
+    // Parse the CBOR map
+    let header: Value = ciborium::from_reader(protected_header)
+        .map_err(|e| VerificationError::ProtectedHeaderParse(format!("CBOR parse error: {e}")))?;
+
+    let map = match header {
+        Value::Map(m) => m,
+        _ => {
+            return Err(VerificationError::ProtectedHeaderParse(
+                "Protected header is not a CBOR map".to_string(),
+            ))
+        }
+    };
+
+    // Custom header labels (from cose_helpers.rs)
+    const HEADER_SEQUENCE: i128 = -65537;
+    const HEADER_TIMESTAMP: i128 = -65538;
+
+    let mut sequence: Option<u64> = None;
+    let mut timestamp: Option<u64> = None;
+
+    for (key, value) in map {
+        if let Value::Integer(label) = key {
+            let label_i128: i128 = label.into();
+            if label_i128 == HEADER_SEQUENCE {
+                if let Value::Integer(v) = value {
+                    let v_i128: i128 = v.into();
+                    sequence = Some(v_i128 as u64);
+                }
+            } else if label_i128 == HEADER_TIMESTAMP {
+                if let Value::Integer(v) = value {
+                    let v_i128: i128 = v.into();
+                    timestamp = Some(v_i128 as u64);
+                }
+            }
+        }
+    }
+
+    let sequence = sequence.ok_or_else(|| {
+        VerificationError::ProtectedHeaderParse("Missing sequence in protected header".to_string())
+    })?;
+
+    let timestamp = timestamp.ok_or_else(|| {
+        VerificationError::ProtectedHeaderParse("Missing timestamp in protected header".to_string())
+    })?;
+
+    Ok((sequence, timestamp))
 }
 
 #[cfg(test)]
