@@ -106,8 +106,9 @@ async fn main() -> Result<()> {
         };
 
         // Run continuous sync loop with callbacks
+        // Uses batch mode if enabled and fetcher supports it, otherwise falls back to single-message mode
         if let Err(e) = validator
-            .run_with_callbacks(&mut on_withdrawal, &mut on_sync)
+            .run_batched(&mut on_withdrawal, &mut on_sync)
             .await
         {
             error!(error = %e, "Sync loop error");

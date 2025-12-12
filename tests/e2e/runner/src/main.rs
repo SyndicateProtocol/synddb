@@ -40,9 +40,9 @@ pub struct Config {
     #[arg(long, env = "MAX_SYNC_DIFF", default_value = "2")]
     pub max_sync_diff: u64,
 
-    /// Skip DA API tests (for external DA layers like GCS that don't expose /da/* endpoints)
-    #[arg(long, env = "SKIP_DA_TESTS", default_value = "false")]
-    pub skip_da_tests: bool,
+    /// Skip storage API tests (for external storage layers like GCS that don't expose /storage/* endpoints)
+    #[arg(long, env = "SKIP_STORAGE_TESTS", default_value = "false")]
+    pub skip_storage_tests: bool,
 }
 
 #[tokio::main]

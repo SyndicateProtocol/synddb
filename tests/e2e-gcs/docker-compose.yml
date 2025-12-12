@@ -169,8 +169,8 @@ services:
       STARTUP_WAIT: "5"
       DATA_WAIT: "25"
       MAX_SYNC_DIFF: "5"
-      # Skip DA API tests - GCS doesn't expose /da/* endpoints on sequencer
-      SKIP_DA_TESTS: "true"
+      # Skip storage API tests - GCS doesn't expose /storage/* endpoints on sequencer
+      SKIP_STORAGE_TESTS: "true"
     depends_on:
       validator:
         condition: service_healthy

@@ -166,6 +166,20 @@ pub(super) fn extract_sequence(bytes: &[u8]) -> Result<u64, CborError> {
         .ok_or_else(|| CborError::MissingHeader("sequence".to_string()))
 }
 
+/// Extract the CBOR-encoded protected header from a `COSE_Sign1` structure.
+///
+/// This returns the raw bytes of the protected header which can be used
+/// to reconstruct the `Sig_structure` for signature verification.
+pub(super) fn extract_protected_header(bytes: &[u8]) -> Result<Vec<u8>, CborError> {
+    let cose = CoseSign1::from_slice(bytes)?;
+    // The protected field contains the serialized header bytes
+    // We need to re-serialize the header to get the CBOR bytes
+    cose.protected
+        .header
+        .to_vec()
+        .map_err(|e| CborError::Cose(format!("Failed to serialize protected header: {e}")))
+}
+
 /// Extract a u64 value from a protected header by label
 fn extract_u64_from_header(header: &Header, label: i64) -> Result<Option<u64>, CborError> {
     for (key, value) in &header.rest {

@@ -119,6 +119,7 @@ impl Inbox {
             message_hash: message_hash_hex.clone(),
             signature: signature_hex.clone(),
             signer: signer_address.clone(),
+            cose_protected_header: None, // Legacy JSON format
         };
 
         let receipt = SequenceReceipt {

@@ -72,14 +72,27 @@ impl TestRunner {
                     .send_snapshot("e2e-snapshot-storage", snapshot_data, 1000)
                     .await?;
 
-                // Small delay for storage propagation
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                // Wait for the message to appear in storage (may need to wait for batch flush)
+                // The CBOR batcher flushes every 1s, so we retry for up to 3s
+                let mut message = None;
+                for _ in 0..30 {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    if let Some(msg) = self
+                        .sequencer
+                        .try_fetch_storage_message(response.sequence)
+                        .await?
+                    {
+                        message = Some(msg);
+                        break;
+                    }
+                }
 
-                // Fetch the message from storage
-                let message = self
-                    .sequencer
-                    .fetch_storage_message(response.sequence)
-                    .await?;
+                let message = message.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Snapshot at sequence {} did not appear in storage after 3s",
+                        response.sequence
+                    )
+                })?;
 
                 // Verify message type is snapshot
                 ensure!(

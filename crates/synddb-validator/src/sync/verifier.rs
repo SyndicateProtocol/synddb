@@ -1,11 +1,14 @@
 //! Signature verification for sequencer messages
 //!
 //! Verifies that `SignedMessage` payloads were signed by the expected sequencer.
+//!
+//! Supports both signature formats:
+//! - **Legacy (JSON)**: 65-byte signature over `keccak256(sequence || timestamp || message_hash)`
+//! - **COSE**: 64-byte signature over COSE `Sig_structure` (detected via `cose_protected_header`)
 
 use crate::error::ValidatorError;
-use alloy::primitives::{keccak256, Address, B256};
-use anyhow::{Context, Result};
-use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+use alloy::primitives::{keccak256, Address};
+use anyhow::Result;
 use synddb_shared::types::message::SignedMessage;
 
 /// Verifies signatures on `SignedMessage` payloads
@@ -23,109 +26,58 @@ impl SignatureVerifier {
 
     /// Verify a signed message
     ///
+    /// Automatically handles both legacy (JSON) and COSE signature formats.
+    ///
     /// Checks:
-    /// 1. Payload hash matches `message_hash`
-    /// 2. Signature is valid over the signing payload
-    /// 3. Recovered signer matches `message.signer`
-    /// 4. Recovered signer matches expected sequencer
+    /// 1. Payload hash matches `message_hash` (for legacy format only)
+    /// 2. Signature is valid (delegates to `SignedMessage::verify_signature()`)
+    /// 3. Claimed signer matches expected sequencer
     pub fn verify(&self, message: &SignedMessage) -> Result<()> {
-        // 1. Verify payload hash matches
-        let computed_hash = keccak256(&message.payload);
-        let computed_hash_hex = format!("0x{}", hex::encode(computed_hash));
+        // For legacy format, verify payload hash matches message_hash
+        // (COSE format doesn't need this check as payload is in the Sig_structure)
+        if message.cose_protected_header.is_none() {
+            let computed_hash = keccak256(&message.payload);
+            let computed_hash_hex = format!("0x{}", hex::encode(computed_hash));
 
-        if computed_hash_hex != message.message_hash {
-            return Err(ValidatorError::PayloadHashMismatch {
-                expected: message.message_hash.clone(),
-                computed: computed_hash_hex,
+            if computed_hash_hex != message.message_hash {
+                return Err(ValidatorError::PayloadHashMismatch {
+                    expected: message.message_hash.clone(),
+                    computed: computed_hash_hex,
+                }
+                .into());
             }
-            .into());
         }
 
-        // 2. Reconstruct signing payload (same format as sequencer)
-        // Format: keccak256(sequence || timestamp || message_hash)
-        let signing_payload =
-            Self::create_signing_payload(message.sequence, message.timestamp, computed_hash);
+        // Verify signature using the appropriate format (legacy or COSE)
+        // This delegates to SignedMessage::verify_signature() which handles both formats
+        message.verify_signature().map_err(|e| {
+            ValidatorError::SignatureVerification(format!("Signature verification failed: {e}"))
+        })?;
 
-        // 3. Parse signature (65 bytes: r[32] + s[32] + v[1])
-        let sig_bytes = hex::decode(
-            message
-                .signature
-                .strip_prefix("0x")
-                .unwrap_or(&message.signature),
-        )
-        .context("Invalid signature hex")?;
+        // Verify the signer matches our expected sequencer
+        let claimed_signer: Address = message.signer.parse().map_err(|e| {
+            ValidatorError::InvalidSignature(format!("Invalid signer address: {e}"))
+        })?;
 
-        if sig_bytes.len() != 65 {
-            return Err(ValidatorError::InvalidSignature(format!(
-                "Expected 65 bytes, got {}",
-                sig_bytes.len()
-            ))
-            .into());
-        }
-
-        // 4. Recover public key
-        let v = sig_bytes[64];
-        let recovery_id = RecoveryId::try_from(if v >= 27 { v - 27 } else { v })
-            .map_err(|e| ValidatorError::InvalidSignature(format!("Invalid recovery id: {e}")))?;
-
-        let signature = Signature::from_slice(&sig_bytes[0..64])
-            .map_err(|e| ValidatorError::InvalidSignature(format!("Invalid signature: {e}")))?;
-
-        let recovered_key =
-            VerifyingKey::recover_from_prehash(signing_payload.as_slice(), &signature, recovery_id)
-                .map_err(|e| {
-                    ValidatorError::SignatureVerification(format!(
-                        "Failed to recover public key: {e}"
-                    ))
-                })?;
-
-        // 5. Derive Ethereum address from public key
-        let public_key_bytes = recovered_key.to_encoded_point(false);
-        let pk_hash = keccak256(&public_key_bytes.as_bytes()[1..]);
-        let recovered_address = Address::from_slice(&pk_hash[12..]);
-
-        // 6. Verify against message.signer
-        let claimed_signer: Address = message
-            .signer
-            .parse()
-            .context("Invalid signer address in message")?;
-
-        if recovered_address != claimed_signer {
-            return Err(ValidatorError::SignerMismatch {
-                expected: format!("{claimed_signer:?}"),
-                actual: format!("{recovered_address:?}"),
-            }
-            .into());
-        }
-
-        // 7. Verify against expected sequencer
-        if recovered_address != self.expected_signer {
+        if claimed_signer != self.expected_signer {
             return Err(ValidatorError::SignerMismatch {
                 expected: format!("{:?}", self.expected_signer),
-                actual: format!("{recovered_address:?}"),
+                actual: format!("{claimed_signer:?}"),
             }
             .into());
         }
 
         Ok(())
     }
-
-    /// Create the signing payload (must match sequencer's format exactly)
-    ///
-    /// Format: `keccak256(sequence_be || timestamp_be || message_hash)`
-    fn create_signing_payload(sequence: u64, timestamp: u64, message_hash: B256) -> B256 {
-        let mut data = Vec::with_capacity(48);
-        data.extend_from_slice(&sequence.to_be_bytes());
-        data.extend_from_slice(&timestamp.to_be_bytes());
-        data.extend_from_slice(message_hash.as_slice());
-        keccak256(&data)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::signers::{local::PrivateKeySigner, Signer};
+    use alloy::{
+        primitives::B256,
+        signers::{local::PrivateKeySigner, Signer},
+    };
     use synddb_shared::types::message::MessageType;
 
     // Test private key (DO NOT use in production!)
@@ -143,9 +95,9 @@ mod tests {
         // Hash the payload
         let message_hash = keccak256(&compressed_payload);
 
-        // Create signing payload
+        // Create signing payload using SignedMessage helper
         let signing_payload =
-            SignatureVerifier::create_signing_payload(sequence, timestamp, message_hash);
+            SignedMessage::compute_signing_payload(sequence, timestamp, message_hash);
 
         // Sign
         let signature = signer.sign_hash(&signing_payload).await.unwrap();
@@ -164,6 +116,7 @@ mod tests {
             message_hash: format!("0x{}", hex::encode(message_hash)),
             signature: format!("0x{}", hex::encode(sig_bytes)),
             signer: format!("{:?}", signer.address()),
+            cose_protected_header: None,
         }
     }
 
@@ -236,23 +189,23 @@ mod tests {
         let result = verifier.verify(&message);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Expected 65 bytes"));
+        assert!(err.contains("signature"));
     }
 
     #[test]
     fn test_signing_payload_deterministic() {
         let hash = B256::from([0x42; 32]);
-        let p1 = SignatureVerifier::create_signing_payload(1, 1000, hash);
-        let p2 = SignatureVerifier::create_signing_payload(1, 1000, hash);
+        let p1 = SignedMessage::compute_signing_payload(1, 1000, hash);
+        let p2 = SignedMessage::compute_signing_payload(1, 1000, hash);
         assert_eq!(p1, p2);
     }
 
     #[test]
     fn test_signing_payload_varies() {
         let hash = B256::from([0x42; 32]);
-        let p1 = SignatureVerifier::create_signing_payload(1, 1000, hash);
-        let p2 = SignatureVerifier::create_signing_payload(2, 1000, hash);
-        let p3 = SignatureVerifier::create_signing_payload(1, 1001, hash);
+        let p1 = SignedMessage::compute_signing_payload(1, 1000, hash);
+        let p2 = SignedMessage::compute_signing_payload(2, 1000, hash);
+        let p3 = SignedMessage::compute_signing_payload(1, 1001, hash);
         assert_ne!(p1, p2);
         assert_ne!(p1, p3);
     }

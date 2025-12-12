@@ -71,9 +71,9 @@ impl HttpFetcher {
         format!("{}/storage/batches", self.base_url)
     }
 
-    /// Get the URL for fetching a specific batch
+    /// Get the URL for fetching a specific batch (JSON format)
     fn batch_url(&self, start_sequence: u64) -> String {
-        format!("{}/storage/batches/{}", self.base_url, start_sequence)
+        format!("{}/storage/batches/{}/json", self.base_url, start_sequence)
     }
 }
 
@@ -253,7 +253,7 @@ mod tests {
         );
         assert_eq!(
             fetcher.batch_url(1),
-            "http://localhost:8433/storage/batches/1"
+            "http://localhost:8433/storage/batches/1/json"
         );
     }
 
@@ -270,7 +270,7 @@ mod tests {
         );
         assert_eq!(
             fetcher.batch_url(1),
-            "http://localhost:8433/storage/batches/1"
+            "http://localhost:8433/storage/batches/1/json"
         );
     }
 

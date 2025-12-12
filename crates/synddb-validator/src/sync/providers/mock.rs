@@ -223,6 +223,7 @@ mod tests {
             message_hash: format!("0x{:064x}", sequence),
             signature: format!("0x{:0130x}", sequence),
             signer: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".to_string(),
+            cose_protected_header: None,
         }
     }
 

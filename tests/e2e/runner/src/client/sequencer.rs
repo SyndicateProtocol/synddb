@@ -106,11 +106,11 @@ impl SequencerClient {
             .context("Failed to list storage batches")
     }
 
-    /// Fetch a batch by start sequence
+    /// Fetch a batch by start sequence (JSON format via /json endpoint)
     pub(crate) async fn fetch_batch(&self, start_sequence: u64) -> Result<SignedBatch> {
         let url = self
             .base_url
-            .join(&format!("/storage/batches/{}", start_sequence))?;
+            .join(&format!("/storage/batches/{}/json", start_sequence))?;
         self.client
             .get(url)
             .send()
@@ -121,11 +121,27 @@ impl SequencerClient {
             .context("Failed to fetch storage batch")
     }
 
+    /// Fetch raw CBOR+zstd batch data by start sequence
+    pub(crate) async fn fetch_batch_cbor(&self, start_sequence: u64) -> Result<Vec<u8>> {
+        let url = self
+            .base_url
+            .join(&format!("/storage/batches/{}", start_sequence))?;
+        self.client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .context("Failed to fetch CBOR batch")
+    }
+
     /// Try to fetch a batch, returning None if not found (404)
     pub(crate) async fn try_fetch_batch(&self, start_sequence: u64) -> Result<Option<SignedBatch>> {
         let url = self
             .base_url
-            .join(&format!("/storage/batches/{}", start_sequence))?;
+            .join(&format!("/storage/batches/{}/json", start_sequence))?;
         let response = self.client.get(url).send().await?;
 
         match response.status() {

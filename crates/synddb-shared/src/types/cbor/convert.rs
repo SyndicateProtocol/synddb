@@ -25,27 +25,34 @@ impl From<CborMessageType> for MessageType {
 impl CborSignedMessage {
     /// Convert to the JSON-compatible `SignedMessage` format.
     ///
-    /// This parses the COSE structure and extracts all fields into the
-    /// legacy format. The signature is converted to 65-byte format with
-    /// recovery byte appended.
+    /// This parses the COSE structure, extracts all fields, and includes the
+    /// COSE protected header for later verification. The signature is stored
+    /// as 64 bytes (r || s) without recovery byte, since COSE verification
+    /// tries both recovery IDs.
     ///
     /// # Arguments
     /// * `expected_signer` - 20-byte Ethereum address to verify against
     ///
     /// # Returns
-    /// The converted `SignedMessage` if verification succeeds.
+    /// The converted `SignedMessage` with `cose_protected_header` set.
+    /// The validator can independently verify the signature using the
+    /// protected header to reconstruct the COSE `Sig_structure`.
     pub fn to_signed_message(
         &self,
         expected_signer: &[u8; 20],
     ) -> Result<SignedMessage, CborError> {
+        // Parse and verify the COSE structure
         let parsed = self.verify_and_parse(expected_signer)?;
+
+        // Extract the protected header for re-verification by validator
+        let cose_protected_header = self.protected_header()?;
 
         // Convert message type
         let message_type: MessageType = parsed.message_type.into();
 
-        // Format signature as 65-byte hex (r || s || v)
-        // We need to recover the v value by trying both parities
-        let signature_hex = format_signature_with_recovery(&parsed.signature, expected_signer)?;
+        // Format signature as 64-byte hex (r || s, no recovery byte)
+        // Validator will try both recovery IDs when verifying
+        let signature_hex = format!("0x{}", hex::encode(parsed.signature));
 
         // Format message hash from payload
         let message_hash = format!("0x{}", hex::encode(compute_message_hash(&parsed.payload)));
@@ -61,19 +68,24 @@ impl CborSignedMessage {
             message_hash,
             signature: signature_hex,
             signer,
+            cose_protected_header: Some(cose_protected_header),
         })
     }
 
     /// Convert to `SignedMessage` without signature verification.
     ///
     /// WARNING: This does not verify the signature. Only use for debugging/inspection.
+    /// The `cose_protected_header` is still included so the validator can verify later.
     pub fn to_signed_message_unchecked(&self) -> Result<SignedMessage, CborError> {
         let parsed = self.parse_without_verify()?;
 
+        // Still extract protected header for potential later verification
+        let cose_protected_header = self.protected_header()?;
+
         let message_type: MessageType = parsed.message_type.into();
 
-        // For unchecked conversion, we use v=27 as default
-        let signature_hex = format!("0x{}1b", hex::encode(parsed.signature));
+        // 64-byte signature (r || s)
+        let signature_hex = format!("0x{}", hex::encode(parsed.signature));
 
         let message_hash = format!("0x{}", hex::encode(compute_message_hash(&parsed.payload)));
         let signer = format!("0x{}", hex::encode(parsed.signer));
@@ -86,6 +98,7 @@ impl CborSignedMessage {
             message_hash,
             signature: signature_hex,
             signer,
+            cose_protected_header: Some(cose_protected_header),
         })
     }
 }
@@ -93,16 +106,17 @@ impl CborSignedMessage {
 impl CborBatch {
     /// Convert to the JSON-compatible `SignedBatch` format.
     ///
-    /// This verifies all signatures and converts the batch to the legacy format.
-    /// The batch signature is converted to 65-byte format.
+    /// This verifies all COSE signatures during conversion and includes the
+    /// `cose_protected_header` in each message so validators can independently
+    /// re-verify the signatures.
     ///
     /// # Returns
     /// The converted `SignedBatch` if all verifications succeed.
     pub fn to_signed_batch(&self) -> Result<SignedBatch, CborError> {
-        // Verify batch signature first
+        // Verify batch signature first (COSE verification)
         self.verify_batch_signature()?;
 
-        // Convert all messages
+        // Convert all messages (each verifies its COSE signature)
         let messages: Result<Vec<SignedMessage>, CborError> = self
             .messages
             .iter()
@@ -110,8 +124,8 @@ impl CborBatch {
             .collect();
         let messages = messages?;
 
-        // Format batch signature as 65-byte hex
-        let batch_signature = format_signature_with_recovery(&self.batch_signature, &self.signer)?;
+        // Format batch signature as 64-byte hex (r || s)
+        let batch_signature = format!("0x{}", hex::encode(self.batch_signature));
 
         // Format signer address
         let signer = format!("0x{}", hex::encode(self.signer));
@@ -128,8 +142,8 @@ impl CborBatch {
 
     /// Convert to `SignedBatch` without full signature verification.
     ///
-    /// This only verifies the batch structure, not individual message signatures.
-    /// Use for cases where performance is critical and signatures were already verified.
+    /// This only parses the batch structure without verifying signatures.
+    /// The `cose_protected_header` is still included so the validator can verify later.
     pub fn to_signed_batch_unchecked(&self) -> Result<SignedBatch, CborError> {
         let messages: Result<Vec<SignedMessage>, CborError> = self
             .messages
@@ -138,8 +152,7 @@ impl CborBatch {
             .collect();
         let messages = messages?;
 
-        // Use v=27 as default for unchecked
-        let batch_signature = format!("0x{}1b", hex::encode(self.batch_signature));
+        let batch_signature = format!("0x{}", hex::encode(self.batch_signature));
         let signer = format!("0x{}", hex::encode(self.signer));
 
         Ok(SignedBatch {
@@ -157,21 +170,6 @@ impl CborBatch {
 fn compute_message_hash(payload: &[u8]) -> [u8; 32] {
     use alloy::primitives::keccak256;
     keccak256(payload).0
-}
-
-/// Format 64-byte signature as 65-byte hex with recovery byte
-fn format_signature_with_recovery(
-    signature: &[u8; 64],
-    _expected_signer: &[u8; 20],
-) -> Result<String, CborError> {
-    // The signature is r || s (64 bytes). We need to determine v (recovery byte).
-    // Since we don't have the original message hash here, we use v=27 (0x1b) as default.
-    // The actual recovery will happen during verification in SignedMessage::verify_signature().
-    //
-    // Note: The JSON format uses v=27/28 convention, where:
-    // - v=27 (0x1b) means recovery_id=0
-    // - v=28 (0x1c) means recovery_id=1
-    Ok(format!("0x{}1b", hex::encode(signature)))
 }
 
 #[cfg(test)]

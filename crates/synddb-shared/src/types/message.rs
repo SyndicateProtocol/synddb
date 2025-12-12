@@ -1,6 +1,6 @@
 //! Core message types for sequencer wire format
 
-use super::serde_helpers::base64_serde;
+use super::serde_helpers::{base64_serde, base64_serde_opt};
 use alloy::{
     primitives::{keccak256, Address, B256},
     signers::Signature,
@@ -44,16 +44,27 @@ pub enum MessageType {
 
 /// A message that has been sequenced and signed by the sequencer.
 ///
-/// # Signature Verification
+/// # Signature Formats
 ///
+/// This struct supports two signature formats:
+///
+/// ## Legacy (JSON) Format
 /// The signature is computed over: `keccak256(sequence || timestamp || message_hash)`
 /// where:
 /// - `sequence` is 8 bytes, big-endian
 /// - `timestamp` is 8 bytes, big-endian
 /// - `message_hash` is 32 bytes (the keccak256 of the compressed payload)
 ///
-/// To verify: call [`SignedMessage::verify_signature()`] which recovers the signer
-/// from the signature and compares it against the `signer` field.
+/// ## COSE Format
+/// When `cose_protected_header` is present, the signature is a `COSE_Sign1` signature
+/// computed over the COSE `Sig_structure`. The protected header contains the sequence,
+/// timestamp, and message type. This format is used for CBOR-encoded batches.
+///
+/// # Verification
+///
+/// Call [`SignedMessage::verify_signature()`] which automatically detects the format:
+/// - If `cose_protected_header` is present: verifies using COSE `Sig_structure`
+/// - Otherwise: verifies using the legacy format
 ///
 /// # JSON Serialization
 ///
@@ -84,15 +95,25 @@ pub struct SignedMessage {
     pub payload: Vec<u8>,
     /// Hash of the compressed payload: `keccak256(compressed_payload)`
     pub message_hash: String,
-    /// Signature over `keccak256(sequence || timestamp || message_hash)`.
-    /// 65 bytes encoded as hex with 0x prefix (130 hex chars + "0x").
+    /// Signature bytes (64 bytes for COSE, 65 bytes for legacy).
+    /// Encoded as hex with 0x prefix.
     pub signature: String,
     /// Ethereum address of the signer (checksummed, with 0x prefix)
     pub signer: String,
+    /// CBOR-encoded COSE protected header (if COSE signature format).
+    ///
+    /// When present, indicates the signature is a `COSE_Sign1` signature and verification
+    /// should use the COSE `Sig_structure`. When absent, legacy verification is used.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "base64_serde_opt"
+    )]
+    pub cose_protected_header: Option<Vec<u8>>,
 }
 
 impl SignedMessage {
-    /// Create the signing payload for a message.
+    /// Create the signing payload for a message (legacy format).
     ///
     /// Format: `keccak256(sequence || timestamp || message_hash)`
     /// where all values are big-endian encoded.
@@ -106,16 +127,26 @@ impl SignedMessage {
 
     /// Verify that the signature is valid and was created by the claimed signer.
     ///
-    /// This recovers the signer address from the signature and compares it
-    /// against the `signer` field.
+    /// Automatically detects the signature format:
+    /// - If `cose_protected_header` is present: verifies using COSE `Sig_structure`
+    /// - Otherwise: verifies using the legacy format
     pub fn verify_signature(&self) -> Result<(), VerificationError> {
+        if let Some(protected_header) = &self.cose_protected_header {
+            self.verify_cose_signature(protected_header)
+        } else {
+            self.verify_legacy_signature()
+        }
+    }
+
+    /// Verify using legacy format: signature over `keccak256(sequence || timestamp || message_hash)`
+    fn verify_legacy_signature(&self) -> Result<(), VerificationError> {
         // Parse the message hash
         let message_hash = parse_b256(&self.message_hash)?;
 
         // Compute the signing payload
         let payload = Self::compute_signing_payload(self.sequence, self.timestamp, message_hash);
 
-        // Parse and verify the signature
+        // Parse and verify the signature (65 bytes with recovery id)
         let recovered_address = recover_signer(&self.signature, payload)?;
 
         // Parse the claimed signer
@@ -133,6 +164,43 @@ impl SignedMessage {
         }
 
         Ok(())
+    }
+
+    /// Verify using COSE format: signature over COSE `Sig_structure`
+    ///
+    /// The `Sig_structure` is: `["Signature1", protected_header, external_aad, payload]`
+    fn verify_cose_signature(&self, protected_header: &[u8]) -> Result<(), VerificationError> {
+        // Build the COSE Sig_structure that was signed
+        // Format: ["Signature1", protected, external_aad, payload]
+        let sig_structure = build_cose_sig_structure(protected_header, &self.payload);
+
+        // Hash it with keccak256 (Ethereum style)
+        let message_hash = keccak256(&sig_structure);
+
+        // Parse signature (64 bytes, no recovery id for COSE)
+        let sig_hex = self.signature.strip_prefix("0x").unwrap_or(&self.signature);
+        let sig_bytes = hex::decode(sig_hex)
+            .map_err(|e| VerificationError::InvalidSignature(format!("Invalid hex: {e}")))?;
+
+        if sig_bytes.len() != 64 {
+            return Err(VerificationError::InvalidSignature(format!(
+                "COSE signature must be 64 bytes, got {}",
+                sig_bytes.len()
+            )));
+        }
+
+        // Parse the claimed signer
+        let claimed_signer: Address = self
+            .signer
+            .parse()
+            .map_err(|e| VerificationError::InvalidAddress(format!("{e}")))?;
+
+        // Try both recovery IDs since COSE doesn't store v
+        let signature_array: [u8; 64] = sig_bytes
+            .try_into()
+            .map_err(|_| VerificationError::InvalidSignature("Invalid signature length".into()))?;
+
+        verify_secp256k1_without_recovery_id(&message_hash, &signature_array, &claimed_signer)
     }
 }
 
@@ -363,6 +431,58 @@ fn recover_signer(signature_hex: &str, payload: B256) -> Result<Address, Verific
         .map_err(|e| VerificationError::RecoveryFailed(format!("{e}")))
 }
 
+/// Build the COSE `Sig_structure` for signature verification.
+///
+/// The `Sig_structure` is a CBOR array: `["Signature1", protected, external_aad, payload]`
+/// where:
+/// - "Signature1" is the context string
+/// - protected is the CBOR-encoded protected header
+/// - `external_aad` is empty (we use `b""`)
+/// - payload is the message payload
+fn build_cose_sig_structure(protected_header: &[u8], payload: &[u8]) -> Vec<u8> {
+    use ciborium::Value;
+
+    let sig_structure = Value::Array(vec![
+        Value::Text("Signature1".to_string()),
+        Value::Bytes(protected_header.to_vec()),
+        Value::Bytes(vec![]), // external_aad is empty
+        Value::Bytes(payload.to_vec()),
+    ]);
+
+    let mut buf = Vec::new();
+    ciborium::into_writer(&sig_structure, &mut buf).expect("CBOR serialization should not fail");
+    buf
+}
+
+/// Verify a secp256k1 signature without recovery ID by trying both possible values.
+///
+/// COSE signatures are 64 bytes (r || s) without the recovery ID (v).
+/// We try both v=0 and v=1 to find which one recovers to the expected signer.
+fn verify_secp256k1_without_recovery_id(
+    message_hash: &B256,
+    signature: &[u8; 64],
+    expected_signer: &Address,
+) -> Result<(), VerificationError> {
+    use alloy::primitives::U256;
+
+    let r = U256::from_be_slice(&signature[..32]);
+    let s = U256::from_be_slice(&signature[32..]);
+
+    // Try both recovery IDs
+    for v in [false, true] {
+        let sig = Signature::new(r, s, v);
+        if let Ok(recovered) = sig.recover_address_from_prehash(message_hash) {
+            if recovered == *expected_signer {
+                return Ok(());
+            }
+        }
+    }
+
+    Err(VerificationError::RecoveryFailed(
+        "Could not recover matching signer address from COSE signature".to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +519,7 @@ mod tests {
             message_hash: "0xabc".to_string(),
             signature: "0xdef".to_string(),
             signer: "0x123".to_string(),
+            cose_protected_header: None,
         };
 
         let json = serde_json::to_string(&msg).unwrap();
@@ -407,6 +528,7 @@ mod tests {
         assert_eq!(decoded.sequence, 42);
         assert_eq!(decoded.timestamp, 1700000000);
         assert_eq!(decoded.payload, vec![1, 2, 3]);
+        assert!(decoded.cose_protected_header.is_none());
     }
 
     #[test]
@@ -420,6 +542,7 @@ mod tests {
                 message_hash: "0xabc".to_string(),
                 signature: "0xdef".to_string(),
                 signer: "0x123".to_string(),
+                cose_protected_header: None,
             },
             SignedMessage {
                 sequence: 2,
@@ -429,6 +552,7 @@ mod tests {
                 message_hash: "0xghi".to_string(),
                 signature: "0xjkl".to_string(),
                 signer: "0x123".to_string(),
+                cose_protected_header: None,
             },
         ];
 
@@ -492,6 +616,7 @@ mod tests {
             message_hash: format!("0x{}", hex::encode(message_hash)),
             signature,
             signer: format!("{:?}", signer.address()),
+            cose_protected_header: None,
         }
     }
 

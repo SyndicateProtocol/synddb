@@ -51,14 +51,13 @@ impl TestRunner {
             self.test_validators_consistent().await,
         ];
 
-        // TODO CLAUDE fix this
-        // DA API tests (only for LocalPublisher, skip for external DA layers like GCS)
-        if self.config.skip_da_tests {
+        // Storage API tests (only for publishers that expose /storage/* endpoints)
+        if self.config.skip_storage_tests {
             info!("");
-            info!("--- Skipping DA API Tests (SKIP_DA_TESTS=true) ---");
+            info!("--- Skipping Storage API Tests (SKIP_STORAGE_TESTS=true) ---");
         } else {
             info!("");
-            info!("--- Running DA API Tests ---");
+            info!("--- Running Storage API Tests ---");
             results.extend(vec![
                 self.test_storage_fetch().await,
                 self.test_snapshot_in_storage().await,
@@ -68,6 +67,10 @@ impl TestRunner {
                 self.test_storage_message_not_found().await,
                 self.test_storage_batch_not_found().await,
                 self.test_storage_batch_message_consistency().await,
+                // CBOR/COSE format tests
+                self.test_cose_protected_header().await,
+                self.test_cose_signature_format().await,
+                self.test_cbor_batch_fetch().await,
             ]);
         }
 

@@ -368,6 +368,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         // Should succeed with no changes
@@ -410,6 +411,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         // Apply the changeset
@@ -435,6 +437,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         // Should succeed with no changes
@@ -516,6 +519,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         // Apply the snapshot
@@ -560,6 +564,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         // Apply the snapshot
@@ -593,6 +598,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         // Should fail
@@ -613,6 +619,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         let extracted = ChangesetApplier::extract_snapshot(&message).unwrap();
@@ -634,6 +641,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         let extracted = ChangesetApplier::extract_snapshot(&message).unwrap();
@@ -652,6 +660,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         let result = applier.apply_message(&message);
@@ -718,6 +727,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: None,
         };
 
         // Apply the batch

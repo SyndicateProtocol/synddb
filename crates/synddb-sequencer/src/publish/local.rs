@@ -154,6 +154,8 @@ impl LocalPublisher {
         Router::new()
             .route("/batches", get(list_batches_handler))
             .route("/batches/{start}", get(get_batch_handler))
+            // Also serve at /json endpoint for consistency with LocalTransport (CBOR format)
+            .route("/batches/{start}/json", get(get_batch_handler))
             .route("/messages/{sequence}", get(get_message_handler))
             .route("/latest", get(get_latest_handler))
             .with_state(Arc::clone(self))
@@ -496,6 +498,7 @@ mod tests {
             message_hash: format!("0x{}", hex::encode(message_hash)),
             signature: signature.to_hex_prefixed(),
             signer: format!("{:?}", signer.address()),
+            cose_protected_header: None,
         }
     }
 

@@ -2,7 +2,7 @@
 #
 # Validates that all components can communicate:
 # 1. Customer app sends changesets to sequencer
-# 2. Sequencer signs and stores to local DA
+# 2. Sequencer signs and stores using CBOR format with COSE signatures
 # 3. Validator fetches and validates from sequencer
 #
 # Usage:
@@ -27,8 +27,11 @@ services:
       RUST_LOG: info
       BIND_ADDRESS: "0.0.0.0:8433"
       SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-      PUBLISHER_TYPE: local
-      LOCAL_STORAGE_PATH: ":memory:"
+      # Use CBOR format with COSE signatures (local in-memory transport)
+      PUBLISHER_TYPE: local-cbor
+      # Batch config for faster flushing in tests
+      BATCH_MAX_MESSAGES: "10"
+      BATCH_FLUSH_INTERVAL: "1s"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8433/health"]
       interval: 5s

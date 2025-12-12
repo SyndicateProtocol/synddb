@@ -18,6 +18,7 @@ use synddb_sequencer::{
     publish::{
         local::{LocalConfig, LocalPublisher},
         traits::StoragePublisher,
+        transport_local::LocalTransport,
     },
     signer::MessageSigner,
 };
@@ -47,13 +48,18 @@ async fn main() -> Result<()> {
 
     let signer = Arc::new(signer);
 
-    // Initialize publisher based on publisher_type
+    // Initialize legacy publisher based on publisher_type
+    // Note: LocalCbor and Gcs use the CBOR batcher instead
     let (publisher, local_publisher): (
         Option<Arc<dyn StoragePublisher>>,
         Option<Arc<LocalPublisher>>,
     ) = match config.publisher_type {
-        PublisherType::None => {
-            info!("Publisher disabled (messages will not be persisted)");
+        PublisherType::None | PublisherType::LocalCbor => {
+            // LocalCbor uses CBOR batcher with LocalTransport (initialized below),
+            // not the legacy JSON publisher
+            if matches!(config.publisher_type, PublisherType::None) {
+                info!("Publisher disabled (messages will not be persisted)");
+            }
             (None, None)
         }
         PublisherType::Local => {
@@ -87,48 +93,73 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Initialize CBOR batcher for GCS transport
-    let batcher: Option<BatcherHandle> = match config.publisher_type {
-        PublisherType::Gcs => {
-            #[cfg(feature = "gcs")]
-            {
-                use synddb_sequencer::publish::transport_gcs::{GcsTransport, GcsTransportConfig};
+    // Initialize CBOR batcher for LocalCbor or GCS transport
+    let (batcher, local_transport): (Option<BatcherHandle>, Option<Arc<LocalTransport>>) =
+        match config.publisher_type {
+            PublisherType::LocalCbor => {
+                use synddb_sequencer::publish::transport::TransportPublisher;
 
-                let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
-                })?;
-
-                let mut transport_config =
-                    GcsTransportConfig::new(bucket).with_prefix(&config.gcs_prefix);
-                if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
-                    transport_config = transport_config.with_emulator_host(emulator_host);
-                }
-
-                let transport = GcsTransport::new(transport_config)
-                    .await
-                    .context("Failed to initialize GCS transport")?;
-
+                let transport = Arc::new(LocalTransport::new());
                 let batch_config = config.batch_config();
                 info!(
                     max_messages = batch_config.max_messages,
                     max_bytes = batch_config.max_batch_bytes,
                     flush_interval_ms = batch_config.flush_interval.as_millis(),
-                    "Initializing CBOR batcher with GCS transport"
+                    "Initializing CBOR batcher with local transport"
                 );
 
-                Some(spawn_batcher(
+                let batcher = spawn_batcher(
                     batch_config,
-                    Arc::new(transport),
+                    Arc::clone(&transport) as Arc<dyn TransportPublisher>,
                     Arc::clone(&signer),
-                ))
+                );
+                (Some(batcher), Some(transport))
             }
-            #[cfg(not(feature = "gcs"))]
-            {
-                None
+            PublisherType::Gcs => {
+                #[cfg(feature = "gcs")]
+                {
+                    use synddb_sequencer::publish::transport_gcs::{
+                        GcsTransport, GcsTransportConfig,
+                    };
+
+                    let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
+                    })?;
+
+                    let mut transport_config =
+                        GcsTransportConfig::new(bucket).with_prefix(&config.gcs_prefix);
+                    if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
+                        transport_config = transport_config.with_emulator_host(emulator_host);
+                    }
+
+                    let transport = GcsTransport::new(transport_config)
+                        .await
+                        .context("Failed to initialize GCS transport")?;
+
+                    let batch_config = config.batch_config();
+                    info!(
+                        max_messages = batch_config.max_messages,
+                        max_bytes = batch_config.max_batch_bytes,
+                        flush_interval_ms = batch_config.flush_interval.as_millis(),
+                        "Initializing CBOR batcher with GCS transport"
+                    );
+
+                    (
+                        Some(spawn_batcher(
+                            batch_config,
+                            Arc::new(transport),
+                            Arc::clone(&signer),
+                        )),
+                        None,
+                    )
+                }
+                #[cfg(not(feature = "gcs"))]
+                {
+                    (None, None)
+                }
             }
-        }
-        _ => None,
-    };
+            _ => (None, None),
+        };
 
     // Try to recover sequence from publisher or batcher
     let start_sequence = match &publisher {
@@ -184,10 +215,15 @@ async fn main() -> Result<()> {
     // Create the HTTP router
     let mut app = create_router(state);
 
-    // Mount local publisher's storage fetch API if configured
+    // Mount storage fetch API if configured
+    // - LocalPublisher: JSON format (legacy)
+    // - LocalTransport: CBOR format with COSE signatures
     if let Some(ref local_pub) = local_publisher {
-        info!("Mounting local storage fetch API at /storage/*");
+        info!("Mounting local storage fetch API at /storage/* (JSON format)");
         app = app.nest("/storage", local_pub.routes());
+    } else if let Some(ref transport) = local_transport {
+        info!("Mounting local storage fetch API at /storage/* (CBOR format)");
+        app = app.nest("/storage", Arc::clone(transport).routes());
     }
 
     // Bind and serve

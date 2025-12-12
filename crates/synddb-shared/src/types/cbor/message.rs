@@ -140,6 +140,14 @@ impl CborSignedMessage {
     pub const fn size(&self) -> usize {
         self.cose_bytes.len()
     }
+
+    /// Extract the CBOR-encoded protected header.
+    ///
+    /// This is needed for COSE signature verification by the validator.
+    /// The protected header contains the sequence, timestamp, and message type.
+    pub fn protected_header(&self) -> Result<Vec<u8>, CborError> {
+        cose_helpers::extract_protected_header(&self.cose_bytes)
+    }
 }
 
 #[cfg(test)]

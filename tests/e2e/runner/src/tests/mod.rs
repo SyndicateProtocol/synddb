@@ -1,5 +1,5 @@
 mod batch;
-mod da;
+mod storage;
 mod multi_validator;
 mod sequencer;
 mod snapshot;

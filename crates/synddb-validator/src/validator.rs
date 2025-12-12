@@ -412,6 +412,10 @@ impl Validator {
     /// Sync all messages from a batch, verifying and applying each
     ///
     /// Returns the number of messages synced from this batch.
+    ///
+    /// Signature verification is always performed. The verifier automatically
+    /// handles both legacy (JSON) and COSE signature formats based on the
+    /// presence of `cose_protected_header` in each message.
     pub async fn sync_batch<F>(&mut self, batch: &SignedBatch, on_withdrawal: &mut F) -> Result<u64>
     where
         F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
@@ -429,7 +433,7 @@ impl Validator {
                 continue;
             }
 
-            // Verify signature
+            // Verify signature (handles both legacy and COSE formats)
             self.verifier
                 .verify(message)
                 .map_err(|e| ValidatorError::SignatureVerification(e.to_string()))?;
@@ -545,8 +549,11 @@ impl Validator {
             return self.run_with_callbacks(on_withdrawal, on_sync).await;
         }
 
+        // Clone fetcher Arc to avoid holding &self across await points
+        let fetcher = Arc::clone(&self.fetcher);
+
         // Build initial batch index
-        let mut index = self.build_batch_index().await?;
+        let mut index = BatchIndex::build(&fetcher).await?;
         let mut last_index_refresh = std::time::Instant::now();
         let index_refresh_interval = self.batch_index_refresh_interval;
 
@@ -570,7 +577,7 @@ impl Validator {
 
             // Refresh index periodically
             if last_index_refresh.elapsed() >= index_refresh_interval || caught_up {
-                if let Ok(new_batches) = index.refresh(&self.fetcher).await {
+                if let Ok(new_batches) = index.refresh(&fetcher).await {
                     if new_batches > 0 {
                         debug!(new_batches, "Discovered new batches");
                         caught_up = false;
@@ -584,14 +591,14 @@ impl Validator {
                 let batch_info = batch_info.clone();
 
                 // Fetch and process the batch
-                match self.fetcher.get_batch_by_path(&batch_info.path).await {
+                match fetcher.get_batch_by_path(&batch_info.path).await {
                     Ok(Some(batch)) => {
                         for message in &batch.messages {
                             if message.sequence < next_sequence {
                                 continue;
                             }
 
-                            // Verify
+                            // Verify signature (handles both legacy and COSE formats)
                             if let Err(e) = self.verifier.verify(message) {
                                 error!(
                                     sequence = message.sequence,
@@ -784,6 +791,7 @@ mod tests {
             message_hash: format!("0x{}", hex::encode(message_hash)),
             signature: format!("0x{}", hex::encode(sig_bytes)),
             signer: format!("{:?}", signer.address()),
+            cose_protected_header: None,
         }
     }
 

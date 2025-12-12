@@ -27,6 +27,44 @@ pub mod base64_serde {
     }
 }
 
+/// Base64 serialization/deserialization for optional binary data in JSON
+///
+/// Use with `#[serde(with = "base64_serde_opt")]` on `Option<Vec<u8>>` fields.
+pub mod base64_serde_opt {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(bytes: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use base64::Engine;
+        match bytes {
+            Some(b) => {
+                let encoded = base64::engine::general_purpose::STANDARD.encode(b);
+                encoded.serialize(serializer)
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use base64::Engine;
+        let opt: Option<String> = Option::deserialize(deserializer)?;
+        match opt {
+            Some(s) => {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&s)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(Some(bytes))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

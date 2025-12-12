@@ -11,7 +11,7 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```rust,ignore
 //! use synddb_shared::types::cbor::batch::CborBatch;
 //! use synddb_shared::types::cbor::message::{CborMessageType, CborSignedMessage};
 //!

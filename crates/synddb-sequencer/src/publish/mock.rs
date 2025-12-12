@@ -184,6 +184,7 @@ mod tests {
             message_hash: format!("0x{}", hex::encode(message_hash)),
             signature: signature.to_hex_prefixed(),
             signer: format!("{:?}", signer.address()),
+            cose_protected_header: None,
         }
     }
 
@@ -238,6 +239,7 @@ mod tests {
             message_hash: "0x".to_string(),
             signature: "0x".to_string(),
             signer: "0x".to_string(),
+            cose_protected_header: None,
         };
 
         let result = publisher.publish(&message).await;
