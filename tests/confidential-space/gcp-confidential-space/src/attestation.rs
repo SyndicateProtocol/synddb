@@ -1,11 +1,12 @@
 //! GCP Confidential Space attestation verification
 
 use crate::jwt::{decode_base64url, parse_jwt, JwkKey, ParsedJwt};
-use alloc::format;
-use alloc::string::String;
-use rsa::pkcs1v15::{Signature, VerifyingKey};
-use rsa::signature::Verifier;
-use rsa::{BigUint, RsaPublicKey};
+use alloc::{format, string::String};
+use rsa::{
+    pkcs1v15::{Signature, VerifyingKey},
+    signature::Verifier,
+    BigUint, RsaPublicKey,
+};
 use sha2::Sha256;
 
 #[cfg(feature = "sp1")]

@@ -3,8 +3,10 @@
 use anyhow::ensure;
 use tracing::info;
 
-use crate::result::{TestCase, TestCaseResult};
-use crate::runner::TestRunner;
+use crate::{
+    result::{TestCase, TestCaseResult},
+    runner::TestRunner,
+};
 
 impl TestRunner {
     /// Test: Can list batches from the storage layer

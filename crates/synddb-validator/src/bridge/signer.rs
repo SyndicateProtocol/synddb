@@ -3,9 +3,10 @@
 //! Signs messages in the format expected by the bridge contract's
 //! `signMessageWithSignature()` function.
 
-use alloy::primitives::{keccak256, Address, B256};
-use alloy::signers::local::PrivateKeySigner;
-use alloy::signers::{Signer, SignerSync};
+use alloy::{
+    primitives::{keccak256, Address, B256},
+    signers::{local::PrivateKeySigner, Signer, SignerSync},
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};

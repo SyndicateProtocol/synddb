@@ -15,14 +15,13 @@
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
-use rusqlite::backup::Backup;
-use rusqlite::hooks::Action;
-use rusqlite::session::Session;
-use rusqlite::Connection;
+use rusqlite::{backup::Backup, hooks::Action, session::Session, Connection};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
-use std::thread::{self, ThreadId};
-use std::time::{Duration, SystemTime};
+use std::{
+    cell::RefCell,
+    thread::{self, ThreadId},
+    time::{Duration, SystemTime},
+};
 use tracing::{debug, error, info, trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

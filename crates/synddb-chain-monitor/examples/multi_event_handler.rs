@@ -20,9 +20,11 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use synddb_chain_monitor::events::{Deposit, StateSync, Withdrawal};
 use synddb_chain_monitor::{
-    config::ChainMonitorConfig, handler::MessageHandler, monitor::ChainMonitor,
+    config::ChainMonitorConfig,
+    events::{Deposit, StateSync, Withdrawal},
+    handler::MessageHandler,
+    monitor::ChainMonitor,
 };
 use tracing::{error, info, warn};
 

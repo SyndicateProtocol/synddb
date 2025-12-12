@@ -1,14 +1,12 @@
 //! Background sender that batches and sends changesets to sequencer
 
-use crate::attestation::AttestationClient;
-use crate::config::Config;
-use crate::recovery::FailedBatchRecovery;
-use crate::retry::retry_with_backoff;
-use crate::session::Changeset;
+use crate::{
+    attestation::AttestationClient, config::Config, recovery::FailedBatchRecovery,
+    retry::retry_with_backoff, session::Changeset,
+};
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 use synddb_shared::types::payloads::{ChangesetBatchRequest, ChangesetData};
 use tracing::{debug, error, info, warn};
 

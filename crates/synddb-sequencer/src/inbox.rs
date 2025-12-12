@@ -4,10 +4,14 @@
 //! This is the core ordering mechanism similar to Arbitrum's delayed inbox.
 
 use alloy::primitives::{keccak256, Address};
-use std::io::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    io::Write,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use crate::signer::{MessageSigner, SignerError};
 use synddb_shared::types::message::{MessageType, SequenceReceipt, SignedMessage};

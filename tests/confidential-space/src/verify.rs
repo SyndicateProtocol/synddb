@@ -10,9 +10,11 @@
 
 use anyhow::{Context, Result};
 use base64::Engine;
-use rsa::pkcs1v15::{Signature, VerifyingKey};
-use rsa::signature::Verifier;
-use rsa::{BigUint, RsaPublicKey};
+use rsa::{
+    pkcs1v15::{Signature, VerifyingKey},
+    signature::Verifier,
+    BigUint, RsaPublicKey,
+};
 use serde::Deserialize;
 use sha2::Sha256;
 use std::path::PathBuf;

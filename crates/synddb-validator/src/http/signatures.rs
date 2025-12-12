@@ -130,8 +130,7 @@ mod tests {
     use super::*;
     use crate::bridge::signer::MessageSignature;
     use alloy::primitives::Address;
-    use axum::body::Body;
-    use axum::http::Request;
+    use axum::{body::Body, http::Request};
     use tower::util::ServiceExt;
 
     fn mock_signature(id: &str) -> MessageSignature {

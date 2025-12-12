@@ -7,8 +7,10 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::os::unix::fs::PermissionsExt;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    os::unix::fs::PermissionsExt,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tracing::{debug, error, info, warn};
 
 const ATTESTATION_SOCKET_PATH: &str = "/run/container_launcher/teeserver.sock";
@@ -961,8 +963,10 @@ fn init_logging() {
 
 #[cfg(feature = "gcs")]
 async fn upload_to_gcs(bucket: &str, content: &str) -> Result<()> {
-    use google_cloud_storage::client::{Client, ClientConfig};
-    use google_cloud_storage::http::objects::upload::{Media, UploadObjectRequest, UploadType};
+    use google_cloud_storage::{
+        client::{Client, ClientConfig},
+        http::objects::upload::{Media, UploadObjectRequest, UploadType},
+    };
 
     let config = ClientConfig::default()
         .with_auth()

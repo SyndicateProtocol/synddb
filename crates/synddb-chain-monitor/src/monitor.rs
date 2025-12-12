@@ -12,9 +12,7 @@ use alloy::{
     rpc::types::{Filter, Log},
 };
 use anyhow::Result;
-use std::fmt::Debug;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{fmt::Debug, sync::Arc, time::Duration};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 

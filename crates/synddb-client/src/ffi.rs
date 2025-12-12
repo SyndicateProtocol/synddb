@@ -5,10 +5,12 @@
 
 use crate::{Config, SyndDB};
 use rusqlite::Connection;
-use std::cell::RefCell;
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
-use std::time::Duration;
+use std::{
+    cell::RefCell,
+    ffi::{CStr, CString},
+    os::raw::c_char,
+    time::Duration,
+};
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };

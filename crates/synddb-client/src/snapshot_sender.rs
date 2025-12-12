@@ -1,10 +1,9 @@
 //! Background sender for database snapshots to sequencer
 
-use crate::attestation::AttestationClient;
-use crate::config::Config;
-use crate::recovery::FailedBatchRecovery;
-use crate::retry::retry_with_backoff;
-use crate::session::Snapshot;
+use crate::{
+    attestation::AttestationClient, config::Config, recovery::FailedBatchRecovery,
+    retry::retry_with_backoff, session::Snapshot,
+};
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

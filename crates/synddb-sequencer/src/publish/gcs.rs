@@ -19,8 +19,10 @@
 //! across all batch files. This ensures atomic publication of messages
 //! with state, preventing partial publication failures.
 
-use crate::publish::traits::{PublishError, PublishResult, StoragePublisher};
-use crate::signer::MessageSigner;
+use crate::{
+    publish::traits::{PublishError, PublishResult, StoragePublisher},
+    signer::MessageSigner,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -177,8 +179,7 @@ impl GcsPublisher {
 
     /// Helper to download data from GCS
     async fn download(&self, path: &str) -> Result<Option<Vec<u8>>, PublishError> {
-        use google_cloud_storage::http::objects::download::Range;
-        use google_cloud_storage::http::objects::get::GetObjectRequest;
+        use google_cloud_storage::http::objects::{download::Range, get::GetObjectRequest};
 
         let request = GetObjectRequest {
             bucket: self.config.bucket.clone(),

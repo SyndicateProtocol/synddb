@@ -6,18 +6,18 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::sync::Arc;
-use tokio::net::TcpListener;
-use tokio::signal;
+use tokio::{net::TcpListener, signal};
 use tracing::{error, info, warn};
 
-use synddb_sequencer::attestation::{AttestationConfig, AttestationVerifier};
-use synddb_sequencer::config::PublisherType;
-use synddb_sequencer::publish::local::{LocalConfig, LocalPublisher};
-use synddb_sequencer::publish::traits::StoragePublisher;
 use synddb_sequencer::{
-    config::SequencerConfig,
+    attestation::{AttestationConfig, AttestationVerifier},
+    config::{PublisherType, SequencerConfig},
     http_api::{create_router, AppState},
     inbox::Inbox,
+    publish::{
+        local::{LocalConfig, LocalPublisher},
+        traits::StoragePublisher,
+    },
     signer::MessageSigner,
 };
 use synddb_shared::runtime;

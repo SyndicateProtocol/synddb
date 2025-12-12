@@ -3,8 +3,10 @@
 use anyhow::ensure;
 use synddb_shared::types::message::MessageType;
 
-use crate::result::{TestCase, TestCaseResult};
-use crate::runner::TestRunner;
+use crate::{
+    result::{TestCase, TestCaseResult},
+    runner::TestRunner,
+};
 
 impl TestRunner {
     /// Test: Can fetch messages from the storage layer

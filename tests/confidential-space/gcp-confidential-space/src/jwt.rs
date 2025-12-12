@@ -1,7 +1,6 @@
 //! JWT parsing utilities for GCP Confidential Space attestation tokens
 
-use alloc::string::String;
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
 /// JWT header structure

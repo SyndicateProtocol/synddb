@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-use crate::client::sequencer::SequencerClient;
-use crate::client::validator::ValidatorClient;
-use crate::result::TestResult;
-use crate::Config;
+use crate::{
+    client::{sequencer::SequencerClient, validator::ValidatorClient},
+    result::TestResult,
+    Config,
+};
 use anyhow::Result;
 use tracing::info;
 

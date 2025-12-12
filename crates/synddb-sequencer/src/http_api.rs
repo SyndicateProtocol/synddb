@@ -16,13 +16,17 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use crate::attestation::AttestationVerifier;
-use crate::http_errors::{HttpError, SequencerError};
-use crate::inbox::Inbox;
-use crate::publish::traits::StoragePublisher;
-use synddb_shared::types::message::{MessageType, SequenceReceipt, SignedMessage};
-use synddb_shared::types::payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest};
-use synddb_shared::types::serde_helpers::base64_serde;
+use crate::{
+    attestation::AttestationVerifier,
+    http_errors::{HttpError, SequencerError},
+    inbox::Inbox,
+    publish::traits::StoragePublisher,
+};
+use synddb_shared::types::{
+    message::{MessageType, SequenceReceipt, SignedMessage},
+    payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest},
+    serde_helpers::base64_serde,
+};
 
 /// Shared application state
 #[derive(Clone)]
@@ -474,11 +478,12 @@ async fn get_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::publish::mock::MockPublisher;
-    use crate::signer::MessageSigner;
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
-    use axum::response::Response;
+    use crate::{publish::mock::MockPublisher, signer::MessageSigner};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        response::Response,
+    };
     use base64::Engine;
     use serde_json::Value;
     use tower::ServiceExt;

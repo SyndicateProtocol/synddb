@@ -8,13 +8,16 @@ use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
 use synddb_shared::runtime;
-use synddb_validator::bridge::signature_store::SignatureStore;
-use synddb_validator::bridge::signer::BridgeSigner;
-use synddb_validator::config::{FetcherType, ValidatorConfig};
-use synddb_validator::http::api::{create_router, AppState};
-use synddb_validator::http::signatures::{create_signature_router, SignatureApiState};
-use synddb_validator::sync::fetcher::StorageFetcher;
-use synddb_validator::validator::Validator;
+use synddb_validator::{
+    bridge::{signature_store::SignatureStore, signer::BridgeSigner},
+    config::{FetcherType, ValidatorConfig},
+    http::{
+        api::{create_router, AppState},
+        signatures::{create_signature_router, SignatureApiState},
+    },
+    sync::fetcher::StorageFetcher,
+    validator::Validator,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {

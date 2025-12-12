@@ -277,8 +277,7 @@ mod tests {
 
     #[test]
     fn test_state_persistence() {
-        use std::fs;
-        use std::path::PathBuf;
+        use std::{fs, path::PathBuf};
 
         // Use a temp file
         let temp_dir = std::env::temp_dir();
