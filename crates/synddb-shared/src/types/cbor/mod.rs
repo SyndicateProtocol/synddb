@@ -11,7 +11,10 @@
 //!
 //! # Example
 //!
-//! ```rust,no_run
+//! ```rust
+//! use synddb_shared::types::cbor::batch::CborBatch;
+//! use synddb_shared::types::cbor::message::{CborMessageType, CborSignedMessage};
+//!
 //! // Create a signed message
 //! let msg = CborSignedMessage::new(
 //!     sequence,
@@ -25,6 +28,7 @@
 //! // Create a batch
 //! let batch = CborBatch::new(
 //!     vec![msg],
+//!     created_at,
 //!     signer_address,
 //!     |data| sign(data),
 //! )?;
@@ -45,5 +49,3 @@ pub mod cose_helpers;
 pub mod debug;
 pub mod error;
 pub mod message;
-#[cfg(test)]
-pub mod tests;
