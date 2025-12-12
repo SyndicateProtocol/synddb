@@ -580,6 +580,14 @@ The `encoding_benchmark` test compares file sizes and performance of different e
 - **CBOR** (uncompressed)
 - **CBOR + zstd** (current production format)
 
+### Test Parameters
+
+- **N** (`num_messages`): Messages per batch
+- **M** (`changesets_per_message`): Changesets per message
+- **O** (`ops_per_changeset`): SQL operations per changeset (simulates activity level)
+
+Test scenarios range from quiet (1-2 ops) to normal trading (3-5 ops) to burst activity (10-20 ops).
+
 ### Running the Benchmark
 
 ```bash
@@ -593,25 +601,49 @@ cargo test -p synddb-benchmark test_encoding_benchmark -- --nocapture
                     ENCODING FORMAT COMPARISON BENCHMARK
 ================================================================================
 
-Test Case: medium_balanced (N=10 messages, M=10 changesets/message)
-Raw changeset data: 24294 bytes
+Test Case: normal_medium (N=5 messages, M=5 changesets/msg, O=4 ops/changeset)
+Raw changeset data: 10665 bytes (100 total SQL operations)
 
   Format               Size (bytes)        Ratio  Encode (us)  Decode (us)
   -------------------- ------------ ------------ ------------ ------------
-  JSON+base64+zstd             4753        1.00x        14086          223
-  CBOR                        26146        5.50x        14291           14
-  CBOR+zstd                    3168        0.67x        14680           99
+  JSON+base64+zstd             2891        1.00x         7937          172
+  CBOR                        11567        4.00x         7445            9
+  CBOR+zstd                    1810        0.63x         7379           67
 
-  CBOR+zstd improvement over JSON+base64+zstd: 33.3% smaller
+  CBOR+zstd improvement over JSON+base64+zstd: 37.4% smaller
+
+--------------------------------------------------------------------------------
+
+Test Case: burst_large (N=10 messages, M=10 changesets/msg, O=20 ops/changeset)
+Raw changeset data: 209140 bytes (2000 total SQL operations)
+
+  Format               Size (bytes)        Ratio  Encode (us)  Decode (us)
+  -------------------- ------------ ------------ ------------ ------------
+  JSON+base64+zstd            25950        1.00x        21274          691
+  CBOR                       210992        8.13x        38227           37
+  CBOR+zstd                   23650        0.91x        39685          727
+
+  CBOR+zstd improvement over JSON+base64+zstd: 8.9% smaller
+
+--------------------------------------------------------------------------------
 
 SUMMARY
 =======
-  JSON+base64+zstd total: 10517 bytes
-  CBOR total:             41960 bytes (4.0x vs JSON)
-  CBOR+zstd total:        6636 bytes (0.6x vs JSON)
 
-Overall CBOR+zstd improvement: 36.9% smaller than JSON+base64+zstd
+Format comparison across all test cases:
+
+  JSON+base64+zstd total: 58240 bytes
+  CBOR total:             395108 bytes (6.8x vs JSON)
+  CBOR+zstd total:        47493 bytes (0.8x vs JSON)
+
+Overall CBOR+zstd improvement: 18.5% smaller than JSON+base64+zstd
 ```
+
+### Key Findings
+
+- **Light/normal activity (1-5 ops)**: CBOR+zstd is 25-39% smaller
+- **Burst activity (10-20 ops)**: CBOR+zstd is 9-23% smaller (zstd compresses repetitive JSON well)
+- **Overall**: ~18% smaller across all scenarios
 
 The benchmark uses realistic SQLite changesets generated via the session extension to provide accurate size comparisons.
 

@@ -26,11 +26,15 @@ use synddb_shared::types::{
 const TEST_PRIVATE_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 /// Test case configuration
+/// - N (`num_messages`): Number of messages in a batch
+/// - M (`changesets_per_message`): Number of changesets per message
+/// - O (`ops_per_changeset`): Number of SQL operations per changeset (simulates activity level)
 #[derive(Debug, Clone)]
 struct TestCase {
     name: &'static str,
     num_messages: usize,
     changesets_per_message: usize,
+    ops_per_changeset: usize,
 }
 
 /// Results for a single encoding format
@@ -89,43 +93,111 @@ fn sign_legacy(signer: &PrivateKeySigner, data: B256) -> Result<[u8; 65]> {
 }
 
 /// Generate realistic `SQLite` changesets using the session extension
-fn generate_changesets(num_changesets: usize) -> Result<Vec<Vec<u8>>> {
+///
+/// - `num_changesets`: Number of changesets to generate
+/// - `ops_per_changeset`: Number of SQL operations per changeset (simulates activity level)
+///   - 1-2 ops: Light activity (single order)
+///   - 3-5 ops: Normal trading (order + balance updates)
+///   - 10-20 ops: Burst activity (batch of orders, trades)
+fn generate_changesets(num_changesets: usize, ops_per_changeset: usize) -> Result<Vec<Vec<u8>>> {
     let conn = Connection::open_in_memory()?;
     initialize_schema(&conn)?;
 
-    // Create a user first
-    conn.execute("INSERT INTO users (username) VALUES ('benchmark_user')", [])?;
+    // Create users for trading simulation
+    for u in 0..10 {
+        conn.execute(
+            "INSERT INTO users (username) VALUES (?)",
+            rusqlite::params![format!("user_{}", u)],
+        )?;
+    }
 
     let mut changesets = Vec::with_capacity(num_changesets);
+    let mut order_id_counter = 0i64;
 
-    for i in 0..num_changesets {
+    for cs_idx in 0..num_changesets {
         // Create a session to capture changes
         let mut session = Session::new(&conn)?;
         session.attach(None::<&str>)?; // Track all tables
 
-        // Insert an order (realistic orderbook operation)
-        conn.execute(
-            "INSERT INTO orders (user_id, symbol, side, order_type, price, quantity)
-             VALUES (1, 'BTC-USD', ?, 'limit', ?, ?)",
-            rusqlite::params![
-                if i % 2 == 0 { "buy" } else { "sell" },
-                50000 + (i as i64 * 100),
-                (i as i64 + 1) * 10,
-            ],
-        )?;
+        // Perform ops_per_changeset operations
+        for op_idx in 0..ops_per_changeset {
+            let global_idx = cs_idx * ops_per_changeset + op_idx;
+            let user_id = (global_idx % 10) as i64 + 1;
 
-        // Update a balance (another common operation)
-        conn.execute(
-            "INSERT OR REPLACE INTO balances (user_id, symbol, amount, locked)
-             VALUES (1, 'BTC-USD', ?, ?)",
-            rusqlite::params![(i as i64 + 1) * 1000, (i as i64) * 100,],
-        )?;
+            // Vary operation types based on index for realistic mix
+            match op_idx % 4 {
+                0 => {
+                    // Insert a new order
+                    conn.execute(
+                        "INSERT INTO orders (user_id, symbol, side, order_type, price, quantity)
+                         VALUES (?, 'BTC-USD', ?, 'limit', ?, ?)",
+                        rusqlite::params![
+                            user_id,
+                            if global_idx.is_multiple_of(2) {
+                                "buy"
+                            } else {
+                                "sell"
+                            },
+                            50000 + (global_idx as i64 * 10),
+                            (global_idx as i64 % 100 + 1) * 10,
+                        ],
+                    )?;
+                    order_id_counter += 1;
+                }
+                1 => {
+                    // Update balance
+                    conn.execute(
+                        "INSERT OR REPLACE INTO balances (user_id, symbol, amount, locked)
+                         VALUES (?, 'BTC-USD', ?, ?)",
+                        rusqlite::params![
+                            user_id,
+                            (global_idx as i64 + 1) * 1000,
+                            (global_idx as i64) * 100,
+                        ],
+                    )?;
+                }
+                2 => {
+                    // Insert ETH balance (different symbol)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO balances (user_id, symbol, amount, locked)
+                         VALUES (?, 'ETH-USD', ?, ?)",
+                        rusqlite::params![
+                            user_id,
+                            (global_idx as i64 + 1) * 500,
+                            (global_idx as i64) * 50,
+                        ],
+                    )?;
+                }
+                3 => {
+                    // Insert another order (different symbol)
+                    conn.execute(
+                        "INSERT INTO orders (user_id, symbol, side, order_type, price, quantity)
+                         VALUES (?, 'ETH-USD', ?, 'limit', ?, ?)",
+                        rusqlite::params![
+                            user_id,
+                            if global_idx.is_multiple_of(2) {
+                                "sell"
+                            } else {
+                                "buy"
+                            },
+                            3000 + (global_idx as i64 * 5),
+                            (global_idx as i64 % 50 + 1) * 5,
+                        ],
+                    )?;
+                    order_id_counter += 1;
+                }
+                _ => unreachable!(),
+            }
+        }
 
         // Get the changeset
         let mut changeset = Vec::new();
         session.changeset_strm(&mut changeset)?;
         changesets.push(changeset);
     }
+
+    // Silence unused variable warning
+    let _ = order_id_counter;
 
     Ok(changesets)
 }
@@ -260,7 +332,7 @@ fn run_benchmark(test_case: &TestCase) -> Result<TestResult> {
 
     // Generate realistic changesets
     let total_changesets = test_case.num_messages * test_case.changesets_per_message;
-    let all_changesets = generate_changesets(total_changesets)?;
+    let all_changesets = generate_changesets(total_changesets, test_case.ops_per_changeset)?;
 
     // Calculate raw changeset bytes
     let raw_changeset_bytes: usize = all_changesets.iter().map(|cs| cs.len()).sum();
@@ -416,10 +488,14 @@ fn print_results(results: &[TestResult]) {
     for result in results {
         let tc = &result.test_case;
         println!(
-            "Test Case: {} (N={} messages, M={} changesets/message)",
-            tc.name, tc.num_messages, tc.changesets_per_message
+            "Test Case: {} (N={} messages, M={} changesets/msg, O={} ops/changeset)",
+            tc.name, tc.num_messages, tc.changesets_per_message, tc.ops_per_changeset
         );
-        println!("Raw changeset data: {} bytes", result.raw_changeset_bytes);
+        let total_ops = tc.num_messages * tc.changesets_per_message * tc.ops_per_changeset;
+        println!(
+            "Raw changeset data: {} bytes ({} total SQL operations)",
+            result.raw_changeset_bytes, total_ops
+        );
         println!();
         println!(
             "  {:<20} {:>12} {:>12} {:>12} {:>12}",
@@ -500,30 +576,56 @@ fn print_results(results: &[TestResult]) {
 #[test]
 fn test_encoding_benchmark() {
     let test_cases = vec![
+        // Light activity scenarios (1-2 ops per changeset)
         TestCase {
-            name: "small_balanced",
-            num_messages: 5,
-            changesets_per_message: 5,
-        },
-        TestCase {
-            name: "medium_balanced",
-            num_messages: 10,
-            changesets_per_message: 10,
-        },
-        TestCase {
-            name: "few_single",
+            name: "quiet_minimal",
             num_messages: 2,
             changesets_per_message: 1,
+            ops_per_changeset: 1,
         },
         TestCase {
-            name: "few_multiple",
+            name: "quiet_light",
             num_messages: 2,
-            changesets_per_message: 4,
+            changesets_per_message: 2,
+            ops_per_changeset: 2,
         },
+        // Normal trading scenarios (3-5 ops per changeset)
         TestCase {
-            name: "medium_multiple",
+            name: "normal_small",
             num_messages: 5,
             changesets_per_message: 4,
+            ops_per_changeset: 3,
+        },
+        TestCase {
+            name: "normal_medium",
+            num_messages: 5,
+            changesets_per_message: 5,
+            ops_per_changeset: 4,
+        },
+        TestCase {
+            name: "normal_large",
+            num_messages: 10,
+            changesets_per_message: 10,
+            ops_per_changeset: 5,
+        },
+        // Burst activity scenarios (10-20 ops per changeset)
+        TestCase {
+            name: "burst_small",
+            num_messages: 5,
+            changesets_per_message: 5,
+            ops_per_changeset: 10,
+        },
+        TestCase {
+            name: "burst_medium",
+            num_messages: 10,
+            changesets_per_message: 5,
+            ops_per_changeset: 15,
+        },
+        TestCase {
+            name: "burst_large",
+            num_messages: 10,
+            changesets_per_message: 10,
+            ops_per_changeset: 20,
         },
     ];
 
