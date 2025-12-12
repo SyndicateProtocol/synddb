@@ -45,6 +45,7 @@
 //! ```
 
 pub mod batch;
+pub mod convert;
 pub mod cose_helpers;
 pub mod debug;
 pub mod error;
