@@ -71,7 +71,7 @@ db = sqlite3.connect('app.db')
 synddb = SyndDB.attach('app.db', 'https://sequencer:8433')
 
 # Just write SQL. We handle the rest.
-db.execute("INSERT INTO trades VALUES (?, ?)", [...])
+db.execute("INSERT INTO trades VALUES (?, ?)", (123, 'BUY'))
 ```
 
 ---
