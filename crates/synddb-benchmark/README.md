@@ -572,6 +572,49 @@ When `SEQUENCER_URL` is set, the benchmark:
 
 The benchmark uses the safe API pattern where `publish()` is called explicitly after transactions complete, ensuring thread-safe changeset extraction.
 
+## Encoding Format Benchmark
+
+The `encoding_benchmark` test compares file sizes and performance of different encoding/compression formats:
+
+- **JSON + base64 + zstd** (legacy format)
+- **CBOR** (uncompressed)
+- **CBOR + zstd** (current production format)
+
+### Running the Benchmark
+
+```bash
+cargo test -p synddb-benchmark test_encoding_benchmark -- --nocapture
+```
+
+### Sample Output
+
+```
+================================================================================
+                    ENCODING FORMAT COMPARISON BENCHMARK
+================================================================================
+
+Test Case: medium_balanced (N=10 messages, M=10 changesets/message)
+Raw changeset data: 24294 bytes
+
+  Format               Size (bytes)        Ratio  Encode (us)  Decode (us)
+  -------------------- ------------ ------------ ------------ ------------
+  JSON+base64+zstd             4753        1.00x        14086          223
+  CBOR                        26146        5.50x        14291           14
+  CBOR+zstd                    3168        0.67x        14680           99
+
+  CBOR+zstd improvement over JSON+base64+zstd: 33.3% smaller
+
+SUMMARY
+=======
+  JSON+base64+zstd total: 10517 bytes
+  CBOR total:             41960 bytes (4.0x vs JSON)
+  CBOR+zstd total:        6636 bytes (0.6x vs JSON)
+
+Overall CBOR+zstd improvement: 36.9% smaller than JSON+base64+zstd
+```
+
+The benchmark uses realistic SQLite changesets generated via the session extension to provide accurate size comparisons.
+
 ## Development
 
 ```bash

@@ -4271,16 +4271,20 @@ dependencies = [
 name = "synddb-benchmark"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "clap",
+ "hex",
  "rand 0.8.5",
  "rusqlite",
  "serde",
  "serde_json",
  "synddb-client",
+ "synddb-shared",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zstd",
 ]
 
 [[package]]
