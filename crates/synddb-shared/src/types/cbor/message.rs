@@ -1,7 +1,6 @@
 //! CBOR message types
 
-use super::cose_helpers;
-use super::error::CborError;
+use super::{cose_helpers, error::CborError};
 use serde::{Deserialize, Serialize};
 
 /// Message type as integer for compact CBOR encoding
@@ -14,6 +13,16 @@ pub enum CborMessageType {
     Withdrawal = 1,
     /// Database snapshot
     Snapshot = 2,
+}
+
+impl From<crate::types::message::MessageType> for CborMessageType {
+    fn from(mt: crate::types::message::MessageType) -> Self {
+        match mt {
+            crate::types::message::MessageType::Changeset => Self::Changeset,
+            crate::types::message::MessageType::Withdrawal => Self::Withdrawal,
+            crate::types::message::MessageType::Snapshot => Self::Snapshot,
+        }
+    }
 }
 
 impl CborMessageType {

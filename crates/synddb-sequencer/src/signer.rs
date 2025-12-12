@@ -85,6 +85,20 @@ impl MessageSigner {
         self.sign(payload).await
     }
 
+    /// Sign raw bytes (32-byte hash)
+    ///
+    /// This is used for CBOR/COSE signing where the caller provides the pre-hashed data.
+    pub async fn sign_raw(
+        &self,
+        hash: &[u8; 32],
+    ) -> Result<alloy::signers::Signature, SignerError> {
+        let hash = B256::from(*hash);
+        self.signer
+            .sign_hash(&hash)
+            .await
+            .map_err(|e| SignerError::SigningFailed(e.to_string()))
+    }
+
     /// Create the signing payload for a batch
     ///
     /// Format: `keccak256(start_sequence || end_sequence || messages_hash)`

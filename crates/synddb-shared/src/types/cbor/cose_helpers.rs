@@ -1,7 +1,9 @@
 //! `COSE_Sign1` helper functions for building and verifying signed messages
 
-use super::error::CborError;
-use super::message::{CborMessageType, ParsedCoseMessage};
+use super::{
+    error::CborError,
+    message::{CborMessageType, ParsedCoseMessage},
+};
 use coset::{cbor::Value, iana, CborSerializable, CoseSign1, CoseSign1Builder, Header, Label};
 
 /// Custom header label for sequence number (private use range)

@@ -1,7 +1,6 @@
 //! CBOR batch type for storing multiple signed messages
 
-use super::error::CborError;
-use super::message::CborSignedMessage;
+use super::{error::CborError, message::CborSignedMessage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};

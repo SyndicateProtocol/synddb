@@ -149,8 +149,7 @@ impl GcsTransport {
 
     /// Download data from GCS
     async fn download(&self, path: &str) -> Result<Option<Vec<u8>>, TransportError> {
-        use google_cloud_storage::http::objects::download::Range;
-        use google_cloud_storage::http::objects::get::GetObjectRequest;
+        use google_cloud_storage::http::objects::{download::Range, get::GetObjectRequest};
 
         let request = GetObjectRequest {
             bucket: self.config.bucket.clone(),

@@ -1,8 +1,6 @@
 //! Debug utilities for converting CBOR types to human-readable JSON
 
-use super::batch::CborBatch;
-use super::error::CborError;
-use super::message::CborSignedMessage;
+use super::{batch::CborBatch, error::CborError, message::CborSignedMessage};
 use alloy::primitives::keccak256;
 use serde_json::{json, Value};
 

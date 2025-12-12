@@ -51,6 +51,7 @@
 //! ```
 
 pub mod attestation;
+pub mod batcher;
 pub mod config;
 pub mod http_api;
 pub mod http_errors;

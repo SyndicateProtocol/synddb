@@ -18,11 +18,13 @@ use tracing::{error, info, warn};
 
 use crate::{
     attestation::AttestationVerifier,
+    batcher::{BatchStats, BatcherHandle, RawMessage},
     http_errors::{HttpError, SequencerError},
     inbox::Inbox,
     publish::traits::StoragePublisher,
 };
 use synddb_shared::types::{
+    cbor::message::CborMessageType,
     message::{MessageType, SequenceReceipt, SignedMessage},
     payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest},
     serde_helpers::base64_serde,
@@ -32,10 +34,12 @@ use synddb_shared::types::{
 #[derive(Clone)]
 pub struct AppState {
     pub inbox: Arc<Inbox>,
-    /// Optional publisher for persisting messages
+    /// Optional publisher for persisting messages (JSON-based, legacy)
     pub publisher: Option<Arc<dyn StoragePublisher>>,
     /// Optional attestation verifier for TEE token validation
     pub attestation_verifier: Option<Arc<AttestationVerifier>>,
+    /// Optional batcher for CBOR batch publishing
+    pub batcher: Option<BatcherHandle>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -44,6 +48,7 @@ impl std::fmt::Debug for AppState {
             .field("inbox", &self.inbox)
             .field("publisher", &self.publisher.is_some())
             .field("attestation_verifier", &self.attestation_verifier.is_some())
+            .field("batcher", &self.batcher.is_some())
             .finish()
     }
 }
@@ -58,6 +63,8 @@ pub fn create_router(state: AppState) -> Router {
     info!("  GET  /health           - Health check (liveness)");
     info!("  GET  /ready            - Readiness check");
     info!("  GET  /status           - Sequencer status");
+    info!("  GET  /batch/stats      - CBOR batch statistics");
+    info!("  POST /batch/flush      - Force flush pending batch");
 
     Router::new()
         .route("/changesets", post(receive_changesets))
@@ -67,6 +74,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
         .route("/status", get(status))
+        .route("/batch/stats", get(batch_stats))
+        .route("/batch/flush", post(batch_flush))
         .with_state(state)
 }
 
@@ -129,6 +138,61 @@ pub struct ReadinessResponse {
     pub status: String,
     /// Individual component checks
     pub checks: Vec<HealthCheck>,
+}
+
+/// Batch statistics response
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct BatchStatsResponse {
+    /// Whether batching is enabled
+    pub enabled: bool,
+    /// Total batches published
+    pub batches_published: u64,
+    /// Total messages published via batching
+    pub messages_published: u64,
+    /// Total compressed bytes published
+    pub bytes_published: u64,
+    /// Total uncompressed bytes (for compression ratio)
+    pub bytes_uncompressed: u64,
+    /// Average compression ratio
+    pub compression_ratio: f64,
+    /// Current pending message count
+    pub pending_messages: usize,
+    /// Current pending byte count
+    pub pending_bytes: usize,
+    /// Last flush timestamp (epoch seconds, 0 if never flushed)
+    pub last_flush_timestamp: u64,
+}
+
+impl From<BatchStats> for BatchStatsResponse {
+    fn from(stats: BatchStats) -> Self {
+        Self {
+            enabled: true,
+            batches_published: stats.batches_published,
+            messages_published: stats.messages_published,
+            bytes_published: stats.bytes_published,
+            bytes_uncompressed: stats.bytes_uncompressed,
+            compression_ratio: stats.compression_ratio(),
+            pending_messages: stats.pending_messages,
+            pending_bytes: stats.pending_bytes,
+            last_flush_timestamp: stats.last_flush_timestamp,
+        }
+    }
+}
+
+/// Batch flush response
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchFlushResponse {
+    /// Whether a batch was published
+    pub published: bool,
+    /// Reference to the published batch (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// Number of messages in the flushed batch
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_count: Option<usize>,
+    /// Compressed size of the batch
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compressed_bytes: Option<usize>,
 }
 
 /// Response for message retrieval
@@ -220,8 +284,24 @@ async fn receive_changesets(
             SequencerError::from(e)
         })?;
 
-    // Publish to storage layer if configured
-    if let Some(publisher) = &state.publisher {
+    // Send to batcher for CBOR batching if configured
+    if let Some(batcher) = &state.batcher {
+        let raw = RawMessage {
+            sequence: signed_message.sequence,
+            timestamp: signed_message.timestamp,
+            message_type: CborMessageType::from(signed_message.message_type.clone()),
+            payload: signed_message.payload.clone(),
+        };
+        if let Err(e) = batcher.add_raw_message(raw).await {
+            warn!(
+                sequence = receipt.sequence,
+                error = %e,
+                "Failed to add to batcher (sequencing succeeded)"
+            );
+        }
+    }
+    // Also publish to legacy storage layer if configured
+    else if let Some(publisher) = &state.publisher {
         let publish_result = publisher.publish(&signed_message).await;
         if !publish_result.success {
             warn!(
@@ -229,8 +309,6 @@ async fn receive_changesets(
                 error = ?publish_result.error,
                 "Failed to publish message (sequencing succeeded)"
             );
-            // Note: We still return success since the message was sequenced
-            // The publish failure should be retried asynchronously
         }
     }
 
@@ -294,8 +372,24 @@ async fn receive_withdrawal(
             SequencerError::from(e)
         })?;
 
-    // Publish to storage layer if configured
-    if let Some(publisher) = &state.publisher {
+    // Send to batcher for CBOR batching if configured
+    if let Some(batcher) = &state.batcher {
+        let raw = RawMessage {
+            sequence: signed_message.sequence,
+            timestamp: signed_message.timestamp,
+            message_type: CborMessageType::from(signed_message.message_type.clone()),
+            payload: signed_message.payload.clone(),
+        };
+        if let Err(e) = batcher.add_raw_message(raw).await {
+            warn!(
+                sequence = receipt.sequence,
+                error = %e,
+                "Failed to add to batcher (sequencing succeeded)"
+            );
+        }
+    }
+    // Also publish to legacy storage layer if configured
+    else if let Some(publisher) = &state.publisher {
         let publish_result = publisher.publish(&signed_message).await;
         if !publish_result.success {
             warn!(
@@ -363,8 +457,24 @@ async fn receive_snapshot(
             SequencerError::from(e)
         })?;
 
-    // Publish to storage layer if configured
-    if let Some(publisher) = &state.publisher {
+    // Send to batcher for CBOR batching if configured
+    if let Some(batcher) = &state.batcher {
+        let raw = RawMessage {
+            sequence: signed_message.sequence,
+            timestamp: signed_message.timestamp,
+            message_type: CborMessageType::from(signed_message.message_type.clone()),
+            payload: signed_message.payload.clone(),
+        };
+        if let Err(e) = batcher.add_raw_message(raw).await {
+            warn!(
+                sequence = receipt.sequence,
+                error = %e,
+                "Failed to add to batcher (sequencing succeeded)"
+            );
+        }
+    }
+    // Also publish to legacy storage layer if configured
+    else if let Some(publisher) = &state.publisher {
         let publish_result = publisher.publish(&signed_message).await;
         if !publish_result.success {
             warn!(
@@ -475,6 +585,57 @@ async fn get_message(
     }
 }
 
+/// Get CBOR batch statistics
+async fn batch_stats(State(state): State<AppState>) -> Json<BatchStatsResponse> {
+    match &state.batcher {
+        Some(batcher) => match batcher.stats().await {
+            Ok(stats) => Json(BatchStatsResponse::from(stats)),
+            Err(e) => {
+                warn!(error = %e, "Failed to get batch stats");
+                Json(BatchStatsResponse {
+                    enabled: true,
+                    ..Default::default()
+                })
+            }
+        },
+        None => Json(BatchStatsResponse {
+            enabled: false,
+            ..Default::default()
+        }),
+    }
+}
+
+/// Force flush the current batch
+async fn batch_flush(State(state): State<AppState>) -> Result<Json<BatchFlushResponse>, HttpError> {
+    let batcher = state.batcher.as_ref().ok_or(SequencerError::NoBatcher)?;
+
+    match batcher.flush().await {
+        Ok(Some(metadata)) => {
+            info!(
+                reference = %metadata.reference,
+                compressed_bytes = metadata.compressed_bytes,
+                "Manual batch flush completed"
+            );
+            Ok(Json(BatchFlushResponse {
+                published: true,
+                reference: Some(metadata.reference),
+                message_count: None, // Could track this if needed
+                compressed_bytes: Some(metadata.compressed_bytes),
+            }))
+        }
+        Ok(None) => Ok(Json(BatchFlushResponse {
+            published: false,
+            reference: None,
+            message_count: None,
+            compressed_bytes: None,
+        })),
+        Err(e) => {
+            error!(error = %e, "Failed to flush batch");
+            Err(SequencerError::BatchFlushFailed(e.to_string()).into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,6 +659,7 @@ mod tests {
             inbox,
             publisher: None,
             attestation_verifier: None,
+            batcher: None,
         };
         create_router(state)
     }
@@ -628,6 +790,7 @@ mod tests {
             inbox: inbox.clone(),
             publisher: None,
             attestation_verifier: None,
+            batcher: None,
         };
         let app = create_router(state);
 
@@ -673,6 +836,7 @@ mod tests {
             inbox: inbox.clone(),
             publisher: Some(publisher.clone()),
             attestation_verifier: None,
+            batcher: None,
         };
         let app = create_router(state);
 
@@ -810,6 +974,7 @@ mod tests {
             inbox: inbox.clone(),
             publisher: Some(publisher.clone()),
             attestation_verifier: None,
+            batcher: None,
         };
         let app = create_router(state);
 
@@ -856,6 +1021,7 @@ mod tests {
             inbox,
             publisher: Some(publisher),
             attestation_verifier: None,
+            batcher: None,
         };
         let app = create_router(state);
 
@@ -932,6 +1098,7 @@ mod tests {
             inbox,
             publisher: Some(publisher),
             attestation_verifier: None,
+            batcher: None,
         };
         let app = create_router(state);
 
@@ -999,6 +1166,7 @@ mod tests {
             inbox: inbox.clone(),
             publisher: Some(publisher.clone()),
             attestation_verifier: None,
+            batcher: None,
         };
         let app = create_router(state);
 
@@ -1038,6 +1206,7 @@ mod tests {
             inbox: inbox.clone(),
             publisher: None,
             attestation_verifier: None,
+            batcher: None,
         };
         let app = create_router(state);
 

@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 
 use synddb_sequencer::{
     attestation::{AttestationConfig, AttestationVerifier},
+    batcher::{spawn_batcher, BatcherHandle},
     config::{PublisherType, SequencerConfig},
     http_api::{create_router, AppState},
     inbox::Inbox,
@@ -74,18 +75,8 @@ async fn main() -> Result<()> {
         PublisherType::Gcs => {
             #[cfg(feature = "gcs")]
             {
-                use synddb_sequencer::publish::gcs::{GcsConfig, GcsPublisher};
-                let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
-                })?;
-                let mut gcs_config = GcsConfig::new(bucket).with_prefix(&config.gcs_prefix);
-                if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
-                    gcs_config = gcs_config.with_emulator_host(emulator_host);
-                }
-                let gcs_pub = GcsPublisher::new(gcs_config, Arc::clone(&signer))
-                    .await
-                    .context("Failed to initialize GCS publisher")?;
-                (Some(Arc::new(gcs_pub) as Arc<dyn StoragePublisher>), None)
+                // GCS now uses CBOR batching via the Batcher, no legacy JSON publisher needed
+                (None, None)
             }
             #[cfg(not(feature = "gcs"))]
             {
@@ -96,7 +87,50 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Try to recover sequence from publisher
+    // Initialize CBOR batcher for GCS transport
+    let batcher: Option<BatcherHandle> = match config.publisher_type {
+        PublisherType::Gcs => {
+            #[cfg(feature = "gcs")]
+            {
+                use synddb_sequencer::publish::transport_gcs::{GcsTransport, GcsTransportConfig};
+
+                let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
+                })?;
+
+                let mut transport_config =
+                    GcsTransportConfig::new(bucket).with_prefix(&config.gcs_prefix);
+                if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
+                    transport_config = transport_config.with_emulator_host(emulator_host);
+                }
+
+                let transport = GcsTransport::new(transport_config)
+                    .await
+                    .context("Failed to initialize GCS transport")?;
+
+                let batch_config = config.batch_config();
+                info!(
+                    max_messages = batch_config.max_messages,
+                    max_bytes = batch_config.max_batch_bytes,
+                    flush_interval_ms = batch_config.flush_interval.as_millis(),
+                    "Initializing CBOR batcher with GCS transport"
+                );
+
+                Some(spawn_batcher(
+                    batch_config,
+                    Arc::new(transport),
+                    Arc::clone(&signer),
+                ))
+            }
+            #[cfg(not(feature = "gcs"))]
+            {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    // Try to recover sequence from publisher or batcher
     let start_sequence = match &publisher {
         Some(pub_) => match pub_.load_state().await {
             Ok(Some(seq)) => {
@@ -144,6 +178,7 @@ async fn main() -> Result<()> {
         inbox: inbox.clone(),
         publisher: publisher.clone(),
         attestation_verifier,
+        batcher: batcher.clone(),
     };
 
     // Create the HTTP router
@@ -164,7 +199,7 @@ async fn main() -> Result<()> {
     // Run server with graceful shutdown
     let shutdown_timeout = config.shutdown_timeout;
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(inbox, publisher, shutdown_timeout))
+        .with_graceful_shutdown(shutdown_signal(inbox, publisher, batcher, shutdown_timeout))
         .await
         .map_err(|e| {
             error!(error = %e, "Server error");
@@ -180,6 +215,7 @@ async fn main() -> Result<()> {
 async fn shutdown_signal(
     inbox: Arc<Inbox>,
     publisher: Option<Arc<dyn StoragePublisher>>,
+    batcher: Option<BatcherHandle>,
     timeout: std::time::Duration,
 ) {
     let ctrl_c = async {
@@ -208,7 +244,17 @@ async fn shutdown_signal(
         }
     }
 
-    // Save state before shutdown
+    // Flush batcher before shutdown
+    if let Some(batcher) = batcher {
+        info!("Flushing batcher before shutdown");
+        match tokio::time::timeout(timeout, batcher.shutdown()).await {
+            Ok(Ok(())) => info!("Batcher shutdown complete"),
+            Ok(Err(e)) => warn!(error = %e, "Batcher shutdown failed"),
+            Err(_) => warn!("Batcher shutdown timed out"),
+        }
+    }
+
+    // Save state before shutdown (for legacy publisher)
     if let Some(pub_) = publisher {
         let current_seq = inbox.current_sequence();
         if current_seq > 0 {

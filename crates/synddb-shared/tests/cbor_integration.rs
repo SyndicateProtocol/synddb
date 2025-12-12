@@ -1,11 +1,14 @@
 //! Integration tests for CBOR/COSE types with real signing
 
-use alloy::primitives::{keccak256, B256};
-use alloy::signers::local::PrivateKeySigner;
-use alloy::signers::SignerSync;
-use synddb_shared::types::cbor::batch::CborBatch;
-use synddb_shared::types::cbor::error::CborError;
-use synddb_shared::types::cbor::message::{CborMessageType, CborSignedMessage};
+use alloy::{
+    primitives::{keccak256, B256},
+    signers::{local::PrivateKeySigner, SignerSync},
+};
+use synddb_shared::types::cbor::{
+    batch::CborBatch,
+    error::CborError,
+    message::{CborMessageType, CborSignedMessage},
+};
 
 /// Test private key (well-known test key, do not use in production)
 const TEST_PRIVATE_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";

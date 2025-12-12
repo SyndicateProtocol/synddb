@@ -62,6 +62,15 @@ pub enum SequencerError {
 
     #[error("Failed to retrieve message: {0}")]
     MessageRetrievalFailed(String),
+
+    // ========================================================================
+    // Batch errors
+    // ========================================================================
+    #[error("No batcher configured - batching unavailable")]
+    NoBatcher,
+
+    #[error("Failed to flush batch: {0}")]
+    BatchFlushFailed(String),
 }
 
 /// Automatic conversion from `SequencerError` to HTTP response
@@ -90,12 +99,15 @@ impl From<SequencerError> for HttpError {
             SequencerError::MessageNotFound(_) => (StatusCode::NOT_FOUND, err.to_string()),
 
             // 501 Not Implemented
-            SequencerError::NoPublisher => (StatusCode::NOT_IMPLEMENTED, err.to_string()),
+            SequencerError::NoPublisher | SequencerError::NoBatcher => {
+                (StatusCode::NOT_IMPLEMENTED, err.to_string())
+            }
 
             // 500 Internal Server Error
             SequencerError::Signing(_)
             | SequencerError::Serialization(_)
-            | SequencerError::MessageRetrievalFailed(_) => {
+            | SequencerError::MessageRetrievalFailed(_)
+            | SequencerError::BatchFlushFailed(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
             }
         };

@@ -8,6 +8,44 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, time::Duration};
 use strum::{EnumIter, IntoEnumIterator};
 
+/// Configuration for message batching
+///
+/// Controls how messages are accumulated before publishing to storage.
+/// A batch is flushed when any threshold is reached.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchConfig {
+    /// Maximum number of messages per batch before flushing
+    ///
+    /// Default: 50 messages
+    pub max_messages: usize,
+
+    /// Maximum total size of messages in a batch (in bytes) before flushing
+    ///
+    /// This is the uncompressed payload size. The actual stored size will
+    /// be smaller due to CBOR encoding and zstd compression.
+    ///
+    /// Default: 1MB (1,048,576 bytes)
+    pub max_batch_bytes: usize,
+
+    /// Maximum time to wait before flushing a partial batch
+    ///
+    /// This ensures messages are published even during low-traffic periods.
+    ///
+    /// Default: 5 seconds
+    #[serde(with = "humantime_serde")]
+    pub flush_interval: Duration,
+}
+
+impl Default for BatchConfig {
+    fn default() -> Self {
+        Self {
+            max_messages: 50,
+            max_batch_bytes: 1_048_576, // 1MB
+            flush_interval: Duration::from_secs(5),
+        }
+    }
+}
+
 /// Available publisher types for message persistence
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter,
@@ -114,9 +152,34 @@ pub struct SequencerConfig {
     #[arg(long, env = "SHUTDOWN_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
+
+    // ========================================================================
+    // Batching configuration (for CBOR file transport)
+    // ========================================================================
+    /// Maximum messages per batch before flushing to storage
+    #[arg(long, env = "BATCH_MAX_MESSAGES", default_value = "50")]
+    pub batch_max_messages: usize,
+
+    /// Maximum batch size in bytes before flushing (uncompressed)
+    #[arg(long, env = "BATCH_MAX_BYTES", default_value = "1048576")]
+    pub batch_max_bytes: usize,
+
+    /// Maximum time to wait before flushing a partial batch
+    #[arg(long, env = "BATCH_FLUSH_INTERVAL", default_value = "5s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub batch_flush_interval: Duration,
 }
 
 impl SequencerConfig {
+    /// Get batch configuration from sequencer config
+    pub const fn batch_config(&self) -> BatchConfig {
+        BatchConfig {
+            max_messages: self.batch_max_messages,
+            max_batch_bytes: self.batch_max_bytes,
+            flush_interval: self.batch_flush_interval,
+        }
+    }
+
     /// Create config with defaults for testing
     ///
     /// Uses `parse_from` with a dummy signing key to get clap defaults,
