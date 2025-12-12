@@ -308,13 +308,18 @@ pub struct SignedBatch {
     pub messages: Vec<SignedMessage>,
     /// Signature over `keccak256(start_sequence || end_sequence || messages_hash)`.
     ///
-    /// The `messages_hash` is `keccak256(compact_json(messages))` where compact JSON
-    /// has no whitespace. 65 bytes encoded as hex with 0x prefix.
+    /// For legacy JSON format: 65 bytes (r || s || v), `messages_hash` is `keccak256(compact_json(messages))`
+    /// For CBOR format: 64 bytes (r || s), `messages_hash` is the SHA-256 content hash stored in `cbor_content_hash`
     pub batch_signature: String,
     /// Ethereum address of the batch signer (checksummed, with 0x prefix)
     pub signer: String,
     /// Unix timestamp (seconds) when the batch was created
     pub created_at: u64,
+    /// SHA-256 content hash from CBOR format (set when converted from `CborBatch`).
+    /// When present, batch signature verification uses CBOR format (64-byte signature over content hash).
+    /// When None, legacy JSON format is used (65-byte signature over JSON messages hash).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cbor_content_hash: Option<[u8; 32]>,
 }
 
 impl SignedBatch {
@@ -347,7 +352,71 @@ impl SignedBatch {
     ///
     /// This does NOT verify individual message signatures - call
     /// `verify_all_signatures()` for complete verification.
+    ///
+    /// Supports both signature formats:
+    /// - **CBOR format** (64 bytes): When `cbor_content_hash` is set, uses SHA-256 content hash
+    /// - **Legacy JSON format** (65 bytes): When `cbor_content_hash` is None, uses keccak256 of JSON messages
     pub fn verify_batch_signature(&self) -> Result<(), VerificationError> {
+        // Parse the claimed signer
+        let claimed_signer: Address = self
+            .signer
+            .parse()
+            .map_err(|e| VerificationError::InvalidAddress(format!("{e}")))?;
+
+        // TODO(cleanup): Remove legacy JSON format detection once all clients use CBOR.
+        // This auto-detection can be simplified to only support CBOR format.
+        self.cbor_content_hash.as_ref().map_or_else(
+            || self.verify_legacy_batch_signature(&claimed_signer),
+            |content_hash| self.verify_cbor_batch_signature(content_hash, &claimed_signer),
+        )
+    }
+
+    /// Verify batch signature using CBOR format (64-byte signature over content hash)
+    fn verify_cbor_batch_signature(
+        &self,
+        content_hash: &[u8; 32],
+        claimed_signer: &Address,
+    ) -> Result<(), VerificationError> {
+        // Compute the signing payload: keccak256(start || end || content_hash)
+        // This matches CborBatch::compute_signing_payload()
+        let mut data = Vec::with_capacity(8 + 8 + 32);
+        data.extend_from_slice(&self.start_sequence.to_be_bytes());
+        data.extend_from_slice(&self.end_sequence.to_be_bytes());
+        data.extend_from_slice(content_hash);
+        let signing_payload = keccak256(&data);
+
+        // The signature is over keccak256(signing_payload), matching CborBatch::verify_batch_signature
+        let message_hash = keccak256(signing_payload);
+
+        // Parse 64-byte signature
+        let sig_hex = self
+            .batch_signature
+            .strip_prefix("0x")
+            .unwrap_or(&self.batch_signature);
+        let sig_bytes = hex::decode(sig_hex)
+            .map_err(|e| VerificationError::InvalidSignature(format!("Invalid hex: {e}")))?;
+
+        if sig_bytes.len() != 64 {
+            return Err(VerificationError::InvalidSignature(format!(
+                "CBOR batch signature must be 64 bytes, got {}",
+                sig_bytes.len()
+            )));
+        }
+
+        let signature_array: [u8; 64] = sig_bytes
+            .try_into()
+            .map_err(|_| VerificationError::InvalidSignature("Invalid signature length".into()))?;
+
+        verify_secp256k1_without_recovery_id(&message_hash, &signature_array, claimed_signer)
+    }
+
+    /// Verify batch signature using legacy JSON format (65-byte signature over JSON messages hash)
+    ///
+    /// TODO(cleanup): Remove this function once JSON format is deprecated
+    fn verify_legacy_batch_signature(
+        &self,
+        claimed_signer: &Address,
+    ) -> Result<(), VerificationError> {
         // Compute messages hash from the actual messages
         let messages_hash = Self::compute_messages_hash(&self.messages)?;
 
@@ -355,17 +424,11 @@ impl SignedBatch {
         let payload =
             Self::compute_signing_payload(self.start_sequence, self.end_sequence, messages_hash);
 
-        // Parse and verify the signature
+        // Parse and verify the signature (65 bytes with recovery ID)
         let recovered_address = recover_signer(&self.batch_signature, payload)?;
 
-        // Parse the claimed signer
-        let claimed_signer: Address = self
-            .signer
-            .parse()
-            .map_err(|e| VerificationError::InvalidAddress(format!("{e}")))?;
-
         // Compare addresses
-        if recovered_address != claimed_signer {
+        if recovered_address != *claimed_signer {
             return Err(VerificationError::SignerMismatch {
                 expected: format!("{claimed_signer:?}"),
                 actual: format!("{recovered_address:?}"),
@@ -655,6 +718,7 @@ mod tests {
             batch_signature: "0xbatchsig".to_string(),
             signer: "0x123".to_string(),
             created_at: 1700000002,
+            cbor_content_hash: None,
         };
 
         let json = serde_json::to_string(&batch).unwrap();
@@ -665,6 +729,26 @@ mod tests {
         assert_eq!(decoded.messages.len(), 2);
         assert_eq!(decoded.messages[0].sequence, 1);
         assert_eq!(decoded.messages[1].sequence, 2);
+    }
+
+    #[test]
+    fn test_batch_json_roundtrip_with_cbor_content_hash() {
+        let content_hash = [0x42u8; 32];
+        let batch = SignedBatch {
+            start_sequence: 1,
+            end_sequence: 2,
+            messages: vec![],
+            batch_signature: "0xbatchsig".to_string(),
+            signer: "0x123".to_string(),
+            created_at: 1700000002,
+            cbor_content_hash: Some(content_hash),
+        };
+
+        let json = serde_json::to_string(&batch).unwrap();
+        println!("JSON: {}", json);
+
+        let decoded: SignedBatch = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.cbor_content_hash, Some(content_hash));
     }
 
     // ========================================================================
@@ -771,6 +855,7 @@ mod tests {
             batch_signature,
             signer: format!("{:?}", signer.address()),
             created_at: 1700000000,
+            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
         };
 
         // Both batch and message signatures should verify
@@ -796,6 +881,7 @@ mod tests {
             batch_signature,
             signer: format!("{:?}", signer.address()),
             created_at: 1700000000,
+            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
         };
 
         // Tamper with a message payload

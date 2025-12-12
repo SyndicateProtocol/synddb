@@ -2712,7 +2712,6 @@ dependencies = [
  "once_cell",
  "serdect",
  "sha2",
- "signature",
 ]
 
 [[package]]
@@ -4416,7 +4415,6 @@ dependencies = [
  "hex",
  "humantime",
  "humantime-serde",
- "k256",
  "reqwest",
  "rusqlite",
  "serde",

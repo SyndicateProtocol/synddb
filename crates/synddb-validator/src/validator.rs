@@ -1004,6 +1004,7 @@ mod tests {
             batch_signature: format!("0x{}", hex::encode(sig_bytes)),
             signer: format!("{:?}", signer.address()),
             created_at: 1700000000,
+            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
         }
     }
 
@@ -1198,6 +1199,7 @@ mod tests {
             batch_signature: "0x00".to_string(),
             signer: "0x00".to_string(),
             created_at: 1700000000,
+            cbor_content_hash: None,
         };
         let batch2 = SignedBatch {
             start_sequence: 50,
@@ -1206,6 +1208,7 @@ mod tests {
             batch_signature: "0x00".to_string(),
             signer: "0x00".to_string(),
             created_at: 1700000001,
+            cbor_content_hash: None,
         };
         fetcher.add_batch(batch1);
         fetcher.add_batch(batch2);

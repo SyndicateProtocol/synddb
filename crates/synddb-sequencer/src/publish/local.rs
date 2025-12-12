@@ -250,6 +250,7 @@ impl StoragePublisher for LocalPublisher {
             batch_signature,
             signer: format!("{:?}", self.signer.address()),
             created_at: message.timestamp,
+            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
         };
 
         self.publish_batch(&batch).await
@@ -554,6 +555,7 @@ mod tests {
             batch_signature: batch_sig.to_hex_prefixed(),
             signer: format!("{:?}", signer.address()),
             created_at: 1700000002,
+            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
         };
 
         // Publish batch
@@ -708,6 +710,7 @@ mod tests {
             batch_signature: batch_sig.to_hex_prefixed(),
             signer: format!("{:?}", signer.address()),
             created_at: 1700000002,
+            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
         };
 
         publisher.publish_batch(&batch).await;

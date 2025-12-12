@@ -298,6 +298,7 @@ mod tests {
             batch_signature: format!("0x{:0130x}", start),
             signer: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".to_string(),
             created_at: 1700000000 + start,
+            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
         }
     }
 

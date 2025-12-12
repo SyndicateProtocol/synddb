@@ -137,6 +137,7 @@ impl CborBatch {
             batch_signature,
             signer,
             created_at: self.created_at,
+            cbor_content_hash: Some(self.content_hash),
         })
     }
 
@@ -162,6 +163,7 @@ impl CborBatch {
             batch_signature,
             signer,
             created_at: self.created_at,
+            cbor_content_hash: Some(self.content_hash),
         })
     }
 }

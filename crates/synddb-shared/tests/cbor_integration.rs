@@ -4,10 +4,13 @@ use alloy::{
     primitives::{keccak256, B256},
     signers::{local::PrivateKeySigner, SignerSync},
 };
-use synddb_shared::types::cbor::{
-    batch::CborBatch,
-    error::CborError,
-    message::{CborMessageType, CborSignedMessage},
+use synddb_shared::types::{
+    cbor::{
+        batch::CborBatch,
+        error::CborError,
+        message::{CborMessageType, CborSignedMessage},
+    },
+    message::SignedBatch,
 };
 
 /// Test private key (well-known test key, do not use in production)
@@ -359,4 +362,88 @@ fn test_batch_size_tracking() {
     let total_bytes = batch.total_message_bytes();
     println!("Total message bytes: {}", total_bytes);
     assert!(total_bytes > 10 * 1000); // At least 10KB of payloads
+}
+
+/// Test that `CborBatch` -> `SignedBatch` conversion preserves verification capability
+#[test]
+fn test_cbor_to_signed_batch_verification() {
+    let signer = test_signer();
+    let addr = signer_address(&signer);
+
+    // Create a CBOR message
+    let msg = CborSignedMessage::new(
+        1,
+        1700000000,
+        CborMessageType::Changeset,
+        b"test payload".to_vec(),
+        addr,
+        |data| sign_sync(&signer, data),
+    )
+    .unwrap();
+
+    // Create a CBOR batch
+    let cbor_batch =
+        CborBatch::new(vec![msg], 1700000000, addr, |data| sign_sync(&signer, data)).unwrap();
+
+    // Verify CBOR batch signature
+    cbor_batch.verify_batch_signature().unwrap();
+
+    // Convert to SignedBatch (JSON format)
+    let signed_batch: SignedBatch = cbor_batch.to_signed_batch().unwrap();
+
+    // Verify cbor_content_hash is set
+    assert!(
+        signed_batch.cbor_content_hash.is_some(),
+        "cbor_content_hash should be set after conversion"
+    );
+    assert_eq!(
+        signed_batch.cbor_content_hash.unwrap(),
+        cbor_batch.content_hash
+    );
+
+    // The SignedBatch should now be verifiable
+    signed_batch.verify_batch_signature().unwrap();
+}
+
+/// Test that `SignedBatch` converted from CBOR survives JSON serialization
+#[test]
+fn test_cbor_to_signed_batch_json_roundtrip_verification() {
+    let signer = test_signer();
+    let addr = signer_address(&signer);
+
+    // Create a CBOR batch
+    let msg = CborSignedMessage::new(
+        42,
+        1700000000,
+        CborMessageType::Changeset,
+        b"test payload".to_vec(),
+        addr,
+        |data| sign_sync(&signer, data),
+    )
+    .unwrap();
+
+    let cbor_batch =
+        CborBatch::new(vec![msg], 1700000000, addr, |data| sign_sync(&signer, data)).unwrap();
+
+    // Convert to SignedBatch
+    let signed_batch = cbor_batch.to_signed_batch().unwrap();
+
+    // Serialize to JSON and back (simulating HTTP transport)
+    let json = serde_json::to_string(&signed_batch).unwrap();
+    println!("SignedBatch JSON length: {} bytes", json.len());
+
+    let deserialized: SignedBatch = serde_json::from_str(&json).unwrap();
+
+    // Verify cbor_content_hash survived serialization
+    assert!(
+        deserialized.cbor_content_hash.is_some(),
+        "cbor_content_hash should survive JSON roundtrip"
+    );
+    assert_eq!(
+        deserialized.cbor_content_hash,
+        signed_batch.cbor_content_hash
+    );
+
+    // The deserialized batch should still be verifiable
+    deserialized.verify_batch_signature().unwrap();
 }

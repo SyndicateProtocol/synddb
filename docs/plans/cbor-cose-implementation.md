@@ -783,7 +783,9 @@ impl TestRunner {
 
 ## Phase 6: Cleanup & Documentation
 
-### 6.1 Remove old JSON types
+### 6.1 Remove old JSON types (TBD - deferred)
+
+> **Note**: This cleanup step is deferred until after production deployment. The JSON types (`SignedMessage`, `SignedBatch`) remain in the codebase to support the legacy HTTP API and gradual migration. They can be removed once all clients have migrated to CBOR format.
 
 - Remove `SignedMessage` and `SignedBatch` from synddb-shared (or deprecate)
 - Update all imports

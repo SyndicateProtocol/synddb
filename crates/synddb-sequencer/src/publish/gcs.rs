@@ -314,6 +314,7 @@ impl StoragePublisher for GcsPublisher {
             batch_signature,
             signer: format!("{:?}", self.signer.address()),
             created_at: message.timestamp,
+            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
         };
         self.publish_batch(&batch).await
     }
