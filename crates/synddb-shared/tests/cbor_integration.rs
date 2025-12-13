@@ -391,14 +391,10 @@ fn test_cbor_to_signed_batch_verification() {
     // Convert to SignedBatch (JSON format)
     let signed_batch: SignedBatch = cbor_batch.to_signed_batch().unwrap();
 
-    // Verify cbor_content_hash is set
-    assert!(
-        signed_batch.cbor_content_hash.is_some(),
-        "cbor_content_hash should be set after conversion"
-    );
+    // Verify content_hash is set
     assert_eq!(
-        signed_batch.cbor_content_hash.unwrap(),
-        cbor_batch.content_hash
+        signed_batch.content_hash, cbor_batch.content_hash,
+        "content_hash should match after conversion"
     );
 
     // The SignedBatch should now be verifiable
@@ -434,14 +430,10 @@ fn test_cbor_to_signed_batch_json_roundtrip_verification() {
 
     let deserialized: SignedBatch = serde_json::from_str(&json).unwrap();
 
-    // Verify cbor_content_hash survived serialization
-    assert!(
-        deserialized.cbor_content_hash.is_some(),
-        "cbor_content_hash should survive JSON roundtrip"
-    );
+    // Verify content_hash survived serialization
     assert_eq!(
-        deserialized.cbor_content_hash,
-        signed_batch.cbor_content_hash
+        deserialized.content_hash, signed_batch.content_hash,
+        "content_hash should survive JSON roundtrip"
     );
 
     // The deserialized batch should still be verifiable

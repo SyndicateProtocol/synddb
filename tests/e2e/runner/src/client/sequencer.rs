@@ -1,9 +1,11 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use base64::Engine;
 use serde::{Deserialize, Serialize};
-use synddb_shared::types::message::{SignedBatch, SignedMessage};
+use synddb_shared::types::{
+    message::{SignedBatch, SignedMessage},
+    payloads::{ChangesetBatchRequest, ChangesetData, SnapshotData, SnapshotRequest},
+};
 use url::Url;
 
 /// Sequencer status response
@@ -195,7 +197,7 @@ impl SequencerClient {
         bail!("Sequencer did not become healthy within {:?}", timeout)
     }
 
-    /// Send a changeset batch to the sequencer
+    /// Send a changeset batch to the sequencer (CBOR format)
     pub(crate) async fn send_changeset(
         &self,
         batch_id: &str,
@@ -209,20 +211,22 @@ impl SequencerClient {
             .unwrap()
             .as_secs();
 
-        let body = serde_json::json!({
-            "batch_id": batch_id,
-            "changesets": [
-                {
-                    "data": base64::engine::general_purpose::STANDARD.encode(changeset_data),
-                    "sequence": client_sequence,
-                    "timestamp": timestamp
-                }
-            ]
-        });
+        let request = ChangesetBatchRequest {
+            batch_id: batch_id.to_string(),
+            changesets: vec![ChangesetData {
+                data: changeset_data.to_vec(),
+                sequence: client_sequence,
+                timestamp,
+            }],
+            attestation_token: None,
+        };
+
+        let cbor_bytes = request.to_cbor().context("Failed to serialize to CBOR")?;
 
         self.client
             .post(url)
-            .json(&body)
+            .header("Content-Type", "application/cbor")
+            .body(cbor_bytes)
             .send()
             .await?
             .error_for_status()?
@@ -231,7 +235,7 @@ impl SequencerClient {
             .context("Failed to send changeset")
     }
 
-    /// Send a snapshot to the sequencer
+    /// Send a snapshot to the sequencer (CBOR format)
     pub(crate) async fn send_snapshot(
         &self,
         message_id: &str,
@@ -245,18 +249,22 @@ impl SequencerClient {
             .unwrap()
             .as_secs();
 
-        let body = serde_json::json!({
-            "message_id": message_id,
-            "snapshot": {
-                "data": base64::engine::general_purpose::STANDARD.encode(data),
-                "timestamp": timestamp,
-                "sequence": client_sequence
-            }
-        });
+        let request = SnapshotRequest {
+            message_id: message_id.to_string(),
+            snapshot: SnapshotData {
+                data: data.to_vec(),
+                timestamp,
+                sequence: client_sequence,
+            },
+            attestation_token: None,
+        };
+
+        let cbor_bytes = request.to_cbor().context("Failed to serialize to CBOR")?;
 
         self.client
             .post(url)
-            .json(&body)
+            .header("Content-Type", "application/cbor")
+            .body(cbor_bytes)
             .send()
             .await?
             .error_for_status()?

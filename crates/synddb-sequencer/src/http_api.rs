@@ -19,6 +19,7 @@ use tracing::{error, info, warn};
 use crate::{
     attestation::AttestationVerifier,
     batcher::{BatchStats, BatcherHandle, RawMessage},
+    cbor_extractor::Cbor,
     http_errors::{HttpError, SequencerError},
     inbox::Inbox,
     publish::traits::StoragePublisher,
@@ -27,7 +28,6 @@ use synddb_shared::types::{
     cbor::message::CborMessageType,
     message::{MessageType, SequenceReceipt, SignedMessage},
     payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest},
-    serde_helpers::base64_serde,
 };
 
 /// Shared application state
@@ -204,8 +204,7 @@ pub struct MessageResponse {
     pub timestamp: u64,
     /// Message type
     pub message_type: String,
-    /// Original payload (base64 encoded)
-    #[serde(with = "base64_serde")]
+    /// Original payload (raw bytes)
     pub payload: Vec<u8>,
     /// Hash of the message
     pub message_hash: String,
@@ -237,10 +236,10 @@ impl From<SignedMessage> for MessageResponse {
 // Handlers
 // ============================================================================
 
-/// Receive and sequence a changeset batch
+/// Receive and sequence a changeset batch (CBOR format)
 async fn receive_changesets(
     State(state): State<AppState>,
-    Json(request): Json<ChangesetBatchRequest>,
+    Cbor(request): Cbor<ChangesetBatchRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
     info!(
         batch_id = %request.batch_id,
@@ -268,10 +267,10 @@ async fn receive_changesets(
         }
     }
 
-    // Serialize the batch as the payload
-    let payload = serde_json::to_vec(&request).map_err(|e| {
+    // Serialize the batch as CBOR payload
+    let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize changeset batch: {}", e);
-        SequencerError::from(e)
+        SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
     // Sequence and sign the message
@@ -321,10 +320,10 @@ async fn receive_changesets(
     Ok((StatusCode::CREATED, Json(SequenceResponse::from(receipt))))
 }
 
-/// Receive and sequence a withdrawal request
+/// Receive and sequence a withdrawal request (CBOR format)
 async fn receive_withdrawal(
     State(state): State<AppState>,
-    Json(request): Json<WithdrawalRequest>,
+    Cbor(request): Cbor<WithdrawalRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
     info!(
         request_id = %request.request_id,
@@ -356,10 +355,10 @@ async fn receive_withdrawal(
         return Err(SequencerError::EmptyRequestId.into());
     }
 
-    // Serialize the request as the payload
-    let payload = serde_json::to_vec(&request).map_err(|e| {
+    // Serialize the request as CBOR payload
+    let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize withdrawal request: {}", e);
-        SequencerError::from(e)
+        SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
     // Sequence and sign the message
@@ -409,10 +408,10 @@ async fn receive_withdrawal(
     Ok((StatusCode::CREATED, Json(SequenceResponse::from(receipt))))
 }
 
-/// Receive and sequence a database snapshot
+/// Receive and sequence a database snapshot (CBOR format)
 async fn receive_snapshot(
     State(state): State<AppState>,
-    Json(request): Json<SnapshotRequest>,
+    Cbor(request): Cbor<SnapshotRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
     info!(
         message_id = %request.message_id,
@@ -441,10 +440,10 @@ async fn receive_snapshot(
         }
     }
 
-    // Serialize the snapshot request as the payload
-    let payload = serde_json::to_vec(&request).map_err(|e| {
+    // Serialize the snapshot request as CBOR payload
+    let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize snapshot: {}", e);
-        SequencerError::from(e)
+        SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
     // Sequence and sign the message
@@ -645,8 +644,7 @@ mod tests {
         http::{Request, StatusCode},
         response::Response,
     };
-    use base64::Engine;
-    use serde_json::Value;
+    use synddb_shared::types::payloads::{ChangesetData, SnapshotData};
     use tower::ServiceExt;
 
     const TEST_PRIVATE_KEY: &str =
@@ -662,6 +660,22 @@ mod tests {
             batcher: None,
         };
         create_router(state)
+    }
+
+    /// Send a CBOR-serialized request to the server
+    async fn send_cbor<T: Serialize>(app: Router, data: &T, uri: &str) -> Response {
+        let mut buf = Vec::new();
+        ciborium::into_writer(data, &mut buf).unwrap();
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("Content-Type", "application/cbor")
+                .body(Body::from(buf))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -710,19 +724,17 @@ mod tests {
     async fn test_receive_changesets() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "batch_id": "test-batch-1",
-            "changesets": [
-                {
-                    "data": "dGVzdCBkYXRh",  // "test data" in base64
-                    "sequence": 0,
-                    "timestamp": 1704067200  // Unix timestamp
-                }
-            ]
-        });
+        let request = ChangesetBatchRequest {
+            batch_id: "test-batch-1".to_string(),
+            changesets: vec![ChangesetData {
+                data: b"test data".to_vec(),
+                sequence: 0,
+                timestamp: 1704067200,
+            }],
+            attestation_token: None,
+        };
 
-        let uri = "/changesets";
-        let response = server_response(app, &request_body, uri).await;
+        let response = send_cbor(app, &request, "/changesets").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -736,33 +748,18 @@ mod tests {
         assert!(receipt.message_hash.starts_with("0x"));
     }
 
-    async fn server_response(app: Router, request_body: &Value, uri: &str) -> Response {
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(uri)
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        response
-    }
-
     #[tokio::test]
     async fn test_receive_withdrawal() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-1",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "1000000000000000000",
-            "data": ""
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-1".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "1000000000000000000".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
     }
@@ -771,13 +768,14 @@ mod tests {
     async fn test_withdrawal_invalid_address() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-1",
-            "recipient": "invalid-address",
-            "amount": "1000000000000000000"
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-1".to_string(),
+            recipient: "invalid-address".to_string(),
+            amount: "1000000000000000000".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -795,12 +793,13 @@ mod tests {
         let app = create_router(state);
 
         // First request
-        let request_body = serde_json::json!({
-            "batch_id": "batch-1",
-            "changesets": []
-        });
+        let request1 = ChangesetBatchRequest {
+            batch_id: "batch-1".to_string(),
+            changesets: vec![],
+            attestation_token: None,
+        };
 
-        let response = server_response(app.clone(), &request_body, "/changesets").await;
+        let response = send_cbor(app.clone(), &request1, "/changesets").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -809,12 +808,13 @@ mod tests {
         assert_eq!(receipt1.sequence, 0);
 
         // Second request
-        let request_body = serde_json::json!({
-            "batch_id": "batch-2",
-            "changesets": []
-        });
+        let request2 = ChangesetBatchRequest {
+            batch_id: "batch-2".to_string(),
+            changesets: vec![],
+            attestation_token: None,
+        };
 
-        let response = server_response(app, &request_body, "/changesets").await;
+        let response = send_cbor(app, &request2, "/changesets").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -840,12 +840,13 @@ mod tests {
         };
         let app = create_router(state);
 
-        let request_body = serde_json::json!({
-            "batch_id": "test-with-publisher",
-            "changesets": []
-        });
+        let request = ChangesetBatchRequest {
+            batch_id: "test-with-publisher".to_string(),
+            changesets: vec![],
+            attestation_token: None,
+        };
 
-        let response = server_response(app, &request_body, "/changesets").await;
+        let response = send_cbor(app, &request, "/changesets").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -859,14 +860,14 @@ mod tests {
     async fn test_withdrawal_with_valid_data() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-valid",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "1000000000000000000",
-            "data": "SGVsbG8gV29ybGQ="  // "Hello World" in base64
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-valid".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "1000000000000000000".to_string(),
+            data: b"Hello World".to_vec(),
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -884,52 +885,51 @@ mod tests {
     async fn test_withdrawal_invalid_hex_in_address() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-1",
-            "recipient": "0xGGGG35Cc6634C0532925a3b844Bc454e4438f44e",  // Invalid hex
-            "amount": "1000000000000000000"
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-1".to_string(),
+            recipient: "0xGGGG35Cc6634C0532925a3b844Bc454e4438f44e".to_string(), // Invalid hex
+            amount: "1000000000000000000".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn test_withdrawal_invalid_amount_format() {
-        let app = test_app();
-
         // Test empty amount
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-1",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": ""
-        });
+        let request1 = WithdrawalRequest {
+            request_id: "withdrawal-1".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: String::new(),
+            data: vec![],
+        };
 
-        let response = server_response(app.clone(), &request_body, "/withdrawals").await;
-
+        let response = send_cbor(test_app(), &request1, "/withdrawals").await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // Test non-numeric amount
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-2",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "abc123"
-        });
+        let request2 = WithdrawalRequest {
+            request_id: "withdrawal-2".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "abc123".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app.clone(), &request_body, "/withdrawals").await;
-
+        let response = send_cbor(test_app(), &request2, "/withdrawals").await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // Test leading zeros
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-3",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "0123"
-        });
+        let request3 = WithdrawalRequest {
+            request_id: "withdrawal-3".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "0123".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
-
+        let response = send_cbor(test_app(), &request3, "/withdrawals").await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -937,13 +937,14 @@ mod tests {
     async fn test_withdrawal_empty_request_id() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "1000"
-        });
+        let request = WithdrawalRequest {
+            request_id: String::new(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "1000".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -953,13 +954,14 @@ mod tests {
         let app = test_app();
 
         // "0" should be valid (single zero is allowed)
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-zero",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "0"
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-zero".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "0".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
     }
@@ -979,12 +981,13 @@ mod tests {
         let app = create_router(state);
 
         // First, create a message
-        let request_body = serde_json::json!({
-            "batch_id": "test-get-message",
-            "changesets": []
-        });
+        let request = ChangesetBatchRequest {
+            batch_id: "test-get-message".to_string(),
+            changesets: vec![],
+            attestation_token: None,
+        };
 
-        let response = server_response(app.clone(), &request_body, "/changesets").await;
+        let response = send_cbor(app.clone(), &request, "/changesets").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -1130,19 +1133,17 @@ mod tests {
     async fn test_receive_snapshot() {
         let app = test_app();
 
-        // Create a minimal SQLite database as snapshot data
-        let snapshot_data = b"SQLite format 3\x00"; // Minimal SQLite header
+        let request = SnapshotRequest {
+            message_id: "snapshot-test-1".to_string(),
+            snapshot: SnapshotData {
+                data: b"SQLite format 3\x00".to_vec(),
+                timestamp: 1704067200,
+                sequence: 100,
+            },
+            attestation_token: None,
+        };
 
-        let request_body = serde_json::json!({
-            "message_id": "snapshot-test-1",
-            "snapshot": {
-                "data": base64::engine::general_purpose::STANDARD.encode(snapshot_data),
-                "timestamp": 1704067200,
-                "sequence": 100
-            }
-        });
-
-        let response = server_response(app, &request_body, "/snapshots").await;
+        let response = send_cbor(app, &request, "/snapshots").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -1170,18 +1171,17 @@ mod tests {
         };
         let app = create_router(state);
 
-        let snapshot_data = b"SQLite format 3\x00";
+        let request = SnapshotRequest {
+            message_id: "snapshot-with-publisher".to_string(),
+            snapshot: SnapshotData {
+                data: b"SQLite format 3\x00".to_vec(),
+                timestamp: 1704067200,
+                sequence: 50,
+            },
+            attestation_token: None,
+        };
 
-        let request_body = serde_json::json!({
-            "message_id": "snapshot-with-publisher",
-            "snapshot": {
-                "data": base64::engine::general_purpose::STANDARD.encode(snapshot_data),
-                "timestamp": 1704067200,
-                "sequence": 50
-            }
-        });
-
-        let response = server_response(app, &request_body, "/snapshots").await;
+        let response = send_cbor(app, &request, "/snapshots").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -1191,8 +1191,7 @@ mod tests {
         let msg = published.unwrap();
         assert_eq!(msg.sequence, 0);
 
-        // Payload is now compressed, so we can't directly deserialize it
-        // Just verify it exists and is non-empty
+        // Payload is now CBOR, verify it exists and is non-empty
         assert!(!msg.payload.is_empty());
         assert!(msg.message_hash.starts_with("0x"));
         assert!(msg.signature.starts_with("0x"));
@@ -1211,16 +1210,17 @@ mod tests {
         let app = create_router(state);
 
         // Send a snapshot with client sequence 100
-        let request_body = serde_json::json!({
-            "message_id": "snap-1",
-            "snapshot": {
-                "data": base64::engine::general_purpose::STANDARD.encode(b"data1"),
-                "timestamp": 1704067200,
-                "sequence": 100
-            }
-        });
+        let request1 = SnapshotRequest {
+            message_id: "snap-1".to_string(),
+            snapshot: SnapshotData {
+                data: b"data1".to_vec(),
+                timestamp: 1704067200,
+                sequence: 100,
+            },
+            attestation_token: None,
+        };
 
-        let response = server_response(app.clone(), &request_body, "/snapshots").await;
+        let response = send_cbor(app.clone(), &request1, "/snapshots").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -1228,16 +1228,17 @@ mod tests {
         let receipt1: SequenceResponse = serde_json::from_slice(&body).unwrap();
 
         // Send another snapshot with client sequence 200
-        let request_body = serde_json::json!({
-            "message_id": "snap-2",
-            "snapshot": {
-                "data": base64::engine::general_purpose::STANDARD.encode(b"data2"),
-                "timestamp": 1704067300,
-                "sequence": 200
-            }
-        });
+        let request2 = SnapshotRequest {
+            message_id: "snap-2".to_string(),
+            snapshot: SnapshotData {
+                data: b"data2".to_vec(),
+                timestamp: 1704067300,
+                sequence: 200,
+            },
+            attestation_token: None,
+        };
 
-        let response = server_response(app, &request_body, "/snapshots").await;
+        let response = send_cbor(app, &request2, "/snapshots").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await

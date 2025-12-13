@@ -220,7 +220,7 @@ impl StoragePublisher for LocalPublisher {
         // Wrap single message in a batch with proper batch signature
         let messages = vec![message.clone()];
 
-        // Serialize messages for hashing
+        // Serialize messages for content hash (using SHA-256 for CBOR format)
         let messages_json = match serde_json::to_vec(&messages) {
             Ok(json) => json,
             Err(e) => {
@@ -229,11 +229,11 @@ impl StoragePublisher for LocalPublisher {
             }
         };
 
-        // Compute messages hash and sign the batch
-        let messages_hash = MessageSigner::compute_messages_hash(&messages_json);
+        // Compute content hash and sign with CBOR format (64-byte signature)
+        let content_hash = MessageSigner::compute_content_hash(&messages_json);
         let batch_signature = match self
             .signer
-            .sign_batch(message.sequence, message.sequence, messages_hash)
+            .sign_batch_cbor(message.sequence, message.sequence, &content_hash)
             .await
         {
             Ok(sig) => sig.to_hex_prefixed(),
@@ -250,7 +250,7 @@ impl StoragePublisher for LocalPublisher {
             batch_signature,
             signer: format!("{:?}", self.signer.address()),
             created_at: message.timestamp,
-            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
+            content_hash,
         };
 
         self.publish_batch(&batch).await
@@ -469,8 +469,14 @@ async fn get_latest_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::keccak256;
-    use synddb_shared::types::message::MessageType;
+    use alloy::{
+        primitives::{keccak256, B256},
+        signers::{local::PrivateKeySigner, SignerSync},
+    };
+    use synddb_shared::types::cbor::{
+        error::CborError,
+        message::{CborMessageType, CborSignedMessage},
+    };
 
     const TEST_PRIVATE_KEY: &str =
         "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -479,27 +485,79 @@ mod tests {
         Arc::new(MessageSigner::new(TEST_PRIVATE_KEY).unwrap())
     }
 
-    /// Create a properly signed message for testing
-    async fn create_signed_message(
-        signer: &MessageSigner,
-        sequence: u64,
-        timestamp: u64,
-    ) -> SignedMessage {
-        let payload = b"test payload";
-        let message_hash = keccak256(payload);
-        let signing_payload =
-            SignedMessage::compute_signing_payload(sequence, timestamp, message_hash);
-        let signature = signer.sign(signing_payload).await.unwrap();
+    fn private_signer() -> PrivateKeySigner {
+        TEST_PRIVATE_KEY.parse().unwrap()
+    }
 
-        SignedMessage {
+    /// Sign for COSE (64-byte signature)
+    fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
+        let hash = keccak256(data);
+        let sig = signer
+            .sign_hash_sync(&B256::from(hash))
+            .map_err(|e| CborError::Signing(e.to_string()))?;
+
+        let mut result = [0u8; 64];
+        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        Ok(result)
+    }
+
+    /// Create a COSE-signed message for testing
+    fn create_signed_message(sequence: u64, timestamp: u64) -> SignedMessage {
+        let signer = private_signer();
+        let addr = signer.address().into_array();
+        let payload = b"test payload";
+
+        let cbor_msg = CborSignedMessage::new(
             sequence,
             timestamp,
-            message_type: MessageType::Changeset,
-            payload: payload.to_vec(),
-            message_hash: format!("0x{}", hex::encode(message_hash)),
-            signature: signature.to_hex_prefixed(),
-            signer: format!("{:?}", signer.address()),
-            cose_protected_header: None,
+            CborMessageType::Changeset,
+            payload.to_vec(),
+            addr,
+            |data| sign_cose(&signer, data),
+        )
+        .unwrap();
+
+        cbor_msg.to_signed_message(&addr).unwrap()
+    }
+
+    /// Create a batch with proper CBOR content hash and signature
+    fn create_signed_batch(messages: Vec<SignedMessage>) -> SignedBatch {
+        use sha2::{Digest, Sha256};
+
+        let pk_signer = private_signer();
+        let start_sequence = messages.first().map_or(0, |m| m.sequence);
+        let end_sequence = messages.last().map_or(0, |m| m.sequence);
+
+        // Compute content hash from serialized messages
+        let messages_json = serde_json::to_vec(&messages).expect("serialize messages");
+        let mut hasher = Sha256::new();
+        hasher.update(&messages_json);
+        let hash_result = hasher.finalize();
+        let mut content_hash = [0u8; 32];
+        content_hash.copy_from_slice(&hash_result);
+
+        // Sign batch payload: keccak256(keccak256(start || end || content_hash))
+        let mut payload_data = Vec::new();
+        payload_data.extend_from_slice(&start_sequence.to_be_bytes());
+        payload_data.extend_from_slice(&end_sequence.to_be_bytes());
+        payload_data.extend_from_slice(&content_hash);
+        let batch_payload = keccak256(&payload_data);
+        let batch_hash = keccak256(batch_payload);
+
+        let batch_sig = pk_signer.sign_hash_sync(&B256::from(batch_hash)).unwrap();
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes[..32].copy_from_slice(&batch_sig.r().to_be_bytes::<32>());
+        sig_bytes[32..].copy_from_slice(&batch_sig.s().to_be_bytes::<32>());
+
+        SignedBatch {
+            start_sequence,
+            end_sequence,
+            messages,
+            batch_signature: format!("0x{}", hex::encode(sig_bytes)),
+            signer: format!("{:?}", pk_signer.address()),
+            created_at: 1700000002,
+            content_hash,
         }
     }
 
@@ -508,7 +566,7 @@ mod tests {
         let signer = test_signer();
         let publisher = LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
 
-        let message = create_signed_message(&signer, 1, 1700000000).await;
+        let message = create_signed_message(1, 1700000000);
 
         // Publish
         let result = publisher.publish(&message).await;
@@ -538,25 +596,12 @@ mod tests {
         let signer = test_signer();
         let publisher = LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
 
-        // Create messages
-        let msg1 = create_signed_message(&signer, 1, 1700000000).await;
-        let msg2 = create_signed_message(&signer, 2, 1700000001).await;
-        let messages = vec![msg1, msg2];
+        // Create messages using CBOR format
+        let msg1 = create_signed_message(1, 1700000000);
+        let msg2 = create_signed_message(2, 1700000001);
 
         // Create properly signed batch
-        let messages_hash = SignedBatch::compute_messages_hash(&messages).unwrap();
-        let batch_payload = SignedBatch::compute_signing_payload(1, 2, messages_hash);
-        let batch_sig = signer.sign(batch_payload).await.unwrap();
-
-        let batch = SignedBatch {
-            start_sequence: 1,
-            end_sequence: 2,
-            messages,
-            batch_signature: batch_sig.to_hex_prefixed(),
-            signer: format!("{:?}", signer.address()),
-            created_at: 1700000002,
-            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
-        };
+        let batch = create_signed_batch(vec![msg1, msg2]);
 
         // Publish batch
         let result = publisher.publish_batch(&batch).await;
@@ -600,7 +645,7 @@ mod tests {
         assert!(publisher.load_state().await.unwrap().is_none());
 
         // Publish a message
-        let message = create_signed_message(&signer, 42, 1700000000).await;
+        let message = create_signed_message(42, 1700000000);
         publisher.publish(&message).await;
 
         // State should now reflect the published message
@@ -612,7 +657,7 @@ mod tests {
         let signer = test_signer();
         let publisher = LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
 
-        let message = create_signed_message(&signer, 0, 1700000000).await;
+        let message = create_signed_message(0, 1700000000);
 
         // Publish
         let result = publisher.publish(&message).await;
@@ -637,7 +682,7 @@ mod tests {
         let signer = test_signer();
         let publisher = LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
 
-        let message = create_signed_message(&signer, 1, 1700000000).await;
+        let message = create_signed_message(1, 1700000000);
 
         // First publish should succeed
         let result1 = publisher.publish(&message).await;
@@ -667,9 +712,9 @@ mod tests {
         assert!(batches.is_empty());
 
         // Publish some messages (each becomes its own batch)
-        let msg1 = create_signed_message(&signer, 1, 1700000000).await;
-        let msg2 = create_signed_message(&signer, 2, 1700000001).await;
-        let msg3 = create_signed_message(&signer, 5, 1700000002).await;
+        let msg1 = create_signed_message(1, 1700000000);
+        let msg2 = create_signed_message(2, 1700000001);
+        let msg3 = create_signed_message(5, 1700000002);
 
         publisher.publish(&msg1).await;
         publisher.publish(&msg2).await;
@@ -694,25 +739,11 @@ mod tests {
         let signer = test_signer();
         let publisher = LocalPublisher::new(LocalConfig::in_memory(), Arc::clone(&signer)).unwrap();
 
-        // Create a multi-message batch
-        let msg1 = create_signed_message(&signer, 1, 1700000000).await;
-        let msg2 = create_signed_message(&signer, 2, 1700000001).await;
-        let messages = vec![msg1, msg2];
+        // Create a multi-message batch using CBOR format
+        let msg1 = create_signed_message(1, 1700000000);
+        let msg2 = create_signed_message(2, 1700000001);
 
-        let messages_hash = SignedBatch::compute_messages_hash(&messages).unwrap();
-        let batch_payload = SignedBatch::compute_signing_payload(1, 2, messages_hash);
-        let batch_sig = signer.sign(batch_payload).await.unwrap();
-
-        let batch = SignedBatch {
-            start_sequence: 1,
-            end_sequence: 2,
-            messages,
-            batch_signature: batch_sig.to_hex_prefixed(),
-            signer: format!("{:?}", signer.address()),
-            created_at: 1700000002,
-            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
-        };
-
+        let batch = create_signed_batch(vec![msg1, msg2]);
         publisher.publish_batch(&batch).await;
 
         // List should return 1 batch with range 1-2

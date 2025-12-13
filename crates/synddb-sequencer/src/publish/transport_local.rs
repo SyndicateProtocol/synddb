@@ -423,7 +423,7 @@ mod tests {
         let msg = transport.get_message(3).unwrap();
         assert_eq!(msg.sequence, 3);
         // COSE message should have protected header
-        assert!(msg.cose_protected_header.is_some());
+        assert!(!msg.cose_protected_header.is_empty());
 
         // Non-existent message
         assert!(transport.get_message(100).is_none());

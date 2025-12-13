@@ -1,9 +1,7 @@
-//! Conversion from CBOR types to JSON-compatible types
+//! Conversion from CBOR types to internal message types
 //!
 //! This module provides conversion functions to convert CBOR/COSE messages
-//! to the legacy JSON-serializable types (`SignedMessage`, `SignedBatch`).
-//! This enables validators to work with a unified message type internally
-//! while supporting both storage formats.
+//! to the internal `SignedMessage` and `SignedBatch` types used by validators.
 
 use super::{
     batch::CborBatch,
@@ -23,20 +21,16 @@ impl From<CborMessageType> for MessageType {
 }
 
 impl CborSignedMessage {
-    /// Convert to the JSON-compatible `SignedMessage` format.
+    /// Convert to the internal `SignedMessage` format.
     ///
-    /// This parses the COSE structure, extracts all fields, and includes the
-    /// COSE protected header for later verification. The signature is stored
-    /// as 64 bytes (r || s) without recovery byte, since COSE verification
-    /// tries both recovery IDs.
+    /// This parses the COSE structure, extracts all fields, and verifies the signature.
+    /// The COSE protected header is included for signature verification.
     ///
     /// # Arguments
     /// * `expected_signer` - 20-byte Ethereum address to verify against
     ///
     /// # Returns
-    /// The converted `SignedMessage` with `cose_protected_header` set.
-    /// The validator can independently verify the signature using the
-    /// protected header to reconstruct the COSE `Sig_structure`.
+    /// The converted `SignedMessage` that can be independently verified.
     pub fn to_signed_message(
         &self,
         expected_signer: &[u8; 20],
@@ -51,7 +45,6 @@ impl CborSignedMessage {
         let message_type: MessageType = parsed.message_type.into();
 
         // Format signature as 64-byte hex (r || s, no recovery byte)
-        // Validator will try both recovery IDs when verifying
         let signature_hex = format!("0x{}", hex::encode(parsed.signature));
 
         // Format message hash from payload
@@ -68,14 +61,14 @@ impl CborSignedMessage {
             message_hash,
             signature: signature_hex,
             signer,
-            cose_protected_header: Some(cose_protected_header),
+            cose_protected_header,
         })
     }
 
     /// Convert to `SignedMessage` without signature verification.
     ///
     /// WARNING: This does not verify the signature. Only use for debugging/inspection.
-    /// The `cose_protected_header` is still included so the validator can verify later.
+    /// The COSE protected header is still included so the caller can verify later.
     pub fn to_signed_message_unchecked(&self) -> Result<SignedMessage, CborError> {
         let parsed = self.parse_without_verify()?;
 
@@ -98,17 +91,15 @@ impl CborSignedMessage {
             message_hash,
             signature: signature_hex,
             signer,
-            cose_protected_header: Some(cose_protected_header),
+            cose_protected_header,
         })
     }
 }
 
 impl CborBatch {
-    /// Convert to the JSON-compatible `SignedBatch` format.
+    /// Convert to the internal `SignedBatch` format.
     ///
-    /// This verifies all COSE signatures during conversion and includes the
-    /// `cose_protected_header` in each message so validators can independently
-    /// re-verify the signatures.
+    /// This verifies all COSE signatures during conversion.
     ///
     /// # Returns
     /// The converted `SignedBatch` if all verifications succeed.
@@ -137,14 +128,14 @@ impl CborBatch {
             batch_signature,
             signer,
             created_at: self.created_at,
-            cbor_content_hash: Some(self.content_hash),
+            content_hash: self.content_hash,
         })
     }
 
     /// Convert to `SignedBatch` without full signature verification.
     ///
     /// This only parses the batch structure without verifying signatures.
-    /// The `cose_protected_header` is still included so the validator can verify later.
+    /// The COSE protected header is still included so the caller can verify later.
     pub fn to_signed_batch_unchecked(&self) -> Result<SignedBatch, CborError> {
         let messages: Result<Vec<SignedMessage>, CborError> = self
             .messages
@@ -163,7 +154,7 @@ impl CborBatch {
             batch_signature,
             signer,
             created_at: self.created_at,
-            cbor_content_hash: Some(self.content_hash),
+            content_hash: self.content_hash,
         })
     }
 }

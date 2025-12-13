@@ -368,7 +368,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         // Should succeed with no changes
@@ -411,7 +411,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         // Apply the changeset
@@ -437,7 +437,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         // Should succeed with no changes
@@ -519,7 +519,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         // Apply the snapshot
@@ -564,7 +564,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         // Apply the snapshot
@@ -598,7 +598,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         // Should fail
@@ -619,7 +619,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         let extracted = ChangesetApplier::extract_snapshot(&message).unwrap();
@@ -641,7 +641,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         let extracted = ChangesetApplier::extract_snapshot(&message).unwrap();
@@ -660,7 +660,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         let result = applier.apply_message(&message);
@@ -727,7 +727,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
-            cose_protected_header: None,
+            cose_protected_header: vec![],
         };
 
         // Apply the batch

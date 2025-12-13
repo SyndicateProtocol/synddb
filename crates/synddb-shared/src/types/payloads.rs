@@ -1,17 +1,80 @@
 //! Payload types for sequencer messages
 //!
-//! These types represent the JSON payloads that are zstd-compressed
-//! and stored in `SignedMessage.payload`.
+//! These types represent the payloads sent from clients to the sequencer.
+//! The primary wire format is CBOR, but JSON with base64-encoded binary fields
+//! is also supported for HTTP API compatibility.
 
-use serde::{Deserialize, Serialize};
+use base64::Engine;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::serde_helpers::base64_serde;
+/// Custom serialization for binary data that works with both JSON (base64) and CBOR (raw bytes)
+mod bytes_serde {
+    use super::*;
+
+    pub(super) fn serialize<S>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            // JSON: encode as base64 string
+            let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+            serializer.serialize_str(&encoded)
+        } else {
+            // CBOR: serialize as raw bytes
+            serializer.serialize_bytes(data)
+        }
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{Error, Visitor};
+
+        struct BytesVisitor;
+
+        impl<'de> Visitor<'de> for BytesVisitor {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a base64 string or byte array")
+            }
+
+            fn visit_str<E: Error>(self, v: &str) -> Result<Self::Value, E> {
+                base64::engine::general_purpose::STANDARD
+                    .decode(v)
+                    .map_err(E::custom)
+            }
+
+            fn visit_bytes<E: Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+                Ok(v.to_vec())
+            }
+
+            fn visit_byte_buf<E: Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(v)
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut bytes = Vec::new();
+                while let Some(byte) = seq.next_element::<u8>()? {
+                    bytes.push(byte);
+                }
+                Ok(bytes)
+            }
+        }
+
+        deserializer.deserialize_any(BytesVisitor)
+    }
+}
 
 /// Changeset data from `synddb-client`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangesetData {
-    /// Raw changeset bytes (base64 encoded in JSON)
-    #[serde(with = "base64_serde")]
+    /// Raw changeset bytes (base64-encoded in JSON, raw bytes in CBOR)
+    #[serde(with = "bytes_serde")]
     pub data: Vec<u8>,
     /// Client-side sequence number
     pub sequence: u64,
@@ -40,16 +103,16 @@ pub struct WithdrawalRequest {
     pub recipient: String,
     /// Amount to withdraw (as string to handle large numbers)
     pub amount: String,
-    /// Optional calldata
-    #[serde(default, with = "base64_serde")]
+    /// Optional calldata (base64-encoded in JSON, raw bytes in CBOR)
+    #[serde(default, with = "bytes_serde")]
     pub data: Vec<u8>,
 }
 
 /// Snapshot data from `synddb-client`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotData {
-    /// Complete `SQLite` database file bytes (base64 encoded in JSON)
-    #[serde(with = "base64_serde")]
+    /// Complete `SQLite` database file bytes (base64-encoded in JSON, raw bytes in CBOR)
+    #[serde(with = "bytes_serde")]
     pub data: Vec<u8>,
     /// Client-side timestamp (Unix timestamp in seconds)
     pub timestamp: u64,
@@ -69,65 +132,98 @@ pub struct SnapshotRequest {
     pub attestation_token: Option<String>,
 }
 
+// ============================================================================
+// CBOR serialization helpers
+// ============================================================================
+
+impl ChangesetBatchRequest {
+    /// Serialize to CBOR bytes
+    pub fn to_cbor(&self) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
+        let mut buf = Vec::new();
+        ciborium::into_writer(self, &mut buf)?;
+        Ok(buf)
+    }
+
+    /// Deserialize from CBOR bytes
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self, ciborium::de::Error<std::io::Error>> {
+        ciborium::from_reader(bytes)
+    }
+}
+
+impl WithdrawalRequest {
+    /// Serialize to CBOR bytes
+    pub fn to_cbor(&self) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
+        let mut buf = Vec::new();
+        ciborium::into_writer(self, &mut buf)?;
+        Ok(buf)
+    }
+
+    /// Deserialize from CBOR bytes
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self, ciborium::de::Error<std::io::Error>> {
+        ciborium::from_reader(bytes)
+    }
+}
+
+impl SnapshotRequest {
+    /// Serialize to CBOR bytes
+    pub fn to_cbor(&self) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
+        let mut buf = Vec::new();
+        ciborium::into_writer(self, &mut buf)?;
+        Ok(buf)
+    }
+
+    /// Deserialize from CBOR bytes
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self, ciborium::de::Error<std::io::Error>> {
+        ciborium::from_reader(bytes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_changeset_data_serialization() {
+    fn test_changeset_data_cbor_roundtrip() {
         let data = ChangesetData {
             data: b"test data".to_vec(),
             sequence: 42,
             timestamp: 1700000000,
         };
 
-        let json = serde_json::to_string(&data).unwrap();
-        // Verify base64 encoding: "test data" -> "dGVzdCBkYXRh"
-        assert!(json.contains("dGVzdCBkYXRh"));
-
-        let decoded: ChangesetData = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.data, b"test data");
-        assert_eq!(decoded.sequence, 42);
-    }
-
-    #[test]
-    fn test_changeset_batch_request() {
         let batch = ChangesetBatchRequest {
             batch_id: "batch-1".to_string(),
-            changesets: vec![ChangesetData {
-                data: b"cs1".to_vec(),
-                sequence: 0,
-                timestamp: 1700000000,
-            }],
+            changesets: vec![data],
             attestation_token: None,
         };
 
-        let json = serde_json::to_string(&batch).unwrap();
-        // attestation_token should be omitted when None
-        assert!(!json.contains("attestation_token"));
+        let cbor = batch.to_cbor().unwrap();
+        let decoded = ChangesetBatchRequest::from_cbor(&cbor).unwrap();
 
-        let decoded: ChangesetBatchRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.batch_id, "batch-1");
         assert_eq!(decoded.changesets.len(), 1);
+        assert_eq!(decoded.changesets[0].data, b"test data");
+        assert_eq!(decoded.changesets[0].sequence, 42);
     }
 
     #[test]
-    fn test_withdrawal_request_with_empty_data() {
-        // Test deserialization with empty data field
-        let json = r#"{
-            "request_id": "w1",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "1000000000000000000",
-            "data": ""
-        }"#;
+    fn test_withdrawal_request_cbor_roundtrip() {
+        let request = WithdrawalRequest {
+            request_id: "w1".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "1000000000000000000".to_string(),
+            data: vec![],
+        };
 
-        let decoded: WithdrawalRequest = serde_json::from_str(json).unwrap();
+        let cbor = request.to_cbor().unwrap();
+        let decoded = WithdrawalRequest::from_cbor(&cbor).unwrap();
+
         assert_eq!(decoded.request_id, "w1");
+        assert_eq!(decoded.recipient, request.recipient);
         assert!(decoded.data.is_empty());
     }
 
     #[test]
-    fn test_snapshot_request() {
+    fn test_snapshot_request_cbor_roundtrip() {
         let request = SnapshotRequest {
             snapshot: SnapshotData {
                 data: b"SQLite format 3\x00".to_vec(),
@@ -138,8 +234,8 @@ mod tests {
             attestation_token: Some("token123".to_string()),
         };
 
-        let json = serde_json::to_string(&request).unwrap();
-        let decoded: SnapshotRequest = serde_json::from_str(&json).unwrap();
+        let cbor = request.to_cbor().unwrap();
+        let decoded = SnapshotRequest::from_cbor(&cbor).unwrap();
 
         assert_eq!(decoded.message_id, "snap-1");
         assert_eq!(decoded.snapshot.sequence, 100);

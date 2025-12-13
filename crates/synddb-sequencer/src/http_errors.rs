@@ -36,6 +36,9 @@ pub enum SequencerError {
     #[error("Serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    #[error("CBOR serialization failed: {0}")]
+    CborSerializationFailed(String),
+
     // ========================================================================
     // Validation errors (manual construction)
     // ========================================================================
@@ -106,6 +109,7 @@ impl From<SequencerError> for HttpError {
             // 500 Internal Server Error
             SequencerError::Signing(_)
             | SequencerError::Serialization(_)
+            | SequencerError::CborSerializationFailed(_)
             | SequencerError::MessageRetrievalFailed(_)
             | SequencerError::BatchFlushFailed(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())

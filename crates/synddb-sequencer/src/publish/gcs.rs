@@ -286,6 +286,7 @@ impl StoragePublisher for GcsPublisher {
     async fn publish(&self, message: &SignedMessage) -> PublishResult {
         let messages = vec![message.clone()];
 
+        // Serialize messages for content hash (using SHA-256 for CBOR format)
         let messages_json = match serde_json::to_vec(&messages) {
             Ok(json) => json,
             Err(e) => {
@@ -294,10 +295,11 @@ impl StoragePublisher for GcsPublisher {
             }
         };
 
-        let messages_hash = MessageSigner::compute_messages_hash(&messages_json);
+        // Compute content hash and sign with CBOR format (64-byte signature)
+        let content_hash = MessageSigner::compute_content_hash(&messages_json);
         let batch_signature = match self
             .signer
-            .sign_batch(message.sequence, message.sequence, messages_hash)
+            .sign_batch_cbor(message.sequence, message.sequence, &content_hash)
             .await
         {
             Ok(sig) => sig.to_hex_prefixed(),
@@ -314,7 +316,7 @@ impl StoragePublisher for GcsPublisher {
             batch_signature,
             signer: format!("{:?}", self.signer.address()),
             created_at: message.timestamp,
-            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
+            content_hash,
         };
         self.publish_batch(&batch).await
     }

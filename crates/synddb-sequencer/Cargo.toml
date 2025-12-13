@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+ciborium = { workspace = true }
 
 # Configuration
 humantime-serde = { workspace = true }
@@ -51,6 +52,9 @@ reqwest = { workspace = true }
 
 # Compression
 zstd = { workspace = true }
+
+# Hashing
+sha2 = { workspace = true }
 
 # Local SQLite storage
 rusqlite = { workspace = true }

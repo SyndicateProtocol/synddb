@@ -734,7 +734,7 @@ mod tests {
     use rusqlite::session::Session;
     use std::io::Write;
     use synddb_shared::types::{
-        message::{MessageType, SignedMessage},
+        message::SignedMessage,
         payloads::{ChangesetBatchRequest, ChangesetData},
     };
 
@@ -756,16 +756,18 @@ mod tests {
         signer.address()
     }
 
-    async fn create_signed_changeset_message(
-        sequence: u64,
-        changeset_data: Vec<u8>,
-    ) -> SignedMessage {
+    fn create_signed_changeset_message(sequence: u64, changeset_data: Vec<u8>) -> SignedMessage {
         use alloy::{
-            primitives::keccak256,
-            signers::{local::PrivateKeySigner, Signer},
+            primitives::{keccak256, B256},
+            signers::{local::PrivateKeySigner, SignerSync},
+        };
+        use synddb_shared::types::cbor::{
+            error::CborError,
+            message::{CborMessageType, CborSignedMessage},
         };
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
+        let addr = signer.address().into_array();
         let timestamp = 1700000000 + sequence;
 
         // Create batch
@@ -785,35 +787,30 @@ mod tests {
         encoder.write_all(&json).unwrap();
         let compressed = encoder.finish().unwrap();
 
-        // Hash
-        let message_hash = keccak256(&compressed);
+        // COSE sign function
+        fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
+            let hash = keccak256(data);
+            let sig = signer
+                .sign_hash_sync(&B256::from(hash))
+                .map_err(|e| CborError::Signing(e.to_string()))?;
+            let mut result = [0u8; 64];
+            result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+            result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+            Ok(result)
+        }
 
-        // Create signing payload
-        let mut signing_data = Vec::with_capacity(48);
-        signing_data.extend_from_slice(&sequence.to_be_bytes());
-        signing_data.extend_from_slice(&timestamp.to_be_bytes());
-        signing_data.extend_from_slice(message_hash.as_slice());
-        let signing_payload = keccak256(&signing_data);
-
-        // Sign
-        let signature = signer.sign_hash(&signing_payload).await.unwrap();
-
-        // Format signature
-        let mut sig_bytes = [0u8; 65];
-        sig_bytes[..32].copy_from_slice(&signature.r().to_be_bytes::<32>());
-        sig_bytes[32..64].copy_from_slice(&signature.s().to_be_bytes::<32>());
-        sig_bytes[64] = if signature.v() { 28 } else { 27 };
-
-        SignedMessage {
+        // Create COSE-signed message
+        let cbor_msg = CborSignedMessage::new(
             sequence,
             timestamp,
-            message_type: MessageType::Changeset,
-            payload: compressed,
-            message_hash: format!("0x{}", hex::encode(message_hash)),
-            signature: format!("0x{}", hex::encode(sig_bytes)),
-            signer: format!("{:?}", signer.address()),
-            cose_protected_header: None,
-        }
+            CborMessageType::Changeset,
+            compressed,
+            addr,
+            |data| sign_cose(&signer, data),
+        )
+        .unwrap();
+
+        cbor_msg.to_signed_message(&addr).unwrap()
     }
 
     /// Create a changeset for testing
@@ -847,7 +844,7 @@ mod tests {
         let fetcher = MockFetcher::new();
 
         // Create signed message
-        let message = create_signed_changeset_message(0, changeset).await;
+        let message = create_signed_changeset_message(0, changeset);
         fetcher.add_message(message);
 
         // Create validator
@@ -909,12 +906,12 @@ mod tests {
 
         // First changeset
         let changeset1 = create_update_changeset(&source, "Bob");
-        let message1 = create_signed_changeset_message(0, changeset1).await;
+        let message1 = create_signed_changeset_message(0, changeset1);
         fetcher.add_message(message1);
 
         // Second changeset
         let changeset2 = create_update_changeset(&source, "Charlie");
-        let message2 = create_signed_changeset_message(1, changeset2).await;
+        let message2 = create_signed_changeset_message(1, changeset2);
         fetcher.add_message(message2);
 
         // Create validator
@@ -975,27 +972,39 @@ mod tests {
     // Batch sync tests
     // =========================================================================
 
-    async fn create_signed_batch(start_sequence: u64, messages: Vec<SignedMessage>) -> SignedBatch {
-        use alloy::signers::{local::PrivateKeySigner, Signer};
+    fn create_signed_batch(start_sequence: u64, messages: Vec<SignedMessage>) -> SignedBatch {
+        use alloy::{
+            primitives::{keccak256, B256},
+            signers::{local::PrivateKeySigner, SignerSync},
+        };
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let end_sequence = messages.last().map_or(start_sequence, |m| m.sequence);
 
-        // Compute messages hash using the proper method
-        let messages_hash = SignedBatch::compute_messages_hash(&messages).unwrap();
+        // Create content hash from serialized messages
+        let content_hash = {
+            let json = serde_json::to_vec(&messages).expect("serialize messages");
+            let hash = keccak256(&json);
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(hash.as_slice());
+            arr
+        };
 
-        // Compute signing payload: keccak256(start_sequence || end_sequence || messages_hash)
-        let signing_payload =
-            SignedBatch::compute_signing_payload(start_sequence, end_sequence, messages_hash);
+        // Compute batch signing payload: keccak256(keccak256(start || end || content_hash))
+        let mut payload_data = Vec::new();
+        payload_data.extend_from_slice(&start_sequence.to_be_bytes());
+        payload_data.extend_from_slice(&end_sequence.to_be_bytes());
+        payload_data.extend_from_slice(&content_hash);
+        let batch_payload = keccak256(&payload_data);
+        let signing_payload = keccak256(batch_payload);
 
         // Sign with the signer's private key
-        let signature = signer.sign_hash(&signing_payload).await.unwrap();
+        let signature = signer.sign_hash_sync(&B256::from(signing_payload)).unwrap();
 
-        // Format as 65-byte signature (r || s || v)
-        let mut sig_bytes = [0u8; 65];
+        // Format as 64-byte signature (r || s) for CBOR-style
+        let mut sig_bytes = [0u8; 64];
         sig_bytes[..32].copy_from_slice(&signature.r().to_be_bytes::<32>());
-        sig_bytes[32..64].copy_from_slice(&signature.s().to_be_bytes::<32>());
-        sig_bytes[64] = if signature.v() { 28 } else { 27 };
+        sig_bytes[32..].copy_from_slice(&signature.s().to_be_bytes::<32>());
 
         SignedBatch {
             start_sequence,
@@ -1004,7 +1013,7 @@ mod tests {
             batch_signature: format!("0x{}", hex::encode(sig_bytes)),
             signer: format!("{:?}", signer.address()),
             created_at: 1700000000,
-            cbor_content_hash: None, // TODO(cleanup): Remove when JSON format is deprecated
+            content_hash,
         }
     }
 
@@ -1041,11 +1050,11 @@ mod tests {
         let changeset1 = create_update_changeset(&source, "Charlie");
 
         // Create signed messages
-        let msg0 = create_signed_changeset_message(0, changeset0).await;
-        let msg1 = create_signed_changeset_message(1, changeset1).await;
+        let msg0 = create_signed_changeset_message(0, changeset0);
+        let msg1 = create_signed_changeset_message(1, changeset1);
 
         // Create a batch containing both messages
-        let batch = create_signed_batch(0, vec![msg0, msg1]).await;
+        let batch = create_signed_batch(0, vec![msg0, msg1]);
 
         // Create mock fetcher in batch mode
         let fetcher = MockFetcher::new_batch_mode();
@@ -1098,13 +1107,13 @@ mod tests {
         let changeset2 = create_update_changeset(&source, "Dave");
 
         // Create signed messages
-        let msg0 = create_signed_changeset_message(0, changeset0).await;
-        let msg1 = create_signed_changeset_message(1, changeset1).await;
-        let msg2 = create_signed_changeset_message(2, changeset2).await;
+        let msg0 = create_signed_changeset_message(0, changeset0);
+        let msg1 = create_signed_changeset_message(1, changeset1);
+        let msg2 = create_signed_changeset_message(2, changeset2);
 
         // Create two batches
-        let batch1 = create_signed_batch(0, vec![msg0, msg1]).await;
-        let batch2 = create_signed_batch(2, vec![msg2]).await;
+        let batch1 = create_signed_batch(0, vec![msg0, msg1]);
+        let batch2 = create_signed_batch(2, vec![msg2]);
 
         // Create mock fetcher in batch mode
         let fetcher = MockFetcher::new_batch_mode();
@@ -1157,7 +1166,7 @@ mod tests {
 
         // Create mock fetcher in NON-batch mode (should fallback to single-message)
         let fetcher = MockFetcher::new();
-        let message = create_signed_changeset_message(0, changeset).await;
+        let message = create_signed_changeset_message(0, changeset);
         fetcher.add_message(message);
 
         // Create validator
@@ -1199,7 +1208,7 @@ mod tests {
             batch_signature: "0x00".to_string(),
             signer: "0x00".to_string(),
             created_at: 1700000000,
-            cbor_content_hash: None,
+            content_hash: [0u8; 32],
         };
         let batch2 = SignedBatch {
             start_sequence: 50,
@@ -1208,7 +1217,7 @@ mod tests {
             batch_signature: "0x00".to_string(),
             signer: "0x00".to_string(),
             created_at: 1700000001,
-            cbor_content_hash: None,
+            content_hash: [0u8; 32],
         };
         fetcher.add_batch(batch1);
         fetcher.add_batch(batch2);
@@ -1246,11 +1255,11 @@ mod tests {
         let changeset1 = create_update_changeset(&source, "Charlie");
 
         // Create signed messages
-        let msg0 = create_signed_changeset_message(0, changeset0).await;
-        let msg1 = create_signed_changeset_message(1, changeset1).await;
+        let msg0 = create_signed_changeset_message(0, changeset0);
+        let msg1 = create_signed_changeset_message(1, changeset1);
 
         // Create batch with both messages
-        let batch = create_signed_batch(0, vec![msg0.clone(), msg1]).await;
+        let batch = create_signed_batch(0, vec![msg0.clone(), msg1]);
 
         // Create mock fetcher
         let fetcher = MockFetcher::new_batch_mode();
@@ -1304,10 +1313,10 @@ mod tests {
         let changeset = create_update_changeset(&source, "Bob");
 
         // Create signed message
-        let msg = create_signed_changeset_message(0, changeset).await;
+        let msg = create_signed_changeset_message(0, changeset);
 
         // Create a valid batch first, then tamper with the signature
-        let mut batch = create_signed_batch(0, vec![msg]).await;
+        let mut batch = create_signed_batch(0, vec![msg]);
 
         // Tamper with the batch signature (change last byte)
         let mut sig_bytes = hex::decode(&batch.batch_signature[2..]).unwrap();
@@ -1365,10 +1374,10 @@ mod tests {
         let changeset = create_update_changeset(&source, "Bob");
 
         // Create signed message
-        let msg = create_signed_changeset_message(0, changeset).await;
+        let msg = create_signed_changeset_message(0, changeset);
 
         // Create a valid batch first
-        let mut batch = create_signed_batch(0, vec![msg]).await;
+        let mut batch = create_signed_batch(0, vec![msg]);
 
         // Tamper with the message inside the batch (change the sequence)
         // This should cause the batch signature verification to fail because
@@ -1394,13 +1403,14 @@ mod tests {
             .execute("INSERT INTO users VALUES (1, 'Alice')", [])
             .unwrap();
 
-        // Sync should fail due to tampered message (batch signature won't match)
+        // Sync should fail due to tampered message
+        // With COSE format, tampering with outer sequence causes header mismatch
         let result = validator.sync_to_head_batched().await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("signature") || err.contains("Signer"),
-            "Expected signature-related error, got: {err}"
+            err.contains("signature") || err.contains("Signer") || err.contains("Header mismatch"),
+            "Expected signature or header mismatch error, got: {err}"
         );
     }
 }

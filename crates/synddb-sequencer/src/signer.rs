@@ -2,15 +2,11 @@
 //!
 //! Signs messages with EIP-191 prefix for compatibility with Ethereum
 //! smart contracts and standard verification tools.
-//!
-//! This module uses the signing payload computation functions from `synddb_shared`
-//! to ensure consistency with signature verification.
 
 use alloy::{
     primitives::{keccak256, Address, B256},
     signers::{local::PrivateKeySigner, Signer},
 };
-use synddb_shared::types::message::{SignedBatch, SignedMessage};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -54,10 +50,14 @@ impl MessageSigner {
     ///
     /// Format: `keccak256(sequence || timestamp || message_hash)`
     ///
-    /// This delegates to [`SignedMessage::compute_signing_payload`] to ensure
-    /// consistency between signing and verification.
+    /// Note: This is used for the inbox's legacy signature. The batcher uses
+    /// COSE signatures with a different payload format.
     pub fn create_signing_payload(sequence: u64, timestamp: u64, message_hash: B256) -> B256 {
-        SignedMessage::compute_signing_payload(sequence, timestamp, message_hash)
+        let mut data = Vec::with_capacity(8 + 8 + 32);
+        data.extend_from_slice(&sequence.to_be_bytes());
+        data.extend_from_slice(&timestamp.to_be_bytes());
+        data.extend_from_slice(message_hash.as_ref());
+        keccak256(&data)
     }
 
     /// Sign a message payload
@@ -102,16 +102,20 @@ impl MessageSigner {
     /// Create the signing payload for a batch
     ///
     /// Format: `keccak256(start_sequence || end_sequence || messages_hash)`
-    /// where `messages_hash` is the keccak256 of the serialized messages JSON
+    /// where `messages_hash` is the hash of the batch content
     ///
-    /// This delegates to [`SignedBatch::compute_signing_payload`] to ensure
-    /// consistency between signing and verification.
+    /// Note: This is used for legacy JSON batch signing. The batcher uses
+    /// CBOR batches with SHA-256 content hashes.
     pub fn create_batch_signing_payload(
         start_sequence: u64,
         end_sequence: u64,
         messages_hash: B256,
     ) -> B256 {
-        SignedBatch::compute_signing_payload(start_sequence, end_sequence, messages_hash)
+        let mut data = Vec::with_capacity(8 + 8 + 32);
+        data.extend_from_slice(&start_sequence.to_be_bytes());
+        data.extend_from_slice(&end_sequence.to_be_bytes());
+        data.extend_from_slice(messages_hash.as_ref());
+        keccak256(&data)
     }
 
     /// Compute the hash of serialized messages for batch signing
@@ -119,7 +123,7 @@ impl MessageSigner {
         keccak256(messages_json)
     }
 
-    /// Sign a batch (convenience method)
+    /// Sign a batch (convenience method) - returns 65-byte legacy signature
     pub async fn sign_batch(
         &self,
         start_sequence: u64,
@@ -130,9 +134,49 @@ impl MessageSigner {
             Self::create_batch_signing_payload(start_sequence, end_sequence, messages_hash);
         self.sign(payload).await
     }
+
+    /// Sign a batch for CBOR format - returns 64-byte signature (r || s)
+    ///
+    /// The `content_hash` is the SHA-256 hash of the CBOR-encoded messages.
+    /// The signing payload is: `keccak256(keccak256(start_sequence` || `end_sequence` || `content_hash`))
+    pub async fn sign_batch_cbor(
+        &self,
+        start_sequence: u64,
+        end_sequence: u64,
+        content_hash: &[u8; 32],
+    ) -> Result<CborSignatureBytes, SignerError> {
+        // Build signing payload: keccak256(start || end || content_hash)
+        let mut data = Vec::with_capacity(8 + 8 + 32);
+        data.extend_from_slice(&start_sequence.to_be_bytes());
+        data.extend_from_slice(&end_sequence.to_be_bytes());
+        data.extend_from_slice(content_hash);
+        let inner_hash = keccak256(&data);
+
+        // Final hash to sign
+        let message_hash = keccak256(inner_hash);
+
+        let signature = self
+            .signer
+            .sign_hash(&message_hash)
+            .await
+            .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
+
+        Ok(CborSignatureBytes::from_signature(&signature))
+    }
+
+    /// Compute content hash from serialized messages (JSON for now, but works with any bytes)
+    pub fn compute_content_hash(messages_bytes: &[u8]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(messages_bytes);
+        let result = hasher.finalize();
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&result);
+        arr
+    }
 }
 
-/// Signature bytes in a format suitable for serialization
+/// 65-byte signature (r: 32, s: 32, v: 1) - legacy format for individual message signing
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureBytes {
     /// Full 65-byte signature (r: 32, s: 32, v: 1)
@@ -146,6 +190,33 @@ impl SignatureBytes {
         bytes[32..64].copy_from_slice(&sig.s().to_be_bytes::<32>());
         // v is a bool (y_parity), convert to recovery id (27 or 28 for legacy, 0 or 1 for EIP-155)
         bytes[64] = if sig.v() { 28 } else { 27 };
+        Self { bytes }
+    }
+
+    /// Convert to hex string (without 0x prefix)
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.bytes)
+    }
+
+    /// Convert to hex string with 0x prefix
+    pub fn to_hex_prefixed(&self) -> String {
+        format!("0x{}", self.to_hex())
+    }
+}
+
+/// 64-byte CBOR/COSE signature (r: 32, s: 32) - used for batch signing
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CborSignatureBytes {
+    /// 64-byte signature (r: 32, s: 32) without recovery id
+    pub bytes: [u8; 64],
+}
+
+impl CborSignatureBytes {
+    /// Create from an alloy Signature (drops the v/recovery byte)
+    pub fn from_signature(sig: &alloy::signers::Signature) -> Self {
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        bytes[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
         Self { bytes }
     }
 

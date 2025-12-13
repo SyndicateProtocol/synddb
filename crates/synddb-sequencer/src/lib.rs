@@ -52,6 +52,7 @@
 
 pub mod attestation;
 pub mod batcher;
+pub mod cbor_extractor;
 pub mod config;
 pub mod http_api;
 pub mod http_errors;

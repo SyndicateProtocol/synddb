@@ -2,21 +2,26 @@
 
 use crate::{
     attestation::AttestationClient, config::Config, recovery::FailedBatchRecovery,
-    retry::retry_with_backoff, session::Snapshot,
+    retry::retry_with_backoff, sender::SendError, session::Snapshot,
 };
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use synddb_shared::types::payloads::{SnapshotData, SnapshotRequest};
 use tracing::{debug, error, info, warn};
 
-#[derive(Debug, Serialize, Deserialize)]
-struct SnapshotMessage {
-    snapshot: Snapshot,
-    message_id: String,
-    /// Optional TEE attestation token (JWT) proving workload identity
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attestation_token: Option<String>,
+impl From<&Snapshot> for SnapshotData {
+    fn from(snap: &Snapshot) -> Self {
+        Self {
+            data: snap.data.clone(),
+            timestamp: snap
+                .timestamp
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            sequence: snap.sequence,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -97,29 +102,30 @@ impl SnapshotSender {
             None
         };
 
-        let message = SnapshotMessage {
-            snapshot,
-            message_id: uuid::Uuid::new_v4().to_string(),
+        let message_id = uuid::Uuid::new_v4().to_string();
+        let request = SnapshotRequest {
+            snapshot: SnapshotData::from(&snapshot),
+            message_id: message_id.clone(),
             attestation_token,
         };
 
         debug!(
             "Sending snapshot to sequencer (seq={}, size={} bytes, attestation: {})",
-            message.snapshot.sequence,
-            message.snapshot.data.len(),
-            message.attestation_token.is_some()
+            snapshot.sequence,
+            snapshot.data.len(),
+            request.attestation_token.is_some()
         );
 
         // Send with retries
         match retry_with_backoff("send_snapshot", self.config.max_retries, || {
-            self.send_snapshot_internal(&message)
+            self.send_snapshot_internal(&request)
         })
         .await
         {
             Ok(()) => {
                 info!(
                     "Successfully sent snapshot {} (sequence {})",
-                    message.message_id, message.snapshot.sequence
+                    message_id, snapshot.sequence
                 );
                 return;
             }
@@ -135,36 +141,38 @@ impl SnapshotSender {
         if let Some(ref recovery) = self.recovery {
             warn!(
                 "Saving snapshot at sequence {} to recovery storage after failed send",
-                message.snapshot.sequence
+                snapshot.sequence
             );
-            if let Err(e) = recovery.save_failed_snapshot(&message.snapshot, "Max retries exceeded")
-            {
+            if let Err(e) = recovery.save_failed_snapshot(&snapshot, "Max retries exceeded") {
                 error!("Failed to save snapshot to recovery storage: {}", e);
             }
         } else {
             error!(
                 "Dropping snapshot at sequence {} after failed send (recovery disabled)",
-                message.snapshot.sequence
+                snapshot.sequence
             );
         }
     }
 
-    async fn send_snapshot_internal(
-        &self,
-        message: &SnapshotMessage,
-    ) -> Result<(), reqwest::Error> {
+    async fn send_snapshot_internal(&self, request: &SnapshotRequest) -> Result<(), SendError> {
         let url = self
             .config
             .sequencer_url
             .join("snapshots")
             .expect("valid URL path");
 
+        // Serialize to CBOR
+        let cbor_bytes = request.to_cbor().map_err(SendError::Cbor)?;
+
         self.client
             .post(url)
-            .json(message)
+            .header("Content-Type", "application/cbor")
+            .body(cbor_bytes)
             .send()
-            .await?
-            .error_for_status()?;
+            .await
+            .map_err(SendError::Http)?
+            .error_for_status()
+            .map_err(SendError::Http)?;
 
         Ok(())
     }
@@ -210,14 +218,14 @@ impl SnapshotSender {
                 None
             };
 
-            let message = SnapshotMessage {
-                snapshot: snapshot.clone(),
+            let request = SnapshotRequest {
+                snapshot: SnapshotData::from(&snapshot),
                 message_id: uuid::Uuid::new_v4().to_string(),
                 attestation_token,
             };
 
             match retry_with_backoff("retry_failed_snapshot", self.config.max_retries, || {
-                self.send_snapshot_internal(&message)
+                self.send_snapshot_internal(&request)
             })
             .await
             {

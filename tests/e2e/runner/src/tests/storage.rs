@@ -58,18 +58,10 @@ impl TestRunner {
             // Fetch a message and verify it has the COSE protected header
             let message = self.sequencer.fetch_storage_message(0).await?;
 
-            // COSE messages from local-cbor publisher should have protected header
+            // All messages should have COSE protected header
             ensure!(
-                message.cose_protected_header.is_some(),
+                !message.cose_protected_header.is_empty(),
                 "Expected cose_protected_header to be present for CBOR format"
-            );
-
-            let header = message.cose_protected_header.as_ref().unwrap();
-
-            // Protected header should be base64 encoded CBOR
-            ensure!(
-                !header.is_empty(),
-                "cose_protected_header should not be empty"
             );
 
             Ok(())

@@ -1,9 +1,8 @@
-//! Encoding format comparison benchmark
+//! Encoding format benchmark
 //!
-//! Compares file sizes and decode times for different encoding/compression combinations:
-//! - JSON + base64 + zstd (legacy format)
+//! Benchmarks CBOR encoding/compression combinations:
 //! - CBOR (uncompressed)
-//! - CBOR + zstd (current production format)
+//! - CBOR + zstd (production format)
 
 use alloy::{
     primitives::{keccak256, B256},
@@ -11,15 +10,12 @@ use alloy::{
 };
 use anyhow::Result;
 use rusqlite::{session::Session, Connection};
-use std::{io::Write, time::Instant};
+use std::time::Instant;
 use synddb_benchmark::schema::initialize_schema;
-use synddb_shared::types::{
-    cbor::{
-        batch::CborBatch,
-        error::CborError,
-        message::{CborMessageType, CborSignedMessage},
-    },
-    message::{MessageType, SignedBatch, SignedMessage},
+use synddb_shared::types::cbor::{
+    batch::CborBatch,
+    error::CborError,
+    message::{CborMessageType, CborSignedMessage},
 };
 
 /// Test private key (well-known test key, do not use in production)
@@ -51,7 +47,6 @@ struct EncodingResult {
 struct TestResult {
     test_case: TestCase,
     raw_changeset_bytes: usize,
-    json_base64_zstd: EncodingResult,
     cbor: EncodingResult,
     cbor_zstd: EncodingResult,
 }
@@ -76,19 +71,6 @@ fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborErr
     let mut result = [0u8; 64];
     result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
     result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-    Ok(result)
-}
-
-/// Sign data synchronously (returns 65-byte signature for legacy format)
-fn sign_legacy(signer: &PrivateKeySigner, data: B256) -> Result<[u8; 65]> {
-    let sig = signer
-        .sign_hash_sync(&data)
-        .map_err(|e| anyhow::anyhow!("Signing failed: {e}"))?;
-
-    let mut result = [0u8; 65];
-    result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-    result[32..64].copy_from_slice(&sig.s().to_be_bytes::<32>());
-    result[64] = if sig.v() { 28 } else { 27 };
     Ok(result)
 }
 
@@ -213,84 +195,6 @@ fn combine_changesets(changesets: &[Vec<u8>]) -> Vec<u8> {
     combined
 }
 
-/// Compress payload with zstd
-fn zstd_compress(data: &[u8]) -> Result<Vec<u8>> {
-    let mut encoder = zstd::Encoder::new(Vec::new(), 3)?;
-    encoder.write_all(data)?;
-    Ok(encoder.finish()?)
-}
-
-/// Decompress zstd data
-fn zstd_decompress(data: &[u8]) -> Result<Vec<u8>> {
-    use std::io::Read;
-    let mut decoder = zstd::Decoder::new(data)?;
-    let mut result = Vec::new();
-    decoder.read_to_end(&mut result)?;
-    Ok(result)
-}
-
-/// Create a `SignedMessage` in legacy JSON format
-fn create_legacy_message(
-    signer: &PrivateKeySigner,
-    sequence: u64,
-    timestamp: u64,
-    payload: Vec<u8>,
-) -> Result<SignedMessage> {
-    // Compress payload with zstd (as done in production)
-    let compressed_payload = zstd_compress(&payload)?;
-
-    // Compute message hash
-    let message_hash = keccak256(&compressed_payload);
-
-    // Compute signing payload
-    let signing_payload = SignedMessage::compute_signing_payload(sequence, timestamp, message_hash);
-
-    // Sign
-    let signature = sign_legacy(signer, signing_payload)?;
-
-    Ok(SignedMessage {
-        sequence,
-        timestamp,
-        message_type: MessageType::Changeset,
-        payload: compressed_payload,
-        message_hash: format!("0x{}", hex::encode(message_hash)),
-        signature: format!("0x{}", hex::encode(signature)),
-        signer: format!("{:?}", signer.address()),
-        cose_protected_header: None,
-    })
-}
-
-/// Create a `SignedBatch` in legacy JSON format
-fn create_legacy_batch(
-    signer: &PrivateKeySigner,
-    messages: Vec<SignedMessage>,
-) -> Result<SignedBatch> {
-    let start_sequence = messages.first().map_or(0, |m| m.sequence);
-    let end_sequence = messages.last().map_or(0, |m| m.sequence);
-    let timestamp = messages.first().map_or(0, |m| m.timestamp);
-
-    // Compute messages hash
-    let messages_hash = SignedBatch::compute_messages_hash(&messages)
-        .map_err(|e| anyhow::anyhow!("Failed to compute messages hash: {e}"))?;
-
-    // Compute signing payload
-    let signing_payload =
-        SignedBatch::compute_signing_payload(start_sequence, end_sequence, messages_hash);
-
-    // Sign
-    let signature = sign_legacy(signer, signing_payload)?;
-
-    Ok(SignedBatch {
-        start_sequence,
-        end_sequence,
-        messages,
-        batch_signature: format!("0x{}", hex::encode(signature)),
-        signer: format!("{:?}", signer.address()),
-        created_at: timestamp,
-        cbor_content_hash: None,
-    })
-}
-
 /// Create a `CborSignedMessage`
 fn create_cbor_message(
     signer: &PrivateKeySigner,
@@ -342,45 +246,6 @@ fn run_benchmark(test_case: &TestCase) -> Result<TestResult> {
     for chunk in all_changesets.chunks(test_case.changesets_per_message) {
         message_payloads.push(combine_changesets(chunk));
     }
-
-    // ========================================================================
-    // JSON + base64 + zstd (legacy format)
-    // ========================================================================
-    let json_result = {
-        let start = Instant::now();
-
-        // Create legacy messages
-        let mut messages = Vec::with_capacity(test_case.num_messages);
-        for (i, payload) in message_payloads.iter().enumerate() {
-            let msg =
-                create_legacy_message(&signer, i as u64, timestamp + i as u64, payload.clone())?;
-            messages.push(msg);
-        }
-
-        // Create legacy batch
-        let batch = create_legacy_batch(&signer, messages)?;
-
-        // Serialize to JSON (payload is already base64 encoded by serde)
-        let json_bytes = serde_json::to_vec(&batch)?;
-
-        // Compress with zstd
-        let compressed = zstd_compress(&json_bytes)?;
-
-        let encode_time = start.elapsed();
-
-        // Decode timing
-        let decode_start = Instant::now();
-        let decompressed = zstd_decompress(&compressed)?;
-        let _decoded: SignedBatch = serde_json::from_slice(&decompressed)?;
-        let decode_time = decode_start.elapsed();
-
-        EncodingResult {
-            format_name: "JSON+base64+zstd",
-            encoded_bytes: compressed.len(),
-            encode_time_us: encode_time.as_micros() as u64,
-            decode_time_us: decode_time.as_micros() as u64,
-        }
-    };
 
     // ========================================================================
     // CBOR (uncompressed)
@@ -471,7 +336,6 @@ fn run_benchmark(test_case: &TestCase) -> Result<TestResult> {
     Ok(TestResult {
         test_case: test_case.clone(),
         raw_changeset_bytes,
-        json_base64_zstd: json_result,
         cbor: cbor_result,
         cbor_zstd: cbor_zstd_result,
     })
@@ -481,7 +345,7 @@ fn run_benchmark(test_case: &TestCase) -> Result<TestResult> {
 fn print_results(results: &[TestResult]) {
     println!();
     println!("================================================================================");
-    println!("                    ENCODING FORMAT COMPARISON BENCHMARK");
+    println!("                       CBOR ENCODING BENCHMARK");
     println!("================================================================================");
     println!();
 
@@ -506,9 +370,9 @@ fn print_results(results: &[TestResult]) {
             "", "", "", "", ""
         );
 
-        let baseline = result.json_base64_zstd.encoded_bytes as f64;
+        let baseline = result.cbor.encoded_bytes as f64;
 
-        for encoding in [&result.json_base64_zstd, &result.cbor, &result.cbor_zstd] {
+        for encoding in [&result.cbor, &result.cbor_zstd] {
             let ratio = encoding.encoded_bytes as f64 / baseline;
             println!(
                 "  {:<20} {:>12} {:>11.2}x {:>12} {:>12}",
@@ -520,13 +384,14 @@ fn print_results(results: &[TestResult]) {
             );
         }
 
-        // Calculate improvement
-        let best_size = result.cbor_zstd.encoded_bytes;
-        let improvement = (1.0 - (best_size as f64 / baseline)) * 100.0;
+        // Calculate compression ratio
+        let compression_ratio =
+            result.cbor.encoded_bytes as f64 / result.cbor_zstd.encoded_bytes as f64;
         println!();
         println!(
-            "  CBOR+zstd improvement over JSON+base64+zstd: {:.1}% smaller",
-            improvement
+            "  Compression ratio: {:.2}x (zstd reduces size by {:.1}%)",
+            compression_ratio,
+            (1.0 - 1.0 / compression_ratio) * 100.0
         );
         println!();
         println!(
@@ -542,33 +407,19 @@ fn print_results(results: &[TestResult]) {
     println!("Format comparison across all test cases:");
     println!();
 
-    let mut total_json: usize = 0;
     let mut total_cbor: usize = 0;
     let mut total_cbor_zstd: usize = 0;
 
     for result in results {
-        total_json += result.json_base64_zstd.encoded_bytes;
         total_cbor += result.cbor.encoded_bytes;
         total_cbor_zstd += result.cbor_zstd.encoded_bytes;
     }
 
-    println!("  JSON+base64+zstd total: {} bytes", total_json);
+    println!("  CBOR total:      {} bytes", total_cbor);
     println!(
-        "  CBOR total:             {} bytes ({:.1}x vs JSON)",
-        total_cbor,
-        total_cbor as f64 / total_json as f64
-    );
-    println!(
-        "  CBOR+zstd total:        {} bytes ({:.1}x vs JSON)",
+        "  CBOR+zstd total: {} bytes ({:.2}x compression)",
         total_cbor_zstd,
-        total_cbor_zstd as f64 / total_json as f64
-    );
-    println!();
-
-    let overall_improvement = (1.0 - (total_cbor_zstd as f64 / total_json as f64)) * 100.0;
-    println!(
-        "Overall CBOR+zstd improvement: {:.1}% smaller than JSON+base64+zstd",
-        overall_improvement
+        total_cbor as f64 / total_cbor_zstd as f64
     );
     println!();
 }
@@ -643,13 +494,13 @@ fn test_encoding_benchmark() {
 
     print_results(&results);
 
-    // Assert that CBOR+zstd is always the smallest
+    // Assert that CBOR+zstd is always smaller than uncompressed CBOR
     for result in &results {
         assert!(
-            result.cbor_zstd.encoded_bytes <= result.json_base64_zstd.encoded_bytes,
-            "CBOR+zstd ({}) should be <= JSON+base64+zstd ({}) for test case {}",
+            result.cbor_zstd.encoded_bytes <= result.cbor.encoded_bytes,
+            "CBOR+zstd ({}) should be <= CBOR ({}) for test case {}",
             result.cbor_zstd.encoded_bytes,
-            result.json_base64_zstd.encoded_bytes,
+            result.cbor.encoded_bytes,
             result.test_case.name
         );
     }
