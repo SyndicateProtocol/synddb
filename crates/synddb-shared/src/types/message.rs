@@ -90,21 +90,15 @@ pub struct SignedMessage {
 impl SignedMessage {
     /// Verify that the signature is valid and was created by the claimed signer.
     ///
-    /// Uses COSE `Sig_structure` for verification.
-    pub fn verify_signature(&self) -> Result<(), VerificationError> {
-        self.verify_cose_signature(&self.cose_protected_header)
-    }
-
-    /// Verify using COSE format: signature over COSE `Sig_structure`
+    /// Uses COSE `Sig_structure` for verification:
+    /// `["Signature1", protected_header, external_aad, payload]`
     ///
-    /// The `Sig_structure` is: `["Signature1", protected_header, external_aad, payload]`
-    ///
-    /// This function also validates that the outer message fields (sequence, timestamp)
+    /// This also validates that the outer message fields (sequence, timestamp)
     /// match the values in the protected header, preventing field substitution attacks.
-    fn verify_cose_signature(&self, protected_header: &[u8]) -> Result<(), VerificationError> {
+    pub fn verify_signature(&self) -> Result<(), VerificationError> {
         // Parse and validate protected header fields match outer fields
         let (header_sequence, header_timestamp) =
-            parse_cose_protected_header_fields(protected_header)?;
+            parse_cose_protected_header_fields(&self.cose_protected_header)?;
 
         if self.sequence != header_sequence {
             return Err(VerificationError::HeaderMismatch {
@@ -124,7 +118,7 @@ impl SignedMessage {
 
         // Build the COSE Sig_structure that was signed
         // Format: ["Signature1", protected, external_aad, payload]
-        let sig_structure = build_cose_sig_structure(protected_header, &self.payload);
+        let sig_structure = build_cose_sig_structure(&self.cose_protected_header, &self.payload);
 
         // Hash it with keccak256 (Ethereum style)
         let message_hash = keccak256(&sig_structure);
@@ -465,5 +459,93 @@ mod tests {
         assert_eq!(decoded.messages.len(), 2);
         assert_eq!(decoded.messages[0].sequence, 1);
         assert_eq!(decoded.messages[1].sequence, 2);
+    }
+
+    #[test]
+    fn test_parse_cose_protected_header_fields() {
+        use ciborium::Value;
+
+        // Custom header labels (must match the constants in parse_cose_protected_header_fields)
+        const HEADER_SEQUENCE: i64 = -65537;
+        const HEADER_TIMESTAMP: i64 = -65538;
+
+        // Build a valid protected header
+        let header = Value::Map(vec![
+            (
+                Value::Integer(HEADER_SEQUENCE.into()),
+                Value::Integer(42i64.into()),
+            ),
+            (
+                Value::Integer(HEADER_TIMESTAMP.into()),
+                Value::Integer(1700000000i64.into()),
+            ),
+        ]);
+        let mut encoded = Vec::new();
+        ciborium::into_writer(&header, &mut encoded).unwrap();
+
+        let (sequence, timestamp) = parse_cose_protected_header_fields(&encoded).unwrap();
+        assert_eq!(sequence, 42);
+        assert_eq!(timestamp, 1700000000);
+    }
+
+    #[test]
+    fn test_parse_cose_protected_header_missing_sequence() {
+        use ciborium::Value;
+
+        const HEADER_TIMESTAMP: i64 = -65538;
+
+        let header = Value::Map(vec![(
+            Value::Integer(HEADER_TIMESTAMP.into()),
+            Value::Integer(1700000000i64.into()),
+        )]);
+        let mut encoded = Vec::new();
+        ciborium::into_writer(&header, &mut encoded).unwrap();
+
+        let result = parse_cose_protected_header_fields(&encoded);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Missing sequence"));
+    }
+
+    #[test]
+    fn test_parse_cose_protected_header_missing_timestamp() {
+        use ciborium::Value;
+
+        const HEADER_SEQUENCE: i64 = -65537;
+
+        let header = Value::Map(vec![(
+            Value::Integer(HEADER_SEQUENCE.into()),
+            Value::Integer(42i64.into()),
+        )]);
+        let mut encoded = Vec::new();
+        ciborium::into_writer(&header, &mut encoded).unwrap();
+
+        let result = parse_cose_protected_header_fields(&encoded);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing timestamp"));
+    }
+
+    #[test]
+    fn test_parse_cose_protected_header_invalid_cbor() {
+        let invalid = vec![0xff, 0xff, 0xff];
+        let result = parse_cose_protected_header_fields(&invalid);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("CBOR parse error"));
+    }
+
+    #[test]
+    fn test_parse_cose_protected_header_not_a_map() {
+        use ciborium::Value;
+
+        // Encode an array instead of a map
+        let not_a_map = Value::Array(vec![Value::Integer(42i64.into())]);
+        let mut encoded = Vec::new();
+        ciborium::into_writer(&not_a_map, &mut encoded).unwrap();
+
+        let result = parse_cose_protected_header_fields(&encoded);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a CBOR map"));
     }
 }

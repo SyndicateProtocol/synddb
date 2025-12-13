@@ -3,6 +3,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use synddb_shared::types::{
+    cbor::batch::CborBatch,
     message::{SignedBatch, SignedMessage},
     payloads::{ChangesetBatchRequest, ChangesetData, SnapshotData, SnapshotRequest},
 };
@@ -108,19 +109,14 @@ impl SequencerClient {
             .context("Failed to list storage batches")
     }
 
-    /// Fetch a batch by start sequence (JSON format via /json endpoint)
+    /// Fetch a batch by start sequence (CBOR+zstd format)
     pub(crate) async fn fetch_batch(&self, start_sequence: u64) -> Result<SignedBatch> {
-        let url = self
-            .base_url
-            .join(&format!("/storage/batches/{}/json", start_sequence))?;
-        self.client
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await
-            .context("Failed to fetch storage batch")
+        let data = self.fetch_batch_cbor(start_sequence).await?;
+        let cbor_batch =
+            CborBatch::from_cbor_zstd(&data).context("Failed to decompress/parse CBOR batch")?;
+        cbor_batch
+            .to_signed_batch()
+            .context("Failed to convert CBOR batch to SignedBatch")
     }
 
     /// Fetch raw CBOR+zstd batch data by start sequence
@@ -143,12 +139,17 @@ impl SequencerClient {
     pub(crate) async fn try_fetch_batch(&self, start_sequence: u64) -> Result<Option<SignedBatch>> {
         let url = self
             .base_url
-            .join(&format!("/storage/batches/{}/json", start_sequence))?;
+            .join(&format!("/storage/batches/{}", start_sequence))?;
         let response = self.client.get(url).send().await?;
 
         match response.status() {
             status if status.is_success() => {
-                let batch = response.json().await?;
+                let data = response.bytes().await?;
+                let cbor_batch = CborBatch::from_cbor_zstd(&data)
+                    .context("Failed to decompress/parse CBOR batch")?;
+                let batch = cbor_batch
+                    .to_signed_batch()
+                    .context("Failed to convert CBOR batch to SignedBatch")?;
                 Ok(Some(batch))
             }
             reqwest::StatusCode::NOT_FOUND => Ok(None),

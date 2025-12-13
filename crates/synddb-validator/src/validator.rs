@@ -413,9 +413,7 @@ impl Validator {
     ///
     /// Returns the number of messages synced from this batch.
     ///
-    /// Signature verification is always performed. The verifier automatically
-    /// handles both legacy (JSON) and COSE signature formats based on the
-    /// presence of `cose_protected_header` in each message.
+    /// Signature verification is always performed using COSE format.
     pub async fn sync_batch<F>(&mut self, batch: &SignedBatch, on_withdrawal: &mut F) -> Result<u64>
     where
         F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
@@ -440,7 +438,7 @@ impl Validator {
                 continue;
             }
 
-            // Verify signature (handles both legacy and COSE formats)
+            // Verify COSE signature
             self.verifier
                 .verify(message)
                 .map_err(|e| ValidatorError::SignatureVerification(e.to_string()))?;
@@ -619,7 +617,7 @@ impl Validator {
                                 continue;
                             }
 
-                            // Verify signature (handles both legacy and COSE formats)
+                            // Verify COSE signature
                             if let Err(e) = self.verifier.verify(message) {
                                 error!(
                                     sequence = message.sequence,
@@ -781,10 +779,11 @@ mod tests {
             attestation_token: None,
         };
 
-        // Compress
-        let json = serde_json::to_vec(&batch).unwrap();
+        // Serialize to CBOR and compress
+        let mut cbor = Vec::new();
+        ciborium::into_writer(&batch, &mut cbor).unwrap();
         let mut encoder = zstd::Encoder::new(Vec::new(), 3).unwrap();
-        encoder.write_all(&json).unwrap();
+        encoder.write_all(&cbor).unwrap();
         let compressed = encoder.finish().unwrap();
 
         // COSE sign function
@@ -981,10 +980,11 @@ mod tests {
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let end_sequence = messages.last().map_or(start_sequence, |m| m.sequence);
 
-        // Create content hash from serialized messages
+        // Create content hash from serialized messages (CBOR format)
         let content_hash = {
-            let json = serde_json::to_vec(&messages).expect("serialize messages");
-            let hash = keccak256(&json);
+            let mut cbor = Vec::new();
+            ciborium::into_writer(&messages, &mut cbor).expect("serialize messages");
+            let hash = keccak256(&cbor);
             let mut arr = [0u8; 32];
             arr.copy_from_slice(hash.as_slice());
             arr

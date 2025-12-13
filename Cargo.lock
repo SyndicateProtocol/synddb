@@ -4419,6 +4419,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "ciborium",
  "clap",
  "google-cloud-storage",
  "hex",

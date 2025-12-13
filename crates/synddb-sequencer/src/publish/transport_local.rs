@@ -4,9 +4,8 @@
 //!
 //! ```text
 //! /storage/batches              - List all batches
-//! /storage/batches/{start}      - Get batch by start sequence (returns CBOR)
-//! /storage/batches/{start}/json - Get batch by start sequence (returns JSON)
-//! /storage/messages/{sequence}  - Get message by sequence (returns JSON)
+//! /storage/batches/{start}      - Get batch by start sequence (CBOR+zstd format)
+//! /storage/messages/{sequence}  - Get message by sequence
 //! /storage/latest               - Get latest sequence number
 //! ```
 //!
@@ -94,7 +93,6 @@ impl LocalTransport {
         Router::new()
             .route("/batches", get(list_batches))
             .route("/batches/{start}", get(get_batch_cbor))
-            .route("/batches/{start}/json", get(get_batch_json))
             .route("/messages/{sequence}", get(get_message))
             .route("/latest", get(get_latest))
             .with_state(self)
@@ -287,7 +285,7 @@ async fn list_batches(State(transport): State<Arc<LocalTransport>>) -> Json<Vec<
     Json(items)
 }
 
-/// Get batch as raw CBOR+zstd (for validators using CBOR)
+/// Get batch as raw CBOR+zstd
 async fn get_batch_cbor(
     State(transport): State<Arc<LocalTransport>>,
     Path(start): Path<u64>,
@@ -301,24 +299,6 @@ async fn get_batch_cbor(
                 data,
             )
                 .into_response()
-        },
-    )
-}
-
-/// Get batch as JSON (for debugging/compatibility)
-async fn get_batch_json(
-    State(transport): State<Arc<LocalTransport>>,
-    Path(start): Path<u64>,
-) -> Response {
-    transport.get_batch(start).map_or_else(
-        || StatusCode::NOT_FOUND.into_response(),
-        |batch| match batch.to_signed_batch() {
-            Ok(signed_batch) => Json(signed_batch).into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to convert batch: {e}"),
-            )
-                .into_response(),
         },
     )
 }
