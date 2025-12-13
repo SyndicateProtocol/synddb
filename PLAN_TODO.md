@@ -154,6 +154,30 @@ src/publish/persistent_queue.rs
 - `da_publish_failures` / `schema_detection_errors`
 - Health status per DA layer
 
+### 3.7 Batching Layer
+
+**Source**: `crates/synddb-sequencer/src/publish/traits.rs:9`
+
+**Status**: TODO - documented but not implemented
+
+**Problem**: Messages published one at a time, inefficient for high throughput
+
+**Solution**: Implement batching layer between HTTP handlers and StoragePublisher
+```rust
+pub struct BatchConfig {
+    /// Maximum messages per batch before flushing (default: 50)
+    pub batch_size: usize,
+    /// Maximum time to wait before flushing a partial batch (default: 5s)
+    pub batch_interval: Duration,
+    /// Enable zstd compression for batches (recommended for batch_size > 1)
+    pub compress: bool,
+}
+```
+
+Two possible modes:
+- Fire-and-forget: HTTP handler returns immediately after sequencing
+- Wait-for-batch: HTTP handler waits until its message's batch is published
+
 ---
 
 ## 4. Validator TEE Integration [P1]
@@ -202,13 +226,30 @@ struct StateUpdateSignature {
 
 ---
 
-## 5. Validator Extension System [P2]
+## 5. Validator Metrics [P1]
+
+**Source**: `crates/synddb-validator/src/metrics.rs`
+
+**Status**: Empty file with TODO comment listing planned metrics
+
+**Planned Prometheus metrics**:
+- `synddb_validator_messages_synced_total` - Counter of synced messages
+- `synddb_validator_last_sequence` - Gauge of last synced sequence number
+- `synddb_validator_sync_lag_seconds` - Gauge of time since last sync
+- `synddb_validator_changeset_apply_duration_seconds` - Histogram of apply times
+- `synddb_validator_signature_verify_duration_seconds` - Histogram of verify times
+- `synddb_validator_gaps_detected_total` - Counter of detected gaps
+- `synddb_validator_withdrawals_signed_total` - Counter of signed withdrawals
+
+---
+
+## 6. Validator Extension System [P2]
 
 **Source**: `PLAN_VALIDATOR.md`
 
 **Status**: Planned but not implemented
 
-### 5.1 WithdrawalValidator Trait
+### 6.1 WithdrawalValidator Trait
 
 ```rust
 #[async_trait]
@@ -217,37 +258,46 @@ pub trait WithdrawalValidator: Send + Sync {
 }
 ```
 
-### 5.2 Example Extensions
+### 6.2 Example Extensions
 
 - `WithdrawalRateLimiter` - Daily withdrawal limits per address
 - Custom business logic validators
 - External API verification
 
+### 6.3 Validator HTTP Protocols
+
+**Source**: `PLAN_VALIDATOR.md:206`
+
+Future protocols beyond REST:
+- JSON-RPC support
+- WebSocket subscriptions for real-time updates
+
 ---
 
-## 6. Chain Monitor / Bridge Integration [P1]
+## 7. Chain Monitor / Bridge Integration [P1]
 
 **Source**: `PLAN_BRIDGE.md`, `crates/synddb-chain-monitor/`
 
 **Status**: Partially implemented with TODOs
 
-### 6.1 Bridge Event Definitions
+### 7.1 Bridge Event Definitions
 
 - `crates/synddb-chain-monitor/src/events.rs:9` - "TODO: Update with finalized Bridge contract events"
+- `crates/synddb-chain-monitor/src/events.rs:10` - "TODO: Test what happens if Bridge interacts with multiple contracts"
 - Define event types matching `contracts/src/Bridge.sol` events:
   - `MessageInitialized`
   - `MessageHandled`
   - `NativeTokenWrapped`
   - `NativeTokenUnwrapped`
 
-### 6.2 Bridge Deployment Metadata
+### 7.2 Bridge Deployment Metadata
 
 - `crates/synddb-chain-monitor/src/config.rs:25` - "TODO - automatically get this from Bridge deployment metadata"
 - Auto-discover Bridge contract address from deployment artifacts
 
 ---
 
-## 7. Additional Validator Fetchers [P2]
+## 8. Additional Validator Fetchers [P2]
 
 **Source**: `PLAN_VALIDATOR.md`
 
@@ -266,21 +316,108 @@ pub trait WithdrawalValidator: Send + Sync {
 
 ---
 
-## 8. Client Language Bindings [P2]
+## 9. Client Language Bindings [P2]
 
 **Source**: `crates/synddb-client/examples/`
 
 **Status**: Go bindings exist with TODOs, Python not implemented
 
-### 8.1 Python Bindings
+### 9.1 Python Bindings
 
 - `crates/synddb-client/examples/README.md:145` - "Status: TODO - Native Python bindings not yet implemented"
+- `crates/synddb-client/examples/python_example.py:5` - "WORK IN PROGRESS - NOT FUNCTIONAL"
 - Options: PyO3 bindings or C FFI wrapper
 
-### 8.2 Go Bindings
+### 9.2 Go Bindings
 
 - `crates/synddb-client/bindings/go/synddb.go:58` - "TODO: Platform-specific extraction of sqlite3*"
 - Complete CGO integration for SQLite pointer handling
+- Currently passes null pointer - needs driver-specific extraction
+
+---
+
+## 10. GCS Provider Improvements [P2]
+
+**Source**: `crates/synddb-sequencer/src/publish/gcs.rs`, `crates/synddb-validator/src/sync/providers/gcs.rs`
+
+### 10.1 Batch Listing Pagination
+
+- `crates/synddb-sequencer/src/publish/gcs.rs:243` - "TODO: This is O(n) in the number of batches"
+- `crates/synddb-validator/src/sync/providers/gcs.rs:187` - "TODO: GCS returns max 1000 objects per request"
+- Need to implement pagination for large batch counts
+
+### 10.2 GCS Architecture Review
+
+- `crates/synddb-validator/src/sync/providers/gcs.rs:17` - "TODO revisit this"
+
+---
+
+## 11. Batch File Optimization [P2]
+
+**Source**: `docs/plans/batch-size-optimization.md`
+
+**Status**: Base64 encoding implemented, compression and COSE planned
+
+### 11.1 Compress Batch Files
+
+**Effort**: Low | **Benefit**: ~2-3x for single messages, ~5-10x for multi-message batches
+
+- Store as `.json.zst` or `.json.gz`
+- GCS can serve with automatic decompression via `Content-Encoding`
+
+### 11.2 COSE Format
+
+**Effort**: High | **Benefit**: Optimal compactness + standardization
+
+Replace JSON with COSE (CBOR Object Signing and Encryption, RFC 8152):
+- No encoding overhead for payloads (raw binary)
+- Standard format for signed data
+- Rust libraries: `coset`, `cose-rust`
+
+Migration approach:
+1. Implement COSE writer in sequencer
+2. Implement COSE reader in validator
+3. Support both formats during transition
+4. Eventually deprecate JSON format
+
+---
+
+## 12. Release Process Improvements [P2]
+
+**Source**: `RELEASING.md:275`
+
+**Status**: Manual release process, automation planned
+
+- [ ] Publish to npm (@synddb/client-native)
+- [ ] Publish to PyPI (synddb-client)
+- [ ] Automated changelog generation
+- [ ] Automated version bumping
+- [ ] Cross-compilation for more platforms (ARM Linux, etc.)
+- [ ] Signed binaries
+- [ ] Notarization for macOS binaries
+
+---
+
+## 13. E2E Test Improvements [P2]
+
+**Source**: `tests/e2e/runner/src/runner.rs:54`
+
+### 13.1 DA Test Configuration
+
+- `tests/e2e/runner/src/runner.rs:54` - "TODO CLAUDE fix this"
+- DA API tests currently skipped for external DA layers (GCS)
+- Need proper configuration for different DA backends
+
+---
+
+## 14. Ignored/Skipped Tests [P2]
+
+Tests marked with `#[ignore]` that need environments or manual verification:
+
+| Test | Location | Reason |
+|------|----------|--------|
+| Attestation network test | `crates/synddb-sequencer/src/attestation.rs:351` | Requires network access |
+| GCP Confidential Space test | `crates/synddb-client/src/attestation.rs:284` | Requires GCP environment |
 
 ---
 
@@ -300,19 +437,51 @@ pub trait WithdrawalValidator: Send + Sync {
 - [ ] Persistent queue for crash recovery
 - [ ] Graceful shutdown
 - [ ] Validator TEE integration (ConfidentialValidator)
-- [ ] Bridge event definitions
+- [ ] Bridge event definitions (update from sample events)
 - [ ] Progressive degradation manager
 - [ ] State commitments
+- [ ] Validator Prometheus metrics
+- [ ] Batching layer for publishers
+- [ ] Bridge deployment metadata auto-discovery
 
 ### Phase 3: Extended Features [P2]
 
 - [ ] IPFS publisher
 - [ ] Arweave publisher
 - [ ] Validator extension system
-- [ ] Python bindings
-- [ ] Complete Go bindings
+- [ ] Python bindings (PyO3)
+- [ ] Complete Go bindings (CGO sqlite3*)
 - [ ] Key rotation protocol
 - [ ] Additional validator fetchers
+- [ ] GCS pagination for large batch counts
+- [ ] Batch file compression (.json.zst)
+- [ ] COSE format for batches
+- [ ] Release automation (npm, PyPI, changelog)
+- [ ] E2E test DA configuration fix
+- [ ] Validator JSON-RPC/WebSocket protocols
+
+---
+
+## Code TODOs Summary
+
+Quick reference of all TODO comments found in the codebase:
+
+| File | Line | Description |
+|------|------|-------------|
+| `synddb-sequencer/src/publish/celestia.rs` | 21-22 | Use celestia-client, return blob ID |
+| `synddb-sequencer/src/publish/eigenda.rs` | 21-22 | Use eigenda-rust, return blob reference |
+| `synddb-sequencer/src/publish/ipfs.rs` | 21-22 | Use ipfs-api, return CID |
+| `synddb-sequencer/src/publish/arweave.rs` | 21-22 | Use arweave-rs, return tx ID |
+| `synddb-sequencer/src/publish/traits.rs` | 9 | Implement batching layer |
+| `synddb-sequencer/src/publish/gcs.rs` | 243 | O(n) batch listing optimization |
+| `synddb-validator/src/metrics.rs` | 3 | Implement Prometheus metrics |
+| `synddb-validator/src/sync/providers/gcs.rs` | 17 | Revisit GCS architecture |
+| `synddb-validator/src/sync/providers/gcs.rs` | 187 | GCS 1000 object pagination |
+| `synddb-chain-monitor/src/events.rs` | 9-10 | Update Bridge events, test multi-contract |
+| `synddb-chain-monitor/src/config.rs` | 25 | Auto-get Bridge deployment metadata |
+| `synddb-client/bindings/go/synddb.go` | 58 | Platform-specific sqlite3* extraction |
+| `synddb-client/examples/python_example.py` | 21 | Implement Python bindings |
+| `tests/e2e/runner/src/runner.rs` | 54 | Fix DA test configuration |
 
 ---
 
@@ -323,3 +492,5 @@ pub trait WithdrawalValidator: Send + Sync {
 - `PLAN_VALIDATOR.md` - Validator implementation plan
 - `PLAN_BRIDGE.md` - Bridge contract specification
 - `PLAN_MESSAGE_PASSING.md` - Message passing system design
+- `docs/plans/batch-size-optimization.md` - Batch optimization strategies
+- `RELEASING.md` - Release process documentation
