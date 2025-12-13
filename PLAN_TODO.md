@@ -494,3 +494,40 @@ Quick reference of all TODO comments found in the codebase:
 - `PLAN_MESSAGE_PASSING.md` - Message passing system design
 - `docs/plans/batch-size-optimization.md` - Batch optimization strategies
 - `RELEASING.md` - Release process documentation
+
+---
+
+## Maintenance: How to Update This Document
+
+When refreshing this TODO list, follow these steps:
+
+1. **Read PLAN and SPEC files** - Glob for `**/{PLAN,SPEC}*.md` and compare documented features against implementation
+
+2. **Search for TODO markers** - Grep for common patterns:
+   ```
+   TODO|FIXME|XXX|HACK|unimplemented!|todo!
+   ```
+
+3. **Search for stub/placeholder code** - Grep for:
+   ```
+   stub|placeholder|not yet|not implemented|WIP
+   ```
+
+4. **Check for ignored tests** - Grep for `#[ignore]` to find tests requiring special environments
+
+5. **Search for future work references** - Grep in `*.md` files for:
+   ```
+   future|roadmap|planned|eventually
+   ```
+
+6. **Review feature flags** - Check `Cargo.toml` files for features with stub implementations
+
+7. **Check empty/minimal files** - Look for files with only TODO comments or minimal content (e.g., `metrics.rs`)
+
+8. **Review docs/ directory** - Check `docs/plans/` for optimization or improvement documents
+
+9. **Check RELEASING.md** - Look for "Future Improvements" sections
+
+10. **Verify against crate READMEs** - Each crate's README may list planned features
+
+After updates, organize items by priority (P0/P1/P2) and update the Implementation Checklist.
