@@ -44,7 +44,13 @@ async fn main() -> Result<()> {
     let signer = MessageSigner::new(&config.signing_key)
         .context("Failed to initialize signer from SIGNING_KEY")?;
 
-    info!(signer_address = %format!("{:?}", signer.address()), "Signer initialized");
+    // Log both address (for human readability) and public key (for verification)
+    let pubkey_hex = format!("0x{}", hex::encode(signer.public_key()));
+    info!(
+        address = %signer.address(),
+        public_key = %pubkey_hex,
+        "Signer initialized"
+    );
 
     let signer = Arc::new(signer);
 

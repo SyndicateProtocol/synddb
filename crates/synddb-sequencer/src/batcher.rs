@@ -366,10 +366,10 @@ impl Batcher {
             .unwrap()
             .as_secs();
 
-        let signer_address = self.signer.address().into_array();
+        let signer_pubkey = self.signer.public_key();
 
         // Create and sign the batch
-        let batch = CborBatch::new(messages, created_at, signer_address, |data| {
+        let batch = CborBatch::new(messages, created_at, signer_pubkey, |data| {
             self.sign_batch_data(data)
         })?;
 
@@ -455,14 +455,14 @@ impl Batcher {
         message_type: CborMessageType,
         payload: Vec<u8>,
     ) -> Result<CborSignedMessage, BatcherError> {
-        let signer_address = self.signer.address().into_array();
+        let signer_pubkey = self.signer.public_key();
 
         CborSignedMessage::new(
             sequence,
             timestamp,
             message_type,
             payload,
-            signer_address,
+            signer_pubkey,
             |data| self.sign_message_data(data),
         )
         .map_err(BatcherError::from)

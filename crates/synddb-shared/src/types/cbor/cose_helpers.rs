@@ -17,15 +17,15 @@ pub const HEADER_MSG_TYPE: i64 = -65539;
 ///
 /// The structure uses:
 /// - Protected header: algorithm (ES256K), sequence, timestamp, message type
-/// - Unprotected header: signer address
+/// - Unprotected header: signer public key (64 bytes, uncompressed without 0x04 prefix)
 /// - Payload: the compressed message data
-/// - Signature: 64-byte secp256k1 signature
+/// - Signature: 64-byte secp256k1 signature (EIP-191 format)
 pub(super) fn build_cose_sign1<F>(
     sequence: u64,
     timestamp: u64,
     message_type: CborMessageType,
     payload: Vec<u8>,
-    signer: [u8; 20],
+    signer_pubkey: [u8; 64], // TODO CLAUDE: im surprised there isn't a better data type for this
     sign_fn: F,
 ) -> Result<Vec<u8>, CborError>
 where
@@ -48,11 +48,11 @@ where
         Value::Integer((message_type.as_u8() as i64).into()),
     ));
 
-    // Build unprotected header with signer address
+    // Build unprotected header with signer public key (64 bytes)
     let mut unprotected = Header::default();
     unprotected.rest.push((
-        Label::Text("signer".to_string()),
-        Value::Bytes(signer.to_vec()),
+        Label::Text("pubkey".to_string()),
+        Value::Bytes(signer_pubkey.to_vec()),
     ));
 
     // Create the COSE_Sign1 structure without signature first to get the Sig_structure
@@ -100,8 +100,8 @@ pub(super) fn parse_cose_sign1(bytes: &[u8]) -> Result<ParsedCoseMessage, CborEr
         as u8;
     let message_type = CborMessageType::from_u8(msg_type_u8)?;
 
-    // Extract signer from unprotected header
-    let signer = extract_signer(&cose.unprotected)?;
+    // Extract public key from unprotected header (64 bytes)
+    let pubkey = extract_pubkey(&cose.unprotected)?;
 
     // Extract signature (must be exactly 64 bytes)
     let signature: [u8; 64] = cose.signature.as_slice().try_into().map_err(|_| {
@@ -120,24 +120,27 @@ pub(super) fn parse_cose_sign1(bytes: &[u8]) -> Result<ParsedCoseMessage, CborEr
         message_type,
         payload,
         signature,
-        signer,
+        pubkey,
     })
 }
 
 /// Verify `COSE_Sign1` signature and parse contents
+///
+/// Verifies that the signature was created by the holder of the private key
+/// corresponding to the expected public key.
 pub(super) fn verify_and_parse_cose_sign1(
     bytes: &[u8],
-    expected_signer: &[u8; 20],
+    expected_pubkey: &[u8; 64],
 ) -> Result<ParsedCoseMessage, CborError> {
     let cose = CoseSign1::from_slice(bytes)?;
 
-    // Extract signer and verify it matches
-    let signer = extract_signer(&cose.unprotected)?;
-    if signer != *expected_signer {
+    // Extract public key and verify it matches
+    let pubkey = extract_pubkey(&cose.unprotected)?;
+    if pubkey != *expected_pubkey {
         return Err(CborError::SignatureVerification(format!(
-            "Signer mismatch: expected 0x{}, got 0x{}",
-            hex::encode(expected_signer),
-            hex::encode(signer)
+            "Public key mismatch: expected 0x{}, got 0x{}",
+            hex::encode(expected_pubkey),
+            hex::encode(pubkey)
         )));
     }
 
@@ -152,8 +155,8 @@ pub(super) fn verify_and_parse_cose_sign1(
         ))
     })?;
 
-    // Verify signature using secp256k1
-    verify_secp256k1_signature(&tbs, &signature, expected_signer)?;
+    // Verify signature using secp256k1 with direct public key verification
+    verify_secp256k1_signature(&tbs, &signature, expected_pubkey)?;
 
     // Now parse the rest
     parse_cose_sign1(bytes)
@@ -195,54 +198,64 @@ fn extract_u64_from_header(header: &Header, label: i64) -> Result<Option<u64>, C
     Ok(None)
 }
 
-/// Extract signer address from unprotected header
-fn extract_signer(header: &Header) -> Result<[u8; 20], CborError> {
+/// Extract public key from unprotected header (64 bytes, uncompressed without prefix)
+fn extract_pubkey(header: &Header) -> Result<[u8; 64], CborError> {
     for (key, value) in &header.rest {
         if let Label::Text(s) = key {
-            if s == "signer" {
+            if s == "pubkey" {
                 if let Value::Bytes(b) = value {
                     return b.as_slice().try_into().map_err(|_| {
-                        CborError::Cose(format!("Invalid signer length: {}", b.len()))
+                        CborError::Cose(format!(
+                            "Invalid public key length: expected 64, got {}",
+                            b.len()
+                        ))
                     });
                 }
             }
         }
     }
-    Err(CborError::MissingHeader("signer".to_string()))
+    Err(CborError::MissingHeader("pubkey".to_string()))
 }
 
-/// Verify a secp256k1 signature
+// TODO CLAUDE or HUMAN: check if lib function for this exists
+/// Verify a secp256k1 signature against a known public key
 ///
-/// The signature is 64 bytes (r || s). We recover the public key from the
-/// signature and verify it matches the expected signer address.
+/// The signature is 64 bytes (r || s). We verify directly against the
+/// provided public key using ECDSA verification.
 fn verify_secp256k1_signature(
     message: &[u8],
     signature: &[u8; 64],
-    expected_signer: &[u8; 20],
+    expected_pubkey: &[u8; 64],
 ) -> Result<(), CborError> {
-    use alloy::primitives::{keccak256, Signature, B256, U256};
+    use alloy::primitives::keccak256;
+    use k256::{
+        ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey},
+        EncodedPoint,
+    };
 
     // Hash the message with keccak256 (Ethereum style)
     let message_hash = keccak256(message);
 
-    // Try both recovery IDs (0 and 1) since we don't store v
-    for v in [false, true] {
-        let sig = Signature::new(
-            U256::from_be_slice(&signature[..32]),
-            U256::from_be_slice(&signature[32..]),
-            v,
-        );
+    // Reconstruct the uncompressed public key with 0x04 prefix
+    let mut uncompressed = [0u8; 65];
+    uncompressed[0] = 0x04;
+    uncompressed[1..].copy_from_slice(expected_pubkey);
 
-        if let Ok(recovered) = sig.recover_address_from_prehash(&B256::from(message_hash)) {
-            if recovered.as_slice() == expected_signer {
-                return Ok(());
-            }
-        }
-    }
+    // Parse the public key
+    let encoded_point = EncodedPoint::from_bytes(uncompressed)
+        .map_err(|e| CborError::SignatureVerification(format!("Invalid public key: {e}")))?;
 
-    Err(CborError::SignatureVerification(
-        "Could not recover matching address from signature".to_string(),
-    ))
+    let verifying_key = VerifyingKey::from_encoded_point(&encoded_point)
+        .map_err(|e| CborError::SignatureVerification(format!("Invalid public key: {e}")))?;
+
+    // Parse the signature (r || s, 64 bytes)
+    let sig = Signature::from_slice(signature)
+        .map_err(|e| CborError::SignatureVerification(format!("Invalid signature: {e}")))?;
+
+    // Verify the signature against the prehashed message
+    verifying_key
+        .verify_prehash(message_hash.as_slice(), &sig)
+        .map_err(|_| CborError::SignatureVerification("Signature verification failed".to_string()))
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 //! smart contracts and standard verification tools.
 
 use alloy::{
-    primitives::{keccak256, Address, B256},
+    primitives::{keccak256, Address, B256, B512},
     signers::{local::PrivateKeySigner, Signer},
 };
 use thiserror::Error;
@@ -44,6 +44,19 @@ impl MessageSigner {
     /// Get the Ethereum address derived from the signing key
     pub const fn address(&self) -> Address {
         self.signer.address()
+    }
+
+    /// Get the 64-byte uncompressed public key (without 0x04 prefix)
+    ///
+    /// This is the raw secp256k1 public key: 32 bytes X coordinate || 32 bytes Y coordinate.
+    /// Used for signature verification without address recovery.
+    pub fn public_key(&self) -> [u8; 64] {
+        self.signer.public_key().0
+    }
+
+    /// Get the public key as a B512
+    pub fn public_key_b512(&self) -> B512 {
+        self.signer.public_key()
     }
 
     /// Create the signing payload for a sequenced message

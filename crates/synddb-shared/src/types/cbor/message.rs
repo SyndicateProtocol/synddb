@@ -55,8 +55,8 @@ pub struct ParsedCoseMessage {
     pub payload: Vec<u8>,
     /// 64-byte signature (r || s, without recovery byte)
     pub signature: [u8; 64],
-    /// 20-byte Ethereum address of signer
-    pub signer: [u8; 20],
+    /// 64-byte uncompressed public key (without 0x04 prefix)
+    pub pubkey: [u8; 64],
 }
 
 /// CBOR-serialized signed message using `COSE_Sign1` structure
@@ -74,14 +74,14 @@ impl CborSignedMessage {
     /// * `timestamp` - Unix timestamp
     /// * `message_type` - Type of message
     /// * `payload` - Already zstd-compressed payload bytes
-    /// * `signer_address` - 20-byte Ethereum address
+    /// * `signer_pubkey` - 64-byte uncompressed public key (without 0x04 prefix)
     /// * `sign_fn` - Function to sign the COSE `Sig_structure`, returns 64-byte signature
     pub fn new<F>(
         sequence: u64,
         timestamp: u64,
         message_type: CborMessageType,
         payload: Vec<u8>,
-        signer_address: [u8; 20],
+        signer_pubkey: [u8; 64],
         sign_fn: F,
     ) -> Result<Self, CborError>
     where
@@ -92,7 +92,7 @@ impl CborSignedMessage {
             timestamp,
             message_type,
             payload,
-            signer_address,
+            signer_pubkey,
             sign_fn,
         )?;
 
@@ -119,9 +119,9 @@ impl CborSignedMessage {
     /// Returns the parsed message if signature verification succeeds.
     pub fn verify_and_parse(
         &self,
-        expected_signer: &[u8; 20],
+        expected_pubkey: &[u8; 64],
     ) -> Result<ParsedCoseMessage, CborError> {
-        cose_helpers::verify_and_parse_cose_sign1(&self.cose_bytes, expected_signer)
+        cose_helpers::verify_and_parse_cose_sign1(&self.cose_bytes, expected_pubkey)
     }
 
     /// Parse without verification (for debugging only)

@@ -51,9 +51,12 @@ pub struct ValidatorConfig {
     )]
     pub state_db_path: String,
 
-    /// Expected sequencer address (for signature verification)
-    #[arg(long, env = "SEQUENCER_ADDRESS")]
-    pub sequencer_address: String,
+    /// Expected sequencer public key (for signature verification)
+    ///
+    /// This should be the 64-byte uncompressed public key in hex format (128 hex chars),
+    /// with optional "0x" prefix. The sequencer logs its public key at startup.
+    #[arg(long, env = "SEQUENCER_PUBKEY")]
+    pub sequencer_pubkey: String,
 
     /// Fetcher type for retrieving messages from storage layer
     #[arg(long, env = "FETCHER_TYPE", value_enum, default_value = "http")]
@@ -157,12 +160,12 @@ pub struct ValidatorConfig {
 }
 
 impl ValidatorConfig {
-    /// Create a config for testing with a specific sequencer address
-    pub fn with_sequencer_address(address: &str) -> Self {
+    /// Create a config for testing with a specific sequencer public key
+    pub fn with_sequencer_pubkey(pubkey: &str) -> Self {
         Self::parse_from([
             "synddb-validator",
-            "--sequencer-address",
-            address,
+            "--sequencer-pubkey",
+            pubkey,
             "--database-path",
             ":memory:",
             "--state-db-path",
@@ -203,13 +206,14 @@ impl ValidatorConfig {
 mod tests {
     use super::*;
 
+    // 64-byte uncompressed public key corresponding to test private key
+    // ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+    const TEST_PUBKEY: &str = "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5";
+
     #[test]
     fn test_config_defaults() {
-        let config = ValidatorConfig::parse_from([
-            "synddb-validator",
-            "--sequencer-address",
-            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-        ]);
+        let config =
+            ValidatorConfig::parse_from(["synddb-validator", "--sequencer-pubkey", TEST_PUBKEY]);
 
         assert_eq!(config.database_path, "/data/validator.db");
         assert_eq!(config.gcs_prefix, "sequencer");
@@ -226,8 +230,8 @@ mod tests {
     fn test_config_with_gcs() {
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
-            "--sequencer-address",
-            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--sequencer-pubkey",
+            TEST_PUBKEY,
             "--gcs-bucket",
             "my-bucket",
             "--gcs-prefix",
@@ -240,13 +244,9 @@ mod tests {
 
     #[test]
     fn test_config_test_helper() {
-        let config =
-            ValidatorConfig::with_sequencer_address("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+        let config = ValidatorConfig::with_sequencer_pubkey(TEST_PUBKEY);
 
-        assert_eq!(
-            config.sequencer_address,
-            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-        );
+        assert_eq!(config.sequencer_pubkey, TEST_PUBKEY);
         assert_eq!(config.database_path, ":memory:");
     }
 
@@ -254,8 +254,8 @@ mod tests {
     fn test_bridge_signer_config() {
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
-            "--sequencer-address",
-            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--sequencer-pubkey",
+            "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5",
             "--bridge-signer",
             "--bridge-contract",
             "0x1234567890abcdef1234567890abcdef12345678",
@@ -279,8 +279,8 @@ mod tests {
     fn test_bridge_signer_validation_missing_contract() {
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
-            "--sequencer-address",
-            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--sequencer-pubkey",
+            "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5",
             "--bridge-signer",
         ]);
 
@@ -291,8 +291,8 @@ mod tests {
     fn test_bridge_signer_disabled_no_validation() {
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
-            "--sequencer-address",
-            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--sequencer-pubkey",
+            "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5",
         ]);
 
         assert!(config.validate_bridge_config().is_ok());
@@ -302,8 +302,8 @@ mod tests {
     fn test_batch_sync_config() {
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
-            "--sequencer-address",
-            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--sequencer-pubkey",
+            "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5",
             "--batch-sync-enabled",
             "false",
             "--batch-index-refresh-interval",

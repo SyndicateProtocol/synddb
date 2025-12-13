@@ -2712,6 +2712,7 @@ dependencies = [
  "once_cell",
  "serdect",
  "sha2",
+ "signature",
 ]
 
 [[package]]
@@ -4400,6 +4401,7 @@ dependencies = [
  "ciborium",
  "coset",
  "hex",
+ "k256",
  "serde",
  "serde_bytes",
  "serde_json",

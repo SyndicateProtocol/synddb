@@ -4,48 +4,81 @@
 //! All messages use `COSE_Sign1` signatures with 64-byte (r || s) format.
 
 use crate::error::ValidatorError;
-use alloy::primitives::Address;
 use anyhow::Result;
 use synddb_shared::types::message::SignedMessage;
 
 /// Verifies signatures on `SignedMessage` payloads
 #[derive(Debug, Clone)]
 pub struct SignatureVerifier {
-    /// Expected sequencer address
-    expected_signer: Address,
+    /// Expected sequencer public key (64 bytes, uncompressed without 0x04 prefix)
+    expected_pubkey: [u8; 64],
 }
 
 impl SignatureVerifier {
-    /// Create a new verifier expecting messages from the given sequencer
-    pub const fn new(expected_signer: Address) -> Self {
-        Self { expected_signer }
+    /// Create a new verifier expecting messages from the given sequencer public key
+    pub const fn new(expected_pubkey: [u8; 64]) -> Self {
+        Self { expected_pubkey }
+    }
+
+    /// Create a new verifier from a hex-encoded public key string
+    ///
+    /// The string should be 128 hex characters (with optional "0x" prefix)
+    /// representing the 64-byte uncompressed public key.
+    pub fn from_hex(hex_pubkey: &str) -> Result<Self> {
+        let hex_str = hex_pubkey.strip_prefix("0x").unwrap_or(hex_pubkey);
+        if hex_str.len() != 128 {
+            return Err(ValidatorError::InvalidSignature(format!(
+                "Invalid public key length: expected 128 hex chars, got {}",
+                hex_str.len()
+            ))
+            .into());
+        }
+        let bytes = hex::decode(hex_str).map_err(|e| {
+            ValidatorError::InvalidSignature(format!("Invalid public key hex: {e}"))
+        })?;
+        let mut pubkey = [0u8; 64];
+        pubkey.copy_from_slice(&bytes);
+        Ok(Self::new(pubkey))
     }
 
     /// Verify a signed message
     ///
     /// All messages use `COSE_Sign1` signatures. This method:
     /// 1. Verifies the COSE signature is valid
-    /// 2. Verifies the claimed signer matches expected sequencer
+    /// 2. Verifies the claimed signer matches expected sequencer public key
     pub fn verify(&self, message: &SignedMessage) -> Result<()> {
         // Verify signature using COSE format
         message.verify_signature().map_err(|e| {
             ValidatorError::SignatureVerification(format!("Signature verification failed: {e}"))
         })?;
 
-        // Verify the signer matches our expected sequencer
-        let claimed_signer: Address = message.signer.parse().map_err(|e| {
-            ValidatorError::InvalidSignature(format!("Invalid signer address: {e}"))
+        // Verify the signer matches our expected sequencer public key
+        let hex_str = message.signer.strip_prefix("0x").unwrap_or(&message.signer);
+        if hex_str.len() != 128 {
+            return Err(ValidatorError::InvalidSignature(format!(
+                "Invalid signer public key length: expected 128 hex chars, got {}",
+                hex_str.len()
+            ))
+            .into());
+        }
+        let claimed_pubkey = hex::decode(hex_str).map_err(|e| {
+            ValidatorError::InvalidSignature(format!("Invalid signer public key hex: {e}"))
         })?;
 
-        if claimed_signer != self.expected_signer {
+        if claimed_pubkey != self.expected_pubkey {
             return Err(ValidatorError::SignerMismatch {
-                expected: format!("{:?}", self.expected_signer),
-                actual: format!("{claimed_signer:?}"),
+                expected: format!("0x{}", hex::encode(self.expected_pubkey)),
+                actual: format!("0x{}", hex::encode(&claimed_pubkey)),
             }
             .into());
         }
 
         Ok(())
+    }
+
+    /// Get the expected public key as hex string
+    pub fn expected_pubkey_hex(&self) -> String {
+        format!("0x{}", hex::encode(self.expected_pubkey))
     }
 }
 
@@ -80,10 +113,19 @@ mod tests {
         Ok(result)
     }
 
+    /// Get signer's 64-byte uncompressed public key (without 0x04 prefix)
+    fn signer_pubkey(signer: &PrivateKeySigner) -> [u8; 64] {
+        let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+        let bytes = pubkey.as_bytes();
+        let mut result = [0u8; 64];
+        result.copy_from_slice(&bytes[1..65]);
+        result
+    }
+
     /// Create a test message in COSE format
     fn create_test_message(sequence: u64, payload: &[u8]) -> SignedMessage {
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let addr = signer.address().into_array();
+        let pubkey = signer_pubkey(&signer);
         let timestamp = 1700000000 + sequence;
 
         // Create COSE-signed message
@@ -92,19 +134,20 @@ mod tests {
             timestamp,
             CborMessageType::Changeset,
             payload.to_vec(),
-            addr,
+            pubkey,
             |data| sign_cose(&signer, data),
         )
         .unwrap();
 
         // Convert to SignedMessage format
-        cbor_msg.to_signed_message(&addr).unwrap()
+        cbor_msg.to_signed_message(&pubkey).unwrap()
     }
 
     #[test]
     fn test_verify_valid_signature() {
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let verifier = SignatureVerifier::new(signer.address());
+        let pubkey = signer_pubkey(&signer);
+        let verifier = SignatureVerifier::new(pubkey);
 
         let message = create_test_message(0, b"test payload");
 
@@ -129,11 +172,9 @@ mod tests {
 
     #[test]
     fn test_verify_wrong_signer_fails() {
-        // Create verifier expecting a different address
-        let wrong_address: Address = "0x0000000000000000000000000000000000000001"
-            .parse()
-            .unwrap();
-        let verifier = SignatureVerifier::new(wrong_address);
+        // Create verifier expecting a different public key
+        let wrong_pubkey = [0x01u8; 64]; // All 0x01s
+        let verifier = SignatureVerifier::new(wrong_pubkey);
 
         let message = create_test_message(0, b"test payload");
         let result = verifier.verify(&message);
@@ -149,7 +190,8 @@ mod tests {
     #[test]
     fn test_verify_tampered_payload_fails() {
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let verifier = SignatureVerifier::new(signer.address());
+        let pubkey = signer_pubkey(&signer);
+        let verifier = SignatureVerifier::new(pubkey);
 
         let mut message = create_test_message(0, b"original payload");
 
@@ -165,7 +207,8 @@ mod tests {
     fn test_verify_tampered_sequence_fails() {
         // Tampering with the outer sequence field fails because it must match protected header
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let verifier = SignatureVerifier::new(signer.address());
+        let pubkey = signer_pubkey(&signer);
+        let verifier = SignatureVerifier::new(pubkey);
 
         let mut message = create_test_message(0, b"test payload");
         message.sequence = 999;
@@ -182,7 +225,8 @@ mod tests {
     #[test]
     fn test_verify_tampered_timestamp_fails() {
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let verifier = SignatureVerifier::new(signer.address());
+        let pubkey = signer_pubkey(&signer);
+        let verifier = SignatureVerifier::new(pubkey);
 
         let mut message = create_test_message(0, b"test payload");
         message.timestamp = 9999999999;
@@ -199,7 +243,8 @@ mod tests {
     #[test]
     fn test_verify_invalid_signature_format() {
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let verifier = SignatureVerifier::new(signer.address());
+        let pubkey = signer_pubkey(&signer);
+        let verifier = SignatureVerifier::new(pubkey);
 
         let mut message = create_test_message(0, b"test payload");
         message.signature = "0xdeadbeef".to_string();
@@ -216,7 +261,8 @@ mod tests {
     #[test]
     fn test_verify_tampered_protected_header_fails() {
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let verifier = SignatureVerifier::new(signer.address());
+        let pubkey = signer_pubkey(&signer);
+        let verifier = SignatureVerifier::new(pubkey);
 
         let mut message = create_test_message(0, b"test payload");
 

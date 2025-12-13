@@ -3,10 +3,7 @@
 //! All messages use CBOR/COSE binary format. The types in this module are used
 //! as internal representations after parsing from CBOR.
 
-use alloy::{
-    primitives::{keccak256, Address, B256},
-    signers::Signature,
-};
+use alloy::primitives::{keccak256, B256};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -16,17 +13,17 @@ pub enum VerificationError {
     #[error("Invalid signature format: {0}")]
     InvalidSignature(String),
 
-    #[error("Invalid signer address format: {0}")]
-    InvalidAddress(String),
+    #[error("Invalid public key format: {0}")]
+    InvalidPublicKey(String),
 
     #[error("Invalid message hash format: {0}")]
     InvalidHash(String),
 
-    #[error("Signature recovery failed: {0}")]
-    RecoveryFailed(String),
+    #[error("Signature verification failed: {0}")]
+    VerificationFailed(String),
 
-    #[error("Signer mismatch: expected {expected}, got {actual}")]
-    SignerMismatch { expected: String, actual: String },
+    #[error("Public key mismatch: expected {expected}, got {actual}")]
+    PublicKeyMismatch { expected: String, actual: String },
 
     #[error("Serialization failed: {0}")]
     SerializationFailed(String),
@@ -81,7 +78,7 @@ pub struct SignedMessage {
     pub message_hash: String,
     /// Signature bytes (64 bytes, r || s). Encoded as hex with 0x prefix.
     pub signature: String,
-    /// Ethereum address of the signer (checksummed, with 0x prefix)
+    /// 64-byte uncompressed public key (without 0x04 prefix). Encoded as hex with 0x prefix.
     pub signer: String,
     /// CBOR-encoded COSE protected header for signature verification
     pub cose_protected_header: Vec<u8>,
@@ -135,18 +132,27 @@ impl SignedMessage {
             )));
         }
 
-        // Parse the claimed signer
-        let claimed_signer: Address = self
-            .signer
-            .parse()
-            .map_err(|e| VerificationError::InvalidAddress(format!("{e}")))?;
+        // Parse the claimed public key (64 bytes)
+        let pubkey_hex = self.signer.strip_prefix("0x").unwrap_or(&self.signer);
+        let pubkey_bytes = hex::decode(pubkey_hex)
+            .map_err(|e| VerificationError::InvalidPublicKey(format!("Invalid hex: {e}")))?;
 
-        // Try both recovery IDs since COSE doesn't store v
+        if pubkey_bytes.len() != 64 {
+            return Err(VerificationError::InvalidPublicKey(format!(
+                "Public key must be 64 bytes, got {}",
+                pubkey_bytes.len()
+            )));
+        }
+
         let signature_array: [u8; 64] = sig_bytes
             .try_into()
             .map_err(|_| VerificationError::InvalidSignature("Invalid signature length".into()))?;
 
-        verify_secp256k1_without_recovery_id(&message_hash, &signature_array, &claimed_signer)
+        let pubkey_array: [u8; 64] = pubkey_bytes
+            .try_into()
+            .map_err(|_| VerificationError::InvalidPublicKey("Invalid public key length".into()))?;
+
+        verify_secp256k1_with_pubkey(&message_hash, &signature_array, &pubkey_array)
     }
 }
 
@@ -172,7 +178,7 @@ pub struct SignedBatch {
     pub messages: Vec<SignedMessage>,
     /// Batch signature (64 bytes, r || s). Encoded as hex with 0x prefix.
     pub batch_signature: String,
-    /// Ethereum address of the batch signer (checksummed, with 0x prefix)
+    /// 64-byte uncompressed public key (without 0x04 prefix). Encoded as hex with 0x prefix.
     pub signer: String,
     /// Unix timestamp (seconds) when the batch was created
     pub created_at: u64,
@@ -186,11 +192,17 @@ impl SignedBatch {
     /// This does NOT verify individual message signatures - call
     /// `verify_all_signatures()` for complete verification.
     pub fn verify_batch_signature(&self) -> Result<(), VerificationError> {
-        // Parse the claimed signer
-        let claimed_signer: Address = self
-            .signer
-            .parse()
-            .map_err(|e| VerificationError::InvalidAddress(format!("{e}")))?;
+        // Parse the claimed public key (64 bytes)
+        let pubkey_hex = self.signer.strip_prefix("0x").unwrap_or(&self.signer);
+        let pubkey_bytes = hex::decode(pubkey_hex)
+            .map_err(|e| VerificationError::InvalidPublicKey(format!("Invalid hex: {e}")))?;
+
+        if pubkey_bytes.len() != 64 {
+            return Err(VerificationError::InvalidPublicKey(format!(
+                "Public key must be 64 bytes, got {}",
+                pubkey_bytes.len()
+            )));
+        }
 
         // Compute the signing payload: keccak256(start || end || content_hash)
         let mut data = Vec::with_capacity(8 + 8 + 32);
@@ -221,7 +233,11 @@ impl SignedBatch {
             .try_into()
             .map_err(|_| VerificationError::InvalidSignature("Invalid signature length".into()))?;
 
-        verify_secp256k1_without_recovery_id(&message_hash, &signature_array, &claimed_signer)
+        let pubkey_array: [u8; 64] = pubkey_bytes
+            .try_into()
+            .map_err(|_| VerificationError::InvalidPublicKey("Invalid public key length".into()))?;
+
+        verify_secp256k1_with_pubkey(&message_hash, &signature_array, &pubkey_array)
     }
 
     /// Verify the batch signature and all individual message signatures.
@@ -282,33 +298,43 @@ pub fn build_cose_sig_structure(protected_header: &[u8], payload: &[u8]) -> Vec<
     buf
 }
 
-/// Verify a secp256k1 signature without recovery ID by trying both possible values.
+// TODO CLAUDE: check if a lib function exists for this 
+/// Verify a `secp256k1` signature against a known public key.
 ///
-/// COSE signatures are 64 bytes (r || s) without the recovery ID (v).
-/// We try both v=0 and v=1 to find which one recovers to the expected signer.
-pub fn verify_secp256k1_without_recovery_id(
+/// This performs direct ECDSA verification without needing to recover the public key.
+/// The signature is 64 bytes (r || s) and the public key is 64 bytes (uncompressed, no prefix).
+pub fn verify_secp256k1_with_pubkey(
     message_hash: &B256,
     signature: &[u8; 64],
-    expected_signer: &Address,
+    expected_pubkey: &[u8; 64],
 ) -> Result<(), VerificationError> {
-    use alloy::primitives::U256;
+    use k256::{
+        ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey},
+        EncodedPoint,
+    };
 
-    let r = U256::from_be_slice(&signature[..32]);
-    let s = U256::from_be_slice(&signature[32..]);
+    // Reconstruct the uncompressed public key with 0x04 prefix
+    let mut uncompressed = [0u8; 65];
+    uncompressed[0] = 0x04;
+    uncompressed[1..].copy_from_slice(expected_pubkey);
 
-    // Try both recovery IDs
-    for v in [false, true] {
-        let sig = Signature::new(r, s, v);
-        if let Ok(recovered) = sig.recover_address_from_prehash(message_hash) {
-            if recovered == *expected_signer {
-                return Ok(());
-            }
-        }
-    }
+    // Parse the public key
+    let encoded_point = EncodedPoint::from_bytes(uncompressed)
+        .map_err(|e| VerificationError::InvalidPublicKey(format!("Invalid public key: {e}")))?;
 
-    Err(VerificationError::RecoveryFailed(
-        "Could not recover matching signer address from COSE signature".to_string(),
-    ))
+    let verifying_key = VerifyingKey::from_encoded_point(&encoded_point)
+        .map_err(|e| VerificationError::InvalidPublicKey(format!("Invalid public key: {e}")))?;
+
+    // Parse the signature (r || s, 64 bytes)
+    let sig = Signature::from_slice(signature)
+        .map_err(|e| VerificationError::InvalidSignature(format!("Invalid signature: {e}")))?;
+
+    // Verify the signature against the prehashed message
+    verifying_key
+        .verify_prehash(message_hash.as_slice(), &sig)
+        .map_err(|_| {
+            VerificationError::VerificationFailed("Signature verification failed".to_string())
+        })
 }
 
 /// Parse sequence and timestamp from a COSE protected header.

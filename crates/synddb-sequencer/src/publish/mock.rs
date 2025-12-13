@@ -83,7 +83,7 @@ impl StoragePublisher for MockPublisher {
             end_sequence: message.sequence,
             messages: messages_vec,
             batch_signature,
-            signer: format!("{:?}", self.signer.address()),
+            signer: format!("0x{}", hex::encode(self.signer.public_key())),
             created_at: message.timestamp,
             content_hash,
         };
@@ -188,10 +188,19 @@ mod tests {
         Ok(result)
     }
 
+    /// Get signer's 64-byte uncompressed public key (without 0x04 prefix)
+    fn signer_pubkey(signer: &PrivateKeySigner) -> [u8; 64] {
+        let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+        let bytes = pubkey.as_bytes();
+        let mut result = [0u8; 64];
+        result.copy_from_slice(&bytes[1..65]);
+        result
+    }
+
     /// Create a COSE-signed message for testing
     fn create_signed_message(sequence: u64, timestamp: u64) -> SignedMessage {
         let signer = private_signer();
-        let addr = signer.address().into_array();
+        let pubkey = signer_pubkey(&signer);
         let payload = b"test payload";
 
         let cbor_msg = CborSignedMessage::new(
@@ -199,12 +208,12 @@ mod tests {
             timestamp,
             CborMessageType::Changeset,
             payload.to_vec(),
-            addr,
+            pubkey,
             |data| sign_cose(&signer, data),
         )
         .unwrap();
 
-        cbor_msg.to_signed_message(&addr).unwrap()
+        cbor_msg.to_signed_message(&pubkey).unwrap()
     }
 
     #[tokio::test]
@@ -278,6 +287,7 @@ mod tests {
         let batch_hash = keccak256(batch_payload);
 
         let pk_signer = private_signer();
+        let pubkey = signer_pubkey(&pk_signer);
         let batch_sig = pk_signer.sign_hash_sync(&B256::from(batch_hash)).unwrap();
         let mut sig_bytes = [0u8; 64];
         sig_bytes[..32].copy_from_slice(&batch_sig.r().to_be_bytes::<32>());
@@ -288,7 +298,7 @@ mod tests {
             end_sequence: 2,
             messages,
             batch_signature: format!("0x{}", hex::encode(sig_bytes)),
-            signer: format!("{:?}", pk_signer.address()),
+            signer: format!("0x{}", hex::encode(pubkey)),
             created_at: 1700000002,
             content_hash,
         };

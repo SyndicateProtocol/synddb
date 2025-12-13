@@ -21,9 +21,15 @@ fn test_signer() -> PrivateKeySigner {
     TEST_PRIVATE_KEY.parse().unwrap()
 }
 
-/// Get signer address as bytes
-const fn signer_address(signer: &PrivateKeySigner) -> [u8; 20] {
-    signer.address().into_array()
+/// Get signer's 64-byte uncompressed public key (without 0x04 prefix)
+fn signer_pubkey(signer: &PrivateKeySigner) -> [u8; 64] {
+    // TODO CLAUDE: the alloy `signer.public_key()` func exists, likely simplifies this
+    let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+    let bytes = pubkey.as_bytes();
+    // Skip the 0x04 prefix (uncompressed point indicator)
+    let mut result = [0u8; 64];
+    result.copy_from_slice(&bytes[1..65]);
+    result
 }
 
 /// Sign a message synchronously (returns 64-byte signature)
@@ -43,7 +49,7 @@ fn sign_sync(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborErr
 #[test]
 fn test_signed_message_roundtrip() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     let payload = b"test payload data".to_vec();
     let sequence = 42u64;
@@ -55,7 +61,7 @@ fn test_signed_message_roundtrip() {
         timestamp,
         CborMessageType::Changeset,
         payload.clone(),
-        addr,
+        pubkey,
         |data| sign_sync(&signer, data),
     )
     .unwrap();
@@ -64,32 +70,32 @@ fn test_signed_message_roundtrip() {
     assert_eq!(msg.sequence().unwrap(), sequence);
 
     // Verify and parse
-    let parsed = msg.verify_and_parse(&addr).unwrap();
+    let parsed = msg.verify_and_parse(&pubkey).unwrap();
     assert_eq!(parsed.sequence, sequence);
     assert_eq!(parsed.timestamp, timestamp);
     assert_eq!(parsed.message_type, CborMessageType::Changeset);
     assert_eq!(parsed.payload, payload);
-    assert_eq!(parsed.signer, addr);
+    assert_eq!(parsed.pubkey, pubkey);
 }
 
 #[test]
 fn test_signed_message_wrong_signer_fails() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
-    let wrong_addr = [0u8; 20]; // All zeros
+    let pubkey = signer_pubkey(&signer);
+    let wrong_pubkey = [0u8; 64]; // All zeros
 
     let msg = CborSignedMessage::new(
         1,
         1700000000,
         CborMessageType::Changeset,
         b"test".to_vec(),
-        addr,
+        pubkey,
         |data| sign_sync(&signer, data),
     )
     .unwrap();
 
-    // Should fail with wrong signer
-    let result = msg.verify_and_parse(&wrong_addr);
+    // Should fail with wrong pubkey
+    let result = msg.verify_and_parse(&wrong_pubkey);
     assert!(result.is_err());
     assert!(matches!(result, Err(CborError::SignatureVerification(_))));
 }
@@ -97,7 +103,7 @@ fn test_signed_message_wrong_signer_fails() {
 #[test]
 fn test_batch_roundtrip() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     // Create multiple messages
     let mut messages = Vec::new();
@@ -107,7 +113,7 @@ fn test_batch_roundtrip() {
             1700000000 + i,
             CborMessageType::Changeset,
             format!("payload {}", i).into_bytes(),
-            addr,
+            pubkey,
             |data| sign_sync(&signer, data),
         )
         .unwrap();
@@ -115,13 +121,15 @@ fn test_batch_roundtrip() {
     }
 
     // Create batch
-    let batch =
-        CborBatch::new(messages, 1700000000, addr, |data| sign_sync(&signer, data)).unwrap();
+    let batch = CborBatch::new(messages, 1700000000, pubkey, |data| {
+        sign_sync(&signer, data)
+    })
+    .unwrap();
 
     assert_eq!(batch.start_sequence, 1);
     assert_eq!(batch.end_sequence, 3);
     assert_eq!(batch.message_count(), 3);
-    assert_eq!(batch.signer, addr);
+    assert_eq!(batch.pubkey, pubkey);
 
     // Serialize to CBOR
     let cbor = batch.to_cbor().unwrap();
@@ -140,20 +148,22 @@ fn test_batch_roundtrip() {
 #[test]
 fn test_batch_zstd_roundtrip() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     let msg = CborSignedMessage::new(
         1,
         1700000000,
         CborMessageType::Changeset,
         b"test payload".to_vec(),
-        addr,
+        pubkey,
         |data| sign_sync(&signer, data),
     )
     .unwrap();
 
-    let batch =
-        CborBatch::new(vec![msg], 1700000000, addr, |data| sign_sync(&signer, data)).unwrap();
+    let batch = CborBatch::new(vec![msg], 1700000000, pubkey, |data| {
+        sign_sync(&signer, data)
+    })
+    .unwrap();
 
     // Serialize with compression
     let compressed = batch.to_cbor_zstd().unwrap();
@@ -175,20 +185,22 @@ fn test_batch_zstd_roundtrip() {
 #[test]
 fn test_batch_to_json() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     let msg = CborSignedMessage::new(
         42,
         1700000000,
         CborMessageType::Changeset,
         b"test payload".to_vec(),
-        addr,
+        pubkey,
         |data| sign_sync(&signer, data),
     )
     .unwrap();
 
-    let batch =
-        CborBatch::new(vec![msg], 1700000000, addr, |data| sign_sync(&signer, data)).unwrap();
+    let batch = CborBatch::new(vec![msg], 1700000000, pubkey, |data| {
+        sign_sync(&signer, data)
+    })
+    .unwrap();
 
     // Convert to JSON
     let json = batch.to_json_pretty().unwrap();
@@ -202,20 +214,20 @@ fn test_batch_to_json() {
     assert_eq!(value["message_count"], 1);
     assert!(value["content_hash"].as_str().unwrap().starts_with("0x"));
     assert!(value["batch_signature"].as_str().unwrap().starts_with("0x"));
-    assert!(value["signer"].as_str().unwrap().starts_with("0x"));
+    assert!(value["pubkey"].as_str().unwrap().starts_with("0x"));
 }
 
 #[test]
 fn test_message_to_json() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     let msg = CborSignedMessage::new(
         42,
         1700000000,
         CborMessageType::Withdrawal,
         b"withdrawal data".to_vec(),
-        addr,
+        pubkey,
         |data| sign_sync(&signer, data),
     )
     .unwrap();
@@ -232,7 +244,7 @@ fn test_message_to_json() {
 #[test]
 fn test_content_hash_determinism() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     // Create same messages twice
     let create_messages = || {
@@ -243,7 +255,7 @@ fn test_content_hash_determinism() {
                     1700000000,
                     CborMessageType::Changeset,
                     format!("payload {}", i).into_bytes(),
-                    addr,
+                    pubkey,
                     |data| sign_sync(&signer, data),
                 )
                 .unwrap()
@@ -251,12 +263,12 @@ fn test_content_hash_determinism() {
             .collect::<Vec<_>>()
     };
 
-    let batch1 = CborBatch::new(create_messages(), 1700000000, addr, |data| {
+    let batch1 = CborBatch::new(create_messages(), 1700000000, pubkey, |data| {
         sign_sync(&signer, data)
     })
     .unwrap();
 
-    let batch2 = CborBatch::new(create_messages(), 1700000000, addr, |data| {
+    let batch2 = CborBatch::new(create_messages(), 1700000000, pubkey, |data| {
         sign_sync(&signer, data)
     })
     .unwrap();
@@ -268,9 +280,9 @@ fn test_content_hash_determinism() {
 #[test]
 fn test_empty_batch_fails() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
-    let result = CborBatch::new(vec![], 1700000000, addr, |data| sign_sync(&signer, data));
+    let result = CborBatch::new(vec![], 1700000000, pubkey, |data| sign_sync(&signer, data));
 
     assert!(result.is_err());
     assert!(matches!(result, Err(CborError::InvalidBatch(_))));
@@ -279,19 +291,20 @@ fn test_empty_batch_fails() {
 #[test]
 fn test_all_message_types() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     for msg_type in [
         CborMessageType::Changeset,
         CborMessageType::Withdrawal,
         CborMessageType::Snapshot,
     ] {
-        let msg = CborSignedMessage::new(1, 1700000000, msg_type, b"test".to_vec(), addr, |data| {
-            sign_sync(&signer, data)
-        })
-        .unwrap();
+        let msg =
+            CborSignedMessage::new(1, 1700000000, msg_type, b"test".to_vec(), pubkey, |data| {
+                sign_sync(&signer, data)
+            })
+            .unwrap();
 
-        let parsed = msg.verify_and_parse(&addr).unwrap();
+        let parsed = msg.verify_and_parse(&pubkey).unwrap();
         assert_eq!(parsed.message_type, msg_type);
     }
 }
@@ -299,7 +312,7 @@ fn test_all_message_types() {
 #[test]
 fn test_large_payload() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     // 100KB payload
     let payload = vec![0xABu8; 100 * 1024];
@@ -309,13 +322,15 @@ fn test_large_payload() {
         1700000000,
         CborMessageType::Snapshot,
         payload.clone(),
-        addr,
+        pubkey,
         |data| sign_sync(&signer, data),
     )
     .unwrap();
 
-    let batch =
-        CborBatch::new(vec![msg], 1700000000, addr, |data| sign_sync(&signer, data)).unwrap();
+    let batch = CborBatch::new(vec![msg], 1700000000, pubkey, |data| {
+        sign_sync(&signer, data)
+    })
+    .unwrap();
 
     // Check compression ratio
     let uncompressed = batch.to_cbor().unwrap();
@@ -332,14 +347,14 @@ fn test_large_payload() {
     let parsed = CborBatch::from_cbor_zstd(&compressed).unwrap();
     parsed.verify_all_signatures().unwrap();
 
-    let msg_parsed = parsed.messages[0].verify_and_parse(&addr).unwrap();
+    let msg_parsed = parsed.messages[0].verify_and_parse(&pubkey).unwrap();
     assert_eq!(msg_parsed.payload, payload);
 }
 
 #[test]
 fn test_batch_size_tracking() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     let mut messages = Vec::new();
     for i in 0..10 {
@@ -348,15 +363,17 @@ fn test_batch_size_tracking() {
             1700000000,
             CborMessageType::Changeset,
             vec![0u8; 1000], // 1KB payload each
-            addr,
+            pubkey,
             |data| sign_sync(&signer, data),
         )
         .unwrap();
         messages.push(msg);
     }
 
-    let batch =
-        CborBatch::new(messages, 1700000000, addr, |data| sign_sync(&signer, data)).unwrap();
+    let batch = CborBatch::new(messages, 1700000000, pubkey, |data| {
+        sign_sync(&signer, data)
+    })
+    .unwrap();
 
     // Total message bytes should be tracked
     let total_bytes = batch.total_message_bytes();
@@ -368,7 +385,7 @@ fn test_batch_size_tracking() {
 #[test]
 fn test_cbor_to_signed_batch_verification() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     // Create a CBOR message
     let msg = CborSignedMessage::new(
@@ -376,14 +393,16 @@ fn test_cbor_to_signed_batch_verification() {
         1700000000,
         CborMessageType::Changeset,
         b"test payload".to_vec(),
-        addr,
+        pubkey,
         |data| sign_sync(&signer, data),
     )
     .unwrap();
 
     // Create a CBOR batch
-    let cbor_batch =
-        CborBatch::new(vec![msg], 1700000000, addr, |data| sign_sync(&signer, data)).unwrap();
+    let cbor_batch = CborBatch::new(vec![msg], 1700000000, pubkey, |data| {
+        sign_sync(&signer, data)
+    })
+    .unwrap();
 
     // Verify CBOR batch signature
     cbor_batch.verify_batch_signature().unwrap();
@@ -405,7 +424,7 @@ fn test_cbor_to_signed_batch_verification() {
 #[test]
 fn test_cbor_to_signed_batch_json_roundtrip_verification() {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
 
     // Create a CBOR batch
     let msg = CborSignedMessage::new(
@@ -413,13 +432,15 @@ fn test_cbor_to_signed_batch_json_roundtrip_verification() {
         1700000000,
         CborMessageType::Changeset,
         b"test payload".to_vec(),
-        addr,
+        pubkey,
         |data| sign_sync(&signer, data),
     )
     .unwrap();
 
-    let cbor_batch =
-        CborBatch::new(vec![msg], 1700000000, addr, |data| sign_sync(&signer, data)).unwrap();
+    let cbor_batch = CborBatch::new(vec![msg], 1700000000, pubkey, |data| {
+        sign_sync(&signer, data)
+    })
+    .unwrap();
 
     // Convert to SignedBatch
     let signed_batch = cbor_batch.to_signed_batch().unwrap();

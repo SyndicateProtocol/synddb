@@ -329,14 +329,14 @@ mod tests {
     fn create_test_message(sequence: u64) -> CborSignedMessage {
         let payload = format!("test payload {}", sequence).into_bytes();
         let timestamp = 1700000000 + sequence;
-        let signer = [0x42u8; 20];
+        let pubkey = [0x42u8; 64]; // Mock 64-byte public key
 
         CborSignedMessage::new(
             sequence,
             timestamp,
             CborMessageType::Changeset,
             payload,
-            signer,
+            pubkey,
             |_data| Ok([0u8; 64]), // Mock signature
         )
         .unwrap()
@@ -345,9 +345,9 @@ mod tests {
     fn create_test_batch(start: u64, end: u64) -> CborBatch {
         let messages: Vec<CborSignedMessage> = (start..=end).map(create_test_message).collect();
         let created_at = 1700000000;
-        let signer = [0x42u8; 20];
+        let pubkey = [0x42u8; 64]; // Mock 64-byte public key
 
-        CborBatch::new(messages, created_at, signer, |_data| Ok([0u8; 64])).unwrap()
+        CborBatch::new(messages, created_at, pubkey, |_data| Ok([0u8; 64])).unwrap()
     }
 
     #[tokio::test]

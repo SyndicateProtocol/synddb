@@ -16,7 +16,7 @@ pub fn batch_to_json(batch: &CborBatch) -> Result<Value, CborError> {
         "created_at": batch.created_at,
         "content_hash": format!("0x{}", hex::encode(batch.content_hash)),
         "batch_signature": format!("0x{}", hex::encode(batch.batch_signature)),
-        "signer": format!("0x{}", hex::encode(batch.signer)),
+        "pubkey": format!("0x{}", hex::encode(batch.pubkey)),
         "message_count": batch.messages.len(),
         "total_message_bytes": batch.total_message_bytes(),
         "messages": messages?,
@@ -34,7 +34,7 @@ pub fn message_to_json(msg: &CborSignedMessage) -> Result<Value, CborError> {
         "payload_size_compressed": parsed.payload.len(),
         "payload_hash": format!("0x{}", hex::encode(keccak256(&parsed.payload))),
         "signature": format!("0x{}", hex::encode(parsed.signature)),
-        "signer": format!("0x{}", hex::encode(parsed.signer)),
+        "pubkey": format!("0x{}", hex::encode(parsed.pubkey)),
         "cose_size": msg.size(),
     }))
 }

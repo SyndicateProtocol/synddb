@@ -27,16 +27,16 @@ impl CborSignedMessage {
     /// The COSE protected header is included for signature verification.
     ///
     /// # Arguments
-    /// * `expected_signer` - 20-byte Ethereum address to verify against
+    /// * `expected_pubkey` - 64-byte uncompressed public key (without 0x04 prefix)
     ///
     /// # Returns
     /// The converted `SignedMessage` that can be independently verified.
     pub fn to_signed_message(
         &self,
-        expected_signer: &[u8; 20],
+        expected_pubkey: &[u8; 64],
     ) -> Result<SignedMessage, CborError> {
         // Parse and verify the COSE structure
-        let parsed = self.verify_and_parse(expected_signer)?;
+        let parsed = self.verify_and_parse(expected_pubkey)?;
 
         // Extract the protected header for re-verification by validator
         let cose_protected_header = self.protected_header()?;
@@ -50,8 +50,8 @@ impl CborSignedMessage {
         // Format message hash from payload
         let message_hash = format!("0x{}", hex::encode(compute_message_hash(&parsed.payload)));
 
-        // Format signer address
-        let signer = format!("0x{}", hex::encode(parsed.signer));
+        // Format public key as hex
+        let signer = format!("0x{}", hex::encode(parsed.pubkey));
 
         Ok(SignedMessage {
             sequence: parsed.sequence,
@@ -81,7 +81,7 @@ impl CborSignedMessage {
         let signature_hex = format!("0x{}", hex::encode(parsed.signature));
 
         let message_hash = format!("0x{}", hex::encode(compute_message_hash(&parsed.payload)));
-        let signer = format!("0x{}", hex::encode(parsed.signer));
+        let signer = format!("0x{}", hex::encode(parsed.pubkey));
 
         Ok(SignedMessage {
             sequence: parsed.sequence,
@@ -111,15 +111,15 @@ impl CborBatch {
         let messages: Result<Vec<SignedMessage>, CborError> = self
             .messages
             .iter()
-            .map(|m| m.to_signed_message(&self.signer))
+            .map(|m| m.to_signed_message(&self.pubkey))
             .collect();
         let messages = messages?;
 
         // Format batch signature as 64-byte hex (r || s)
         let batch_signature = format!("0x{}", hex::encode(self.batch_signature));
 
-        // Format signer address
-        let signer = format!("0x{}", hex::encode(self.signer));
+        // Format public key as hex
+        let signer = format!("0x{}", hex::encode(self.pubkey));
 
         Ok(SignedBatch {
             start_sequence: self.start_sequence,
@@ -145,7 +145,7 @@ impl CborBatch {
         let messages = messages?;
 
         let batch_signature = format!("0x{}", hex::encode(self.batch_signature));
-        let signer = format!("0x{}", hex::encode(self.signer));
+        let signer = format!("0x{}", hex::encode(self.pubkey));
 
         Ok(SignedBatch {
             start_sequence: self.start_sequence,

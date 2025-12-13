@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     runtime::init_logging(config.log_json);
 
     info!(
-        sequencer = %config.sequencer_address,
+        expected_sequencer_pubkey = %config.sequencer_pubkey,
         database = %config.database_path,
         state_db = %config.state_db_path,
         "`SyndDB` Validator starting"

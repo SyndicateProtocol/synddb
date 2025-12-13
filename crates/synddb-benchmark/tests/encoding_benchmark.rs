@@ -56,9 +56,14 @@ fn test_signer() -> PrivateKeySigner {
     TEST_PRIVATE_KEY.parse().unwrap()
 }
 
-/// Get signer address as bytes
-const fn signer_address(signer: &PrivateKeySigner) -> [u8; 20] {
-    signer.address().into_array()
+/// Get signer's 64-byte uncompressed public key (without 0x04 prefix)
+fn signer_pubkey(signer: &PrivateKeySigner) -> [u8; 64] {
+    // TODO CLAUDE: signer.pubkey() exists, might be better
+    let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+    let bytes = pubkey.as_bytes();
+    let mut result = [0u8; 64];
+    result.copy_from_slice(&bytes[1..65]);
+    result
 }
 
 /// Sign data synchronously (returns 64-byte signature for COSE)
@@ -198,7 +203,7 @@ fn combine_changesets(changesets: &[Vec<u8>]) -> Vec<u8> {
 /// Create a `CborSignedMessage`
 fn create_cbor_message(
     signer: &PrivateKeySigner,
-    addr: [u8; 20],
+    pubkey: [u8; 64],
     sequence: u64,
     timestamp: u64,
     payload: Vec<u8>,
@@ -209,7 +214,7 @@ fn create_cbor_message(
         timestamp,
         CborMessageType::Changeset,
         payload,
-        addr,
+        pubkey,
         |data| sign_cose(signer, data),
     )
     .map_err(|e| anyhow::anyhow!("Failed to create CBOR message: {e}"))?;
@@ -220,18 +225,18 @@ fn create_cbor_message(
 /// Create a `CborBatch`
 fn create_cbor_batch(
     signer: &PrivateKeySigner,
-    addr: [u8; 20],
+    pubkey: [u8; 64],
     messages: Vec<CborSignedMessage>,
     timestamp: u64,
 ) -> Result<CborBatch> {
-    CborBatch::new(messages, timestamp, addr, |data| sign_cose(signer, data))
+    CborBatch::new(messages, timestamp, pubkey, |data| sign_cose(signer, data))
         .map_err(|e| anyhow::anyhow!("Failed to create CBOR batch: {e}"))
 }
 
 /// Run benchmark for a single test case
 fn run_benchmark(test_case: &TestCase) -> Result<TestResult> {
     let signer = test_signer();
-    let addr = signer_address(&signer);
+    let pubkey = signer_pubkey(&signer);
     let timestamp = 1700000000u64;
 
     // Generate realistic changesets
@@ -258,7 +263,7 @@ fn run_benchmark(test_case: &TestCase) -> Result<TestResult> {
         for (i, payload) in message_payloads.iter().enumerate() {
             let msg = create_cbor_message(
                 &signer,
-                addr,
+                pubkey,
                 i as u64,
                 timestamp + i as u64,
                 payload.clone(),
@@ -267,7 +272,7 @@ fn run_benchmark(test_case: &TestCase) -> Result<TestResult> {
         }
 
         // Create CBOR batch
-        let batch = create_cbor_batch(&signer, addr, messages, timestamp)?;
+        let batch = create_cbor_batch(&signer, pubkey, messages, timestamp)?;
 
         // Serialize to CBOR (uncompressed)
         let cbor_bytes = batch
@@ -301,7 +306,7 @@ fn run_benchmark(test_case: &TestCase) -> Result<TestResult> {
         for (i, payload) in message_payloads.iter().enumerate() {
             let msg = create_cbor_message(
                 &signer,
-                addr,
+                pubkey,
                 i as u64,
                 timestamp + i as u64,
                 payload.clone(),
@@ -310,7 +315,7 @@ fn run_benchmark(test_case: &TestCase) -> Result<TestResult> {
         }
 
         // Create CBOR batch
-        let batch = create_cbor_batch(&signer, addr, messages, timestamp)?;
+        let batch = create_cbor_batch(&signer, pubkey, messages, timestamp)?;
 
         // Serialize to CBOR + zstd
         let cbor_zstd_bytes = batch

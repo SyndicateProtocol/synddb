@@ -14,7 +14,6 @@ use crate::{
         verifier::SignatureVerifier,
     },
 };
-use alloy::primitives::Address;
 use anyhow::{Context, Result};
 use std::{sync::Arc, time::Duration};
 use synddb_shared::types::message::SignedBatch;
@@ -54,19 +53,16 @@ impl Validator {
         fetcher: Arc<dyn StorageFetcher>,
         shutdown_rx: watch::Receiver<bool>,
     ) -> Result<Self> {
-        // Parse sequencer address
-        let sequencer_address: Address = config
-            .sequencer_address
-            .parse()
-            .context("Invalid sequencer address")?;
+        // Parse sequencer public key from hex
+        let verifier = SignatureVerifier::from_hex(&config.sequencer_pubkey)
+            .context("Invalid sequencer public key")?;
 
         // Initialize components
-        let verifier = SignatureVerifier::new(sequencer_address);
         let applier = ChangesetApplier::new(&config.database_path)?;
         let state = StateStore::new(&config.state_db_path)?;
 
         info!(
-            sequencer = %config.sequencer_address,
+            sequencer_pubkey = %config.sequencer_pubkey,
             database = %config.database_path,
             gap_retry_count = config.gap_retry_count,
             gap_skip_on_failure = config.gap_skip_on_failure,
@@ -92,10 +88,10 @@ impl Validator {
     /// Create a validator for testing with in-memory storage
     pub fn in_memory(
         fetcher: Arc<dyn StorageFetcher>,
-        sequencer_address: Address,
+        sequencer_pubkey: [u8; 64],
         shutdown_rx: watch::Receiver<bool>,
     ) -> Result<Self> {
-        let verifier = SignatureVerifier::new(sequencer_address);
+        let verifier = SignatureVerifier::new(sequencer_pubkey);
         let applier = ChangesetApplier::in_memory()?;
         let state = StateStore::in_memory()?;
 
@@ -750,10 +746,14 @@ mod tests {
     const TEST_PRIVATE_KEY: &str =
         "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-    fn test_sequencer_address() -> Address {
+    fn test_sequencer_pubkey() -> [u8; 64] {
         use alloy::signers::local::PrivateKeySigner;
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        signer.address()
+        let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+        let bytes = pubkey.as_bytes();
+        let mut result = [0u8; 64];
+        result.copy_from_slice(&bytes[1..65]);
+        result
     }
 
     fn create_signed_changeset_message(sequence: u64, changeset_data: Vec<u8>) -> SignedMessage {
@@ -767,8 +767,17 @@ mod tests {
         };
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let addr = signer.address().into_array();
         let timestamp = 1700000000 + sequence;
+
+        // Get signer's 64-byte uncompressed public key (without 0x04 prefix)
+        fn signer_pubkey(signer: &PrivateKeySigner) -> [u8; 64] {
+            let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+            let bytes = pubkey.as_bytes();
+            let mut result = [0u8; 64];
+            result.copy_from_slice(&bytes[1..65]);
+            result
+        }
+        let pubkey = signer_pubkey(&signer);
 
         // Create batch
         let batch = ChangesetBatchRequest {
@@ -806,12 +815,12 @@ mod tests {
             timestamp,
             CborMessageType::Changeset,
             compressed,
-            addr,
+            pubkey,
             |data| sign_cose(&signer, data),
         )
         .unwrap();
 
-        cbor_msg.to_signed_message(&addr).unwrap()
+        cbor_msg.to_signed_message(&pubkey).unwrap()
     }
 
     /// Create a changeset for testing
@@ -851,7 +860,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database with same schema
         validator
@@ -884,7 +893,7 @@ mod tests {
 
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Try to sync non-existent message
         let result = validator.sync_one(0).await.unwrap();
@@ -918,7 +927,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -951,7 +960,7 @@ mod tests {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Spawn the run loop
         let handle = tokio::spawn(async move {
@@ -981,6 +990,10 @@ mod tests {
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let end_sequence = messages.last().map_or(start_sequence, |m| m.sequence);
+
+        // Get 64-byte uncompressed public key
+        let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+        let pubkey_bytes = &pubkey.as_bytes()[1..65]; // Skip 0x04 prefix
 
         // Create content hash from serialized messages (CBOR format)
         let content_hash = {
@@ -1013,7 +1026,7 @@ mod tests {
             end_sequence,
             messages,
             batch_signature: format!("0x{}", hex::encode(sig_bytes)),
-            signer: format!("{:?}", signer.address()),
+            signer: format!("0x{}", hex::encode(pubkey_bytes)),
             created_at: 1700000000,
             content_hash,
         }
@@ -1025,14 +1038,14 @@ mod tests {
         let fetcher = MockFetcher::new();
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
         assert!(!validator.supports_batch_sync());
 
         // Batch mode fetcher
         let fetcher = MockFetcher::new_batch_mode();
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
         assert!(validator.supports_batch_sync());
     }
 
@@ -1065,7 +1078,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -1125,7 +1138,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -1174,7 +1187,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -1227,7 +1240,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Build batch index
         let index = validator.build_batch_index().await.unwrap();
@@ -1271,7 +1284,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -1332,7 +1345,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -1393,7 +1406,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator

@@ -32,8 +32,8 @@ pub struct CborBatch {
     pub messages: Vec<CborSignedMessage>,
     /// 64-byte batch signature (covers all messages)
     pub batch_signature: [u8; 64],
-    /// 20-byte Ethereum address of signer
-    pub signer: [u8; 20],
+    /// 64-byte uncompressed public key (without 0x04 prefix)
+    pub pubkey: [u8; 64],
 }
 
 /// Internal serialization format for `CborBatch`
@@ -53,8 +53,8 @@ struct CborBatchWire {
     messages: Vec<serde_bytes::ByteBuf>,
     #[serde(rename = "sig", with = "serde_bytes")]
     batch_signature: Vec<u8>,
-    #[serde(rename = "addr", with = "serde_bytes")]
-    signer: Vec<u8>,
+    #[serde(rename = "pubkey", with = "serde_bytes")]
+    pubkey: Vec<u8>,
 }
 
 impl CborBatch {
@@ -63,12 +63,12 @@ impl CborBatch {
     /// # Arguments
     /// * `messages` - Signed messages to include in the batch
     /// * `created_at` - Unix timestamp for batch creation
-    /// * `signer_address` - 20-byte Ethereum address
+    /// * `signer_pubkey` - 64-byte uncompressed public key (without 0x04 prefix)
     /// * `sign_fn` - Function to sign the batch payload, returns 64-byte signature
     pub fn new<F>(
         messages: Vec<CborSignedMessage>,
         created_at: u64,
-        signer_address: [u8; 20],
+        signer_pubkey: [u8; 64],
         sign_fn: F,
     ) -> Result<Self, CborError>
     where
@@ -113,7 +113,7 @@ impl CborBatch {
             content_hash,
             messages,
             batch_signature,
-            signer: signer_address,
+            pubkey: signer_pubkey,
         })
     }
 
@@ -158,7 +158,7 @@ impl CborBatch {
                 .map(|m| serde_bytes::ByteBuf::from(m.as_bytes().to_vec()))
                 .collect(),
             batch_signature: self.batch_signature.to_vec(),
-            signer: self.signer.to_vec(),
+            pubkey: self.pubkey.to_vec(),
         };
 
         let mut buf = Vec::new();
@@ -200,10 +200,9 @@ impl CborBatch {
             .try_into()
             .map_err(|_| CborError::InvalidBatch("Invalid batch signature length".to_string()))?;
 
-        let signer: [u8; 20] = wire
-            .signer
-            .try_into()
-            .map_err(|_| CborError::InvalidBatch("Invalid signer length".to_string()))?;
+        let pubkey: [u8; 64] = wire.pubkey.try_into().map_err(|_| {
+            CborError::InvalidBatch("Invalid public key length: expected 64 bytes".to_string())
+        })?;
 
         let messages: Vec<CborSignedMessage> = wire
             .messages
@@ -219,13 +218,17 @@ impl CborBatch {
             content_hash,
             messages,
             batch_signature,
-            signer,
+            pubkey,
         })
     }
 
-    /// Verify batch signature
+    /// Verify batch signature against the public key
     pub fn verify_batch_signature(&self) -> Result<(), CborError> {
-        use alloy::primitives::{keccak256, Signature, B256, U256};
+        use alloy::primitives::keccak256;
+        use k256::{
+            ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey},
+            EncodedPoint,
+        };
 
         // Recompute content hash
         let computed_hash = Self::compute_content_hash(&self.messages);
@@ -245,24 +248,28 @@ impl CborBatch {
         // Hash the payload
         let message_hash = keccak256(payload);
 
-        // Try both recovery IDs
-        for v in [false, true] {
-            let sig = Signature::new(
-                U256::from_be_slice(&self.batch_signature[..32]),
-                U256::from_be_slice(&self.batch_signature[32..]),
-                v,
-            );
+        // Reconstruct the uncompressed public key with 0x04 prefix
+        let mut uncompressed = [0u8; 65];
+        uncompressed[0] = 0x04;
+        uncompressed[1..].copy_from_slice(&self.pubkey);
 
-            if let Ok(recovered) = sig.recover_address_from_prehash(&B256::from(message_hash)) {
-                if recovered.as_slice() == self.signer {
-                    return Ok(());
-                }
-            }
-        }
+        // Parse the public key
+        let encoded_point = EncodedPoint::from_bytes(uncompressed)
+            .map_err(|e| CborError::SignatureVerification(format!("Invalid public key: {e}")))?;
 
-        Err(CborError::SignatureVerification(
-            "Batch signature verification failed".to_string(),
-        ))
+        let verifying_key = VerifyingKey::from_encoded_point(&encoded_point)
+            .map_err(|e| CborError::SignatureVerification(format!("Invalid public key: {e}")))?;
+
+        // Parse the signature (r || s, 64 bytes)
+        let sig = Signature::from_slice(&self.batch_signature)
+            .map_err(|e| CborError::SignatureVerification(format!("Invalid signature: {e}")))?;
+
+        // Verify the signature against the prehashed message
+        verifying_key
+            .verify_prehash(message_hash.as_slice(), &sig)
+            .map_err(|_| {
+                CborError::SignatureVerification("Batch signature verification failed".to_string())
+            })
     }
 
     /// Verify batch and all message signatures
@@ -270,9 +277,9 @@ impl CborBatch {
         // Verify batch signature first
         self.verify_batch_signature()?;
 
-        // Verify each message signature
+        // Verify each message signature against the batch public key
         for (i, msg) in self.messages.iter().enumerate() {
-            msg.verify_and_parse(&self.signer).map_err(|e| {
+            msg.verify_and_parse(&self.pubkey).map_err(|e| {
                 CborError::SignatureVerification(format!(
                     "Message {} verification failed: {}",
                     i, e
