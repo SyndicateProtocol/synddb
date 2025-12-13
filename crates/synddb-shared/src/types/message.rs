@@ -298,7 +298,7 @@ pub fn build_cose_sig_structure(protected_header: &[u8], payload: &[u8]) -> Vec<
     buf
 }
 
-// TODO CLAUDE: check if a lib function exists for this 
+// TODO CLAUDE: check if a lib function exists for this
 /// Verify a `secp256k1` signature against a known public key.
 ///
 /// This performs direct ECDSA verification without needing to recover the public key.
