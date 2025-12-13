@@ -192,7 +192,8 @@ impl BatcherHandle {
     }
 }
 
-/// Batcher task that accumulates messages and publishes batches
+/// Batcher task that accumulates messages and publishes batches. Takes a `transport` trait object
+/// whose implementation can vary.
 struct Batcher {
     config: BatchConfig,
     transport: Arc<dyn TransportPublisher>,
@@ -384,7 +385,7 @@ impl Batcher {
             "Publishing batch"
         );
 
-        // Publish to transport
+        // Publish to transport layer
         let metadata = self.transport.publish(&batch).await?;
 
         let compression_ratio =
