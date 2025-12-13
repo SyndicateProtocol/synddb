@@ -105,8 +105,7 @@ async fn main() -> Result<()> {
             state_for_loop.update_sync_status(Some(sequence), current_timestamp());
         };
 
-        // Run continuous sync loop with callbacks
-        // Uses batch mode if enabled and fetcher supports it, otherwise falls back to single-message mode
+        // Run a continuous sync batching loop with callbacks
         if let Err(e) = validator
             .run_batched(&mut on_withdrawal, &mut on_sync)
             .await
@@ -185,6 +184,8 @@ async fn sync_to_head_with_signing(
     let mut next_sequence = validator.last_sequence()?.map_or(0, |s| s + 1);
     let mut synced = 0;
     let mut on_withdrawal = create_withdrawal_callback(signer.cloned(), store.clone());
+
+    // TODO CLAUDE: check that received messages are all in order, or else break. maybe this is already covered
 
     loop {
         let result = validator

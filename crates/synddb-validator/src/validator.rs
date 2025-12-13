@@ -381,6 +381,8 @@ impl Validator {
                     // Caught up to head
                     break;
                 }
+                //TODO CLAUDE: make sure that "out of sequence" errors are caught here, because data may be unavailable.
+                // Re-derivation should quit
                 Err(e) => {
                     warn!(sequence = next_sequence, error = %e, "Sync error, stopping");
                     break;
