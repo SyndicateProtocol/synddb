@@ -679,7 +679,7 @@ Examples:
 - `sequencer/batches/000000000001_000000000050.cbor.zst` (messages 1-50)
 - `sequencer/batches/000000000051_000000000100.cbor.zst` (messages 51-100)
 
-The 12-digit zero-padding supports approximately 1 trillion sequences while maintaining lexicographic sortability.
+The 12-digit zero-padding supports approximately 1 trillion sequences while maintaining lexicographic sortability. If you were to send messages every second, this is approximately 300 centuries, or roughly the amount of time from the caveman era to the modern day. 
 
 **Content type:** `application/cbor+zstd`
 
