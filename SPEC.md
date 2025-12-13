@@ -388,13 +388,13 @@ Deploy the default validator in a TEE:
 synddb-validator \
     --fetcher-type http \
     --sequencer-url http://sequencer:8433 \
-    --sequencer-address 0x...
+    --sequencer-pubkey 8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5
 
 # Or fetch from GCS
 synddb-validator \
     --fetcher-type gcs \
     --gcs-bucket my-bucket \
-    --sequencer-address 0x...
+    --sequencer-pubkey 8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5
 ```
 
 The default validator will sync SQL operations (changesets and snapshots) from storage layers, apply them to rebuild state, and verify basic invariants before signing for settlement.
@@ -580,7 +580,7 @@ SyndDB uses CBOR (Concise Binary Object Representation) with COSE (CBOR Object S
 ### Overview
 
 The wire format provides:
-- **40-50% size reduction** compared to JSON+base64 encoding
+- **Up to 40% size reduction** compared to JSON+base64 encoding
 - **Cryptographic authenticity** via COSE_Sign1 signatures
 - **Content addressing** via SHA-256 hashes for cross-system references
 - **Transport agnosticism** - same format works across GCS, Arweave, etc.
@@ -592,7 +592,7 @@ Individual messages are wrapped in COSE_Sign1 structures (RFC 9052). The structu
 ```
 COSE_Sign1 = [
     protected: bstr,     # CBOR-encoded protected header
-    unprotected: {},     # Unprotected header (signer address)
+    unprotected: {},     # Unprotected header (signer public key)
     payload: bstr,       # zstd-compressed payload
     signature: bstr      # 64-byte secp256k1 signature (r || s)
 ]
@@ -615,11 +615,11 @@ The custom labels (-65537 to -65539) are in the IANA private use range.
 
 | Field | Label | Type | Description |
 |-------|-------|------|-------------|
-| Signer | "signer" | bstr | 20-byte Ethereum address |
+| Signer | "signer" | bstr | 64-byte uncompressed secp256k1 public key (without 0x04 prefix) |
 
 #### Signature Format
 
-The signature is 64 bytes (r || s) without the recovery byte `v`. During verification, both recovery IDs (0 and 1) are tried to recover the signer address and match against the expected signer.
+The signature is 64 bytes (r || s) without the recovery byte `v`. During verification, the signature is verified directly against the signer's public key using ECDSA verification (no address recovery needed).
 
 The signature covers the COSE `Sig_structure`:
 ```
@@ -643,8 +643,8 @@ CborBatch = {
     "t":    uint,      # Creation timestamp
     "h":    bstr,      # SHA-256 content hash (32 bytes)
     "m":    [bstr],    # Array of COSE_Sign1 message bytes
-    "sig":  bstr,      # 64-byte batch signature
-    "addr": bstr       # 20-byte signer address
+    "sig":  bstr,      # 64-byte batch signature (r || s)
+    "pub":  bstr       # 64-byte signer public key
 }
 ```
 
@@ -718,12 +718,14 @@ The `content_hash` field enables content-addressed lookup regardless of transpor
 
 1. **Batch verification:**
    - Recompute content hash from messages
-   - Verify batch signature against signer address
+   - Verify batch signature against signer public key
+   - Confirm signer public key matches expected sequencer
 
 2. **Message verification:**
    - Parse COSE_Sign1 structure
    - Verify signature covers correct `Sig_structure`
-   - Verify recovered address matches expected signer
+   - Verify signature is valid for the claimed public key (direct ECDSA verification)
+   - Confirm signer public key matches expected sequencer
    - Validate protected header fields match outer message fields
 
 3. **Field consistency:**

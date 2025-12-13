@@ -187,7 +187,7 @@ pub struct SequencerConfig {
 | POST | `/withdrawals` | Submit withdrawal request |
 | GET | `/messages/:sequence` | Retrieve signed message by sequence |
 | GET | `/health` | Health check |
-| GET | `/status` | Sequencer status (sequence number, signer address) |
+| GET | `/status` | Sequencer status (sequence number, signer public key) |
 
 ### Request/Response Formats
 
@@ -297,7 +297,7 @@ impl MessageSigner {
 
 1. **Proof of Ordering**: The signature proves the sequencer assigned this specific sequence number at this timestamp
 2. **Non-repudiation**: The sequencer cannot deny having ordered a message
-3. **Verifiability**: Anyone with the signer's address can verify the signature
+3. **Verifiability**: Anyone with the signer's public key can verify the signature
 4. **Bridge Integration**: Signed withdrawals can be submitted to on-chain contracts
 
 ### Signature Verification (Client-side or On-chain)
@@ -355,7 +355,7 @@ gs://{bucket}/{prefix}/
 ├── state/
 │   └── sequence.json       # Current sequence number (for recovery)
 └── metadata/
-    └── signer.json         # Signer address (for verification)
+    └── signer.json         # Signer public key (for verification)
 ```
 
 ### Message Format in GCS

@@ -36,12 +36,13 @@ State reconstruction service for SyndDB. Fetches signed messages from the sequen
 
 ```bash
 # Run with HTTP fetcher (fetches from sequencer directly)
-SEQUENCER_ADDRESS=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 \
+# SEQUENCER_PUBKEY is the 64-byte uncompressed secp256k1 public key (128 hex chars)
+SEQUENCER_PUBKEY=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
 SEQUENCER_URL=http://localhost:8433 \
 cargo run -p synddb-validator
 
 # Run with GCS fetcher
-SEQUENCER_ADDRESS=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 \
+SEQUENCER_PUBKEY=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
 FETCHER_TYPE=gcs \
 GCS_BUCKET=my-bucket \
 cargo run -p synddb-validator --features gcs
@@ -54,7 +55,7 @@ RUST_LOG=debug LOG_JSON=true cargo run -p synddb-validator
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SEQUENCER_ADDRESS` | Yes | - | Expected sequencer address for signature verification |
+| `SEQUENCER_PUBKEY` | Yes | - | Expected sequencer public key for signature verification (64-byte uncompressed secp256k1, 128 hex chars) |
 | `DATABASE_PATH` | No | `/data/validator.db` | SQLite database for replicated state |
 | `STATE_DB_PATH` | No | `/data/validator_state.db` | SQLite database for validator state (sequences) |
 | `FETCHER_TYPE` | No | `http` | Fetcher type: `http` or `gcs` |
@@ -164,7 +165,7 @@ Batch sync reduces the number of network requests when catching up from behind, 
 cargo test -p synddb-validator
 
 # Run with test configuration
-SEQUENCER_ADDRESS=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 \
+SEQUENCER_PUBKEY=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
 SEQUENCER_URL=http://localhost:8433 \
 DATABASE_PATH=:memory: \
 STATE_DB_PATH=:memory: \

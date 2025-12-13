@@ -71,7 +71,7 @@ SIGNING_KEY=<key> RUST_LOG=debug RUST_LOG_JSON=true cargo run -p synddb-sequence
 
 - `GET /health` - Liveness check (always returns 200)
 - `GET /ready` - Readiness check (verifies publisher connectivity)
-- `GET /status` - Sequencer status (current sequence, signer address)
+- `GET /status` - Sequencer status (current sequence, signer public key)
 
 ### Message Submission
 
