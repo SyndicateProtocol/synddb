@@ -5,7 +5,7 @@
 
 use alloy::{
     primitives::{keccak256, Address, B256, B512},
-    signers::{local::PrivateKeySigner, Signer},
+    signers::{local::PrivateKeySigner, Signer, SignerSync},
 };
 use thiserror::Error;
 
@@ -101,14 +101,10 @@ impl MessageSigner {
     /// Sign raw bytes (32-byte hash)
     ///
     /// This is used for CBOR/COSE signing where the caller provides the pre-hashed data.
-    pub async fn sign_raw(
-        &self,
-        hash: &[u8; 32],
-    ) -> Result<alloy::signers::Signature, SignerError> {
+    pub fn sign_raw_sync(&self, hash: &[u8; 32]) -> Result<alloy::signers::Signature, SignerError> {
         let hash = B256::from(*hash);
         self.signer
-            .sign_hash(&hash)
-            .await
+            .sign_hash_sync(&hash)
             .map_err(|e| SignerError::SigningFailed(e.to_string()))
     }
 

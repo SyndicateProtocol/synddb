@@ -9,19 +9,12 @@ use std::sync::Arc;
 use tokio::{net::TcpListener, signal};
 use tracing::{error, info, warn};
 
-use synddb_sequencer::{
-    attestation::{AttestationConfig, AttestationVerifier},
-    batcher::{spawn_batcher, BatcherHandle},
-    config::{PublisherType, SequencerConfig},
-    http_api::{create_router, AppState},
-    inbox::Inbox,
-    publish::{
-        local::{LocalConfig, LocalPublisher},
-        traits::StoragePublisher,
-        transport_local::LocalTransport,
-    },
-    signer::MessageSigner,
-};
+use synddb_sequencer::{attestation::{AttestationConfig, AttestationVerifier}, batcher::{ BatcherHandle}, config::{PublisherType, SequencerConfig}, http_api::{create_router, AppState}, inbox::Inbox, publish::{
+    local::{LocalConfig, LocalPublisher},
+    traits::StoragePublisher,
+    transport_local::LocalTransport,
+}, signer::MessageSigner};
+use synddb_sequencer::batcher::Batcher;
 use synddb_shared::runtime;
 
 #[tokio::main]
@@ -114,7 +107,7 @@ async fn main() -> Result<()> {
                     "Initializing CBOR batcher with local transport"
                 );
 
-                let batcher = spawn_batcher(
+                let batcher = Batcher::spawn(
                     batch_config,
                     Arc::clone(&transport) as Arc<dyn TransportPublisher>,
                     Arc::clone(&signer),
@@ -151,7 +144,7 @@ async fn main() -> Result<()> {
                     );
 
                     (
-                        Some(spawn_batcher(
+                        Some(Batcher::spawn(
                             batch_config,
                             Arc::new(transport),
                             Arc::clone(&signer),

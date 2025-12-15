@@ -1,10 +1,12 @@
 //! Message batching layer for efficient storage publication
 //!
 //! The `Batcher` accumulates signed messages and publishes them as CBOR batches
-//! to the configured transport layer. Batches are flushed when any threshold is reached:
+//! to the configured transport layer. Batches are flushed to the storage layer when any threshold
+//! is reached:
 //! - Maximum message count
 //! - Maximum batch size (bytes)
 //! - Flush interval timeout
+//! - Graceful shutdown trigger
 //!
 //! This provides efficient batching without blocking HTTP handlers.
 
@@ -24,18 +26,6 @@ use tokio::{
     time::{interval, Duration},
 };
 use tracing::{debug, error, info};
-
-/// Spawn a new batcher task
-///
-/// Creates a batcher that accumulates messages and publishes them as CBOR batches.
-/// Returns a handle for sending messages to the batcher.
-pub fn spawn_batcher(
-    config: BatchConfig,
-    transport: Arc<dyn TransportPublisher>,
-    signer: Arc<MessageSigner>,
-) -> BatcherHandle {
-    Batcher::spawn(config, transport, signer)
-}
 
 /// Statistics about batch operations
 #[derive(Debug, Clone, Default)]
@@ -68,6 +58,7 @@ impl BatchStats {
 }
 
 /// Message to be batched
+#[derive(Debug, Clone)]
 struct PendingMessage {
     message: CborSignedMessage,
     size: usize,
@@ -192,9 +183,11 @@ impl BatcherHandle {
     }
 }
 
-/// Batcher task that accumulates messages and publishes batches. Takes a `transport` trait object
-/// whose implementation can vary.
-struct Batcher {
+/// Batcher task that accumulates messages and publishes batches.
+/// - Takes a `transport` trait object whose implementation can vary.
+/// - On graceful shutdown, attempts to flush all pending messages to storage
+#[derive(Clone, Debug)]
+pub struct Batcher {
     config: BatchConfig,
     transport: Arc<dyn TransportPublisher>,
     signer: Arc<MessageSigner>,
@@ -205,10 +198,19 @@ struct Batcher {
 }
 
 impl Batcher {
-    /// Create a new batcher and spawn its background task
+    /// Create a new batcher and spawn its background task.
     ///
     /// Returns a handle for sending messages to the batcher.
-    pub(crate) fn spawn(
+    ///
+    /// ## Ordering Guarantee
+    ///
+    /// All commands are processed in FIFO order. The batcher uses an `mpsc` channel
+    /// and a single-threaded event loop ([`run`](Self::run)), ensuring that
+    /// concurrent submissions are serialized. Messages are signed and batched in
+    /// the order received, and batches are signed and published sequentially.
+    /// This prevents race conditions even when multiple HTTP handlers submit
+    /// messages simultaneously.
+    pub fn spawn(
         config: BatchConfig,
         transport: Arc<dyn TransportPublisher>,
         signer: Arc<MessageSigner>,
@@ -413,34 +415,22 @@ impl Batcher {
         Ok(Some(metadata))
     }
 
-    /// Sign batch data using the message signer
+    /// Sign batch data synchronously.
+    ///
+    /// See [`spawn`](Self::spawn) for ordering guarantees.
     fn sign_batch_data(&self, data: &[u8]) -> Result<[u8; 64], CborError> {
         use alloy::primitives::keccak256;
 
         let hash = keccak256(data);
+        let sig = self
+            .signer
+            .sign_raw_sync(&hash.0)
+            .map_err(|e| CborError::Signing(e.to_string()))?;
 
-        // Use blocking sign since we're in sync context
-        let rt = tokio::runtime::Handle::current();
-        let signer = Arc::clone(&self.signer);
-        let hash_clone = hash;
-
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                rt.block_on(async move {
-                    let sig = signer
-                        .sign_raw(&hash_clone.0)
-                        .await
-                        .map_err(|e| CborError::Signing(e.to_string()))?;
-
-                    let mut result = [0u8; 64];
-                    result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-                    result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-                    Ok(result)
-                })
-            })
-            .join()
-            .unwrap()
-        })
+        let mut result = [0u8; 64];
+        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        Ok(result)
     }
 }
 
@@ -468,34 +458,22 @@ impl Batcher {
         .map_err(BatcherError::from)
     }
 
-    /// Sign message data using the message signer
+    /// Sign message data synchronously.
+    ///
+    /// See [`spawn`](Self::spawn) for ordering guarantees.
     fn sign_message_data(&self, data: &[u8]) -> Result<[u8; 64], CborError> {
         use alloy::primitives::keccak256;
 
         let hash = keccak256(data);
+        let sig = self
+            .signer
+            .sign_raw_sync(&hash.0)
+            .map_err(|e| CborError::Signing(e.to_string()))?;
 
-        // Use blocking sign since we're in sync context
-        let rt = tokio::runtime::Handle::current();
-        let signer = Arc::clone(&self.signer);
-        let hash_clone = hash;
-
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                rt.block_on(async move {
-                    let sig = signer
-                        .sign_raw(&hash_clone.0)
-                        .await
-                        .map_err(|e| CborError::Signing(e.to_string()))?;
-
-                    let mut result = [0u8; 64];
-                    result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-                    result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-                    Ok(result)
-                })
-            })
-            .join()
-            .unwrap()
-        })
+        let mut result = [0u8; 64];
+        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        Ok(result)
     }
 }
 
