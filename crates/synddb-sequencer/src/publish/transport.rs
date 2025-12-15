@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 use std::fmt::Debug;
-use synddb_shared::types::cbor::{batch::CborBatch, error::CborError};
+use synddb_shared::types::cbor::{batch::CborBatch, error::CborError, message::CborSignedMessage};
 
 /// Information about a published or available batch
 #[derive(Debug, Clone)]
@@ -101,4 +101,15 @@ pub trait TransportPublisher: Send + Sync + Debug {
     ///
     /// Returns `None` if no batches have been published yet.
     async fn get_latest_sequence(&self) -> Result<Option<u64>, TransportError>;
+
+    /// Get a single message by sequence number
+    ///
+    /// Searches batches to find the one containing this sequence, then
+    /// extracts the specific message. Returns `None` if no batch contains
+    /// this sequence.
+    ///
+    /// Note: This is O(n) in the number of batches for most implementations.
+    /// For sequential replay, prefer iterating batches directly via `list_batches`
+    /// and `fetch`.
+    async fn get_message(&self, sequence: u64) -> Result<Option<CborSignedMessage>, TransportError>;
 }

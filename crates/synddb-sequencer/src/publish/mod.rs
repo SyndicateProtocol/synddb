@@ -28,7 +28,6 @@ pub mod ipfs;
 #[cfg(feature = "gcs")]
 pub mod gcs;
 
-#[cfg(feature = "gcs")]
 pub mod transport_gcs;
 
 pub mod transport_arweave;

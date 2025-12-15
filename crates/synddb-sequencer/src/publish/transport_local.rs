@@ -27,7 +27,10 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, RwLock},
 };
-use synddb_shared::types::{cbor::batch::CborBatch, message::SignedMessage};
+use synddb_shared::types::{
+    cbor::{batch::CborBatch, message::CborSignedMessage},
+    message::SignedMessage,
+};
 use tracing::{debug, info};
 
 // ============================================================================
@@ -204,7 +207,7 @@ impl LocalTransport {
         Router::new()
             .route("/batches", get(list_batches))
             .route("/batches/{start}", get(get_batch_cbor))
-            .route("/messages/{sequence}", get(get_message))
+            .route("/messages/{sequence}", get(get_message_handler))
             .route("/latest", get(get_latest))
             .with_state(self)
     }
@@ -298,11 +301,12 @@ impl LocalTransport {
         }
     }
 
-    /// Get a message by sequence number
+    /// Get a message by sequence number as JSON `SignedMessage`
     ///
     /// Searches all batches to find the message, converts to JSON `SignedMessage`.
+    /// Used by HTTP routes that need the JSON format.
     /// Note: This doesn't re-verify signatures since they were verified at publish time.
-    pub fn get_message(&self, sequence: u64) -> Option<SignedMessage> {
+    pub fn get_signed_message(&self, sequence: u64) -> Option<SignedMessage> {
         // Find the batch containing this sequence
         let compressed_data = match &*self.storage {
             StorageInner::Memory(state) => {
@@ -453,6 +457,46 @@ impl TransportPublisher for LocalTransport {
     async fn get_latest_sequence(&self) -> Result<Option<u64>, TransportError> {
         Ok(self.latest_sequence())
     }
+
+    async fn get_message(&self, sequence: u64) -> Result<Option<CborSignedMessage>, TransportError> {
+        // Find the batch containing this sequence
+        let compressed_data = match &*self.storage {
+            StorageInner::Memory(state) => {
+                let state = state.read().unwrap();
+                state
+                    .batches
+                    .values()
+                    .find(|stored| {
+                        sequence >= stored.start_sequence && sequence <= stored.end_sequence
+                    })
+                    .map(|stored| stored.compressed_data.clone())
+            }
+            StorageInner::Sqlite(conn) => {
+                let conn = conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT compressed_data FROM batches WHERE start_sequence <= ?1 AND end_sequence >= ?1",
+                    [sequence],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .ok()
+            }
+        };
+
+        let Some(data) = compressed_data else {
+            return Ok(None);
+        };
+
+        let batch = CborBatch::from_cbor_zstd(&data)?;
+
+        // Find the message in this batch
+        for msg in batch.messages {
+            if msg.sequence().ok() == Some(sequence) {
+                return Ok(Some(msg));
+            }
+        }
+
+        Ok(None)
+    }
 }
 
 // ============================================================================
@@ -504,11 +548,11 @@ async fn get_batch_cbor(
 }
 
 /// Get message by sequence (returns JSON `SignedMessage`)
-async fn get_message(
+async fn get_message_handler(
     State(transport): State<Arc<LocalTransport>>,
     Path(sequence): Path<u64>,
 ) -> Response {
-    transport.get_message(sequence).map_or_else(
+    transport.get_signed_message(sequence).map_or_else(
         || StatusCode::NOT_FOUND.into_response(),
         |msg| Json(msg).into_response(),
     )
@@ -600,13 +644,11 @@ mod tests {
         transport.publish(&create_test_batch(1, 5)).await.unwrap();
 
         // Get message from batch
-        let msg = transport.get_message(3).unwrap();
-        assert_eq!(msg.sequence, 3);
-        // COSE message should have protected header
-        assert!(!msg.cose_protected_header.is_empty());
+        let msg = transport.get_message(3).await.unwrap().unwrap();
+        assert_eq!(msg.sequence().unwrap(), 3);
 
         // Non-existent message
-        assert!(transport.get_message(100).is_none());
+        assert!(transport.get_message(100).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -676,12 +718,11 @@ mod tests {
         transport.publish(&create_test_batch(1, 5)).await.unwrap();
 
         // Get message from batch
-        let msg = transport.get_message(3).unwrap();
-        assert_eq!(msg.sequence, 3);
-        assert!(!msg.cose_protected_header.is_empty());
+        let msg = transport.get_message(3).await.unwrap().unwrap();
+        assert_eq!(msg.sequence().unwrap(), 3);
 
         // Non-existent message
-        assert!(transport.get_message(100).is_none());
+        assert!(transport.get_message(100).await.unwrap().is_none());
     }
 
     #[tokio::test]
