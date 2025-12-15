@@ -12,8 +12,8 @@
 
 use crate::{
     config::BatchConfig,
-    publish::transport::{PublishMetadata, TransportError, TransportPublisher},
     signer::MessageSigner,
+    transport::traits::{PublishMetadata, TransportError, TransportPublisher},
 };
 use std::{sync::Arc, time::Instant};
 use synddb_shared::types::cbor::{

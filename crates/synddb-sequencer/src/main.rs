@@ -15,8 +15,8 @@ use synddb_sequencer::{
     config::{PublisherType, SequencerConfig},
     http_api::{create_router, AppState},
     inbox::Inbox,
-    publish::transport_local::{LocalTransport, LocalTransportConfig},
     signer::MessageSigner,
+    transport::local::{LocalTransport, LocalTransportConfig},
 };
 use synddb_shared::runtime;
 
@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
                 (None, None)
             }
             PublisherType::Local => {
-                use synddb_sequencer::publish::transport::TransportPublisher;
+                use synddb_sequencer::transport::traits::TransportPublisher;
 
                 // Use optional LOCAL_STORAGE_PATH for file persistence, else default to in-memory
                 let transport_config = config.local_storage_path.as_ref().map_or_else(
@@ -91,9 +91,7 @@ async fn main() -> Result<()> {
             PublisherType::Gcs => {
                 #[cfg(feature = "gcs")]
                 {
-                    use synddb_sequencer::publish::transport_gcs::{
-                        GcsTransport, GcsTransportConfig,
-                    };
+                    use synddb_sequencer::transport::gcs::{GcsTransport, GcsTransportConfig};
 
                     let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
                         anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
@@ -211,10 +209,7 @@ async fn main() -> Result<()> {
 }
 
 /// Wait for shutdown signal and perform graceful shutdown
-async fn shutdown_signal(
-    batcher: Option<BatcherHandle>,
-    timeout: std::time::Duration,
-) {
+async fn shutdown_signal(batcher: Option<BatcherHandle>, timeout: std::time::Duration) {
     let ctrl_c = async {
         signal::ctrl_c()
             .await

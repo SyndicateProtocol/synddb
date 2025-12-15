@@ -30,7 +30,7 @@
 //! │  └────────┬────────┘    │
 //! │           │             │
 //! │  ┌────────▼────────┐    │
-//! │  │   Publisher     │    │
+//! │  │   Transport     │    │
 //! │  │  (GCS, etc.)    │    │
 //! │  └─────────────────┘    │
 //! └─────────────────────────┘
@@ -57,5 +57,5 @@ pub mod config;
 pub mod http_api;
 pub mod http_errors;
 pub mod inbox;
-pub mod publish;
 pub mod signer;
+pub mod transport;

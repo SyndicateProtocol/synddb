@@ -111,5 +111,6 @@ pub trait TransportPublisher: Send + Sync + Debug {
     /// Note: This is O(n) in the number of batches for most implementations.
     /// For sequential replay, prefer iterating batches directly via `list_batches`
     /// and `fetch`.
-    async fn get_message(&self, sequence: u64) -> Result<Option<CborSignedMessage>, TransportError>;
+    async fn get_message(&self, sequence: u64)
+        -> Result<Option<CborSignedMessage>, TransportError>;
 }

@@ -13,7 +13,7 @@
 //! This transport enables testing CBOR/COSE signatures with the HTTP fetcher,
 //! providing the same binary format as GCS but without external dependencies.
 
-use crate::publish::transport::{BatchInfo, PublishMetadata, TransportError, TransportPublisher};
+use crate::transport::traits::{BatchInfo, PublishMetadata, TransportError, TransportPublisher};
 use async_trait::async_trait;
 use axum::{
     extract::{Path, State},
@@ -155,13 +155,11 @@ impl Default for LocalTransport {
 
 /// SQL schema for `SQLite` backend
 const SQLITE_SCHEMA: &str = r#"
-    CREATE TABLE IF NOT EXISTS batches (
-        start_sequence INTEGER PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS batches (start_sequence INTEGER PRIMARY KEY,
         end_sequence INTEGER NOT NULL,
         compressed_data BLOB NOT NULL,
         uncompressed_size INTEGER NOT NULL,
-        content_hash BLOB NOT NULL
-    );
+        content_hash BLOB NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_end_sequence ON batches(end_sequence);
 "#;
 
@@ -305,7 +303,7 @@ impl LocalTransport {
     ///
     /// Searches all batches to find the message, converts to JSON `SignedMessage`.
     /// Used by HTTP routes that need the JSON format.
-    /// Note: This doesn't re-verify signatures since they were verified at publish time.
+    /// Note: This doesn't re-verify signatures since they were verified at transport time.
     pub fn get_signed_message(&self, sequence: u64) -> Option<SignedMessage> {
         // Find the batch containing this sequence
         let compressed_data = match &*self.storage {
@@ -337,7 +335,7 @@ impl LocalTransport {
         for msg in &batch.messages {
             if msg.sequence().ok() == Some(sequence) {
                 // Convert to SignedMessage (JSON format with cose_protected_header)
-                // Use unchecked since signatures were verified at publish time
+                // Use unchecked since signatures were verified at transport time
                 if let Ok(signed_msg) = msg.to_signed_message_unchecked() {
                     return Some(signed_msg);
                 }
@@ -458,7 +456,10 @@ impl TransportPublisher for LocalTransport {
         Ok(self.latest_sequence())
     }
 
-    async fn get_message(&self, sequence: u64) -> Result<Option<CborSignedMessage>, TransportError> {
+    async fn get_message(
+        &self,
+        sequence: u64,
+    ) -> Result<Option<CborSignedMessage>, TransportError> {
         // Find the batch containing this sequence
         let compressed_data = match &*self.storage {
             StorageInner::Memory(state) => {
@@ -731,10 +732,10 @@ mod tests {
 
         let batch = create_test_batch(1, 5);
 
-        // First publish should succeed
+        // First transport should succeed
         let metadata1 = transport.publish(&batch).await.unwrap();
 
-        // Second publish of same batch should also succeed (idempotent)
+        // Second transport of same batch should also succeed (idempotent)
         let metadata2 = transport.publish(&batch).await.unwrap();
 
         // Both should return same reference
@@ -757,7 +758,7 @@ mod tests {
         // Clean up any existing file
         let _ = std::fs::remove_file(&db_path);
 
-        // Create transport and publish batch
+        // Create transport and transport batch
         {
             let transport = LocalTransport::new(LocalTransportConfig::file(&db_path_str));
             transport.publish(&create_test_batch(1, 5)).await.unwrap();
