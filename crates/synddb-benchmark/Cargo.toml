@@ -36,7 +36,5 @@ synddb-client = { path = "../synddb-client" }
 
 [dev-dependencies]
 synddb-shared = { path = "../synddb-shared" }
-zstd = { workspace = true }
 alloy = { workspace = true }
-hex = { workspace = true }
 rusqlite = { workspace = true, features = ["bundled", "session"] }

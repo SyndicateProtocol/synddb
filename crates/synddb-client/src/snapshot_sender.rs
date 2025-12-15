@@ -11,15 +11,15 @@ use synddb_shared::types::payloads::{SnapshotData, SnapshotRequest};
 use tracing::{debug, error, info, warn};
 
 impl From<&Snapshot> for SnapshotData {
-    fn from(snap: &Snapshot) -> Self {
+    fn from(snapshot: &Snapshot) -> Self {
         Self {
-            data: snap.data.clone(),
-            timestamp: snap
+            data: snapshot.data.clone(),
+            timestamp: snapshot
                 .timestamp
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
-            sequence: snap.sequence,
+            sequence: snapshot.sequence,
         }
     }
 }

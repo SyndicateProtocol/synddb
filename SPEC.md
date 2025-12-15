@@ -388,13 +388,13 @@ Deploy the default validator in a TEE:
 synddb-validator \
     --fetcher-type http \
     --sequencer-url http://sequencer:8433 \
-    --sequencer-pubkey 8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5
+    --sequencer-pubkey 8318535b...
 
 # Or fetch from GCS
 synddb-validator \
     --fetcher-type gcs \
     --gcs-bucket my-bucket \
-    --sequencer-pubkey 8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5
+    --sequencer-pubkey 8318535b...
 ```
 
 The default validator will sync SQL operations (changesets and snapshots) from storage layers, apply them to rebuild state, and verify basic invariants before signing for settlement.

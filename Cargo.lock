@@ -4275,7 +4275,6 @@ dependencies = [
  "alloy",
  "anyhow",
  "clap",
- "hex",
  "rand 0.8.5",
  "rusqlite",
  "serde",
@@ -4285,7 +4284,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "zstd",
 ]
 
 [[package]]
@@ -4329,6 +4327,7 @@ dependencies = [
  "serde_json",
  "synddb-chain-monitor",
  "synddb-shared",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",

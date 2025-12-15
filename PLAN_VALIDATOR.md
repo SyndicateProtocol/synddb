@@ -171,7 +171,7 @@ The GCS fetcher (`--fetcher-type=gcs`) fetches signed messages from Google Cloud
 **Configuration:**
 ```bash
 synddb-validator \
-  --sequencer-pubkey=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
+  --sequencer-pubkey=... \
   --fetcher-type=gcs \
   --gcs-bucket=synddb-messages \
   --gcs-prefix=sequencer

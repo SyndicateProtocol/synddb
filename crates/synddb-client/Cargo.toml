@@ -33,6 +33,7 @@ synddb-chain-monitor = { path = "../synddb-chain-monitor" }
 synddb-shared = { path = "../synddb-shared" }
 alloy = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
+thiserror = {workspace = true}
 
 [lib]
 # Compile as both Rust library and C-compatible shared library

@@ -6,33 +6,18 @@ use crate::{
 };
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
-use std::{fmt, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
+use thiserror::Error;
 use synddb_shared::types::payloads::{ChangesetBatchRequest, ChangesetData};
 use tracing::{debug, error, info, warn};
 
 /// Error type for send operations
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum SendError {
+    #[error("HTTP error: {0}")]
     Http(reqwest::Error),
+    #[error("CBOR serialization error: {0}")]
     Cbor(ciborium::ser::Error<std::io::Error>),
-}
-
-impl fmt::Display for SendError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Http(e) => write!(f, "HTTP error: {e}"),
-            Self::Cbor(e) => write!(f, "CBOR serialization error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for SendError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Http(e) => Some(e),
-            Self::Cbor(e) => Some(e),
-        }
-    }
 }
 
 impl From<&Changeset> for ChangesetData {

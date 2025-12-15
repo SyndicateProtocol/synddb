@@ -55,6 +55,7 @@ pub enum PublisherType {
     /// No persistence (messages only kept in memory during request)
     #[default]
     None,
+    //TODO CLAUDE: kill this?
     /// Local `SQLite` storage with HTTP fetch API (JSON format, legacy)
     Local,
     /// Local in-memory storage with HTTP fetch API (CBOR format with COSE signatures)
