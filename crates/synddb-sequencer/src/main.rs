@@ -9,12 +9,19 @@ use std::sync::Arc;
 use tokio::{net::TcpListener, signal};
 use tracing::{error, info, warn};
 
-use synddb_sequencer::{attestation::{AttestationConfig, AttestationVerifier}, batcher::{ BatcherHandle}, config::{PublisherType, SequencerConfig}, http_api::{create_router, AppState}, inbox::Inbox, publish::{
-    local::{LocalConfig, LocalPublisher},
-    traits::StoragePublisher,
-    transport_local::LocalTransport,
-}, signer::MessageSigner};
-use synddb_sequencer::batcher::Batcher;
+use synddb_sequencer::{
+    attestation::{AttestationConfig, AttestationVerifier},
+    batcher::{Batcher, BatcherHandle},
+    config::{PublisherType, SequencerConfig},
+    http_api::{create_router, AppState},
+    inbox::Inbox,
+    publish::{
+        local::{LocalConfig, LocalPublisher},
+        traits::StoragePublisher,
+        transport_local::LocalTransport,
+    },
+    signer::MessageSigner,
+};
 use synddb_shared::runtime;
 
 #[tokio::main]
