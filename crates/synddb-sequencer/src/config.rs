@@ -55,11 +55,11 @@ pub enum PublisherType {
     /// No persistence (messages only kept in memory during request)
     #[default]
     None,
-    //TODO CLAUDE: kill this?
-    /// Local `SQLite` storage with HTTP fetch API (JSON format, legacy)
+    /// Local storage for testing with HTTP fetch API (CBOR format with COSE signatures)
+    ///
+    /// Uses `SQLite` for file persistence if `LOCAL_STORAGE_PATH` is set,
+    /// otherwise uses in-memory storage.
     Local,
-    /// Local in-memory storage with HTTP fetch API (CBOR format with COSE signatures)
-    LocalCbor,
     /// Google Cloud Storage (CBOR format with COSE signatures)
     Gcs,
 }
@@ -76,7 +76,6 @@ impl fmt::Display for PublisherType {
         match self {
             Self::None => write!(f, "none"),
             Self::Local => write!(f, "local"),
-            Self::LocalCbor => write!(f, "local-cbor"),
             Self::Gcs => write!(f, "gcs"),
         }
     }

@@ -4,6 +4,7 @@
 //! storage backends. The transport layer is separate from the batch format:
 //!
 //! - **GCS:** Stores raw CBOR+zstd bytes directly
+//! - **Local:** In-memory or `SQLite` storage for testing
 //! - **Arweave (future):** Wraps CBOR in ANS-104 `DataItem` with discovery tags
 //!
 //! The `CborBatch` format is transport-agnostic. Content hashes enable cross-system
@@ -11,7 +12,7 @@
 
 use async_trait::async_trait;
 use std::fmt::Debug;
-use synddb_shared::types::cbor::batch::CborBatch;
+use synddb_shared::types::cbor::{batch::CborBatch, error::CborError};
 
 /// Information about a published or available batch
 #[derive(Debug, Clone)]
@@ -61,8 +62,8 @@ pub enum TransportError {
     SignatureVerification(String),
 }
 
-impl From<synddb_shared::types::cbor::error::CborError> for TransportError {
-    fn from(e: synddb_shared::types::cbor::error::CborError) -> Self {
+impl From<CborError> for TransportError {
+    fn from(e: CborError) -> Self {
         Self::Serialization(e.to_string())
     }
 }

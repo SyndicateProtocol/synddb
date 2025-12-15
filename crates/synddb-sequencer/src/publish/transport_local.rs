@@ -1,6 +1,7 @@
-//! Local in-memory transport for CBOR batches
+//! Local transport for CBOR batches with configurable storage backend
 //!
-//! Stores CBOR batches in memory with optional HTTP routes for serving:
+//! Supports both in-memory storage (for testing) and `SQLite` file persistence
+//! (for local development without external dependencies like GCS).
 //!
 //! ```text
 //! /storage/batches              - List all batches
@@ -21,14 +22,76 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use rusqlite::{Connection, ErrorCode};
 use std::{
     collections::BTreeMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 use synddb_shared::types::{cbor::batch::CborBatch, message::SignedMessage};
 use tracing::{debug, info};
 
-/// Stored batch data
+// ============================================================================
+// Configuration
+// ============================================================================
+
+/// Storage backend for `LocalTransport`
+#[derive(Debug, Clone)]
+pub enum LocalStorageBackend {
+    /// In-memory storage (lost on restart)
+    InMemory,
+    /// `SQLite` file storage (persistent)
+    Sqlite { path: String },
+}
+
+/// Configuration for `LocalTransport`
+#[derive(Debug, Clone)]
+pub struct LocalTransportConfig {
+    /// Storage backend to use
+    pub backend: LocalStorageBackend,
+}
+
+impl LocalTransportConfig {
+    /// Create config for in-memory storage
+    pub const fn in_memory() -> Self {
+        Self {
+            backend: LocalStorageBackend::InMemory,
+        }
+    }
+
+    /// Create config for `SQLite` file storage
+    pub fn file(path: impl Into<String>) -> Self {
+        Self {
+            backend: LocalStorageBackend::Sqlite { path: path.into() },
+        }
+    }
+}
+
+impl Default for LocalTransportConfig {
+    fn default() -> Self {
+        Self::in_memory()
+    }
+}
+
+// ============================================================================
+// Storage Internals
+// ============================================================================
+
+/// Internal storage implementation
+enum StorageInner {
+    /// In-memory storage using `BTreeMap`
+    Memory(RwLock<MemoryState>),
+    /// `SQLite` file storage
+    Sqlite(Mutex<Connection>),
+}
+
+/// In-memory storage state
+#[derive(Default)]
+struct MemoryState {
+    /// Batches indexed by `start_sequence`
+    batches: BTreeMap<u64, StoredBatch>,
+}
+
+/// Stored batch data (used by in-memory backend)
 #[derive(Clone)]
 struct StoredBatch {
     /// Raw CBOR+zstd compressed data
@@ -43,43 +106,91 @@ struct StoredBatch {
     end_sequence: u64,
 }
 
-/// Shared state for `LocalTransport`
-#[derive(Default)]
-struct LocalTransportState {
-    /// Batches indexed by `start_sequence`
-    batches: BTreeMap<u64, StoredBatch>,
-}
+// ============================================================================
+// LocalTransport
+// ============================================================================
 
-/// Local in-memory transport for CBOR batches
+/// Local transport for CBOR batches
 ///
 /// Thread-safe storage that can be shared with HTTP handlers.
-#[derive(Clone)]
+/// Supports both in-memory and `SQLite` file backends.
 pub struct LocalTransport {
-    state: Arc<RwLock<LocalTransportState>>,
+    storage: Arc<StorageInner>,
+}
+
+impl Clone for LocalTransport {
+    fn clone(&self) -> Self {
+        Self {
+            storage: Arc::clone(&self.storage),
+        }
+    }
 }
 
 impl std::fmt::Debug for LocalTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.read().unwrap();
+        let batch_count = match &*self.storage {
+            StorageInner::Memory(state) => state.read().unwrap().batches.len(),
+            StorageInner::Sqlite(conn) => {
+                let conn = conn.lock().unwrap();
+                conn.query_row("SELECT COUNT(*) FROM batches", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap_or(0) as usize
+            }
+        };
         f.debug_struct("LocalTransport")
-            .field("batch_count", &state.batches.len())
+            .field("batch_count", &batch_count)
             .finish()
     }
 }
 
 impl Default for LocalTransport {
     fn default() -> Self {
-        Self::new()
+        Self::new(LocalTransportConfig::default())
     }
 }
 
+/// SQL schema for `SQLite` backend
+const SQLITE_SCHEMA: &str = r#"
+    CREATE TABLE IF NOT EXISTS batches (
+        start_sequence INTEGER PRIMARY KEY,
+        end_sequence INTEGER NOT NULL,
+        compressed_data BLOB NOT NULL,
+        uncompressed_size INTEGER NOT NULL,
+        content_hash BLOB NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_end_sequence ON batches(end_sequence);
+"#;
+
 impl LocalTransport {
-    /// Create a new local transport
-    pub fn new() -> Self {
-        info!("Local CBOR transport initialized");
+    /// Create a new local transport with the given configuration
+    pub fn new(config: LocalTransportConfig) -> Self {
+        let storage = match config.backend {
+            LocalStorageBackend::InMemory => {
+                info!("Local CBOR transport initialized (in-memory)");
+                StorageInner::Memory(RwLock::new(MemoryState::default()))
+            }
+            LocalStorageBackend::Sqlite { path } => {
+                let conn = if path == ":memory:" {
+                    Connection::open_in_memory().expect("Failed to open in-memory SQLite")
+                } else {
+                    Connection::open(&path)
+                        .unwrap_or_else(|e| panic!("Failed to open SQLite at {path}: {e}"))
+                };
+                conn.execute_batch(SQLITE_SCHEMA)
+                    .expect("Failed to create SQLite schema");
+                info!(path = %path, "Local CBOR transport initialized (SQLite)");
+                StorageInner::Sqlite(Mutex::new(conn))
+            }
+        };
         Self {
-            state: Arc::new(RwLock::new(LocalTransportState::default())),
+            storage: Arc::new(storage),
         }
+    }
+
+    /// Create a new in-memory transport (convenience method)
+    pub fn in_memory() -> Self {
+        Self::new(LocalTransportConfig::in_memory())
     }
 
     /// Create an Axum router for serving batches over HTTP
@@ -100,41 +211,91 @@ impl LocalTransport {
 
     /// Get a batch by start sequence (for internal use)
     pub fn get_batch(&self, start_sequence: u64) -> Option<CborBatch> {
-        let state = self.state.read().unwrap();
-        state
-            .batches
-            .get(&start_sequence)
-            .and_then(|stored| CborBatch::from_cbor_zstd(&stored.compressed_data).ok())
+        self.get_batch_compressed(start_sequence)
+            .and_then(|data| CborBatch::from_cbor_zstd(&data).ok())
     }
 
     /// Get compressed batch data by start sequence
     pub fn get_batch_compressed(&self, start_sequence: u64) -> Option<Vec<u8>> {
-        let state = self.state.read().unwrap();
-        state
-            .batches
-            .get(&start_sequence)
-            .map(|stored| stored.compressed_data.clone())
+        match &*self.storage {
+            StorageInner::Memory(state) => {
+                let state = state.read().unwrap();
+                state
+                    .batches
+                    .get(&start_sequence)
+                    .map(|stored| stored.compressed_data.clone())
+            }
+            StorageInner::Sqlite(conn) => {
+                let conn = conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT compressed_data FROM batches WHERE start_sequence = ?1",
+                    [start_sequence],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .ok()
+            }
+        }
     }
 
     /// List all batch metadata
     pub fn list_batch_info(&self) -> Vec<BatchInfo> {
-        let state = self.state.read().unwrap();
-        state
-            .batches
-            .values()
-            .map(|stored| BatchInfo {
-                start_sequence: stored.start_sequence,
-                end_sequence: stored.end_sequence,
-                reference: format!("local://{}", stored.start_sequence),
-                content_hash: stored.content_hash,
-            })
-            .collect()
+        match &*self.storage {
+            StorageInner::Memory(state) => {
+                let state = state.read().unwrap();
+                state
+                    .batches
+                    .values()
+                    .map(|stored| BatchInfo {
+                        start_sequence: stored.start_sequence,
+                        end_sequence: stored.end_sequence,
+                        reference: format!("local://{}", stored.start_sequence),
+                        content_hash: stored.content_hash,
+                    })
+                    .collect()
+            }
+            StorageInner::Sqlite(conn) => {
+                let conn = conn.lock().unwrap();
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT start_sequence, end_sequence, content_hash FROM batches ORDER BY start_sequence",
+                    )
+                    .unwrap();
+                stmt.query_map([], |row| {
+                    let start_sequence: u64 = row.get(0)?;
+                    let end_sequence: u64 = row.get(1)?;
+                    let content_hash_blob: Vec<u8> = row.get(2)?;
+                    let mut content_hash = [0u8; 32];
+                    content_hash.copy_from_slice(&content_hash_blob);
+                    Ok(BatchInfo {
+                        start_sequence,
+                        end_sequence,
+                        reference: format!("local://{start_sequence}"),
+                        content_hash,
+                    })
+                })
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+            }
+        }
     }
 
     /// Get the latest sequence number
     pub fn latest_sequence(&self) -> Option<u64> {
-        let state = self.state.read().unwrap();
-        state.batches.values().map(|b| b.end_sequence).max()
+        match &*self.storage {
+            StorageInner::Memory(state) => {
+                let state = state.read().unwrap();
+                state.batches.values().map(|b| b.end_sequence).max()
+            }
+            StorageInner::Sqlite(conn) => {
+                let conn = conn.lock().unwrap();
+                conn.query_row("SELECT MAX(end_sequence) FROM batches", [], |row| {
+                    row.get::<_, Option<u64>>(0)
+                })
+                .ok()
+                .flatten()
+            }
+        }
     }
 
     /// Get a message by sequence number
@@ -142,24 +303,40 @@ impl LocalTransport {
     /// Searches all batches to find the message, converts to JSON `SignedMessage`.
     /// Note: This doesn't re-verify signatures since they were verified at publish time.
     pub fn get_message(&self, sequence: u64) -> Option<SignedMessage> {
-        let state = self.state.read().unwrap();
-
         // Find the batch containing this sequence
-        for stored in state.batches.values() {
-            if sequence >= stored.start_sequence && sequence <= stored.end_sequence {
-                if let Ok(batch) = CborBatch::from_cbor_zstd(&stored.compressed_data) {
-                    // Find the message in this batch
-                    for msg in &batch.messages {
-                        if msg.sequence().ok() == Some(sequence) {
-                            // Convert to SignedMessage (JSON format with cose_protected_header)
-                            // Use unchecked since signatures were verified at publish time
-                            if let Ok(signed_msg) = msg.to_signed_message_unchecked() {
-                                return Some(signed_msg);
-                            }
-                        }
-                    }
+        let compressed_data = match &*self.storage {
+            StorageInner::Memory(state) => {
+                let state = state.read().unwrap();
+                state
+                    .batches
+                    .values()
+                    .find(|stored| {
+                        sequence >= stored.start_sequence && sequence <= stored.end_sequence
+                    })
+                    .map(|stored| stored.compressed_data.clone())
+            }
+            StorageInner::Sqlite(conn) => {
+                let conn = conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT compressed_data FROM batches WHERE start_sequence <= ?1 AND end_sequence >= ?1",
+                    [sequence],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .ok()
+            }
+        };
+
+        let compressed_data = compressed_data?;
+        let batch = CborBatch::from_cbor_zstd(&compressed_data).ok()?;
+
+        // Find the message in this batch
+        for msg in &batch.messages {
+            if msg.sequence().ok() == Some(sequence) {
+                // Convert to SignedMessage (JSON format with cose_protected_header)
+                // Use unchecked since signatures were verified at publish time
+                if let Ok(signed_msg) = msg.to_signed_message_unchecked() {
+                    return Some(signed_msg);
                 }
-                break;
             }
         }
         None
@@ -188,18 +365,41 @@ impl TransportPublisher for LocalTransport {
         let compressed_bytes = compressed.len();
         let compression_ratio = uncompressed_bytes as f64 / compressed_bytes as f64;
 
-        let stored = StoredBatch {
-            compressed_data: compressed,
-            uncompressed_size: uncompressed_bytes,
-            content_hash: batch.content_hash,
-            start_sequence: batch.start_sequence,
-            end_sequence: batch.end_sequence,
-        };
-
-        // Store in memory
-        {
-            let mut state = self.state.write().unwrap();
-            state.batches.insert(batch.start_sequence, stored);
+        // Store in backend
+        match &*self.storage {
+            StorageInner::Memory(state) => {
+                let stored = StoredBatch {
+                    compressed_data: compressed,
+                    uncompressed_size: uncompressed_bytes,
+                    content_hash: batch.content_hash,
+                    start_sequence: batch.start_sequence,
+                    end_sequence: batch.end_sequence,
+                };
+                let mut state = state.write().unwrap();
+                state.batches.insert(batch.start_sequence, stored);
+            }
+            StorageInner::Sqlite(conn) => {
+                let conn = conn.lock().unwrap();
+                let result = conn.execute(
+                    "INSERT INTO batches (start_sequence, end_sequence, compressed_data, uncompressed_size, content_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        batch.start_sequence,
+                        batch.end_sequence,
+                        &compressed,
+                        uncompressed_bytes,
+                        &batch.content_hash[..],
+                    ],
+                );
+                // Handle idempotent writes - duplicate is OK
+                if let Err(rusqlite::Error::SqliteFailure(err, _)) = &result {
+                    if err.code != ErrorCode::ConstraintViolation {
+                        result.map_err(|e| {
+                            TransportError::Storage(format!("SQLite insert failed: {e}"))
+                        })?;
+                    }
+                    // Constraint violation = duplicate, which is fine (idempotent)
+                }
+            }
         }
 
         let reference = format!("local://{}", batch.start_sequence);
@@ -223,9 +423,9 @@ impl TransportPublisher for LocalTransport {
     }
 
     async fn fetch(&self, start_sequence: u64) -> Result<Option<CborBatch>, TransportError> {
-        let state = self.state.read().unwrap();
+        let compressed_data = self.get_batch_compressed(start_sequence);
 
-        let Some(stored) = state.batches.get(&start_sequence) else {
+        let Some(data) = compressed_data else {
             debug!(
                 start_sequence = start_sequence,
                 "Batch not found in local storage"
@@ -233,7 +433,7 @@ impl TransportPublisher for LocalTransport {
             return Ok(None);
         };
 
-        let batch = CborBatch::from_cbor_zstd(&stored.compressed_data)?;
+        let batch = CborBatch::from_cbor_zstd(&data)?;
 
         info!(
             start_sequence = batch.start_sequence,
@@ -352,7 +552,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_transport_publish_and_fetch() {
-        let transport = LocalTransport::new();
+        let transport = LocalTransport::in_memory();
 
         let batch = create_test_batch(1, 5);
         let metadata = transport.publish(&batch).await.unwrap();
@@ -369,7 +569,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_transport_list_batches() {
-        let transport = LocalTransport::new();
+        let transport = LocalTransport::in_memory();
 
         transport.publish(&create_test_batch(1, 5)).await.unwrap();
         transport.publish(&create_test_batch(6, 10)).await.unwrap();
@@ -382,7 +582,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_transport_latest_sequence() {
-        let transport = LocalTransport::new();
+        let transport = LocalTransport::in_memory();
 
         assert_eq!(transport.get_latest_sequence().await.unwrap(), None);
 
@@ -395,7 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_transport_get_message() {
-        let transport = LocalTransport::new();
+        let transport = LocalTransport::in_memory();
 
         transport.publish(&create_test_batch(1, 5)).await.unwrap();
 
@@ -411,9 +611,139 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_transport_fetch_not_found() {
-        let transport = LocalTransport::new();
+        let transport = LocalTransport::in_memory();
 
         let result = transport.fetch(999).await.unwrap();
         assert!(result.is_none());
+    }
+
+    // ========================================================================
+    // SQLite backend tests
+    // ========================================================================
+
+    /// Create a `SQLite` transport using :memory: for testing
+    fn sqlite_transport() -> LocalTransport {
+        LocalTransport::new(LocalTransportConfig::file(":memory:"))
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_publish_and_fetch() {
+        let transport = sqlite_transport();
+
+        let batch = create_test_batch(1, 5);
+        let metadata = transport.publish(&batch).await.unwrap();
+
+        assert!(metadata.reference.starts_with("local://"));
+        assert!(metadata.compressed_bytes > 0);
+
+        // Fetch it back
+        let fetched = transport.fetch(1).await.unwrap().unwrap();
+        assert_eq!(fetched.start_sequence, 1);
+        assert_eq!(fetched.end_sequence, 5);
+        assert_eq!(fetched.messages.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_list_batches() {
+        let transport = sqlite_transport();
+
+        transport.publish(&create_test_batch(1, 5)).await.unwrap();
+        transport.publish(&create_test_batch(6, 10)).await.unwrap();
+
+        let batches = transport.list_batches().await.unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].start_sequence, 1);
+        assert_eq!(batches[1].start_sequence, 6);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_latest_sequence() {
+        let transport = sqlite_transport();
+
+        assert_eq!(transport.get_latest_sequence().await.unwrap(), None);
+
+        transport.publish(&create_test_batch(1, 5)).await.unwrap();
+        assert_eq!(transport.get_latest_sequence().await.unwrap(), Some(5));
+
+        transport.publish(&create_test_batch(6, 10)).await.unwrap();
+        assert_eq!(transport.get_latest_sequence().await.unwrap(), Some(10));
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_get_message() {
+        let transport = sqlite_transport();
+
+        transport.publish(&create_test_batch(1, 5)).await.unwrap();
+
+        // Get message from batch
+        let msg = transport.get_message(3).unwrap();
+        assert_eq!(msg.sequence, 3);
+        assert!(!msg.cose_protected_header.is_empty());
+
+        // Non-existent message
+        assert!(transport.get_message(100).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_idempotent_publish() {
+        let transport = sqlite_transport();
+
+        let batch = create_test_batch(1, 5);
+
+        // First publish should succeed
+        let metadata1 = transport.publish(&batch).await.unwrap();
+
+        // Second publish of same batch should also succeed (idempotent)
+        let metadata2 = transport.publish(&batch).await.unwrap();
+
+        // Both should return same reference
+        assert_eq!(metadata1.reference, metadata2.reference);
+
+        // Should still only have one batch
+        let batches = transport.list_batches().await.unwrap();
+        assert_eq!(batches.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_persistence_across_restart() {
+        use std::path::PathBuf;
+
+        // Create a temp file path
+        let temp_dir = std::env::temp_dir();
+        let db_path: PathBuf = temp_dir.join(format!("test_sqlite_{}.db", std::process::id()));
+        let db_path_str = db_path.to_string_lossy().to_string();
+
+        // Clean up any existing file
+        let _ = std::fs::remove_file(&db_path);
+
+        // Create transport and publish batch
+        {
+            let transport = LocalTransport::new(LocalTransportConfig::file(&db_path_str));
+            transport.publish(&create_test_batch(1, 5)).await.unwrap();
+            transport.publish(&create_test_batch(6, 10)).await.unwrap();
+
+            assert_eq!(transport.get_latest_sequence().await.unwrap(), Some(10));
+        }
+        // Transport dropped, connection closed
+
+        // Reopen and verify data persisted
+        {
+            let transport = LocalTransport::new(LocalTransportConfig::file(&db_path_str));
+
+            // Latest sequence should be recovered
+            assert_eq!(transport.get_latest_sequence().await.unwrap(), Some(10));
+
+            // Batches should be present
+            let batches = transport.list_batches().await.unwrap();
+            assert_eq!(batches.len(), 2);
+
+            // Can fetch specific batch
+            let fetched = transport.fetch(1).await.unwrap().unwrap();
+            assert_eq!(fetched.start_sequence, 1);
+            assert_eq!(fetched.end_sequence, 5);
+        }
+
+        // Clean up
+        let _ = std::fs::remove_file(&db_path);
     }
 }

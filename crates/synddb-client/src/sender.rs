@@ -7,8 +7,8 @@ use crate::{
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
 use std::{sync::Arc, time::Instant};
-use thiserror::Error;
 use synddb_shared::types::payloads::{ChangesetBatchRequest, ChangesetData};
+use thiserror::Error;
 use tracing::{debug, error, info, warn};
 
 /// Error type for send operations

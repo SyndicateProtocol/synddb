@@ -6,7 +6,7 @@
 //! - Health and status checks
 
 use axum::{
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -22,7 +22,6 @@ use crate::{
     cbor_extractor::Cbor,
     http_errors::{HttpError, SequencerError},
     inbox::Inbox,
-    publish::traits::StoragePublisher,
 };
 use synddb_shared::types::{
     cbor::message::CborMessageType,
@@ -34,8 +33,6 @@ use synddb_shared::types::{
 #[derive(Clone)]
 pub struct AppState {
     pub inbox: Arc<Inbox>,
-    /// Optional publisher for persisting messages (JSON-based, legacy)
-    pub publisher: Option<Arc<dyn StoragePublisher>>,
     /// Optional attestation verifier for TEE token validation
     pub attestation_verifier: Option<Arc<AttestationVerifier>>,
     /// Optional batcher for CBOR batch publishing
@@ -46,7 +43,6 @@ impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState")
             .field("inbox", &self.inbox)
-            .field("publisher", &self.publisher.is_some())
             .field("attestation_verifier", &self.attestation_verifier.is_some())
             .field("batcher", &self.batcher.is_some())
             .finish()
@@ -59,7 +55,6 @@ pub fn create_router(state: AppState) -> Router {
     info!("  POST /changesets       - Submit changeset batch");
     info!("  POST /withdrawals      - Submit withdrawal request");
     info!("  POST /snapshots        - Submit database snapshot");
-    info!("  GET  /messages/:seq    - Retrieve message by sequence");
     info!("  GET  /health           - Health check (liveness)");
     info!("  GET  /ready            - Readiness check");
     info!("  GET  /status           - Sequencer status");
@@ -70,7 +65,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/changesets", post(receive_changesets))
         .route("/withdrawals", post(receive_withdrawal))
         .route("/snapshots", post(receive_snapshot))
-        .route("/messages/{sequence}", get(get_message))
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
         .route("/status", get(status))
@@ -299,17 +293,6 @@ async fn receive_changesets(
             );
         }
     }
-    // Also publish to legacy storage layer if configured
-    else if let Some(publisher) = &state.publisher {
-        let publish_result = publisher.publish(&signed_message).await;
-        if !publish_result.success {
-            warn!(
-                sequence = receipt.sequence,
-                error = ?publish_result.error,
-                "Failed to publish message (sequencing succeeded)"
-            );
-        }
-    }
 
     info!(
         sequence = receipt.sequence,
@@ -387,17 +370,6 @@ async fn receive_withdrawal(
             );
         }
     }
-    // Also publish to legacy storage layer if configured
-    else if let Some(publisher) = &state.publisher {
-        let publish_result = publisher.publish(&signed_message).await;
-        if !publish_result.success {
-            warn!(
-                sequence = receipt.sequence,
-                error = ?publish_result.error,
-                "Failed to publish withdrawal (sequencing succeeded)"
-            );
-        }
-    }
 
     info!(
         sequence = receipt.sequence,
@@ -472,17 +444,6 @@ async fn receive_snapshot(
             );
         }
     }
-    // Also publish to legacy storage layer if configured
-    else if let Some(publisher) = &state.publisher {
-        let publish_result = publisher.publish(&signed_message).await;
-        if !publish_result.success {
-            warn!(
-                sequence = receipt.sequence,
-                error = ?publish_result.error,
-                "Failed to publish snapshot (sequencing succeeded)"
-            );
-        }
-    }
 
     info!(
         sequence = receipt.sequence,
@@ -505,7 +466,7 @@ async fn health_check() -> &'static str {
 /// Readiness check endpoint
 ///
 /// Returns OK if the server is ready to accept traffic.
-/// Checks that the publisher (if configured) is accessible.
+/// Checks that the batcher (if configured) is accessible.
 async fn readiness_check(
     State(state): State<AppState>,
 ) -> Result<Json<ReadinessResponse>, HttpError> {
@@ -518,19 +479,22 @@ async fn readiness_check(
         message: None,
     });
 
-    // Check publisher if configured
-    if let Some(publisher) = &state.publisher {
-        match publisher.get_latest_sequence().await {
-            Ok(_) => {
+    // Check batcher if configured
+    if let Some(batcher) = &state.batcher {
+        match batcher.stats().await {
+            Ok(stats) => {
                 checks.push(HealthCheck {
-                    name: "publisher".to_string(),
+                    name: "batcher".to_string(),
                     status: "ok".to_string(),
-                    message: Some(format!("Connected to {}", publisher.name())),
+                    message: Some(format!(
+                        "batches={}, messages={}, pending={}",
+                        stats.batches_published, stats.messages_published, stats.pending_messages
+                    )),
                 });
             }
             Err(e) => {
                 checks.push(HealthCheck {
-                    name: "publisher".to_string(),
+                    name: "batcher".to_string(),
                     status: "degraded".to_string(),
                     message: Some(format!("Error: {e}")),
                 });
@@ -538,7 +502,7 @@ async fn readiness_check(
         }
     } else {
         checks.push(HealthCheck {
-            name: "publisher".to_string(),
+            name: "batcher".to_string(),
             status: "not_configured".to_string(),
             message: None,
         });
@@ -562,26 +526,6 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         current_sequence: state.inbox.current_sequence(),
         signer_address: format!("{:?}", state.inbox.signer_address()),
     })
-}
-
-/// Get a message by sequence number
-async fn get_message(
-    State(state): State<AppState>,
-    Path(sequence): Path<u64>,
-) -> Result<impl IntoResponse, HttpError> {
-    let publisher = state
-        .publisher
-        .as_ref()
-        .ok_or(SequencerError::NoPublisher)?;
-
-    match publisher.get(sequence).await {
-        Ok(Some(message)) => Ok(Json(MessageResponse::from(message))),
-        Ok(None) => Err(SequencerError::MessageNotFound(sequence).into()),
-        Err(e) => {
-            error!(sequence, error = %e, "Failed to retrieve message");
-            Err(SequencerError::MessageRetrievalFailed(e.to_string()).into())
-        }
-    }
 }
 
 /// Get CBOR batch statistics
@@ -638,7 +582,7 @@ async fn batch_flush(State(state): State<AppState>) -> Result<Json<BatchFlushRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{publish::mock::MockPublisher, signer::MessageSigner};
+    use crate::signer::MessageSigner;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -655,7 +599,6 @@ mod tests {
         let inbox = Arc::new(Inbox::new(signer));
         let state = AppState {
             inbox,
-            publisher: None,
             attestation_verifier: None,
             batcher: None,
         };
@@ -786,7 +729,6 @@ mod tests {
         let inbox = Arc::new(Inbox::new(signer));
         let state = AppState {
             inbox: inbox.clone(),
-            publisher: None,
             attestation_verifier: None,
             batcher: None,
         };
@@ -824,36 +766,6 @@ mod tests {
 
         // Verify inbox state
         assert_eq!(inbox.current_sequence(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_receive_changesets_with_publisher() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox: inbox.clone(),
-            publisher: Some(publisher.clone()),
-            attestation_verifier: None,
-            batcher: None,
-        };
-        let app = create_router(state);
-
-        let request = ChangesetBatchRequest {
-            batch_id: "test-with-publisher".to_string(),
-            changesets: vec![],
-            attestation_token: None,
-        };
-
-        let response = send_cbor(app, &request, "/changesets").await;
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Verify message was published
-        let published = publisher.get(0).await.unwrap();
-        assert!(published.is_some());
-        assert_eq!(published.unwrap().sequence, 0);
     }
 
     #[tokio::test]
@@ -967,99 +879,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_message_with_publisher() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox: inbox.clone(),
-            publisher: Some(publisher.clone()),
-            attestation_verifier: None,
-            batcher: None,
-        };
-        let app = create_router(state);
-
-        // First, create a message
-        let request = ChangesetBatchRequest {
-            batch_id: "test-get-message".to_string(),
-            changesets: vec![],
-            attestation_token: None,
-        };
-
-        let response = send_cbor(app.clone(), &request, "/changesets").await;
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Now retrieve the message
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/messages/0")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let message: MessageResponse = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(message.sequence, 0);
-        assert_eq!(message.message_type, "changeset");
-        assert!(message.signature.starts_with("0x"));
-    }
-
-    #[tokio::test]
-    async fn test_get_message_not_found() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox,
-            publisher: Some(publisher),
-            attestation_verifier: None,
-            batcher: None,
-        };
-        let app = create_router(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/messages/999")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn test_get_message_no_publisher() {
-        let app = test_app(); // No publisher configured
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/messages/0")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
-    }
-
-    #[tokio::test]
-    async fn test_readiness_no_publisher() {
+    async fn test_readiness_no_batcher() {
         let app = test_app();
 
         let response = app
@@ -1088,45 +908,7 @@ mod tests {
         assert!(readiness
             .checks
             .iter()
-            .any(|c| c.name == "publisher" && c.status == "not_configured"));
-    }
-
-    #[tokio::test]
-    async fn test_readiness_with_publisher() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox,
-            publisher: Some(publisher),
-            attestation_verifier: None,
-            batcher: None,
-        };
-        let app = create_router(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/ready")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let readiness: ReadinessResponse = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(readiness.status, "ready");
-        assert!(readiness
-            .checks
-            .iter()
-            .any(|c| c.name == "publisher" && c.status == "ok"));
+            .any(|c| c.name == "batcher" && c.status == "not_configured"));
     }
 
     #[tokio::test]
@@ -1158,52 +940,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_receive_snapshot_with_publisher() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox: inbox.clone(),
-            publisher: Some(publisher.clone()),
-            attestation_verifier: None,
-            batcher: None,
-        };
-        let app = create_router(state);
-
-        let request = SnapshotRequest {
-            message_id: "snapshot-with-publisher".to_string(),
-            snapshot: SnapshotData {
-                data: b"SQLite format 3\x00".to_vec(),
-                timestamp: 1704067200,
-                sequence: 50,
-            },
-            attestation_token: None,
-        };
-
-        let response = send_cbor(app, &request, "/snapshots").await;
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Verify message was published
-        let published = publisher.get(0).await.unwrap();
-        assert!(published.is_some());
-        let msg = published.unwrap();
-        assert_eq!(msg.sequence, 0);
-
-        // Payload is now CBOR, verify it exists and is non-empty
-        assert!(!msg.payload.is_empty());
-        assert!(msg.message_hash.starts_with("0x"));
-        assert!(msg.signature.starts_with("0x"));
-    }
-
-    #[tokio::test]
     async fn test_snapshot_sequence_independence() {
         let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
         let inbox = Arc::new(Inbox::new(signer));
         let state = AppState {
             inbox: inbox.clone(),
-            publisher: None,
             attestation_verifier: None,
             batcher: None,
         };

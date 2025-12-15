@@ -12,7 +12,7 @@ use serde::de::DeserializeOwned;
 pub enum CborRejection {
     /// Failed to read request body
     BytesRejection(BytesRejection),
-    /// Invalid Content-Type header (not application/cbor)
+    /// Invalid Content-Type header (not `application/cbor`)
     InvalidContentType,
     /// Failed to deserialize CBOR body
     DeserializationError(String),

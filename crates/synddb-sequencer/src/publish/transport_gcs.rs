@@ -1,6 +1,6 @@
 //! Google Cloud Storage transport for CBOR batches
 //!
-//! Stores CBOR batches in GCS with zstd compression:
+//! Stores CBOR batches in GCS with `zstd` compression:
 //!
 //! ```text
 //! gs://{bucket}/{prefix}/

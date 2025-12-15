@@ -15,11 +15,7 @@ use synddb_sequencer::{
     config::{PublisherType, SequencerConfig},
     http_api::{create_router, AppState},
     inbox::Inbox,
-    publish::{
-        local::{LocalConfig, LocalPublisher},
-        traits::StoragePublisher,
-        transport_local::LocalTransport,
-    },
+    publish::transport_local::{LocalTransport, LocalTransportConfig},
     signer::MessageSigner,
 };
 use synddb_shared::runtime;
@@ -54,58 +50,29 @@ async fn main() -> Result<()> {
 
     let signer = Arc::new(signer);
 
-    // Initialize legacy publisher based on publisher_type
-    // Note: LocalCbor and Gcs use the CBOR batcher instead
-    let (publisher, local_publisher): (
-        Option<Arc<dyn StoragePublisher>>,
-        Option<Arc<LocalPublisher>>,
-    ) = match config.publisher_type {
-        PublisherType::None | PublisherType::LocalCbor => {
-            // LocalCbor uses CBOR batcher with LocalTransport (initialized below),
-            // not the legacy JSON publisher
-            if matches!(config.publisher_type, PublisherType::None) {
-                info!("Publisher disabled (messages will not be persisted)");
-            }
-            (None, None)
-        }
-        PublisherType::Local => {
-            let path = config.local_storage_path.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("LOCAL_STORAGE_PATH is required when publisher_type=local")
-            })?;
-            let local_config = if path == ":memory:" {
-                LocalConfig::in_memory()
-            } else {
-                LocalConfig::file(path)
-            };
-            let local_pub = LocalPublisher::new_arc(local_config, Arc::clone(&signer))
-                .context("Failed to initialize local publisher")?;
-            (
-                Some(local_pub.clone() as Arc<dyn StoragePublisher>),
-                Some(local_pub),
-            )
-        }
-        PublisherType::Gcs => {
-            #[cfg(feature = "gcs")]
-            {
-                // GCS now uses CBOR batching via the Batcher, no legacy JSON publisher needed
-                (None, None)
-            }
-            #[cfg(not(feature = "gcs"))]
-            {
-                anyhow::bail!(
-                    "publisher_type=gcs requires the 'gcs' feature. Compile with --features gcs"
-                );
-            }
-        }
-    };
-
-    // Initialize CBOR batcher for LocalCbor or GCS transport
+    // Initialize CBOR batcher based on publisher_type
     let (batcher, local_transport): (Option<BatcherHandle>, Option<Arc<LocalTransport>>) =
         match config.publisher_type {
-            PublisherType::LocalCbor => {
+            PublisherType::None => {
+                info!("Publisher disabled (messages will not be persisted)");
+                (None, None)
+            }
+            PublisherType::Local => {
                 use synddb_sequencer::publish::transport::TransportPublisher;
 
-                let transport = Arc::new(LocalTransport::new());
+                // Use optional LOCAL_STORAGE_PATH for file persistence, else default to in-memory
+                let transport_config = config.local_storage_path.as_ref().map_or_else(
+                    || {
+                        info!("Using in-memory storage for local transport");
+                        LocalTransportConfig::in_memory()
+                    },
+                    |path| {
+                        info!(path = %path, "Using SQLite storage for local transport");
+                        LocalTransportConfig::file(path)
+                    },
+                );
+
+                let transport = Arc::new(LocalTransport::new(transport_config));
                 let batch_config = config.batch_config();
                 info!(
                     max_messages = batch_config.max_messages,
@@ -161,30 +128,26 @@ async fn main() -> Result<()> {
                 }
                 #[cfg(not(feature = "gcs"))]
                 {
-                    (None, None)
+                    anyhow::bail!(
+                        "publisher_type=gcs requires the 'gcs' feature. Compile with --features gcs"
+                    );
                 }
             }
-            _ => (None, None),
         };
 
-    // Try to recover sequence from publisher or batcher
-    let start_sequence = match &publisher {
-        Some(pub_) => match pub_.load_state().await {
-            Ok(Some(seq)) => {
-                info!(sequence = seq, "Recovered sequence from publisher");
-                seq + 1 // Start from next sequence
-            }
-            Ok(None) => {
+    // Try to recover sequence from local transport
+    let start_sequence = local_transport.as_ref().map_or(0, |transport| {
+        transport.latest_sequence().map_or_else(
+            || {
                 info!("No previous state found, starting from sequence 0");
                 0
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to load state, starting from 0");
-                0
-            }
-        },
-        None => 0,
-    };
+            },
+            |seq| {
+                info!(sequence = seq, "Recovered sequence from local storage");
+                seq + 1 // Start from next sequence
+            },
+        )
+    });
 
     // Create the inbox (shares signer with publisher)
     let inbox = Arc::new(Inbox::with_start_sequence_arc(
@@ -213,7 +176,6 @@ async fn main() -> Result<()> {
     // Create application state
     let state = AppState {
         inbox: inbox.clone(),
-        publisher: publisher.clone(),
         attestation_verifier,
         batcher: batcher.clone(),
     };
@@ -221,14 +183,9 @@ async fn main() -> Result<()> {
     // Create the HTTP router
     let mut app = create_router(state);
 
-    // Mount storage fetch API if configured
-    // - LocalPublisher: JSON format (legacy)
-    // - LocalTransport: CBOR format with COSE signatures
-    if let Some(ref local_pub) = local_publisher {
-        info!("Mounting local storage fetch API at /storage/* (JSON format)");
-        app = app.nest("/storage", local_pub.routes());
-    } else if let Some(ref transport) = local_transport {
-        info!("Mounting local storage fetch API at /storage/* (CBOR format)");
+    // Mount storage fetch API if local transport is configured
+    if let Some(ref transport) = local_transport {
+        info!("Mounting local storage fetch API at /storage/*");
         app = app.nest("/storage", Arc::clone(transport).routes());
     }
 
@@ -241,7 +198,7 @@ async fn main() -> Result<()> {
     // Run server with graceful shutdown
     let shutdown_timeout = config.shutdown_timeout;
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(inbox, publisher, batcher, shutdown_timeout))
+        .with_graceful_shutdown(shutdown_signal(batcher, shutdown_timeout))
         .await
         .map_err(|e| {
             error!(error = %e, "Server error");
@@ -255,8 +212,6 @@ async fn main() -> Result<()> {
 
 /// Wait for shutdown signal and perform graceful shutdown
 async fn shutdown_signal(
-    inbox: Arc<Inbox>,
-    publisher: Option<Arc<dyn StoragePublisher>>,
     batcher: Option<BatcherHandle>,
     timeout: std::time::Duration,
 ) {
@@ -293,19 +248,6 @@ async fn shutdown_signal(
             Ok(Ok(())) => info!("Batcher shutdown complete"),
             Ok(Err(e)) => warn!(error = %e, "Batcher shutdown failed"),
             Err(_) => warn!("Batcher shutdown timed out"),
-        }
-    }
-
-    // Save state before shutdown (for legacy publisher)
-    if let Some(pub_) = publisher {
-        let current_seq = inbox.current_sequence();
-        if current_seq > 0 {
-            info!(sequence = current_seq - 1, "Saving state before shutdown");
-            match tokio::time::timeout(timeout, pub_.save_state(current_seq - 1)).await {
-                Ok(Ok(())) => info!("State saved successfully"),
-                Ok(Err(e)) => warn!(error = %e, "Failed to save state"),
-                Err(_) => warn!("State save timed out"),
-            }
         }
     }
 

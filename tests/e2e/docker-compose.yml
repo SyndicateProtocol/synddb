@@ -28,7 +28,7 @@ services:
       BIND_ADDRESS: "0.0.0.0:8433"
       SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
       # Use CBOR format with COSE signatures (local in-memory transport)
-      PUBLISHER_TYPE: local-cbor
+      PUBLISHER_TYPE: local
       # Batch config for faster flushing in tests
       BATCH_MAX_MESSAGES: "10"
       BATCH_FLUSH_INTERVAL: "1s"

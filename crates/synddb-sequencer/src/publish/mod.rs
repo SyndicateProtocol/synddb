@@ -5,18 +5,15 @@
 //!
 //! # Transport Layers
 //!
-//! The `transport` module provides the new CBOR-based transport abstraction:
+//! The `transport` module provides the CBOR-based transport abstraction:
 //! - [`transport::TransportPublisher`] - Trait for CBOR batch storage
-//! - [`transport_local::LocalTransport`] - In-memory storage with HTTP routes
+//! - [`transport_local::LocalTransport`] - Local storage with optional `SQLite` persistence
 //! - [`transport_gcs::GcsTransport`] - GCS implementation (requires `gcs` feature)
 //!
-//! # Legacy Publishers (JSON-based, being replaced)
+//! # Testing
 //!
-//! - [`local::LocalPublisher`] - SQLite-based local storage (always available)
-//! - [`gcs::GcsPublisher`] - Google Cloud Storage (requires `gcs` feature)
 //! - [`mock::MockPublisher`] - In-memory mock for testing
 
-pub mod local;
 pub mod mock;
 pub mod traits;
 pub mod transport;
