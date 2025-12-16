@@ -23,13 +23,7 @@ fn test_signer() -> PrivateKeySigner {
 
 /// Get signer's 64-byte uncompressed public key (without 0x04 prefix)
 fn signer_pubkey(signer: &PrivateKeySigner) -> [u8; 64] {
-    // TODO CLAUDE: the alloy `signer.public_key()` func exists, likely simplifies this
-    let pubkey = signer.credential().verifying_key().to_encoded_point(false);
-    let bytes = pubkey.as_bytes();
-    // Skip the 0x04 prefix (uncompressed point indicator)
-    let mut result = [0u8; 64];
-    result.copy_from_slice(&bytes[1..65]);
-    result
+    signer.public_key().0
 }
 
 /// Sign a message synchronously (returns 64-byte signature)

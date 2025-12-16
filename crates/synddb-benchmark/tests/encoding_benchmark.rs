@@ -58,12 +58,7 @@ fn test_signer() -> PrivateKeySigner {
 
 /// Get signer's 64-byte uncompressed public key (without 0x04 prefix)
 fn signer_pubkey(signer: &PrivateKeySigner) -> [u8; 64] {
-    // TODO CLAUDE: signer.pubkey() exists, might be better
-    let pubkey = signer.credential().verifying_key().to_encoded_point(false);
-    let bytes = pubkey.as_bytes();
-    let mut result = [0u8; 64];
-    result.copy_from_slice(&bytes[1..65]);
-    result
+    signer.public_key().0
 }
 
 /// Sign data synchronously (returns 64-byte signature for COSE)

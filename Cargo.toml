@@ -77,7 +77,7 @@ alloy = { version = "1.0.25", features = [
   "rpc-types",
   "sol-types",
 ] }
-k256 = { version = "0.13", features = ["ecdsa"] }
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
 url = { version = "2.5", features = ["serde"] }
 async-trait = "0.1"
 

@@ -28,7 +28,7 @@ sha2 = { workspace = true }
 zstd = { workspace = true }
 
 # Cryptography (signature verification)
-k256 = { workspace = true }
+k256 = { workspace = true, features = ["ecdsa", "sha256"] }
 
 # Logging and signal handling (for runtime utilities)
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
