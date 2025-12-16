@@ -16,12 +16,7 @@ use crate::{
     transport::traits::{PublishMetadata, TransportError, TransportPublisher},
 };
 use std::{sync::Arc, time::Instant};
-use synddb_shared::types::cbor::{
-    batch::CborBatch,
-    error::CborError,
-    message::{CborMessageType, CborSignedMessage},
-    verify::verifying_key_from_bytes,
-};
+use synddb_shared::types::cbor::{batch::CborBatch, error::CborError, message::CborSignedMessage};
 use tokio::{
     sync::{mpsc, oneshot},
     time::{interval, Duration},
@@ -65,26 +60,8 @@ struct PendingMessage {
     size: usize,
 }
 
-/// Raw message data to be batched
-#[derive(Debug)]
-pub struct RawMessage {
-    /// Sequence number assigned by the inbox
-    pub sequence: u64,
-    /// Timestamp from the inbox
-    pub timestamp: u64,
-    /// Message type
-    pub message_type: CborMessageType,
-    /// Compressed payload (already zstd-compressed by inbox)
-    pub payload: Vec<u8>,
-}
-
 /// Command sent to the batcher task
 enum BatcherCommand {
-    /// Add a raw message to be signed and batched
-    AddRawMessage {
-        raw: RawMessage,
-        response: oneshot::Sender<Result<(), BatcherError>>,
-    },
     /// Add an already-signed CBOR message to the pending batch
     AddMessage {
         message: CborSignedMessage,
@@ -125,19 +102,6 @@ pub struct BatcherHandle {
 }
 
 impl BatcherHandle {
-    /// Add a raw message to be signed and batched
-    ///
-    /// The batcher will sign the message and add it to the pending batch.
-    /// This may trigger an immediate flush if thresholds are exceeded.
-    pub async fn add_raw_message(&self, raw: RawMessage) -> Result<(), BatcherError> {
-        let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(BatcherCommand::AddRawMessage { raw, response: tx })
-            .await
-            .map_err(|_| BatcherError::ChannelClosed)?;
-        rx.await.map_err(|_| BatcherError::ChannelClosed)?
-    }
-
     /// Add an already-signed CBOR message to the pending batch
     ///
     /// This may trigger an immediate flush if thresholds are exceeded.
@@ -249,10 +213,6 @@ impl Batcher {
             tokio::select! {
                 Some(cmd) = rx.recv() => {
                     match cmd {
-                        BatcherCommand::AddRawMessage { raw, response } => {
-                            let result = self.handle_add_raw_message(raw).await;
-                            let _ = response.send(result);
-                        }
                         BatcherCommand::AddMessage { message, response } => {
                             let result = self.handle_add_message(message).await;
                             let _ = response.send(result);
@@ -298,22 +258,6 @@ impl Batcher {
             bytes_published = self.stats.bytes_published,
             "Batcher shutdown complete"
         );
-    }
-
-    /// Handle adding a raw message - signs it and adds to batch
-    async fn handle_add_raw_message(&mut self, raw: RawMessage) -> Result<(), BatcherError> {
-        debug!(
-            sequence = raw.sequence,
-            timestamp = raw.timestamp,
-            message_type = ?raw.message_type,
-            payload_size = raw.payload.len(),
-            "Creating CBOR message from raw data"
-        );
-
-        let message =
-            self.create_cbor_message(raw.sequence, raw.timestamp, raw.message_type, raw.payload)?;
-
-        self.handle_add_message(message).await
     }
 
     /// Handle adding a message to the pending batch
@@ -420,51 +364,6 @@ impl Batcher {
     ///
     /// See [`spawn`](Self::spawn) for ordering guarantees.
     fn sign_batch_data(&self, data: &[u8]) -> Result<[u8; 64], CborError> {
-        use alloy::primitives::keccak256;
-
-        let hash = keccak256(data);
-        let sig = self
-            .signer
-            .sign_raw_sync(&hash.0)
-            .map_err(|e| CborError::Signing(e.to_string()))?;
-
-        let mut result = [0u8; 64];
-        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-        Ok(result)
-    }
-}
-
-impl Batcher {
-    /// Create and sign a CBOR message
-    ///
-    /// This is called from the background task when creating messages.
-    fn create_cbor_message(
-        &self,
-        sequence: u64,
-        timestamp: u64,
-        message_type: CborMessageType,
-        payload: Vec<u8>,
-    ) -> Result<CborSignedMessage, BatcherError> {
-        let signer_pubkey_bytes = self.signer.public_key();
-        let signer_pubkey = verifying_key_from_bytes(&signer_pubkey_bytes)
-            .map_err(|e| BatcherError::Signing(e.to_string()))?;
-
-        CborSignedMessage::new(
-            sequence,
-            timestamp,
-            message_type,
-            payload,
-            &signer_pubkey,
-            |data| self.sign_message_data(data),
-        )
-        .map_err(BatcherError::from)
-    }
-
-    /// Sign message data synchronously.
-    ///
-    /// See [`spawn`](Self::spawn) for ordering guarantees.
-    fn sign_message_data(&self, data: &[u8]) -> Result<[u8; 64], CborError> {
         use alloy::primitives::keccak256;
 
         let hash = keccak256(data);

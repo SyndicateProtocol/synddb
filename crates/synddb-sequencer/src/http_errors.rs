@@ -33,6 +33,9 @@ pub enum SequencerError {
     #[error("Signing failed: {0}")]
     Signing(#[from] crate::signer::SignerError),
 
+    #[error("Inbox error: {0}")]
+    Inbox(#[from] crate::inbox::InboxError),
+
     #[error("Serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
 
@@ -108,6 +111,7 @@ impl From<SequencerError> for HttpError {
 
             // 500 Internal Server Error
             SequencerError::Signing(_)
+            | SequencerError::Inbox(_)
             | SequencerError::Serialization(_)
             | SequencerError::CborSerializationFailed(_)
             | SequencerError::MessageRetrievalFailed(_)

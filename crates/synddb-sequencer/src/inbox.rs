@@ -2,6 +2,9 @@
 //!
 //! Provides monotonic sequence number assignment for all incoming messages.
 //! This is the core ordering mechanism similar to Arbitrum's delayed inbox.
+//!
+//! Messages are signed using COSE (CBOR Object Signing and Encryption) with
+//! 64-byte secp256k1 ECDSA signatures (r || s format, no recovery ID).
 
 use alloy::primitives::{keccak256, Address};
 use std::{
@@ -12,9 +15,44 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
+use thiserror::Error;
 
-use crate::signer::{MessageSigner, SignerError};
-use synddb_shared::types::message::{MessageType, SequenceReceipt, SignedMessage};
+use crate::signer::MessageSigner;
+use synddb_shared::types::cbor::{
+    error::CborError,
+    message::{CborMessageType, CborSignedMessage},
+    verify::verifying_key_from_bytes,
+};
+
+/// Errors from inbox operations
+#[derive(Debug, Error)]
+pub enum InboxError {
+    #[error("Signing error: {0}")]
+    Signing(String),
+
+    #[error("CBOR encoding error: {0}")]
+    Cbor(#[from] CborError),
+
+    #[error("Invalid public key: {0}")]
+    InvalidPublicKey(String),
+}
+
+/// Receipt returned to clients after successful sequencing
+///
+/// Contains the COSE signature (64 bytes, r || s format) for the sequenced message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SequenceReceipt {
+    /// Assigned sequence number
+    pub sequence: u64,
+    /// Timestamp when sequenced
+    pub timestamp: u64,
+    /// Hash of the compressed payload: `keccak256(zstd_compressed_payload)`
+    pub message_hash: String,
+    /// COSE signature (64 bytes, r || s). Encoded as hex with 0x prefix.
+    pub signature: String,
+    /// 64-byte uncompressed public key (without 0x04 prefix). Encoded as hex with 0x prefix.
+    pub signer: String,
+}
 
 /// Compress payload using `zstd`
 ///
@@ -27,7 +65,7 @@ fn compress_payload(data: &[u8]) -> Vec<u8> {
     encoder.finish().expect("Failed to finish compression")
 }
 
-/// The message inbox - assigns sequence numbers and signs messages
+/// The message inbox - assigns sequence numbers and signs messages using COSE
 #[derive(Debug)]
 pub struct Inbox {
     /// Current sequence counter (atomic for thread safety)
@@ -72,20 +110,19 @@ impl Inbox {
         self.sequence.load(Ordering::SeqCst)
     }
 
-    /// Sequence and sign a message
+    /// Sequence and sign a message using COSE
     ///
     /// This atomically:
     /// 1. Assigns the next sequence number
     /// 2. Records the current timestamp
-    /// 3. Compresses the payload
-    /// 4. Hashes the compressed payload
-    /// 5. Signs the message
-    /// 6. Returns a receipt
-    pub async fn sequence_message(
+    /// 3. Compresses the payload with `zstd`
+    /// 4. Creates a COSE `Sign1` message with 64-byte signature
+    /// 5. Returns the signed message and a receipt
+    pub fn sequence_message(
         &self,
-        message_type: MessageType,
+        message_type: CborMessageType,
         payload: Vec<u8>,
-    ) -> Result<(SignedMessage, SequenceReceipt), SignerError> {
+    ) -> Result<(CborSignedMessage, SequenceReceipt), InboxError> {
         // Atomically get and increment sequence
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
 
@@ -98,51 +135,66 @@ impl Inbox {
         // Compress the payload
         let compressed_payload = compress_payload(&payload);
 
-        // Hash the compressed payload
+        // Hash the compressed payload (for receipt)
         let message_hash = keccak256(&compressed_payload);
 
-        // Sign the message
-        let signature = self
-            .signer
-            .sign_message(sequence, timestamp, message_hash)
-            .await?;
+        // Get signer's public key as `VerifyingKey`
+        let pubkey_bytes = self.signer.public_key();
+        let verifying_key = verifying_key_from_bytes(&pubkey_bytes)
+            .map_err(|e| InboxError::InvalidPublicKey(e.to_string()))?;
 
-        let signer_address = format!("{:?}", self.signer.address());
-        let message_hash_hex = format!("0x{}", hex::encode(message_hash));
-        let signature_hex = signature.to_hex_prefixed();
-
-        let signed_message = SignedMessage {
+        // Create COSE signed message
+        let cbor_message = CborSignedMessage::new(
             sequence,
             timestamp,
             message_type,
-            payload: compressed_payload,
-            message_hash: message_hash_hex.clone(),
-            signature: signature_hex.clone(),
-            signer: signer_address.clone(),
-            cose_protected_header: vec![], // Placeholder - real COSE header is set by batcher
-        };
+            compressed_payload,
+            &verifying_key,
+            |data| self.sign_cose(data),
+        )?;
+
+        // Extract signature from COSE message for receipt
+        let parsed = cbor_message.parse_without_verify()?;
+        let signature_hex = format!("0x{}", hex::encode(parsed.signature));
+        let signer_hex = format!("0x{}", hex::encode(pubkey_bytes));
+        let message_hash_hex = format!("0x{}", hex::encode(message_hash));
 
         let receipt = SequenceReceipt {
             sequence,
             timestamp,
             message_hash: message_hash_hex,
             signature: signature_hex,
-            signer: signer_address,
+            signer: signer_hex,
         };
 
-        Ok((signed_message, receipt))
+        Ok((cbor_message, receipt))
+    }
+
+    /// Sign data for COSE (returns 64-byte signature)
+    fn sign_cose(&self, data: &[u8]) -> Result<[u8; 64], CborError> {
+        let hash = keccak256(data);
+        let sig = self
+            .signer
+            .sign_raw_sync(&hash.0)
+            .map_err(|e| CborError::Signing(e.to_string()))?;
+
+        let mut result = [0u8; 64];
+        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        Ok(result)
     }
 }
 
-/// Verify a signature matches the expected signer
-pub fn verify_receipt(receipt: &SequenceReceipt, expected_signer: Address) -> bool {
-    // Parse the signer address from the receipt
-    let receipt_signer: Address = match receipt.signer.parse() {
-        Ok(addr) => addr,
-        Err(_) => return false,
+/// Verify that a receipt's signer matches the expected public key
+///
+/// The receipt contains a 64-byte uncompressed public key (hex with 0x prefix).
+pub fn verify_receipt_signer(receipt: &SequenceReceipt, expected_pubkey: &[u8; 64]) -> bool {
+    let receipt_pubkey_hex = receipt.signer.strip_prefix("0x").unwrap_or(&receipt.signer);
+    let Ok(receipt_pubkey_bytes) = hex::decode(receipt_pubkey_hex) else {
+        return false;
     };
 
-    receipt_signer == expected_signer
+    receipt_pubkey_bytes.as_slice() == expected_pubkey
 }
 
 #[cfg(test)]
@@ -168,84 +220,89 @@ mod tests {
         assert_eq!(inbox.current_sequence(), 100);
     }
 
-    #[tokio::test]
-    async fn test_sequence_message() {
-        let inbox = Inbox::new(test_signer());
+    #[test]
+    fn test_sequence_message() {
+        let signer = test_signer();
+        let pubkey = signer.public_key();
+        let inbox = Inbox::new(signer);
         let payload = b"test payload".to_vec();
 
-        let (signed_msg, receipt) = inbox
-            .sequence_message(MessageType::Changeset, payload.clone())
-            .await
+        let (cbor_msg, receipt) = inbox
+            .sequence_message(CborMessageType::Changeset, payload)
             .unwrap();
 
-        assert_eq!(signed_msg.sequence, 0);
         assert_eq!(receipt.sequence, 0);
-        // Payload is now compressed, so it won't match the original
-        assert_ne!(signed_msg.payload, payload);
-        // But it should be smaller or similar size for small payloads
-        assert!(!signed_msg.payload.is_empty());
-        assert!(signed_msg.signature.starts_with("0x"));
-        assert!(signed_msg.message_hash.starts_with("0x"));
+        // COSE message should have non-zero size
+        assert!(cbor_msg.size() > 0);
+        // Receipt should have 64-byte signature (128 hex chars + 0x prefix)
+        assert!(receipt.signature.starts_with("0x"));
+        assert_eq!(receipt.signature.len(), 130); // 0x + 128 hex chars
+                                                  // Receipt should have 64-byte public key (128 hex chars + 0x prefix)
+        assert!(receipt.signer.starts_with("0x"));
+        assert_eq!(receipt.signer.len(), 130); // 0x + 128 hex chars
+                                               // Verify signer matches
+        assert!(verify_receipt_signer(&receipt, &pubkey));
     }
 
-    #[tokio::test]
-    async fn test_sequence_monotonic() {
+    #[test]
+    fn test_sequence_monotonic() {
         let inbox = Inbox::new(test_signer());
 
-        let (msg1, _) = inbox
-            .sequence_message(MessageType::Changeset, b"msg1".to_vec())
-            .await
+        let (_, receipt1) = inbox
+            .sequence_message(CborMessageType::Changeset, b"msg1".to_vec())
             .unwrap();
 
-        let (msg2, _) = inbox
-            .sequence_message(MessageType::Changeset, b"msg2".to_vec())
-            .await
+        let (_, receipt2) = inbox
+            .sequence_message(CborMessageType::Changeset, b"msg2".to_vec())
             .unwrap();
 
-        let (msg3, _) = inbox
-            .sequence_message(MessageType::Withdrawal, b"msg3".to_vec())
-            .await
+        let (_, receipt3) = inbox
+            .sequence_message(CborMessageType::Withdrawal, b"msg3".to_vec())
             .unwrap();
 
-        assert_eq!(msg1.sequence, 0);
-        assert_eq!(msg2.sequence, 1);
-        assert_eq!(msg3.sequence, 2);
+        assert_eq!(receipt1.sequence, 0);
+        assert_eq!(receipt2.sequence, 1);
+        assert_eq!(receipt3.sequence, 2);
         assert_eq!(inbox.current_sequence(), 3);
     }
 
-    #[tokio::test]
-    async fn test_receipt_matches_signed_message() {
-        let inbox = Inbox::new(test_signer());
+    #[test]
+    fn test_receipt_signature_is_valid_cose() {
+        let signer = test_signer();
+        let pubkey_bytes = signer.public_key();
+        let inbox = Inbox::new(signer);
 
-        let (signed_msg, receipt) = inbox
-            .sequence_message(MessageType::Changeset, b"test".to_vec())
-            .await
+        let (cbor_msg, receipt) = inbox
+            .sequence_message(CborMessageType::Changeset, b"test".to_vec())
             .unwrap();
 
-        assert_eq!(signed_msg.sequence, receipt.sequence);
-        assert_eq!(signed_msg.timestamp, receipt.timestamp);
-        assert_eq!(signed_msg.message_hash, receipt.message_hash);
-        assert_eq!(signed_msg.signature, receipt.signature);
-        assert_eq!(signed_msg.signer, receipt.signer);
+        // The COSE message should be verifiable
+        let verifying_key = verifying_key_from_bytes(&pubkey_bytes).unwrap();
+        let parsed = cbor_msg.verify_and_parse(&verifying_key).unwrap();
+
+        assert_eq!(parsed.sequence, receipt.sequence);
+        assert_eq!(parsed.timestamp, receipt.timestamp);
+
+        // Signature in receipt should match the COSE signature
+        let receipt_sig_hex = receipt.signature.strip_prefix("0x").unwrap();
+        let receipt_sig = hex::decode(receipt_sig_hex).unwrap();
+        assert_eq!(receipt_sig.as_slice(), parsed.signature.as_slice());
     }
 
-    #[tokio::test]
-    async fn test_verify_receipt() {
+    #[test]
+    fn test_verify_receipt_signer() {
         let signer = test_signer();
-        let expected_address = signer.address();
+        let expected_pubkey = signer.public_key();
         let inbox = Inbox::new(signer);
 
         let (_, receipt) = inbox
-            .sequence_message(MessageType::Changeset, b"test".to_vec())
-            .await
+            .sequence_message(CborMessageType::Changeset, b"test".to_vec())
             .unwrap();
 
-        assert!(verify_receipt(&receipt, expected_address));
+        assert!(verify_receipt_signer(&receipt, &expected_pubkey));
 
-        // Wrong address should fail
-        let wrong_address: Address = "0x0000000000000000000000000000000000000001"
-            .parse()
-            .unwrap();
-        assert!(!verify_receipt(&receipt, wrong_address));
+        // Wrong pubkey should fail
+        let wrong_pubkey = [0x42u8; 64];
+        assert!(!verify_receipt_signer(&receipt, &wrong_pubkey));
     }
 }

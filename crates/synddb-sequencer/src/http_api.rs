@@ -18,14 +18,14 @@ use tracing::{error, info, warn};
 
 use crate::{
     attestation::AttestationVerifier,
-    batcher::{BatchStats, BatcherHandle, RawMessage},
+    batcher::{BatchStats, BatcherHandle},
     cbor_extractor::Cbor,
     http_errors::{HttpError, SequencerError},
-    inbox::Inbox,
+    inbox::{Inbox, SequenceReceipt},
 };
 use synddb_shared::types::{
     cbor::message::CborMessageType,
-    message::{MessageType, SequenceReceipt, SignedMessage},
+    message::{MessageType, SignedMessage},
     payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest},
 };
 
@@ -267,25 +267,18 @@ async fn receive_changesets(
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
-    // Sequence and sign the message
-    let (signed_message, receipt) = state
+    // Sequence and sign the message (creates COSE signed message)
+    let (cbor_message, receipt) = state
         .inbox
-        .sequence_message(MessageType::Changeset, payload)
-        .await
+        .sequence_message(CborMessageType::Changeset, payload)
         .map_err(|e| {
             error!("Failed to sequence message: {}", e);
             SequencerError::from(e)
         })?;
 
-    // Send to batcher for CBOR batching if configured
+    // Send to batcher for batching if configured
     if let Some(batcher) = &state.batcher {
-        let raw = RawMessage {
-            sequence: signed_message.sequence,
-            timestamp: signed_message.timestamp,
-            message_type: CborMessageType::from(signed_message.message_type.clone()),
-            payload: signed_message.payload.clone(),
-        };
-        if let Err(e) = batcher.add_raw_message(raw).await {
+        if let Err(e) = batcher.add_message(cbor_message).await {
             warn!(
                 sequence = receipt.sequence,
                 error = %e,
@@ -344,25 +337,18 @@ async fn receive_withdrawal(
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
-    // Sequence and sign the message
-    let (signed_message, receipt) = state
+    // Sequence and sign the message (creates COSE signed message)
+    let (cbor_message, receipt) = state
         .inbox
-        .sequence_message(MessageType::Withdrawal, payload)
-        .await
+        .sequence_message(CborMessageType::Withdrawal, payload)
         .map_err(|e| {
             error!("Failed to sequence withdrawal: {}", e);
             SequencerError::from(e)
         })?;
 
-    // Send to batcher for CBOR batching if configured
+    // Send to batcher for batching if configured
     if let Some(batcher) = &state.batcher {
-        let raw = RawMessage {
-            sequence: signed_message.sequence,
-            timestamp: signed_message.timestamp,
-            message_type: CborMessageType::from(signed_message.message_type.clone()),
-            payload: signed_message.payload.clone(),
-        };
-        if let Err(e) = batcher.add_raw_message(raw).await {
+        if let Err(e) = batcher.add_message(cbor_message).await {
             warn!(
                 sequence = receipt.sequence,
                 error = %e,
@@ -418,25 +404,18 @@ async fn receive_snapshot(
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
-    // Sequence and sign the message
-    let (signed_message, receipt) = state
+    // Sequence and sign the message (creates COSE signed message)
+    let (cbor_message, receipt) = state
         .inbox
-        .sequence_message(MessageType::Snapshot, payload)
-        .await
+        .sequence_message(CborMessageType::Snapshot, payload)
         .map_err(|e| {
             error!("Failed to sequence snapshot: {}", e);
             SequencerError::from(e)
         })?;
 
-    // Send to batcher for CBOR batching if configured
+    // Send to batcher for batching if configured
     if let Some(batcher) = &state.batcher {
-        let raw = RawMessage {
-            sequence: signed_message.sequence,
-            timestamp: signed_message.timestamp,
-            message_type: CborMessageType::from(signed_message.message_type.clone()),
-            payload: signed_message.payload.clone(),
-        };
-        if let Err(e) = batcher.add_raw_message(raw).await {
+        if let Err(e) = batcher.add_message(cbor_message).await {
             warn!(
                 sequence = receipt.sequence,
                 error = %e,

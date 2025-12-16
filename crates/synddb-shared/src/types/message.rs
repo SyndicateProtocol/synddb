@@ -264,21 +264,6 @@ impl SignedBatch {
     }
 }
 
-/// Receipt returned to clients after successful sequencing
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SequenceReceipt {
-    /// Assigned sequence number
-    pub sequence: u64,
-    /// Timestamp when sequenced
-    pub timestamp: u64,
-    /// Hash of the message payload
-    pub message_hash: String,
-    /// Signature proving the sequencer ordered this message
-    pub signature: String,
-    /// Address of the sequencer
-    pub signer: String,
-}
-
 // ============================================================================
 // Helper functions for COSE signature verification
 // ============================================================================
