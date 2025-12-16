@@ -1,6 +1,7 @@
 //! CBOR message types
 
-use super::{cose_helpers, error::CborError};
+use super::{cose_helpers, error::CborError, verify::verifying_key_to_bytes};
+use k256::ecdsa::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
 /// Message type as integer for compact CBOR encoding
@@ -74,14 +75,14 @@ impl CborSignedMessage {
     /// * `timestamp` - Unix timestamp
     /// * `message_type` - Type of message
     /// * `payload` - Already zstd-compressed payload bytes
-    /// * `signer_pubkey` - 64-byte uncompressed public key (without 0x04 prefix)
+    /// * `signer_pubkey` - The signer's public key
     /// * `sign_fn` - Function to sign the COSE `Sig_structure`, returns 64-byte signature
     pub fn new<F>(
         sequence: u64,
         timestamp: u64,
         message_type: CborMessageType,
         payload: Vec<u8>,
-        signer_pubkey: [u8; 64],
+        signer_pubkey: &VerifyingKey,
         sign_fn: F,
     ) -> Result<Self, CborError>
     where
@@ -119,9 +120,20 @@ impl CborSignedMessage {
     /// Returns the parsed message if signature verification succeeds.
     pub fn verify_and_parse(
         &self,
-        expected_pubkey: &[u8; 64],
+        expected_pubkey: &VerifyingKey,
     ) -> Result<ParsedCoseMessage, CborError> {
         cose_helpers::verify_and_parse_cose_sign1(&self.cose_bytes, expected_pubkey)
+    }
+
+    /// Get the signer's public key as bytes (without verification)
+    ///
+    /// Returns the 64-byte uncompressed public key from the COSE header.
+    /// For verified access, use `verify_and_parse()` instead.
+    pub fn signer_pubkey_bytes(&self) -> Result<[u8; 64], CborError> {
+        let parsed = cose_helpers::parse_cose_sign1(&self.cose_bytes)?;
+        Ok(verifying_key_to_bytes(
+            &super::verify::verifying_key_from_bytes(&parsed.pubkey)?,
+        ))
     }
 
     /// Parse without verification (for debugging only)

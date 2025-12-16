@@ -1,6 +1,6 @@
 //! CBOR batch type for storing multiple signed messages
 
-use super::{error::CborError, message::CborSignedMessage};
+use super::{error::CborError, message::CborSignedMessage, verify::verifying_key_from_bytes};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
@@ -277,9 +277,12 @@ impl CborBatch {
         // Verify batch signature first
         self.verify_batch_signature()?;
 
+        // Convert pubkey bytes to VerifyingKey once for all messages
+        let verifying_key = verifying_key_from_bytes(&self.pubkey)?;
+
         // Verify each message signature against the batch public key
         for (i, msg) in self.messages.iter().enumerate() {
-            msg.verify_and_parse(&self.pubkey).map_err(|e| {
+            msg.verify_and_parse(&verifying_key).map_err(|e| {
                 CborError::SignatureVerification(format!(
                     "Message {} verification failed: {}",
                     i, e

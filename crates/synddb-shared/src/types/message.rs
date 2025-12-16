@@ -3,7 +3,7 @@
 //! All messages use CBOR/COSE binary format. The types in this module are used
 //! as internal representations after parsing from CBOR.
 
-use crate::types::cbor::verify::verify_secp256k1;
+use crate::types::cbor::verify::{verify_secp256k1, verifying_key_from_bytes};
 use alloy::primitives::keccak256;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -150,8 +150,12 @@ impl SignedMessage {
             .try_into()
             .map_err(|_| VerificationError::InvalidPublicKey("Invalid public key length".into()))?;
 
+        // Convert to VerifyingKey for type-safe verification
+        let verifying_key = verifying_key_from_bytes(&pubkey_array)
+            .map_err(|e| VerificationError::InvalidPublicKey(e.to_string()))?;
+
         // Use the consolidated verify module (hashes with keccak256 internally)
-        verify_secp256k1(&sig_structure, &signature_array, &pubkey_array)
+        verify_secp256k1(&sig_structure, &signature_array, &verifying_key)
             .map_err(|e| VerificationError::VerificationFailed(e.to_string()))
     }
 }
@@ -234,9 +238,13 @@ impl SignedBatch {
             .try_into()
             .map_err(|_| VerificationError::InvalidPublicKey("Invalid public key length".into()))?;
 
+        // Convert to VerifyingKey for type-safe verification
+        let verifying_key = verifying_key_from_bytes(&pubkey_array)
+            .map_err(|e| VerificationError::InvalidPublicKey(e.to_string()))?;
+
         // The signature is over keccak256(signing_payload)
         // verify_secp256k1 hashes its input with keccak256, so we pass signing_payload
-        verify_secp256k1(signing_payload.as_slice(), &signature_array, &pubkey_array)
+        verify_secp256k1(signing_payload.as_slice(), &signature_array, &verifying_key)
             .map_err(|e| VerificationError::VerificationFailed(e.to_string()))
     }
 

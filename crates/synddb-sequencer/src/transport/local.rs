@@ -569,30 +569,71 @@ async fn get_latest(State(transport): State<Arc<LocalTransport>>) -> Json<Latest
 #[cfg(test)]
 mod tests {
     use super::*;
-    use synddb_shared::types::cbor::message::{CborMessageType, CborSignedMessage};
+    use alloy::{
+        primitives::keccak256,
+        signers::{local::PrivateKeySigner, SignerSync},
+    };
+    use synddb_shared::types::cbor::{
+        error::CborError,
+        message::{CborMessageType, CborSignedMessage},
+        verify::verifying_key_from_bytes,
+    };
+
+    // Test private key (DO NOT use in production!)
+    const TEST_PRIVATE_KEY: &str =
+        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    fn test_signer() -> PrivateKeySigner {
+        TEST_PRIVATE_KEY.parse().unwrap()
+    }
+
+    fn signer_pubkey_bytes(signer: &PrivateKeySigner) -> [u8; 64] {
+        let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+        let bytes = pubkey.as_bytes();
+        let mut result = [0u8; 64];
+        result.copy_from_slice(&bytes[1..65]);
+        result
+    }
+
+    fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
+        let hash = keccak256(data);
+        let sig = signer
+            .sign_hash_sync(&hash)
+            .map_err(|e| CborError::Signing(e.to_string()))?;
+        let mut result = [0u8; 64];
+        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        Ok(result)
+    }
 
     fn create_test_message(sequence: u64) -> CborSignedMessage {
+        let signer = test_signer();
+        let pubkey_bytes = signer_pubkey_bytes(&signer);
+        let pubkey = verifying_key_from_bytes(&pubkey_bytes).unwrap();
         let payload = format!("test payload {}", sequence).into_bytes();
         let timestamp = 1700000000 + sequence;
-        let pubkey = [0x42u8; 64]; // Mock 64-byte public key
 
         CborSignedMessage::new(
             sequence,
             timestamp,
             CborMessageType::Changeset,
             payload,
-            pubkey,
-            |_data| Ok([0u8; 64]), // Mock signature
+            &pubkey,
+            |data| sign_cose(&signer, data),
         )
         .unwrap()
     }
 
     fn create_test_batch(start: u64, end: u64) -> CborBatch {
+        let signer = test_signer();
+        let pubkey_bytes = signer_pubkey_bytes(&signer);
         let messages: Vec<CborSignedMessage> = (start..=end).map(create_test_message).collect();
         let created_at = 1700000000;
-        let pubkey = [0x42u8; 64]; // Mock 64-byte public key
 
-        CborBatch::new(messages, created_at, pubkey, |_data| Ok([0u8; 64])).unwrap()
+        CborBatch::new(messages, created_at, pubkey_bytes, |data| {
+            sign_cose(&signer, data)
+        })
+        .unwrap()
     }
 
     #[tokio::test]

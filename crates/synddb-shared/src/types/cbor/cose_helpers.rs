@@ -3,9 +3,10 @@
 use super::{
     error::CborError,
     message::{CborMessageType, ParsedCoseMessage},
+    verify::{verify_secp256k1, verifying_key_from_bytes, verifying_key_to_bytes},
 };
-use crate::types::cbor::verify::verify_secp256k1;
 use coset::{cbor::Value, iana, CborSerializable, CoseSign1, CoseSign1Builder, Header, Label};
+use k256::ecdsa::VerifyingKey;
 
 /// Custom header label for sequence number (private use range)
 pub const HEADER_SEQUENCE: i64 = -65537;
@@ -26,12 +27,15 @@ pub(super) fn build_cose_sign1<F>(
     timestamp: u64,
     message_type: CborMessageType,
     payload: Vec<u8>,
-    signer_pubkey: [u8; 64], // TODO CLAUDE: im surprised there isn't a better data type for this
+    signer_pubkey: &VerifyingKey,
     sign_fn: F,
 ) -> Result<Vec<u8>, CborError>
 where
     F: FnOnce(&[u8]) -> Result<[u8; 64], CborError>,
 {
+    // Convert VerifyingKey to 64-byte representation for COSE header
+    let pubkey_bytes = verifying_key_to_bytes(signer_pubkey);
+
     // Build protected header with custom fields
     let mut protected = Header {
         alg: Some(coset::Algorithm::Assigned(iana::Algorithm::ES256K)),
@@ -53,7 +57,7 @@ where
     let mut unprotected = Header::default();
     unprotected.rest.push((
         Label::Text("pubkey".to_string()),
-        Value::Bytes(signer_pubkey.to_vec()),
+        Value::Bytes(pubkey_bytes.to_vec()),
     ));
 
     // Create the COSE_Sign1 structure without signature first to get the Sig_structure
@@ -84,7 +88,7 @@ where
 }
 
 /// Parse a `COSE_Sign1` structure and extract `SyndDB` fields (without signature verification)
-pub(super) fn parse_cose_sign1(bytes: &[u8]) -> Result<ParsedCoseMessage, CborError> {
+pub fn parse_cose_sign1(bytes: &[u8]) -> Result<ParsedCoseMessage, CborError> {
     let cose = CoseSign1::from_slice(bytes)?;
 
     // Extract protected header fields
@@ -102,7 +106,7 @@ pub(super) fn parse_cose_sign1(bytes: &[u8]) -> Result<ParsedCoseMessage, CborEr
     let message_type = CborMessageType::from_u8(msg_type_u8)?;
 
     // Extract public key from unprotected header (64 bytes)
-    let pubkey = extract_pubkey(&cose.unprotected)?;
+    let pubkey = extract_pubkey_bytes(&cose.unprotected)?;
 
     // Extract signature (must be exactly 64 bytes)
     let signature: [u8; 64] = cose.signature.as_slice().try_into().map_err(|_| {
@@ -131,17 +135,19 @@ pub(super) fn parse_cose_sign1(bytes: &[u8]) -> Result<ParsedCoseMessage, CborEr
 /// corresponding to the expected public key.
 pub fn verify_and_parse_cose_sign1(
     bytes: &[u8],
-    expected_pubkey: &[u8; 64],
+    expected_pubkey: &VerifyingKey,
 ) -> Result<ParsedCoseMessage, CborError> {
     let cose = CoseSign1::from_slice(bytes)?;
 
     // Extract public key and verify it matches
     let pubkey = extract_pubkey(&cose.unprotected)?;
-    if pubkey != *expected_pubkey {
+    let expected_bytes = verifying_key_to_bytes(expected_pubkey);
+    let actual_bytes = verifying_key_to_bytes(&pubkey);
+    if actual_bytes != expected_bytes {
         return Err(CborError::SignatureVerification(format!(
             "Public key mismatch: expected 0x{}, got 0x{}",
-            hex::encode(expected_pubkey),
-            hex::encode(pubkey)
+            hex::encode(expected_bytes),
+            hex::encode(actual_bytes)
         )));
     }
 
@@ -199,8 +205,14 @@ fn extract_u64_from_header(header: &Header, label: i64) -> Result<Option<u64>, C
     Ok(None)
 }
 
+/// Extract public key from unprotected header as `VerifyingKey`
+fn extract_pubkey(header: &Header) -> Result<VerifyingKey, CborError> {
+    let bytes = extract_pubkey_bytes(header)?;
+    verifying_key_from_bytes(&bytes)
+}
+
 /// Extract public key from unprotected header (64 bytes, uncompressed without prefix)
-fn extract_pubkey(header: &Header) -> Result<[u8; 64], CborError> {
+fn extract_pubkey_bytes(header: &Header) -> Result<[u8; 64], CborError> {
     for (key, value) in &header.rest {
         if let Label::Text(s) = key {
             if s == "pubkey" {
@@ -221,8 +233,10 @@ fn extract_pubkey(header: &Header) -> Result<[u8; 64], CborError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::keccak256;
-    use alloy::signers::{local::PrivateKeySigner, SignerSync};
+    use alloy::{
+        primitives::keccak256,
+        signers::{local::PrivateKeySigner, SignerSync},
+    };
 
     /// Test private key (well-known test key, do not use in production)
     const TEST_PRIVATE_KEY: &str =
@@ -232,14 +246,14 @@ mod tests {
         TEST_PRIVATE_KEY.parse().unwrap()
     }
 
-    fn signer_pubkey(signer: &PrivateKeySigner) -> [u8; 64] {
-        signer.public_key().0
+    fn signer_verifying_key(signer: &PrivateKeySigner) -> VerifyingKey {
+        verifying_key_from_bytes(&signer.public_key().0).unwrap()
     }
 
     fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
         let hash = keccak256(data);
         let sig = signer
-            .sign_hash_sync(&hash.into())
+            .sign_hash_sync(&hash)
             .map_err(|e| CborError::Signing(e.to_string()))?;
 
         let mut result = [0u8; 64];
@@ -248,7 +262,7 @@ mod tests {
         Ok(result)
     }
 
-    /// Helper to build a valid COSE_Sign1 structure for testing
+    /// Helper to build a valid `COSE_Sign1` structure for testing
     fn build_test_cose(
         sequence: u64,
         timestamp: u64,
@@ -256,13 +270,13 @@ mod tests {
         payload: &[u8],
     ) -> Vec<u8> {
         let signer = test_signer();
-        let pubkey = signer_pubkey(&signer);
+        let pubkey = signer_verifying_key(&signer);
         build_cose_sign1(
             sequence,
             timestamp,
             message_type,
             payload.to_vec(),
-            pubkey,
+            &pubkey,
             |data| sign_cose(&signer, data),
         )
         .unwrap()
@@ -287,37 +301,56 @@ mod tests {
     }
 
     // =========================================================================
-    // extract_pubkey tests
+    // extract_pubkey_bytes tests
     // =========================================================================
 
     #[test]
-    fn test_extract_pubkey_valid() {
+    fn test_extract_pubkey_bytes_valid() {
         let pubkey = [0x42u8; 64];
         let mut header = Header::default();
-        header
-            .rest
-            .push((Label::Text("pubkey".to_string()), Value::Bytes(pubkey.to_vec())));
+        header.rest.push((
+            Label::Text("pubkey".to_string()),
+            Value::Bytes(pubkey.to_vec()),
+        ));
 
-        let result = extract_pubkey(&header).unwrap();
+        let result = extract_pubkey_bytes(&header).unwrap();
         assert_eq!(result, pubkey);
     }
 
     #[test]
-    fn test_extract_pubkey_missing() {
+    fn test_extract_pubkey_bytes_missing() {
         let header = Header::default();
-        let result = extract_pubkey(&header);
+        let result = extract_pubkey_bytes(&header);
         assert!(matches!(result, Err(CborError::MissingHeader(s)) if s == "pubkey"));
     }
 
     #[test]
-    fn test_extract_pubkey_wrong_length() {
+    fn test_extract_pubkey_bytes_wrong_length() {
         let mut header = Header::default();
-        header
-            .rest
-            .push((Label::Text("pubkey".to_string()), Value::Bytes(vec![0x42; 32])));
+        header.rest.push((
+            Label::Text("pubkey".to_string()),
+            Value::Bytes(vec![0x42; 32]),
+        ));
 
-        let result = extract_pubkey(&header);
-        assert!(matches!(result, Err(CborError::Cose(s)) if s.contains("Invalid public key length")));
+        let result = extract_pubkey_bytes(&header);
+        assert!(
+            matches!(result, Err(CborError::Cose(s)) if s.contains("Invalid public key length"))
+        );
+    }
+
+    #[test]
+    fn test_extract_pubkey_valid_verifying_key() {
+        let signer = test_signer();
+        let pubkey_bytes = signer.public_key().0;
+        let mut header = Header::default();
+        header.rest.push((
+            Label::Text("pubkey".to_string()),
+            Value::Bytes(pubkey_bytes.to_vec()),
+        ));
+
+        let result = extract_pubkey(&header).unwrap();
+        // Verify we can convert back to same bytes
+        assert_eq!(verifying_key_to_bytes(&result), pubkey_bytes);
     }
 
     // =========================================================================
@@ -327,14 +360,14 @@ mod tests {
     #[test]
     fn test_build_cose_sign1_valid() {
         let signer = test_signer();
-        let pubkey = signer_pubkey(&signer);
+        let pubkey = signer_verifying_key(&signer);
 
         let result = build_cose_sign1(
             42,
             1700000000,
             CborMessageType::Changeset,
             b"test payload".to_vec(),
-            pubkey,
+            &pubkey,
             |data| sign_cose(&signer, data),
         );
 
@@ -349,14 +382,15 @@ mod tests {
 
     #[test]
     fn test_build_cose_sign1_signing_error() {
-        let pubkey = [0x42u8; 64];
+        let signer = test_signer();
+        let pubkey = signer_verifying_key(&signer);
 
         let result = build_cose_sign1(
             1,
             1700000000,
             CborMessageType::Changeset,
             b"payload".to_vec(),
-            pubkey,
+            &pubkey,
             |_data| Err(CborError::Signing("simulated signing failure".to_string())),
         );
 
@@ -427,7 +461,8 @@ mod tests {
         assert_eq!(parsed.timestamp, 1700000000);
         assert_eq!(parsed.message_type, CborMessageType::Withdrawal);
         assert_eq!(parsed.payload, b"payload");
-        assert_eq!(parsed.pubkey, signer_pubkey(&test_signer()));
+        let expected_pubkey = verifying_key_to_bytes(&signer_verifying_key(&test_signer()));
+        assert_eq!(parsed.pubkey, expected_pubkey);
     }
 
     #[test]
@@ -449,15 +484,15 @@ mod tests {
             Label::Int(HEADER_TIMESTAMP),
             Value::Integer(1700000000i64.into()),
         ));
-        protected.rest.push((
-            Label::Int(HEADER_MSG_TYPE),
-            Value::Integer(0i64.into()),
-        ));
+        protected
+            .rest
+            .push((Label::Int(HEADER_MSG_TYPE), Value::Integer(0i64.into())));
 
         let mut unprotected = Header::default();
-        unprotected
-            .rest
-            .push((Label::Text("pubkey".to_string()), Value::Bytes(vec![0u8; 64])));
+        unprotected.rest.push((
+            Label::Text("pubkey".to_string()),
+            Value::Bytes(vec![0u8; 64]),
+        ));
 
         let cose = CoseSign1Builder::new()
             .protected(protected)
@@ -485,15 +520,15 @@ mod tests {
             Label::Int(HEADER_TIMESTAMP),
             Value::Integer(1700000000i64.into()),
         ));
-        protected.rest.push((
-            Label::Int(HEADER_MSG_TYPE),
-            Value::Integer(0i64.into()),
-        ));
+        protected
+            .rest
+            .push((Label::Int(HEADER_MSG_TYPE), Value::Integer(0i64.into())));
 
         let mut unprotected = Header::default();
-        unprotected
-            .rest
-            .push((Label::Text("pubkey".to_string()), Value::Bytes(vec![0u8; 64])));
+        unprotected.rest.push((
+            Label::Text("pubkey".to_string()),
+            Value::Bytes(vec![0u8; 64]),
+        ));
 
         let cose = CoseSign1Builder::new()
             .protected(protected)
@@ -504,7 +539,9 @@ mod tests {
 
         let cose_bytes = cose.to_vec().unwrap();
         let result = parse_cose_sign1(&cose_bytes);
-        assert!(matches!(result, Err(CborError::Cose(s)) if s.contains("Invalid signature length")));
+        assert!(
+            matches!(result, Err(CborError::Cose(s)) if s.contains("Invalid signature length"))
+        );
     }
 
     // =========================================================================
@@ -514,7 +551,7 @@ mod tests {
     #[test]
     fn test_verify_and_parse_valid() {
         let signer = test_signer();
-        let pubkey = signer_pubkey(&signer);
+        let pubkey = signer_verifying_key(&signer);
         let cose_bytes = build_test_cose(42, 1700000000, CborMessageType::Snapshot, b"payload");
 
         let parsed = verify_and_parse_cose_sign1(&cose_bytes, &pubkey).unwrap();
@@ -526,7 +563,12 @@ mod tests {
     #[test]
     fn test_verify_and_parse_pubkey_mismatch() {
         let cose_bytes = build_test_cose(42, 1700000000, CborMessageType::Changeset, b"payload");
-        let wrong_pubkey = [0xffu8; 64];
+        // Use a different valid key (not arbitrary bytes, which wouldn't be a valid point)
+        let other_signer: PrivateKeySigner =
+            "0x1111111111111111111111111111111111111111111111111111111111111111"
+                .parse()
+                .unwrap();
+        let wrong_pubkey = signer_verifying_key(&other_signer);
 
         let result = verify_and_parse_cose_sign1(&cose_bytes, &wrong_pubkey);
         assert!(
@@ -537,7 +579,8 @@ mod tests {
     #[test]
     fn test_verify_and_parse_invalid_signature() {
         let signer = test_signer();
-        let pubkey = signer_pubkey(&signer);
+        let pubkey = signer_verifying_key(&signer);
+        let pubkey_bytes = verifying_key_to_bytes(&pubkey);
 
         // Build COSE with correct pubkey but garbage signature
         let mut protected = Header {
@@ -551,15 +594,15 @@ mod tests {
             Label::Int(HEADER_TIMESTAMP),
             Value::Integer(1700000000i64.into()),
         ));
-        protected.rest.push((
-            Label::Int(HEADER_MSG_TYPE),
-            Value::Integer(0i64.into()),
-        ));
+        protected
+            .rest
+            .push((Label::Int(HEADER_MSG_TYPE), Value::Integer(0i64.into())));
 
         let mut unprotected = Header::default();
-        unprotected
-            .rest
-            .push((Label::Text("pubkey".to_string()), Value::Bytes(pubkey.to_vec())));
+        unprotected.rest.push((
+            Label::Text("pubkey".to_string()),
+            Value::Bytes(pubkey_bytes.to_vec()),
+        ));
 
         let cose = CoseSign1Builder::new()
             .protected(protected)
@@ -579,7 +622,7 @@ mod tests {
     #[test]
     fn test_verify_and_parse_invalid_cbor() {
         let invalid_bytes = vec![0xff, 0xff, 0xff];
-        let pubkey = [0u8; 64];
+        let pubkey = signer_verifying_key(&test_signer());
 
         let result = verify_and_parse_cose_sign1(&invalid_bytes, &pubkey);
         assert!(result.is_err());

@@ -764,20 +764,22 @@ mod tests {
         use synddb_shared::types::cbor::{
             error::CborError,
             message::{CborMessageType, CborSignedMessage},
+            verify::verifying_key_from_bytes,
         };
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let timestamp = 1700000000 + sequence;
 
         // Get signer's 64-byte uncompressed public key (without 0x04 prefix)
-        fn signer_pubkey(signer: &PrivateKeySigner) -> [u8; 64] {
+        fn signer_pubkey_bytes(signer: &PrivateKeySigner) -> [u8; 64] {
             let pubkey = signer.credential().verifying_key().to_encoded_point(false);
             let bytes = pubkey.as_bytes();
             let mut result = [0u8; 64];
             result.copy_from_slice(&bytes[1..65]);
             result
         }
-        let pubkey = signer_pubkey(&signer);
+        let pubkey_bytes = signer_pubkey_bytes(&signer);
+        let pubkey = verifying_key_from_bytes(&pubkey_bytes).unwrap();
 
         // Create batch
         let batch = ChangesetBatchRequest {
@@ -815,7 +817,7 @@ mod tests {
             timestamp,
             CborMessageType::Changeset,
             compressed,
-            pubkey,
+            &pubkey,
             |data| sign_cose(&signer, data),
         )
         .unwrap();

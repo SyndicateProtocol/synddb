@@ -20,6 +20,7 @@ use synddb_shared::types::cbor::{
     batch::CborBatch,
     error::CborError,
     message::{CborMessageType, CborSignedMessage},
+    verify::verifying_key_from_bytes,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -445,14 +446,16 @@ impl Batcher {
         message_type: CborMessageType,
         payload: Vec<u8>,
     ) -> Result<CborSignedMessage, BatcherError> {
-        let signer_pubkey = self.signer.public_key();
+        let signer_pubkey_bytes = self.signer.public_key();
+        let signer_pubkey = verifying_key_from_bytes(&signer_pubkey_bytes)
+            .map_err(|e| BatcherError::Signing(e.to_string()))?;
 
         CborSignedMessage::new(
             sequence,
             timestamp,
             message_type,
             payload,
-            signer_pubkey,
+            &signer_pubkey,
             |data| self.sign_message_data(data),
         )
         .map_err(BatcherError::from)

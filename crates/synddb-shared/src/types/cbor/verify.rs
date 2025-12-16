@@ -5,9 +5,32 @@
 //!
 //! See [README.md](./README.md) for details on why this approach is used.
 
+use crate::types::cbor::error::CborError;
 use k256::ecdsa::{signature::DigestVerifier, Signature, VerifyingKey};
 use sha3::{Digest, Keccak256};
-use crate::types::cbor::error::CborError;
+
+/// Convert a 64-byte uncompressed public key (without 0x04 prefix) to a `VerifyingKey`.
+///
+/// This validates that the bytes represent a valid point on the secp256k1 curve.
+pub fn verifying_key_from_bytes(pubkey: &[u8; 64]) -> Result<VerifyingKey, CborError> {
+    // Reconstruct the uncompressed SEC1 public key (0x04 || x || y)
+    let mut sec1_pubkey = [0u8; 65];
+    sec1_pubkey[0] = 0x04;
+    sec1_pubkey[1..].copy_from_slice(pubkey);
+
+    VerifyingKey::from_sec1_bytes(&sec1_pubkey)
+        .map_err(|e| CborError::SignatureVerification(format!("Invalid public key: {e}")))
+}
+
+/// Convert a `VerifyingKey` to a 64-byte uncompressed public key (without 0x04 prefix).
+pub fn verifying_key_to_bytes(key: &VerifyingKey) -> [u8; 64] {
+    let sec1 = key.to_encoded_point(false); // false = uncompressed
+    let bytes = sec1.as_bytes();
+    // SEC1 uncompressed is 65 bytes: 0x04 || x || y
+    let mut result = [0u8; 64];
+    result.copy_from_slice(&bytes[1..65]);
+    result
+}
 
 /// Verify a secp256k1 ECDSA signature using keccak256 hashing.
 ///
@@ -17,28 +40,20 @@ use crate::types::cbor::error::CborError;
 /// # Arguments
 /// - `data`: The raw data that was signed (will be hashed with keccak256)
 /// - `signature`: 64-byte signature (r || s format, as used by COSE)
-/// - `pubkey`: 64-byte uncompressed public key (without the 0x04 prefix)
+/// - `verifying_key`: The public key to verify against
 ///
 /// # Example
 /// ```rust,ignore
 /// // Verify a COSE Sig_structure
 /// let sig_structure = cose.tbs_data(&[]);
-/// verify_secp256k1(&sig_structure, &signature, &pubkey)?;
+/// let key = verifying_key_from_bytes(&pubkey_bytes)?;
+/// verify_secp256k1(&sig_structure, &signature, &key)?;
 /// ```
 pub fn verify_secp256k1(
     data: &[u8],
     signature: &[u8; 64],
-    pubkey: &[u8; 64],
+    verifying_key: &VerifyingKey,
 ) -> Result<(), CborError> {
-    // Reconstruct the uncompressed SEC1 public key (0x04 || x || y)
-    let mut sec1_pubkey = [0u8; 65];
-    sec1_pubkey[0] = 0x04;
-    sec1_pubkey[1..].copy_from_slice(pubkey);
-
-    // Parse the public key using k256's SEC1 parsing
-    let verifying_key = VerifyingKey::from_sec1_bytes(&sec1_pubkey)
-        .map_err(|e| CborError::SignatureVerification(format!("Invalid public key: {e}")))?;
-
     // Parse the 64-byte (r || s) signature
     let sig = Signature::from_slice(signature)
         .map_err(|e| CborError::SignatureVerification(format!("Invalid signature: {e}")))?;
@@ -55,24 +70,60 @@ pub fn verify_secp256k1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::keccak256;
-    use alloy::signers::{local::PrivateKeySigner, SignerSync};
+    use alloy::{
+        primitives::keccak256,
+        signers::{local::PrivateKeySigner, SignerSync},
+    };
 
     /// Test private key (well-known test key, do not use in production)
     const TEST_PRIVATE_KEY: &str =
         "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
+    fn test_signer() -> PrivateKeySigner {
+        TEST_PRIVATE_KEY.parse().unwrap()
+    }
+
+    fn signer_verifying_key(signer: &PrivateKeySigner) -> VerifyingKey {
+        verifying_key_from_bytes(&signer.public_key().0).unwrap()
+    }
+
+    // =========================================================================
+    // verifying_key_from_bytes / verifying_key_to_bytes tests
+    // =========================================================================
+
+    #[test]
+    fn test_verifying_key_roundtrip() {
+        let signer = test_signer();
+        let original_bytes = signer.public_key().0;
+
+        let key = verifying_key_from_bytes(&original_bytes).unwrap();
+        let roundtrip_bytes = verifying_key_to_bytes(&key);
+
+        assert_eq!(original_bytes, roundtrip_bytes);
+    }
+
+    #[test]
+    fn test_verifying_key_from_invalid_bytes() {
+        let invalid = [0u8; 64];
+        let result = verifying_key_from_bytes(&invalid);
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // verify_secp256k1 tests
+    // =========================================================================
+
     #[test]
     fn test_verify_valid_signature() {
-        let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let pubkey = signer.public_key().0;
+        let signer = test_signer();
+        let key = signer_verifying_key(&signer);
 
         let data = b"test message to sign";
 
         // Sign: hash with keccak256, then sign the hash
         let hash = keccak256(data);
         let sig = signer
-            .sign_hash_sync(&hash.into())
+            .sign_hash_sync(&hash)
             .expect("signing should succeed");
 
         // Extract r and s (64 bytes total, no v)
@@ -81,49 +132,57 @@ mod tests {
         signature[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
 
         // Verify using our function (which also hashes with keccak256 internally)
-        let result = verify_secp256k1(data, &signature, &pubkey);
+        let result = verify_secp256k1(data, &signature, &key);
         assert!(result.is_ok(), "Valid signature should verify: {result:?}");
     }
 
     #[test]
     fn test_verify_wrong_data_fails() {
-        let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let pubkey = signer.public_key().0;
+        let signer = test_signer();
+        let key = signer_verifying_key(&signer);
 
         let data = b"original message";
         let wrong_data = b"different message";
 
         // Sign the original data
         let hash = keccak256(data);
-        let sig = signer.sign_hash_sync(&hash.into()).unwrap();
+        let sig = signer.sign_hash_sync(&hash).unwrap();
 
         let mut signature = [0u8; 64];
         signature[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
         signature[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
 
         // Verify against wrong data should fail
-        let result = verify_secp256k1(wrong_data, &signature, &pubkey);
+        let result = verify_secp256k1(wrong_data, &signature, &key);
         assert!(result.is_err(), "Wrong data should fail verification");
     }
 
     #[test]
-    fn test_verify_invalid_pubkey_zeros() {
-        let data = b"test data";
-        let signature = [0u8; 64];
-        let pubkey = [0u8; 64]; // Invalid all-zeros pubkey
+    fn test_verify_wrong_key_fails() {
+        let signer = test_signer();
+        let key = signer_verifying_key(&signer);
 
-        let result = verify_secp256k1(data, &signature, &pubkey);
-        assert!(result.is_err());
-        assert!(matches!(result, Err(CborError::SignatureVerification(_))));
-    }
+        // Create a different signer
+        let other_signer: PrivateKeySigner =
+            "0x1111111111111111111111111111111111111111111111111111111111111111"
+                .parse()
+                .unwrap();
+        let other_key = signer_verifying_key(&other_signer);
 
-    #[test]
-    fn test_verify_invalid_pubkey_ones() {
-        let data = b"test data";
-        let signature = [0xffu8; 64];
-        let pubkey = [0x01u8; 64]; // Invalid pubkey
+        let data = b"test message";
+        let hash = keccak256(data);
+        let sig = signer.sign_hash_sync(&hash).unwrap();
 
-        let result = verify_secp256k1(data, &signature, &pubkey);
-        assert!(result.is_err());
+        let mut signature = [0u8; 64];
+        signature[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        signature[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+
+        // Verify with wrong key should fail
+        let result = verify_secp256k1(data, &signature, &other_key);
+        assert!(result.is_err(), "Wrong key should fail verification");
+
+        // But correct key should work
+        let result = verify_secp256k1(data, &signature, &key);
+        assert!(result.is_ok());
     }
 }

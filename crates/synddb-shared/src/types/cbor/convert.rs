@@ -7,8 +7,10 @@ use super::{
     batch::CborBatch,
     error::CborError,
     message::{CborMessageType, CborSignedMessage},
+    verify::verifying_key_from_bytes,
 };
 use crate::types::message::{MessageType, SignedBatch, SignedMessage};
+use k256::ecdsa::VerifyingKey;
 
 impl From<CborMessageType> for MessageType {
     fn from(t: CborMessageType) -> Self {
@@ -27,13 +29,13 @@ impl CborSignedMessage {
     /// The COSE protected header is included for signature verification.
     ///
     /// # Arguments
-    /// * `expected_pubkey` - 64-byte uncompressed public key (without 0x04 prefix)
+    /// * `expected_pubkey` - The expected signer's public key
     ///
     /// # Returns
     /// The converted `SignedMessage` that can be independently verified.
     pub fn to_signed_message(
         &self,
-        expected_pubkey: &[u8; 64],
+        expected_pubkey: &VerifyingKey,
     ) -> Result<SignedMessage, CborError> {
         // Parse and verify the COSE structure
         let parsed = self.verify_and_parse(expected_pubkey)?;
@@ -107,11 +109,14 @@ impl CborBatch {
         // Verify batch signature first (COSE verification)
         self.verify_batch_signature()?;
 
+        // Convert pubkey bytes to VerifyingKey once for all messages
+        let verifying_key = verifying_key_from_bytes(&self.pubkey)?;
+
         // Convert all messages (each verifies its COSE signature)
         let messages: Result<Vec<SignedMessage>, CborError> = self
             .messages
             .iter()
-            .map(|m| m.to_signed_message(&self.pubkey))
+            .map(|m| m.to_signed_message(&verifying_key))
             .collect();
         let messages = messages?;
 

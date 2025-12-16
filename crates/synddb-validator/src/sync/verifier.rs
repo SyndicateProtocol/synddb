@@ -92,6 +92,7 @@ mod tests {
     use synddb_shared::types::cbor::{
         error::CborError,
         message::{CborMessageType, CborSignedMessage},
+        verify::verifying_key_from_bytes,
     };
 
     // Test private key (DO NOT use in production!)
@@ -125,7 +126,8 @@ mod tests {
     /// Create a test message in COSE format
     fn create_test_message(sequence: u64, payload: &[u8]) -> SignedMessage {
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        let pubkey = signer_pubkey(&signer);
+        let pubkey_bytes = signer_pubkey(&signer);
+        let pubkey = verifying_key_from_bytes(&pubkey_bytes).unwrap();
         let timestamp = 1700000000 + sequence;
 
         // Create COSE-signed message
@@ -134,7 +136,7 @@ mod tests {
             timestamp,
             CborMessageType::Changeset,
             payload.to_vec(),
-            pubkey,
+            &pubkey,
             |data| sign_cose(&signer, data),
         )
         .unwrap();
