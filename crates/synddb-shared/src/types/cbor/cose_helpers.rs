@@ -4,6 +4,7 @@ use super::{
     error::CborError,
     message::{CborMessageType, ParsedCoseMessage},
 };
+use crate::types::cbor::verify::verify_secp256k1;
 use coset::{cbor::Value, iana, CborSerializable, CoseSign1, CoseSign1Builder, Header, Label};
 
 /// Custom header label for sequence number (private use range)
@@ -128,7 +129,7 @@ pub(super) fn parse_cose_sign1(bytes: &[u8]) -> Result<ParsedCoseMessage, CborEr
 ///
 /// Verifies that the signature was created by the holder of the private key
 /// corresponding to the expected public key.
-pub(super) fn verify_and_parse_cose_sign1(
+pub fn verify_and_parse_cose_sign1(
     bytes: &[u8],
     expected_pubkey: &[u8; 64],
 ) -> Result<ParsedCoseMessage, CborError> {
@@ -155,8 +156,8 @@ pub(super) fn verify_and_parse_cose_sign1(
         ))
     })?;
 
-    // Verify signature using secp256k1 with direct public key verification
-    verify_secp256k1_signature(&tbs, &signature, expected_pubkey)?;
+    // Verify signature using the consolidated verify module
+    verify_secp256k1(&tbs, &signature, expected_pubkey)?;
 
     // Now parse the rest
     parse_cose_sign1(bytes)
@@ -215,47 +216,6 @@ fn extract_pubkey(header: &Header) -> Result<[u8; 64], CborError> {
         }
     }
     Err(CborError::MissingHeader("pubkey".to_string()))
-}
-
-// TODO CLAUDE or HUMAN: check if lib function for this exists
-/// Verify a secp256k1 signature against a known public key
-///
-/// The signature is 64 bytes (r || s). We verify directly against the
-/// provided public key using ECDSA verification.
-fn verify_secp256k1_signature(
-    message: &[u8],
-    signature: &[u8; 64],
-    expected_pubkey: &[u8; 64],
-) -> Result<(), CborError> {
-    use alloy::primitives::keccak256;
-    use k256::{
-        ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey},
-        EncodedPoint,
-    };
-
-    // Hash the message with keccak256 (Ethereum style)
-    let message_hash = keccak256(message);
-
-    // Reconstruct the uncompressed public key with 0x04 prefix
-    let mut uncompressed = [0u8; 65];
-    uncompressed[0] = 0x04;
-    uncompressed[1..].copy_from_slice(expected_pubkey);
-
-    // Parse the public key
-    let encoded_point = EncodedPoint::from_bytes(uncompressed)
-        .map_err(|e| CborError::SignatureVerification(format!("Invalid public key: {e}")))?;
-
-    let verifying_key = VerifyingKey::from_encoded_point(&encoded_point)
-        .map_err(|e| CborError::SignatureVerification(format!("Invalid public key: {e}")))?;
-
-    // Parse the signature (r || s, 64 bytes)
-    let sig = Signature::from_slice(signature)
-        .map_err(|e| CborError::SignatureVerification(format!("Invalid signature: {e}")))?;
-
-    // Verify the signature against the prehashed message
-    verifying_key
-        .verify_prehash(message_hash.as_slice(), &sig)
-        .map_err(|_| CborError::SignatureVerification("Signature verification failed".to_string()))
 }
 
 #[cfg(test)]

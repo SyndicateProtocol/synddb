@@ -50,3 +50,4 @@ pub mod cose_helpers;
 pub mod debug;
 pub mod error;
 pub mod message;
+pub mod verify;

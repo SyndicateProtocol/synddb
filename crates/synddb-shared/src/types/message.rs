@@ -3,7 +3,8 @@
 //! All messages use CBOR/COSE binary format. The types in this module are used
 //! as internal representations after parsing from CBOR.
 
-use alloy::primitives::{keccak256, B256};
+use crate::types::cbor::verify::verify_secp256k1;
+use alloy::primitives::keccak256;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -117,9 +118,6 @@ impl SignedMessage {
         // Format: ["Signature1", protected, external_aad, payload]
         let sig_structure = build_cose_sig_structure(&self.cose_protected_header, &self.payload);
 
-        // Hash it with keccak256 (Ethereum style)
-        let message_hash = keccak256(&sig_structure);
-
         // Parse signature (64 bytes, no recovery id for COSE)
         let sig_hex = self.signature.strip_prefix("0x").unwrap_or(&self.signature);
         let sig_bytes = hex::decode(sig_hex)
@@ -152,7 +150,9 @@ impl SignedMessage {
             .try_into()
             .map_err(|_| VerificationError::InvalidPublicKey("Invalid public key length".into()))?;
 
-        verify_secp256k1_with_pubkey(&message_hash, &signature_array, &pubkey_array)
+        // Use the consolidated verify module (hashes with keccak256 internally)
+        verify_secp256k1(&sig_structure, &signature_array, &pubkey_array)
+            .map_err(|e| VerificationError::VerificationFailed(e.to_string()))
     }
 }
 
@@ -211,9 +211,6 @@ impl SignedBatch {
         data.extend_from_slice(&self.content_hash);
         let signing_payload = keccak256(&data);
 
-        // The signature is over keccak256(signing_payload)
-        let message_hash = keccak256(signing_payload);
-
         // Parse 64-byte signature
         let sig_hex = self
             .batch_signature
@@ -237,7 +234,10 @@ impl SignedBatch {
             .try_into()
             .map_err(|_| VerificationError::InvalidPublicKey("Invalid public key length".into()))?;
 
-        verify_secp256k1_with_pubkey(&message_hash, &signature_array, &pubkey_array)
+        // The signature is over keccak256(signing_payload)
+        // verify_secp256k1 hashes its input with keccak256, so we pass signing_payload
+        verify_secp256k1(signing_payload.as_slice(), &signature_array, &pubkey_array)
+            .map_err(|e| VerificationError::VerificationFailed(e.to_string()))
     }
 
     /// Verify the batch signature and all individual message signatures.
@@ -296,45 +296,6 @@ pub fn build_cose_sig_structure(protected_header: &[u8], payload: &[u8]) -> Vec<
     let mut buf = Vec::new();
     ciborium::into_writer(&sig_structure, &mut buf).expect("CBOR serialization should not fail");
     buf
-}
-
-// TODO CLAUDE: check if a lib function exists for this
-/// Verify a `secp256k1` signature against a known public key.
-///
-/// This performs direct ECDSA verification without needing to recover the public key.
-/// The signature is 64 bytes (r || s) and the public key is 64 bytes (uncompressed, no prefix).
-pub fn verify_secp256k1_with_pubkey(
-    message_hash: &B256,
-    signature: &[u8; 64],
-    expected_pubkey: &[u8; 64],
-) -> Result<(), VerificationError> {
-    use k256::{
-        ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey},
-        EncodedPoint,
-    };
-
-    // Reconstruct the uncompressed public key with 0x04 prefix
-    let mut uncompressed = [0u8; 65];
-    uncompressed[0] = 0x04;
-    uncompressed[1..].copy_from_slice(expected_pubkey);
-
-    // Parse the public key
-    let encoded_point = EncodedPoint::from_bytes(uncompressed)
-        .map_err(|e| VerificationError::InvalidPublicKey(format!("Invalid public key: {e}")))?;
-
-    let verifying_key = VerifyingKey::from_encoded_point(&encoded_point)
-        .map_err(|e| VerificationError::InvalidPublicKey(format!("Invalid public key: {e}")))?;
-
-    // Parse the signature (r || s, 64 bytes)
-    let sig = Signature::from_slice(signature)
-        .map_err(|e| VerificationError::InvalidSignature(format!("Invalid signature: {e}")))?;
-
-    // Verify the signature against the prehashed message
-    verifying_key
-        .verify_prehash(message_hash.as_slice(), &sig)
-        .map_err(|_| {
-            VerificationError::VerificationFailed("Signature verification failed".to_string())
-        })
 }
 
 /// Parse sequence and timestamp from a COSE protected header.
