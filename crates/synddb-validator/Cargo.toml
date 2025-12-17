@@ -59,3 +59,4 @@ google-cloud-storage = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
+k256 = { workspace = true }

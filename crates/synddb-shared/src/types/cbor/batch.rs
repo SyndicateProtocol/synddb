@@ -1,6 +1,7 @@
 //! CBOR batch type for storing multiple signed messages
 
 use super::{error::CborError, message::CborSignedMessage, verify::verifying_key_from_bytes};
+use k256::ecdsa::Signature;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
@@ -64,7 +65,7 @@ impl CborBatch {
     /// * `messages` - Signed messages to include in the batch
     /// * `created_at` - Unix timestamp for batch creation
     /// * `signer_pubkey` - 64-byte uncompressed public key (without 0x04 prefix)
-    /// * `sign_fn` - Function to sign the batch payload, returns 64-byte signature
+    /// * `sign_fn` - Function to sign the batch payload, returns ECDSA signature
     pub fn new<F>(
         messages: Vec<CborSignedMessage>,
         created_at: u64,
@@ -72,7 +73,7 @@ impl CborBatch {
         sign_fn: F,
     ) -> Result<Self, CborError>
     where
-        F: FnOnce(&[u8]) -> Result<[u8; 64], CborError>,
+        F: FnOnce(&[u8]) -> Result<Signature, CborError>,
     {
         if messages.is_empty() {
             return Err(CborError::InvalidBatch("Batch cannot be empty".to_string()));
@@ -103,7 +104,10 @@ impl CborBatch {
             Self::compute_signing_payload(start_sequence, end_sequence, &content_hash);
 
         // Sign it
-        let batch_signature = sign_fn(&signing_payload)?;
+        let signature = sign_fn(&signing_payload)?;
+
+        // Convert Signature to bytes for storage
+        let batch_signature: [u8; 64] = signature.to_bytes().into();
 
         Ok(Self {
             version: BATCH_VERSION,

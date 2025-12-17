@@ -9,6 +9,7 @@ use alloy::{
     signers::{k256::ecdsa::VerifyingKey, local::PrivateKeySigner, SignerSync},
 };
 use anyhow::Result;
+use k256::ecdsa::Signature;
 use rusqlite::{session::Session, Connection};
 use std::time::Instant;
 use synddb_benchmark::schema::initialize_schema;
@@ -16,7 +17,7 @@ use synddb_shared::types::cbor::{
     batch::CborBatch,
     error::CborError,
     message::{CborMessageType, CborSignedMessage},
-    verify::verifying_key_from_bytes,
+    verify::{signature_from_bytes, verifying_key_from_bytes},
 };
 
 /// Test private key (well-known test key, do not use in production)
@@ -67,17 +68,17 @@ fn signer_verifying_key(signer: &PrivateKeySigner) -> VerifyingKey {
     verifying_key_from_bytes(&signer.public_key().0).unwrap()
 }
 
-/// Sign data synchronously (returns 64-byte signature for COSE)
-fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
+/// Sign data synchronously (returns k256 Signature for COSE)
+fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<Signature, CborError> {
     let hash = keccak256(data);
     let sig = signer
         .sign_hash_sync(&B256::from(hash))
         .map_err(|e| CborError::Signing(e.to_string()))?;
 
-    let mut result = [0u8; 64];
-    result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-    result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-    Ok(result)
+    let mut bytes = [0u8; 64];
+    bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+    bytes[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+    signature_from_bytes(&bytes)
 }
 
 /// Generate realistic `SQLite` changesets using the session extension

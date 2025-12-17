@@ -727,6 +727,7 @@ impl std::fmt::Debug for Validator {
 mod tests {
     use super::*;
     use crate::sync::providers::mock::MockFetcher;
+    use alloy::signers::local::PrivateKeySigner;
     use rusqlite::session::Session;
     use std::io::Write;
     use synddb_shared::types::{
@@ -756,28 +757,30 @@ mod tests {
         result
     }
 
+    // Get signer's 64-byte uncompressed public key (without 0x04 prefix)
+    fn signer_pubkey_bytes(signer: &PrivateKeySigner) -> [u8; 64] {
+        let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+        let bytes = pubkey.as_bytes();
+        let mut result = [0u8; 64];
+        result.copy_from_slice(&bytes[1..65]);
+        result
+    }
+
     fn create_signed_changeset_message(sequence: u64, changeset_data: Vec<u8>) -> SignedMessage {
         use alloy::{
             primitives::{keccak256, B256},
             signers::{local::PrivateKeySigner, SignerSync},
         };
+        use k256::ecdsa::Signature;
         use synddb_shared::types::cbor::{
             error::CborError,
             message::{CborMessageType, CborSignedMessage},
-            verify::verifying_key_from_bytes,
+            verify::{signature_from_bytes, verifying_key_from_bytes},
         };
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let timestamp = 1700000000 + sequence;
 
-        // Get signer's 64-byte uncompressed public key (without 0x04 prefix)
-        fn signer_pubkey_bytes(signer: &PrivateKeySigner) -> [u8; 64] {
-            let pubkey = signer.credential().verifying_key().to_encoded_point(false);
-            let bytes = pubkey.as_bytes();
-            let mut result = [0u8; 64];
-            result.copy_from_slice(&bytes[1..65]);
-            result
-        }
         let pubkey_bytes = signer_pubkey_bytes(&signer);
         let pubkey = verifying_key_from_bytes(&pubkey_bytes).unwrap();
 
@@ -800,15 +803,15 @@ mod tests {
         let compressed = encoder.finish().unwrap();
 
         // COSE sign function
-        fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
+        fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<Signature, CborError> {
             let hash = keccak256(data);
             let sig = signer
                 .sign_hash_sync(&B256::from(hash))
                 .map_err(|e| CborError::Signing(e.to_string()))?;
-            let mut result = [0u8; 64];
-            result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-            result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-            Ok(result)
+            let mut bytes = [0u8; 64];
+            bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+            bytes[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+            signature_from_bytes(&bytes)
         }
 
         // Create COSE-signed message

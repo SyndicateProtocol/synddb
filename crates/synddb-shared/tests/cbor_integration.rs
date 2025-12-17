@@ -4,13 +4,13 @@ use alloy::{
     primitives::{keccak256, B256},
     signers::{local::PrivateKeySigner, SignerSync},
 };
-use k256::ecdsa::VerifyingKey;
+use k256::ecdsa::{Signature, VerifyingKey};
 use synddb_shared::types::{
     cbor::{
         batch::CborBatch,
         error::CborError,
         message::{CborMessageType, CborSignedMessage},
-        verify::verifying_key_from_bytes,
+        verify::{signature_from_bytes, verifying_key_from_bytes},
     },
     message::SignedBatch,
 };
@@ -33,18 +33,19 @@ fn signer_verifying_key(signer: &PrivateKeySigner) -> VerifyingKey {
     verifying_key_from_bytes(&signer.public_key().0).unwrap()
 }
 
-/// Sign a message synchronously (returns 64-byte signature)
-fn sign_sync(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
+/// Sign a message synchronously (returns ECDSA Signature)
+fn sign_sync(signer: &PrivateKeySigner, data: &[u8]) -> Result<Signature, CborError> {
     let hash = keccak256(data);
     let sig = signer
         .sign_hash_sync(&B256::from(hash))
         .map_err(|e| CborError::Signing(e.to_string()))?;
 
-    // Extract r and s (64 bytes total, no v)
-    let mut result = [0u8; 64];
-    result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-    result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-    Ok(result)
+    // Convert 65-byte alloy Signature to 64-byte k256 Signature
+    // Extract r and s, strip recovery id v
+    let mut bytes = [0u8; 64];
+    bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+    bytes[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+    signature_from_bytes(&bytes)
 }
 
 #[test]

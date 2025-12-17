@@ -1,7 +1,7 @@
 //! CBOR message types
 
 use super::{cose_helpers, error::CborError, verify::verifying_key_to_bytes};
-use k256::ecdsa::VerifyingKey;
+use k256::ecdsa::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 /// Message type as integer for compact CBOR encoding
@@ -76,7 +76,7 @@ impl CborSignedMessage {
     /// * `message_type` - Type of message
     /// * `payload` - Already zstd-compressed payload bytes
     /// * `signer_pubkey` - The signer's public key
-    /// * `sign_fn` - Function to sign the COSE `Sig_structure`, returns 64-byte signature
+    /// * `sign_fn` - Function to sign the COSE `Sig_structure`, returns ECDSA signature
     pub fn new<F>(
         sequence: u64,
         timestamp: u64,
@@ -86,7 +86,7 @@ impl CborSignedMessage {
         sign_fn: F,
     ) -> Result<Self, CborError>
     where
-        F: FnOnce(&[u8]) -> Result<[u8; 64], CborError>,
+        F: FnOnce(&[u8]) -> Result<Signature, CborError>,
     {
         let cose_bytes = cose_helpers::build_cose_sign1(
             sequence,

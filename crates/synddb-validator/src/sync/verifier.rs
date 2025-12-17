@@ -89,10 +89,11 @@ mod tests {
         primitives::{keccak256, B256},
         signers::{local::PrivateKeySigner, SignerSync},
     };
+    use k256::ecdsa::Signature;
     use synddb_shared::types::cbor::{
         error::CborError,
         message::{CborMessageType, CborSignedMessage},
-        verify::verifying_key_from_bytes,
+        verify::{signature_from_bytes, verifying_key_from_bytes},
     };
 
     // Test private key (DO NOT use in production!)
@@ -100,18 +101,18 @@ mod tests {
     const TEST_PRIVATE_KEY: &str =
         "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-    /// Sign a message synchronously (returns 64-byte signature for COSE)
-    fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
+    /// Sign a message synchronously (returns k256 Signature for COSE)
+    fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<Signature, CborError> {
         let hash = keccak256(data);
         let sig = signer
             .sign_hash_sync(&B256::from(hash))
             .map_err(|e| CborError::Signing(e.to_string()))?;
 
         // Extract r and s (64 bytes total, no v)
-        let mut result = [0u8; 64];
-        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-        Ok(result)
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        bytes[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        signature_from_bytes(&bytes)
     }
 
     /// Get signer's 64-byte uncompressed public key (without 0x04 prefix)

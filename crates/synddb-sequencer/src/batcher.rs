@@ -15,8 +15,11 @@ use crate::{
     signer::MessageSigner,
     transport::traits::{PublishMetadata, TransportError, TransportPublisher},
 };
+use k256::ecdsa::Signature;
 use std::{sync::Arc, time::Instant};
-use synddb_shared::types::cbor::{batch::CborBatch, error::CborError, message::CborSignedMessage};
+use synddb_shared::types::cbor::{
+    batch::CborBatch, error::CborError, message::CborSignedMessage, verify::signature_from_bytes,
+};
 use tokio::{
     sync::{mpsc, oneshot},
     time::{interval, Duration},
@@ -363,7 +366,7 @@ impl Batcher {
     /// Sign batch data synchronously.
     ///
     /// See [`spawn`](Self::spawn) for ordering guarantees.
-    fn sign_batch_data(&self, data: &[u8]) -> Result<[u8; 64], CborError> {
+    fn sign_batch_data(&self, data: &[u8]) -> Result<Signature, CborError> {
         use alloy::primitives::keccak256;
 
         let hash = keccak256(data);
@@ -372,10 +375,10 @@ impl Batcher {
             .sign_raw_sync(&hash.0)
             .map_err(|e| CborError::Signing(e.to_string()))?;
 
-        let mut result = [0u8; 64];
-        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-        Ok(result)
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        bytes[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        signature_from_bytes(&bytes)
     }
 }
 

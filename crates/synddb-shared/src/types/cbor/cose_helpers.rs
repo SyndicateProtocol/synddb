@@ -3,10 +3,12 @@
 use super::{
     error::CborError,
     message::{CborMessageType, ParsedCoseMessage},
-    verify::{verify_secp256k1, verifying_key_from_bytes, verifying_key_to_bytes},
+    verify::{
+        signature_from_bytes, verify_secp256k1, verifying_key_from_bytes, verifying_key_to_bytes,
+    },
 };
 use coset::{cbor::Value, iana, CborSerializable, CoseSign1, CoseSign1Builder, Header, Label};
-use k256::ecdsa::VerifyingKey;
+use k256::ecdsa::{Signature, VerifyingKey};
 
 /// Custom header label for sequence number (private use range)
 pub const HEADER_SEQUENCE: i64 = -65537;
@@ -21,7 +23,7 @@ pub const HEADER_MSG_TYPE: i64 = -65539;
 /// - Protected header: algorithm (ES256K), sequence, timestamp, message type
 /// - Unprotected header: signer public key (64 bytes, uncompressed without 0x04 prefix)
 /// - Payload: the compressed message data
-/// - Signature: 64-byte secp256k1 signature (EIP-191 format)
+/// - Signature: 64-byte secp256k1 signature (r || s format)
 pub(super) fn build_cose_sign1<F>(
     sequence: u64,
     timestamp: u64,
@@ -31,7 +33,7 @@ pub(super) fn build_cose_sign1<F>(
     sign_fn: F,
 ) -> Result<Vec<u8>, CborError>
 where
-    F: FnOnce(&[u8]) -> Result<[u8; 64], CborError>,
+    F: FnOnce(&[u8]) -> Result<Signature, CborError>,
 {
     // Convert VerifyingKey to 64-byte representation for COSE header
     let pubkey_bytes = verifying_key_to_bytes(signer_pubkey);
@@ -73,12 +75,12 @@ where
     // Sign it
     let signature = sign_fn(&tbs)?;
 
-    // Rebuild with signature
+    // Rebuild with signature (convert Signature to bytes for COSE storage)
     let cose_signed = CoseSign1Builder::new()
         .protected(protected)
         .unprotected(unprotected)
         .payload(payload)
-        .signature(signature.to_vec())
+        .signature(signature.to_bytes().to_vec())
         .build();
 
     // Serialize to CBOR
@@ -154,13 +156,14 @@ pub fn verify_and_parse_cose_sign1(
     // Compute the Sig_structure that was signed
     let tbs = cose.tbs_data(&[]);
 
-    // Get signature
-    let signature: [u8; 64] = cose.signature.as_slice().try_into().map_err(|_| {
+    // Get signature bytes and parse to Signature type
+    let signature_bytes: [u8; 64] = cose.signature.as_slice().try_into().map_err(|_| {
         CborError::Cose(format!(
             "Invalid signature length: {}",
             cose.signature.len()
         ))
     })?;
+    let signature = signature_from_bytes(&signature_bytes)?;
 
     // Verify signature using the consolidated verify module
     verify_secp256k1(&tbs, &signature, expected_pubkey)?;
@@ -250,16 +253,17 @@ mod tests {
         verifying_key_from_bytes(&signer.public_key().0).unwrap()
     }
 
-    fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
+    fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<Signature, CborError> {
         let hash = keccak256(data);
-        let sig = signer
+        let alloy_sig = signer
             .sign_hash_sync(&hash)
             .map_err(|e| CborError::Signing(e.to_string()))?;
 
-        let mut result = [0u8; 64];
-        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-        Ok(result)
+        // Convert 65-byte alloy sig to 64-byte ECDSA sig
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&alloy_sig.r().to_be_bytes::<32>());
+        bytes[32..].copy_from_slice(&alloy_sig.s().to_be_bytes::<32>());
+        signature_from_bytes(&bytes)
     }
 
     /// Helper to build a valid `COSE_Sign1` structure for testing

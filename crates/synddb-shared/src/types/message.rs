@@ -3,7 +3,9 @@
 //! All messages use CBOR/COSE binary format. The types in this module are used
 //! as internal representations after parsing from CBOR.
 
-use crate::types::cbor::verify::{verify_secp256k1, verifying_key_from_bytes};
+use crate::types::cbor::verify::{
+    signature_from_bytes, verify_secp256k1, verifying_key_from_bytes,
+};
 use alloy::primitives::keccak256;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -146,6 +148,9 @@ impl SignedMessage {
             .try_into()
             .map_err(|_| VerificationError::InvalidSignature("Invalid signature length".into()))?;
 
+        let signature = signature_from_bytes(&signature_array)
+            .map_err(|e| VerificationError::InvalidSignature(e.to_string()))?;
+
         let pubkey_array: [u8; 64] = pubkey_bytes
             .try_into()
             .map_err(|_| VerificationError::InvalidPublicKey("Invalid public key length".into()))?;
@@ -155,7 +160,7 @@ impl SignedMessage {
             .map_err(|e| VerificationError::InvalidPublicKey(e.to_string()))?;
 
         // Use the consolidated verify module (hashes with keccak256 internally)
-        verify_secp256k1(&sig_structure, &signature_array, &verifying_key)
+        verify_secp256k1(&sig_structure, &signature, &verifying_key)
             .map_err(|e| VerificationError::VerificationFailed(e.to_string()))
     }
 }
@@ -234,6 +239,9 @@ impl SignedBatch {
             .try_into()
             .map_err(|_| VerificationError::InvalidSignature("Invalid signature length".into()))?;
 
+        let signature = signature_from_bytes(&signature_array)
+            .map_err(|e| VerificationError::InvalidSignature(e.to_string()))?;
+
         let pubkey_array: [u8; 64] = pubkey_bytes
             .try_into()
             .map_err(|_| VerificationError::InvalidPublicKey("Invalid public key length".into()))?;
@@ -244,7 +252,7 @@ impl SignedBatch {
 
         // The signature is over keccak256(signing_payload)
         // verify_secp256k1 hashes its input with keccak256, so we pass signing_payload
-        verify_secp256k1(signing_payload.as_slice(), &signature_array, &verifying_key)
+        verify_secp256k1(signing_payload.as_slice(), &signature, &verifying_key)
             .map_err(|e| VerificationError::VerificationFailed(e.to_string()))
     }
 

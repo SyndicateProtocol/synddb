@@ -39,7 +39,7 @@ pub fn verifying_key_to_bytes(key: &VerifyingKey) -> [u8; 64] {
 ///
 /// # Arguments
 /// - `data`: The raw data that was signed (will be hashed with keccak256)
-/// - `signature`: 64-byte signature (r || s format, as used by COSE)
+/// - `signature`: The ECDSA signature (r || s format)
 /// - `verifying_key`: The public key to verify against
 ///
 /// # Example
@@ -51,20 +51,22 @@ pub fn verifying_key_to_bytes(key: &VerifyingKey) -> [u8; 64] {
 /// ```
 pub fn verify_secp256k1(
     data: &[u8],
-    signature: &[u8; 64],
+    signature: &Signature,
     verifying_key: &VerifyingKey,
 ) -> Result<(), CborError> {
-    // Parse the 64-byte (r || s) signature
-    let sig = Signature::from_slice(signature)
-        .map_err(|e| CborError::SignatureVerification(format!("Invalid signature: {e}")))?;
-
     // Create keccak256 digest of the data
     let digest = Keccak256::new_with_prefix(data);
 
     // Verify using DigestVerifier trait (type-safe, not hazmat)
     verifying_key
-        .verify_digest(digest, &sig)
+        .verify_digest(digest, signature)
         .map_err(|_| CborError::SignatureVerification("Signature verification failed".to_string()))
+}
+
+/// Parse a 64-byte signature (r || s) into a `Signature`.
+pub fn signature_from_bytes(bytes: &[u8; 64]) -> Result<Signature, CborError> {
+    Signature::from_slice(bytes)
+        .map_err(|e| CborError::SignatureVerification(format!("Invalid signature: {e}")))
 }
 
 #[cfg(test)]
@@ -113,6 +115,14 @@ mod tests {
     // verify_secp256k1 tests
     // =========================================================================
 
+    /// Helper to convert alloy signature to k256 Signature
+    fn alloy_sig_to_k256(sig: &alloy::signers::Signature) -> Signature {
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        bytes[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        signature_from_bytes(&bytes).unwrap()
+    }
+
     #[test]
     fn test_verify_valid_signature() {
         let signer = test_signer();
@@ -122,14 +132,11 @@ mod tests {
 
         // Sign: hash with keccak256, then sign the hash
         let hash = keccak256(data);
-        let sig = signer
+        let alloy_sig = signer
             .sign_hash_sync(&hash)
             .expect("signing should succeed");
 
-        // Extract r and s (64 bytes total, no v)
-        let mut signature = [0u8; 64];
-        signature[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        signature[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        let signature = alloy_sig_to_k256(&alloy_sig);
 
         // Verify using our function (which also hashes with keccak256 internally)
         let result = verify_secp256k1(data, &signature, &key);
@@ -146,11 +153,8 @@ mod tests {
 
         // Sign the original data
         let hash = keccak256(data);
-        let sig = signer.sign_hash_sync(&hash).unwrap();
-
-        let mut signature = [0u8; 64];
-        signature[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        signature[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        let alloy_sig = signer.sign_hash_sync(&hash).unwrap();
+        let signature = alloy_sig_to_k256(&alloy_sig);
 
         // Verify against wrong data should fail
         let result = verify_secp256k1(wrong_data, &signature, &key);
@@ -171,11 +175,8 @@ mod tests {
 
         let data = b"test message";
         let hash = keccak256(data);
-        let sig = signer.sign_hash_sync(&hash).unwrap();
-
-        let mut signature = [0u8; 64];
-        signature[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        signature[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        let alloy_sig = signer.sign_hash_sync(&hash).unwrap();
+        let signature = alloy_sig_to_k256(&alloy_sig);
 
         // Verify with wrong key should fail
         let result = verify_secp256k1(data, &signature, &other_key);
@@ -184,5 +185,19 @@ mod tests {
         // But correct key should work
         let result = verify_secp256k1(data, &signature, &key);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_signature_from_bytes() {
+        let signer = test_signer();
+        let hash = keccak256(b"test");
+        let alloy_sig = signer.sign_hash_sync(&hash).unwrap();
+
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&alloy_sig.r().to_be_bytes::<32>());
+        bytes[32..].copy_from_slice(&alloy_sig.s().to_be_bytes::<32>());
+
+        let sig = signature_from_bytes(&bytes).unwrap();
+        assert_eq!(&*sig.to_bytes(), &bytes);
     }
 }

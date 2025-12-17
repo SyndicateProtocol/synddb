@@ -18,10 +18,11 @@ use std::{
 use thiserror::Error;
 
 use crate::signer::MessageSigner;
+use k256::ecdsa::Signature;
 use synddb_shared::types::cbor::{
     error::CborError,
     message::{CborMessageType, CborSignedMessage},
-    verify::verifying_key_from_bytes,
+    verify::{signature_from_bytes, verifying_key_from_bytes},
 };
 
 /// Errors from inbox operations
@@ -170,18 +171,18 @@ impl Inbox {
         Ok((cbor_message, receipt))
     }
 
-    /// Sign data for COSE (returns 64-byte signature)
-    fn sign_cose(&self, data: &[u8]) -> Result<[u8; 64], CborError> {
+    /// Sign data for COSE (returns ECDSA Signature)
+    fn sign_cose(&self, data: &[u8]) -> Result<Signature, CborError> {
         let hash = keccak256(data);
-        let sig = self
+        let alloy_sig = self
             .signer
             .sign_raw_sync(&hash.0)
             .map_err(|e| CborError::Signing(e.to_string()))?;
 
-        let mut result = [0u8; 64];
-        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-        Ok(result)
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&alloy_sig.r().to_be_bytes::<32>());
+        bytes[32..].copy_from_slice(&alloy_sig.s().to_be_bytes::<32>());
+        signature_from_bytes(&bytes)
     }
 }
 

@@ -573,10 +573,11 @@ mod tests {
         primitives::keccak256,
         signers::{local::PrivateKeySigner, SignerSync},
     };
+    use k256::ecdsa::Signature;
     use synddb_shared::types::cbor::{
         error::CborError,
         message::{CborMessageType, CborSignedMessage},
-        verify::verifying_key_from_bytes,
+        verify::{signature_from_bytes, verifying_key_from_bytes},
     };
 
     // Test private key (DO NOT use in production!)
@@ -595,15 +596,15 @@ mod tests {
         result
     }
 
-    fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<[u8; 64], CborError> {
+    fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<Signature, CborError> {
         let hash = keccak256(data);
         let sig = signer
             .sign_hash_sync(&hash)
             .map_err(|e| CborError::Signing(e.to_string()))?;
-        let mut result = [0u8; 64];
-        result[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        result[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
-        Ok(result)
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+        bytes[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+        signature_from_bytes(&bytes)
     }
 
     fn create_test_message(sequence: u64) -> CborSignedMessage {
