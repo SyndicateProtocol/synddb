@@ -26,6 +26,7 @@ Expected reduction: **~3x smaller files**
 ### 2. Compress Entire Batch File
 
 **Effort**: Low
+
 **Benefit**: ~2-3x for single messages, ~5-10x for multi-message batches
 
 Store batch files with compression:

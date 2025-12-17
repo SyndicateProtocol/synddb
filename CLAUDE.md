@@ -55,6 +55,9 @@ pub struct Config {
 - In-memory SQLite: `Connection::open_in_memory()`
 - Don't import libraries for specific tests, import them at the top level instead
 
+### Test Modification Policy
+Treat existing tests as immutable. If an existing test fails or seems to need modification, ask for confirmation before changing it—the test may be catching a regression. This does not apply to new tests written as part of the current work, meaning the new content introduced in the current branch or PR.
+
 ### Project structure
 - Do not re-export dependencies from `crates/` in mod.rs or lib.rs files. Refer to the full path instead.
 

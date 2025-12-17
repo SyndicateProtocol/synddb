@@ -81,7 +81,7 @@ impl ChangesetApplier {
         }
     }
 
-    /// Decompress and parse a message payload
+    /// Decompress and parse a CBOR message payload
     fn decompress_and_parse<T: serde::de::DeserializeOwned>(
         &self,
         message: &SignedMessage,
@@ -94,7 +94,7 @@ impl ChangesetApplier {
             ))
         })?;
 
-        serde_json::from_slice(&decompressed).map_err(|e| {
+        ciborium::from_reader(decompressed.as_slice()).map_err(|e| {
             ValidatorError::ParseError(format!(
                 "Failed to parse {type_name} at sequence {}: {e}",
                 message.sequence
@@ -244,8 +244,8 @@ impl ChangesetApplier {
         }
 
         let decompressed = Self::decompress(&message.payload)?;
-        let request: SnapshotRequest =
-            serde_json::from_slice(&decompressed).context("Failed to parse snapshot request")?;
+        let request: SnapshotRequest = ciborium::from_reader(decompressed.as_slice())
+            .context("Failed to parse snapshot request")?;
 
         Ok(Some(request))
     }
@@ -270,8 +270,8 @@ impl ChangesetApplier {
         }
 
         let decompressed = Self::decompress(&message.payload)?;
-        let request: WithdrawalRequest =
-            serde_json::from_slice(&decompressed).context("Failed to parse withdrawal request")?;
+        let request: WithdrawalRequest = ciborium::from_reader(decompressed.as_slice())
+            .context("Failed to parse withdrawal request")?;
 
         Ok(Some(request))
     }
@@ -327,7 +327,7 @@ mod tests {
         output
     }
 
-    /// Create a compressed changeset batch
+    /// Create a compressed changeset batch (CBOR format)
     fn create_compressed_batch(changesets: Vec<Vec<u8>>) -> Vec<u8> {
         use std::io::Write;
 
@@ -345,11 +345,12 @@ mod tests {
             attestation_token: None,
         };
 
-        let json = serde_json::to_vec(&batch).unwrap();
+        let mut cbor = Vec::new();
+        ciborium::into_writer(&batch, &mut cbor).unwrap();
 
         // Compress with zstd
         let mut encoder = zstd::Encoder::new(Vec::new(), 3).unwrap();
-        encoder.write_all(&json).unwrap();
+        encoder.write_all(&cbor).unwrap();
         encoder.finish().unwrap()
     }
 
@@ -368,6 +369,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         // Should succeed with no changes
@@ -410,6 +412,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         // Apply the changeset
@@ -435,13 +438,14 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         // Should succeed with no changes
         assert!(applier.apply_message(&message).is_ok());
     }
 
-    /// Create a compressed snapshot message
+    /// Create a compressed snapshot message (CBOR format)
     fn create_compressed_snapshot(db_data: Vec<u8>, sequence: u64) -> Vec<u8> {
         use std::io::Write;
         use synddb_shared::types::payloads::{SnapshotData, SnapshotRequest};
@@ -456,11 +460,12 @@ mod tests {
             attestation_token: None,
         };
 
-        let json = serde_json::to_vec(&request).unwrap();
+        let mut cbor = Vec::new();
+        ciborium::into_writer(&request, &mut cbor).unwrap();
 
         // Compress with zstd
         let mut encoder = zstd::Encoder::new(Vec::new(), 3).unwrap();
-        encoder.write_all(&json).unwrap();
+        encoder.write_all(&cbor).unwrap();
         encoder.finish().unwrap()
     }
 
@@ -516,6 +521,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         // Apply the snapshot
@@ -560,6 +566,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         // Apply the snapshot
@@ -593,6 +600,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         // Should fail
@@ -613,6 +621,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         let extracted = ChangesetApplier::extract_snapshot(&message).unwrap();
@@ -634,6 +643,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         let extracted = ChangesetApplier::extract_snapshot(&message).unwrap();
@@ -652,6 +662,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         let result = applier.apply_message(&message);
@@ -718,6 +729,7 @@ mod tests {
             message_hash: "0x0".to_string(),
             signature: "0x0".to_string(),
             signer: "0x0".to_string(),
+            cose_protected_header: vec![],
         };
 
         // Apply the batch

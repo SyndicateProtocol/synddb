@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+ciborium = { workspace = true }
 
 # Configuration
 humantime-serde = { workspace = true }
@@ -38,7 +39,6 @@ axum = { workspace = true }
 
 # Cryptography (signature verification)
 alloy = { workspace = true, features = ["signers", "signer-local"] }
-k256 = { workspace = true }
 hex = { workspace = true }
 
 # Database
@@ -59,3 +59,4 @@ google-cloud-storage = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
+k256 = { workspace = true }

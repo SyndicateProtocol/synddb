@@ -14,7 +14,6 @@ use crate::{
         verifier::SignatureVerifier,
     },
 };
-use alloy::primitives::Address;
 use anyhow::{Context, Result};
 use std::{sync::Arc, time::Duration};
 use synddb_shared::types::message::SignedBatch;
@@ -54,19 +53,16 @@ impl Validator {
         fetcher: Arc<dyn StorageFetcher>,
         shutdown_rx: watch::Receiver<bool>,
     ) -> Result<Self> {
-        // Parse sequencer address
-        let sequencer_address: Address = config
-            .sequencer_address
-            .parse()
-            .context("Invalid sequencer address")?;
+        // Parse sequencer public key from hex
+        let verifier = SignatureVerifier::from_hex(&config.sequencer_pubkey)
+            .context("Invalid sequencer public key")?;
 
         // Initialize components
-        let verifier = SignatureVerifier::new(sequencer_address);
         let applier = ChangesetApplier::new(&config.database_path)?;
         let state = StateStore::new(&config.state_db_path)?;
 
         info!(
-            sequencer = %config.sequencer_address,
+            sequencer_pubkey = %config.sequencer_pubkey,
             database = %config.database_path,
             gap_retry_count = config.gap_retry_count,
             gap_skip_on_failure = config.gap_skip_on_failure,
@@ -92,10 +88,10 @@ impl Validator {
     /// Create a validator for testing with in-memory storage
     pub fn in_memory(
         fetcher: Arc<dyn StorageFetcher>,
-        sequencer_address: Address,
+        sequencer_pubkey: [u8; 64],
         shutdown_rx: watch::Receiver<bool>,
     ) -> Result<Self> {
-        let verifier = SignatureVerifier::new(sequencer_address);
+        let verifier = SignatureVerifier::new(sequencer_pubkey);
         let applier = ChangesetApplier::in_memory()?;
         let state = StateStore::in_memory()?;
 
@@ -381,6 +377,8 @@ impl Validator {
                     // Caught up to head
                     break;
                 }
+                //TODO CLAUDE: make sure that "out of sequence" errors are caught here, because data may be unavailable.
+                // Re-derivation should quit
                 Err(e) => {
                     warn!(sequence = next_sequence, error = %e, "Sync error, stopping");
                     break;
@@ -412,10 +410,19 @@ impl Validator {
     /// Sync all messages from a batch, verifying and applying each
     ///
     /// Returns the number of messages synced from this batch.
+    ///
+    /// Signature verification is always performed using COSE format.
     pub async fn sync_batch<F>(&mut self, batch: &SignedBatch, on_withdrawal: &mut F) -> Result<u64>
     where
         F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
     {
+        // Verify batch signature before processing any messages
+        batch.verify_batch_signature().map_err(|e| {
+            ValidatorError::SignatureVerification(format!(
+                "Batch signature verification failed: {e}"
+            ))
+        })?;
+
         let next_sequence = self.state.next_sequence()?;
         let mut synced = 0;
 
@@ -429,7 +436,7 @@ impl Validator {
                 continue;
             }
 
-            // Verify signature
+            // Verify COSE signature
             self.verifier
                 .verify(message)
                 .map_err(|e| ValidatorError::SignatureVerification(e.to_string()))?;
@@ -545,8 +552,11 @@ impl Validator {
             return self.run_with_callbacks(on_withdrawal, on_sync).await;
         }
 
+        // Clone fetcher Arc to avoid holding &self across await points
+        let fetcher = Arc::clone(&self.fetcher);
+
         // Build initial batch index
-        let mut index = self.build_batch_index().await?;
+        let mut index = BatchIndex::build(&fetcher).await?;
         let mut last_index_refresh = std::time::Instant::now();
         let index_refresh_interval = self.batch_index_refresh_interval;
 
@@ -570,7 +580,7 @@ impl Validator {
 
             // Refresh index periodically
             if last_index_refresh.elapsed() >= index_refresh_interval || caught_up {
-                if let Ok(new_batches) = index.refresh(&self.fetcher).await {
+                if let Ok(new_batches) = index.refresh(&fetcher).await {
                     if new_batches > 0 {
                         debug!(new_batches, "Discovered new batches");
                         caught_up = false;
@@ -584,14 +594,28 @@ impl Validator {
                 let batch_info = batch_info.clone();
 
                 // Fetch and process the batch
-                match self.fetcher.get_batch_by_path(&batch_info.path).await {
+                match fetcher.get_batch_by_path(&batch_info.path).await {
                     Ok(Some(batch)) => {
+                        // Verify batch signature before processing messages
+                        if let Err(e) = batch.verify_batch_signature() {
+                            error!(
+                                start_sequence = batch.start_sequence,
+                                end_sequence = batch.end_sequence,
+                                error = %e,
+                                "Batch signature verification failed"
+                            );
+                            return Err(ValidatorError::SignatureVerification(format!(
+                                "Batch signature verification failed: {e}"
+                            ))
+                            .into());
+                        }
+
                         for message in &batch.messages {
                             if message.sequence < next_sequence {
                                 continue;
                             }
 
-                            // Verify
+                            // Verify COSE signature
                             if let Err(e) = self.verifier.verify(message) {
                                 error!(
                                     sequence = message.sequence,
@@ -703,10 +727,11 @@ impl std::fmt::Debug for Validator {
 mod tests {
     use super::*;
     use crate::sync::providers::mock::MockFetcher;
+    use alloy::signers::local::PrivateKeySigner;
     use rusqlite::session::Session;
     use std::io::Write;
     use synddb_shared::types::{
-        message::{MessageType, SignedMessage},
+        message::SignedMessage,
         payloads::{ChangesetBatchRequest, ChangesetData},
     };
 
@@ -722,23 +747,42 @@ mod tests {
     const TEST_PRIVATE_KEY: &str =
         "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-    fn test_sequencer_address() -> Address {
+    fn test_sequencer_pubkey() -> [u8; 64] {
         use alloy::signers::local::PrivateKeySigner;
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
-        signer.address()
+        let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+        let bytes = pubkey.as_bytes();
+        let mut result = [0u8; 64];
+        result.copy_from_slice(&bytes[1..65]);
+        result
     }
 
-    async fn create_signed_changeset_message(
-        sequence: u64,
-        changeset_data: Vec<u8>,
-    ) -> SignedMessage {
+    // Get signer's 64-byte uncompressed public key (without 0x04 prefix)
+    fn signer_pubkey_bytes(signer: &PrivateKeySigner) -> [u8; 64] {
+        let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+        let bytes = pubkey.as_bytes();
+        let mut result = [0u8; 64];
+        result.copy_from_slice(&bytes[1..65]);
+        result
+    }
+
+    fn create_signed_changeset_message(sequence: u64, changeset_data: Vec<u8>) -> SignedMessage {
         use alloy::{
-            primitives::keccak256,
-            signers::{local::PrivateKeySigner, Signer},
+            primitives::{keccak256, B256},
+            signers::{local::PrivateKeySigner, SignerSync},
+        };
+        use k256::ecdsa::Signature;
+        use synddb_shared::types::cbor::{
+            error::CborError,
+            message::{CborMessageType, CborSignedMessage},
+            verify::{signature_from_bytes, verifying_key_from_bytes},
         };
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let timestamp = 1700000000 + sequence;
+
+        let pubkey_bytes = signer_pubkey_bytes(&signer);
+        let pubkey = verifying_key_from_bytes(&pubkey_bytes).unwrap();
 
         // Create batch
         let batch = ChangesetBatchRequest {
@@ -751,40 +795,37 @@ mod tests {
             attestation_token: None,
         };
 
-        // Compress
-        let json = serde_json::to_vec(&batch).unwrap();
+        // Serialize to CBOR and compress
+        let mut cbor = Vec::new();
+        ciborium::into_writer(&batch, &mut cbor).unwrap();
         let mut encoder = zstd::Encoder::new(Vec::new(), 3).unwrap();
-        encoder.write_all(&json).unwrap();
+        encoder.write_all(&cbor).unwrap();
         let compressed = encoder.finish().unwrap();
 
-        // Hash
-        let message_hash = keccak256(&compressed);
+        // COSE sign function
+        fn sign_cose(signer: &PrivateKeySigner, data: &[u8]) -> Result<Signature, CborError> {
+            let hash = keccak256(data);
+            let sig = signer
+                .sign_hash_sync(&B256::from(hash))
+                .map_err(|e| CborError::Signing(e.to_string()))?;
+            let mut bytes = [0u8; 64];
+            bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+            bytes[32..].copy_from_slice(&sig.s().to_be_bytes::<32>());
+            signature_from_bytes(&bytes)
+        }
 
-        // Create signing payload
-        let mut signing_data = Vec::with_capacity(48);
-        signing_data.extend_from_slice(&sequence.to_be_bytes());
-        signing_data.extend_from_slice(&timestamp.to_be_bytes());
-        signing_data.extend_from_slice(message_hash.as_slice());
-        let signing_payload = keccak256(&signing_data);
-
-        // Sign
-        let signature = signer.sign_hash(&signing_payload).await.unwrap();
-
-        // Format signature
-        let mut sig_bytes = [0u8; 65];
-        sig_bytes[..32].copy_from_slice(&signature.r().to_be_bytes::<32>());
-        sig_bytes[32..64].copy_from_slice(&signature.s().to_be_bytes::<32>());
-        sig_bytes[64] = if signature.v() { 28 } else { 27 };
-
-        SignedMessage {
+        // Create COSE-signed message
+        let cbor_msg = CborSignedMessage::new(
             sequence,
             timestamp,
-            message_type: MessageType::Changeset,
-            payload: compressed,
-            message_hash: format!("0x{}", hex::encode(message_hash)),
-            signature: format!("0x{}", hex::encode(sig_bytes)),
-            signer: format!("{:?}", signer.address()),
-        }
+            CborMessageType::Changeset,
+            compressed,
+            &pubkey,
+            |data| sign_cose(&signer, data),
+        )
+        .unwrap();
+
+        cbor_msg.to_signed_message(&pubkey).unwrap()
     }
 
     /// Create a changeset for testing
@@ -818,13 +859,13 @@ mod tests {
         let fetcher = MockFetcher::new();
 
         // Create signed message
-        let message = create_signed_changeset_message(0, changeset).await;
+        let message = create_signed_changeset_message(0, changeset);
         fetcher.add_message(message);
 
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database with same schema
         validator
@@ -857,7 +898,7 @@ mod tests {
 
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Try to sync non-existent message
         let result = validator.sync_one(0).await.unwrap();
@@ -880,18 +921,18 @@ mod tests {
 
         // First changeset
         let changeset1 = create_update_changeset(&source, "Bob");
-        let message1 = create_signed_changeset_message(0, changeset1).await;
+        let message1 = create_signed_changeset_message(0, changeset1);
         fetcher.add_message(message1);
 
         // Second changeset
         let changeset2 = create_update_changeset(&source, "Charlie");
-        let message2 = create_signed_changeset_message(1, changeset2).await;
+        let message2 = create_signed_changeset_message(1, changeset2);
         fetcher.add_message(message2);
 
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -924,7 +965,7 @@ mod tests {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Spawn the run loop
         let handle = tokio::spawn(async move {
@@ -946,35 +987,53 @@ mod tests {
     // Batch sync tests
     // =========================================================================
 
-    async fn create_signed_batch(start_sequence: u64, messages: Vec<SignedMessage>) -> SignedBatch {
+    fn create_signed_batch(start_sequence: u64, messages: Vec<SignedMessage>) -> SignedBatch {
         use alloy::{
-            primitives::keccak256,
-            signers::{local::PrivateKeySigner, Signer},
+            primitives::{keccak256, B256},
+            signers::{local::PrivateKeySigner, SignerSync},
         };
 
         let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().unwrap();
         let end_sequence = messages.last().map_or(start_sequence, |m| m.sequence);
 
-        // Create batch signature (hash of all message hashes)
-        let mut batch_data = Vec::new();
-        for msg in &messages {
-            batch_data.extend_from_slice(&msg.sequence.to_be_bytes());
-        }
-        let batch_hash = keccak256(&batch_data);
-        let signature = signer.sign_hash(&batch_hash).await.unwrap();
+        // Get 64-byte uncompressed public key
+        let pubkey = signer.credential().verifying_key().to_encoded_point(false);
+        let pubkey_bytes = &pubkey.as_bytes()[1..65]; // Skip 0x04 prefix
 
-        let mut sig_bytes = [0u8; 65];
+        // Create content hash from serialized messages (CBOR format)
+        let content_hash = {
+            let mut cbor = Vec::new();
+            ciborium::into_writer(&messages, &mut cbor).expect("serialize messages");
+            let hash = keccak256(&cbor);
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(hash.as_slice());
+            arr
+        };
+
+        // Compute batch signing payload: keccak256(keccak256(start || end || content_hash))
+        let mut payload_data = Vec::new();
+        payload_data.extend_from_slice(&start_sequence.to_be_bytes());
+        payload_data.extend_from_slice(&end_sequence.to_be_bytes());
+        payload_data.extend_from_slice(&content_hash);
+        let batch_payload = keccak256(&payload_data);
+        let signing_payload = keccak256(batch_payload);
+
+        // Sign with the signer's private key
+        let signature = signer.sign_hash_sync(&B256::from(signing_payload)).unwrap();
+
+        // Format as 64-byte signature (r || s) for CBOR-style
+        let mut sig_bytes = [0u8; 64];
         sig_bytes[..32].copy_from_slice(&signature.r().to_be_bytes::<32>());
-        sig_bytes[32..64].copy_from_slice(&signature.s().to_be_bytes::<32>());
-        sig_bytes[64] = if signature.v() { 28 } else { 27 };
+        sig_bytes[32..].copy_from_slice(&signature.s().to_be_bytes::<32>());
 
         SignedBatch {
             start_sequence,
             end_sequence,
             messages,
             batch_signature: format!("0x{}", hex::encode(sig_bytes)),
-            signer: format!("{:?}", signer.address()),
+            signer: format!("0x{}", hex::encode(pubkey_bytes)),
             created_at: 1700000000,
+            content_hash,
         }
     }
 
@@ -984,14 +1043,14 @@ mod tests {
         let fetcher = MockFetcher::new();
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
         assert!(!validator.supports_batch_sync());
 
         // Batch mode fetcher
         let fetcher = MockFetcher::new_batch_mode();
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
         assert!(validator.supports_batch_sync());
     }
 
@@ -1011,11 +1070,11 @@ mod tests {
         let changeset1 = create_update_changeset(&source, "Charlie");
 
         // Create signed messages
-        let msg0 = create_signed_changeset_message(0, changeset0).await;
-        let msg1 = create_signed_changeset_message(1, changeset1).await;
+        let msg0 = create_signed_changeset_message(0, changeset0);
+        let msg1 = create_signed_changeset_message(1, changeset1);
 
         // Create a batch containing both messages
-        let batch = create_signed_batch(0, vec![msg0, msg1]).await;
+        let batch = create_signed_batch(0, vec![msg0, msg1]);
 
         // Create mock fetcher in batch mode
         let fetcher = MockFetcher::new_batch_mode();
@@ -1024,7 +1083,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -1068,13 +1127,13 @@ mod tests {
         let changeset2 = create_update_changeset(&source, "Dave");
 
         // Create signed messages
-        let msg0 = create_signed_changeset_message(0, changeset0).await;
-        let msg1 = create_signed_changeset_message(1, changeset1).await;
-        let msg2 = create_signed_changeset_message(2, changeset2).await;
+        let msg0 = create_signed_changeset_message(0, changeset0);
+        let msg1 = create_signed_changeset_message(1, changeset1);
+        let msg2 = create_signed_changeset_message(2, changeset2);
 
         // Create two batches
-        let batch1 = create_signed_batch(0, vec![msg0, msg1]).await;
-        let batch2 = create_signed_batch(2, vec![msg2]).await;
+        let batch1 = create_signed_batch(0, vec![msg0, msg1]);
+        let batch2 = create_signed_batch(2, vec![msg2]);
 
         // Create mock fetcher in batch mode
         let fetcher = MockFetcher::new_batch_mode();
@@ -1084,7 +1143,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -1127,13 +1186,13 @@ mod tests {
 
         // Create mock fetcher in NON-batch mode (should fallback to single-message)
         let fetcher = MockFetcher::new();
-        let message = create_signed_changeset_message(0, changeset).await;
+        let message = create_signed_changeset_message(0, changeset);
         fetcher.add_message(message);
 
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -1169,6 +1228,7 @@ mod tests {
             batch_signature: "0x00".to_string(),
             signer: "0x00".to_string(),
             created_at: 1700000000,
+            content_hash: [0u8; 32],
         };
         let batch2 = SignedBatch {
             start_sequence: 50,
@@ -1177,6 +1237,7 @@ mod tests {
             batch_signature: "0x00".to_string(),
             signer: "0x00".to_string(),
             created_at: 1700000001,
+            content_hash: [0u8; 32],
         };
         fetcher.add_batch(batch1);
         fetcher.add_batch(batch2);
@@ -1184,7 +1245,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Build batch index
         let index = validator.build_batch_index().await.unwrap();
@@ -1214,11 +1275,11 @@ mod tests {
         let changeset1 = create_update_changeset(&source, "Charlie");
 
         // Create signed messages
-        let msg0 = create_signed_changeset_message(0, changeset0).await;
-        let msg1 = create_signed_changeset_message(1, changeset1).await;
+        let msg0 = create_signed_changeset_message(0, changeset0);
+        let msg1 = create_signed_changeset_message(1, changeset1);
 
         // Create batch with both messages
-        let batch = create_signed_batch(0, vec![msg0.clone(), msg1]).await;
+        let batch = create_signed_batch(0, vec![msg0.clone(), msg1]);
 
         // Create mock fetcher
         let fetcher = MockFetcher::new_batch_mode();
@@ -1228,7 +1289,7 @@ mod tests {
         // Create validator
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut validator =
-            Validator::in_memory(Arc::new(fetcher), test_sequencer_address(), shutdown_rx).unwrap();
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
 
         // Setup target database
         validator
@@ -1255,5 +1316,121 @@ mod tests {
             .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
             .unwrap();
         assert_eq!(name, "Charlie");
+    }
+
+    #[tokio::test]
+    async fn test_validator_rejects_invalid_batch_signature() {
+        // Setup source database
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Create changeset
+        let changeset = create_update_changeset(&source, "Bob");
+
+        // Create signed message
+        let msg = create_signed_changeset_message(0, changeset);
+
+        // Create a valid batch first, then tamper with the signature
+        let mut batch = create_signed_batch(0, vec![msg]);
+
+        // Tamper with the batch signature (change last byte)
+        let mut sig_bytes = hex::decode(&batch.batch_signature[2..]).unwrap();
+        sig_bytes[63] ^= 0xFF; // Flip bits in the last byte
+        batch.batch_signature = format!("0x{}", hex::encode(sig_bytes));
+
+        // Create mock fetcher in batch mode
+        let fetcher = MockFetcher::new_batch_mode();
+        fetcher.add_batch(batch);
+
+        // Create validator
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
+
+        // Setup target database
+        validator
+            .connection()
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        validator
+            .connection()
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Sync should fail due to invalid batch signature
+        let result = validator.sync_to_head_batched().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Batch signature verification failed"),
+            "Expected batch signature error, got: {err}"
+        );
+
+        // Verify no state was changed (still Alice, not Bob)
+        let name: String = validator
+            .connection()
+            .query_row("SELECT name FROM users WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "Alice");
+    }
+
+    #[tokio::test]
+    async fn test_validator_rejects_tampered_batch_messages() {
+        // Setup source database
+        let source = rusqlite::Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Create changeset
+        let changeset = create_update_changeset(&source, "Bob");
+
+        // Create signed message
+        let msg = create_signed_changeset_message(0, changeset);
+
+        // Create a valid batch first
+        let mut batch = create_signed_batch(0, vec![msg]);
+
+        // Tamper with the message inside the batch (change the sequence)
+        // This should cause the batch signature verification to fail because
+        // the messages_hash will be different
+        batch.messages[0].sequence = 999;
+
+        // Create mock fetcher in batch mode
+        let fetcher = MockFetcher::new_batch_mode();
+        fetcher.add_batch(batch);
+
+        // Create validator
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut validator =
+            Validator::in_memory(Arc::new(fetcher), test_sequencer_pubkey(), shutdown_rx).unwrap();
+
+        // Setup target database
+        validator
+            .connection()
+            .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        validator
+            .connection()
+            .execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Sync should fail due to tampered message
+        // With COSE format, tampering with outer sequence causes header mismatch
+        let result = validator.sync_to_head_batched().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("signature") || err.contains("Signer") || err.contains("Header mismatch"),
+            "Expected signature or header mismatch error, got: {err}"
+        );
     }
 }

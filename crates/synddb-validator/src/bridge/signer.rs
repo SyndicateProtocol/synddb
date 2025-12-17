@@ -235,12 +235,14 @@ mod tests {
     // Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
     const TEST_PRIVATE_KEY: &str =
         "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    // 64-byte uncompressed public key corresponding to TEST_PRIVATE_KEY
+    const TEST_PUBKEY: &str = "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5";
 
     fn test_config() -> ValidatorConfig {
         ValidatorConfig::parse_from([
             "synddb-validator",
-            "--sequencer-address",
-            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--sequencer-pubkey",
+            TEST_PUBKEY,
             "--bridge-signer",
             "--bridge-contract",
             "0x1234567890abcdef1234567890abcdef12345678",

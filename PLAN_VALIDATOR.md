@@ -151,7 +151,7 @@ The HTTP fetcher (`--fetcher-type=http`) fetches signed messages directly from a
 **Configuration:**
 ```bash
 synddb-validator \
-  --sequencer-address=0x... \
+  --sequencer-pubkey=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
   --fetcher-type=http \
   --sequencer-url=http://localhost:8433
 ```
@@ -171,7 +171,7 @@ The GCS fetcher (`--fetcher-type=gcs`) fetches signed messages from Google Cloud
 **Configuration:**
 ```bash
 synddb-validator \
-  --sequencer-address=0x... \
+  --sequencer-pubkey=... \
   --fetcher-type=gcs \
   --gcs-bucket=synddb-messages \
   --gcs-prefix=sequencer
@@ -318,7 +318,7 @@ pub struct ValidatorConfig {
     // === Core Validation ===
     pub database_path: String,           // Path to replicated SQLite DB
     pub state_db_path: String,           // Path to validator state DB
-    pub sequencer_address: String,       // Expected sequencer address
+    pub sequencer_pubkey: String,        // Expected sequencer public key (64-byte, 128 hex chars)
 
     // === Fetcher Configuration ===
     pub fetcher_type: FetcherType,       // http or gcs (default: http)
@@ -355,20 +355,21 @@ pub struct ValidatorConfig {
 
 ```bash
 # HTTP fetcher mode (default) - for local development or self-hosted deployments
+# SEQUENCER_PUBKEY is the 64-byte uncompressed secp256k1 public key (128 hex chars)
 synddb-validator \
-  --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
+  --sequencer-pubkey=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
   --fetcher-type=http \
   --sequencer-url=http://localhost:8433
 
 # GCS fetcher mode - for production deployments
 synddb-validator \
-  --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
+  --sequencer-pubkey=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
   --fetcher-type=gcs \
   --gcs-bucket=synddb-messages
 
 # Bridge signer mode - signs withdrawal messages for relayers
 synddb-validator \
-  --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
+  --sequencer-pubkey=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
   --fetcher-type=gcs \
   --gcs-bucket=synddb-messages \
   --bridge-signer \
@@ -378,7 +379,7 @@ synddb-validator \
 
 # With custom gap handling for unreliable DA sources
 synddb-validator \
-  --sequencer-address=0x742d35Cc6634C0532925a3b844Bc9e7595f2bD41 \
+  --sequencer-pubkey=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
   --fetcher-type=gcs \
   --gcs-bucket=synddb-messages \
   --gap-retry-count=10 \
@@ -389,7 +390,8 @@ synddb-validator \
 
 ```bash
 # Required for all validators
-export SEQUENCER_ADDRESS="0x..."      # Sequencer's Ethereum address
+# SEQUENCER_PUBKEY is the 64-byte uncompressed secp256k1 public key (128 hex chars)
+export SEQUENCER_PUBKEY="8318535b..."  # Sequencer's public key
 
 # Fetcher configuration (choose one mode)
 export FETCHER_TYPE="http"            # "http" (default) or "gcs"
@@ -1091,8 +1093,8 @@ async fn test_full_sync() {
 
     // Start syncer
     let state_manager = StateManager::new(":memory:").unwrap();
-    let expected_signer = config.sequencer_address.parse().unwrap();
-    let syncer = StorageSyncer::new(vec![mock_fetcher], state_manager, expected_signer);
+    let expected_pubkey = SignatureVerifier::from_hex(&config.sequencer_pubkey).unwrap();
+    let syncer = StorageSyncer::new(vec![mock_fetcher], state_manager, expected_pubkey);
 
     // Start applier in background
     let mut applier = ChangesetApplier::new(":memory:", None).unwrap();

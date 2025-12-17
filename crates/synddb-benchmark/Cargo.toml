@@ -33,3 +33,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }
 synddb-client = { path = "../synddb-client" }
+
+[dev-dependencies]
+synddb-shared = { path = "../synddb-shared" }
+alloy = { workspace = true }
+rusqlite = { workspace = true, features = ["bundled", "session"] }
+k256 = { workspace = true }

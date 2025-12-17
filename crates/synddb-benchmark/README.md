@@ -572,6 +572,75 @@ When `SEQUENCER_URL` is set, the benchmark:
 
 The benchmark uses the safe API pattern where `publish()` is called explicitly after transactions complete, ensuring thread-safe changeset extraction.
 
+## Encoding Format Benchmark
+
+The `encoding_benchmark` test compares CBOR encoding with and without zstd compression:
+
+- **CBOR** (uncompressed)
+- **CBOR + zstd** (production format)
+
+### Test Parameters
+
+- **N** (`num_messages`): Messages per batch
+- **M** (`changesets_per_message`): Changesets per message
+- **O** (`ops_per_changeset`): SQL operations per changeset (simulates activity level)
+
+Test scenarios range from quiet (1-2 ops) to normal trading (3-5 ops) to burst activity (10-20 ops).
+
+### Running the Benchmark
+
+```bash
+cargo test -p synddb-benchmark test_encoding_benchmark -- --nocapture
+```
+
+### Sample Output
+
+```
+================================================================================
+                       CBOR ENCODING BENCHMARK
+================================================================================
+
+Test Case: normal_medium (N=5 messages, M=5 changesets/msg, O=4 ops/changeset)
+Raw changeset data: 10665 bytes (100 total SQL operations)
+
+  Format               Size (bytes)        Ratio  Encode (us)  Decode (us)
+  -------------------- ------------ ------------ ------------ ------------
+  CBOR                        11567        1.00x         7445            9
+  CBOR+zstd                    1810        0.16x         7379           67
+
+  Compression ratio: 6.39x (zstd reduces size by 84.4%)
+
+--------------------------------------------------------------------------------
+
+Test Case: burst_large (N=10 messages, M=10 changesets/msg, O=20 ops/changeset)
+Raw changeset data: 209140 bytes (2000 total SQL operations)
+
+  Format               Size (bytes)        Ratio  Encode (us)  Decode (us)
+  -------------------- ------------ ------------ ------------ ------------
+  CBOR                       210992        1.00x        38227           37
+  CBOR+zstd                   23650        0.11x        39685          727
+
+  Compression ratio: 8.92x (zstd reduces size by 88.8%)
+
+--------------------------------------------------------------------------------
+
+SUMMARY
+=======
+
+Format comparison across all test cases:
+
+  CBOR total:      395108 bytes
+  CBOR+zstd total:  47493 bytes (8.32x compression)
+```
+
+### Key Findings
+
+- **zstd compression** achieves 5-9x compression ratio depending on data patterns
+- **Decode performance**: CBOR+zstd decode is slower due to decompression overhead
+- **Production choice**: CBOR+zstd provides significant size reduction with acceptable decode latency
+
+The benchmark uses realistic SQLite changesets generated via the session extension to provide accurate size comparisons.
+
 ## Development
 
 ```bash

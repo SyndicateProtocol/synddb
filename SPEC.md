@@ -388,13 +388,13 @@ Deploy the default validator in a TEE:
 synddb-validator \
     --fetcher-type http \
     --sequencer-url http://sequencer:8433 \
-    --sequencer-address 0x...
+    --sequencer-pubkey 8318535b...
 
 # Or fetch from GCS
 synddb-validator \
     --fetcher-type gcs \
     --gcs-bucket my-bucket \
-    --sequencer-address 0x...
+    --sequencer-pubkey 8318535b...
 ```
 
 The default validator will sync SQL operations (changesets and snapshots) from storage layers, apply them to rebuild state, and verify basic invariants before signing for settlement.
@@ -572,6 +572,166 @@ Converting any existing SQLite application to SyndDB is straightforward:
 5. No other code changes required to your business logic
 
 This approach makes SyndDB a drop-in solution for adding blockchain verifiability to applications written in any language.
+
+## Wire Format: CBOR/COSE Binary Encoding
+
+SyndDB uses CBOR (Concise Binary Object Representation) with COSE (CBOR Object Signing and Encryption) for efficient, authenticated message storage and transport.
+
+### Overview
+
+The wire format provides:
+- **Up to 40% size reduction** compared to JSON+base64 encoding
+- **Cryptographic authenticity** via COSE_Sign1 signatures
+- **Content addressing** via SHA-256 hashes for cross-system references
+- **Transport agnosticism** - same format works across GCS, Arweave, etc.
+
+### Message Structure: COSE_Sign1
+
+Individual messages are wrapped in COSE_Sign1 structures (RFC 9052). The structure contains:
+
+```
+COSE_Sign1 = [
+    protected: bstr,     # CBOR-encoded protected header
+    unprotected: {},     # Unprotected header (signer public key)
+    payload: bstr,       # zstd-compressed payload
+    signature: bstr      # 64-byte secp256k1 signature (r || s)
+]
+```
+
+#### Protected Header
+
+The protected header is CBOR-encoded and covered by the signature. It contains:
+
+| Field | COSE Label | Type | Description |
+|-------|------------|------|-------------|
+| Algorithm | 1 | int | ES256K (-47) for secp256k1 |
+| Sequence | -65537 | uint | Monotonic sequence number |
+| Timestamp | -65538 | uint | Unix timestamp |
+| Message Type | -65539 | uint | 0=Changeset, 1=Withdrawal, 2=Snapshot |
+
+The custom labels (-65537 to -65539) are in the IANA private use range.
+
+#### Unprotected Header
+
+| Field | Label | Type | Description |
+|-------|-------|------|-------------|
+| Signer | "signer" | bstr | 64-byte uncompressed secp256k1 public key (without 0x04 prefix) |
+
+#### Signature Format
+
+The signature is 64 bytes (r || s) without the recovery byte `v`. During verification, the signature is verified directly against the signer's public key using ECDSA verification (no address recovery needed).
+
+The signature covers the COSE `Sig_structure`:
+```
+Sig_structure = [
+    context: "Signature1",
+    body_protected: protected_header_bytes,
+    external_aad: bstr_empty,
+    payload: payload_bytes
+]
+```
+
+### Batch Structure: CborBatch
+
+Multiple messages are grouped into batches for efficient storage:
+
+```
+CborBatch = {
+    "v":    uint,      # Format version (currently 1)
+    "s":    uint,      # Start sequence (inclusive)
+    "e":    uint,      # End sequence (inclusive)
+    "t":    uint,      # Creation timestamp
+    "h":    bstr,      # SHA-256 content hash (32 bytes)
+    "m":    [bstr],    # Array of COSE_Sign1 message bytes
+    "sig":  bstr,      # 64-byte batch signature (r || s)
+    "pub":  bstr       # 64-byte signer public key
+}
+```
+
+#### Content Hash
+
+The content hash is SHA-256 over all message bytes concatenated in order:
+```
+content_hash = SHA256(message[0].bytes || message[1].bytes || ... || message[n].bytes)
+```
+
+This enables content-addressed lookup across different storage systems.
+
+#### Batch Signature
+
+The batch signature covers:
+```
+signing_payload = keccak256(start_sequence_be || end_sequence_be || content_hash)
+```
+
+Where `_be` indicates big-endian 8-byte encoding.
+
+### Storage Format
+
+Batches are stored as CBOR serialized data compressed with zstd (level 3).
+
+**File naming convention:**
+```
+{prefix}/batches/{start:012}_{end:012}.cbor.zst
+```
+
+Examples:
+- `sequencer/batches/000000000001_000000000050.cbor.zst` (messages 1-50)
+- `sequencer/batches/000000000051_000000000100.cbor.zst` (messages 51-100)
+
+The 12-digit zero-padding supports approximately 1 trillion sequences while maintaining lexicographic sortability. If you were to send messages every second, this is approximately 300 centuries, or roughly the amount of time from the caveman era to the modern day. 
+
+**Content type:** `application/cbor+zstd`
+
+### Transport Layer Architecture
+
+The transport layer is abstracted from the batch format:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        CborBatch                            │
+│  (format-agnostic: same structure regardless of transport)  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   TransportPublisher                        │
+├─────────────────────┬───────────────────────────────────────┤
+│   GcsTransport      │   ArweaveTransport (future)          │
+│   - Raw CBOR+zstd   │   - ANS-104 DataItem wrapper         │
+│   - gs:// URIs      │   - Discovery tags                   │
+│                     │   - Content hash cross-reference     │
+└─────────────────────┴───────────────────────────────────────┘
+```
+
+**Current:** GCS stores raw CBOR+zstd bytes directly.
+
+**Future (Arweave):** CBOR batch wrapped in ANS-104 DataItem with tags:
+- `App-Name`: Application identifier
+- `Schema-Version`: Format version
+- `Start-Sequence`, `End-Sequence`: Sequence range
+- `Content-SHA256`: Content hash for cross-system lookup
+
+The `content_hash` field enables content-addressed lookup regardless of transport-specific addressing (Arweave TX IDs differ even for identical content).
+
+### Verification Flow
+
+1. **Batch verification:**
+   - Recompute content hash from messages
+   - Verify batch signature against signer public key
+   - Confirm signer public key matches expected sequencer
+
+2. **Message verification:**
+   - Parse COSE_Sign1 structure
+   - Verify signature covers correct `Sig_structure`
+   - Verify signature is valid for the claimed public key (direct ECDSA verification)
+   - Confirm signer public key matches expected sequencer
+   - Validate protected header fields match outer message fields
+
+3. **Field consistency:**
+   - Outer `sequence` must equal protected header sequence
+   - Outer `timestamp` must equal protected header timestamp
+   - This prevents field substitution attacks
 
 ## Terminology Glossary
 

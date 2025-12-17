@@ -8,7 +8,17 @@ use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
 use std::{sync::Arc, time::Instant};
 use synddb_shared::types::payloads::{ChangesetBatchRequest, ChangesetData};
+use thiserror::Error;
 use tracing::{debug, error, info, warn};
+
+/// Error type for send operations
+#[derive(Debug, Error)]
+pub enum SendError {
+    #[error("HTTP error: {0}")]
+    Http(reqwest::Error),
+    #[error("CBOR serialization error: {0}")]
+    Cbor(ciborium::ser::Error<std::io::Error>),
+}
 
 impl From<&Changeset> for ChangesetData {
     fn from(cs: &Changeset) -> Self {
@@ -186,19 +196,25 @@ impl ChangesetSender {
         }
     }
 
-    async fn send_batch(&self, batch: &ChangesetBatchRequest) -> Result<(), reqwest::Error> {
+    async fn send_batch(&self, batch: &ChangesetBatchRequest) -> Result<(), SendError> {
         let url = self
             .config
             .sequencer_url
             .join("changesets")
             .expect("valid URL path");
 
+        // Serialize to CBOR
+        let cbor_bytes = batch.to_cbor().map_err(SendError::Cbor)?;
+
         self.client
             .post(url)
-            .json(batch)
+            .header("Content-Type", "application/cbor")
+            .body(cbor_bytes)
             .send()
-            .await?
-            .error_for_status()?;
+            .await
+            .map_err(SendError::Http)?
+            .error_for_status()
+            .map_err(SendError::Http)?;
 
         Ok(())
     }

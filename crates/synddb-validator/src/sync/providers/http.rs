@@ -6,7 +6,7 @@
 //! # Endpoints
 //!
 //! - `GET /storage/batches` - List all batches (for building batch index)
-//! - `GET /storage/batches/{start}` - Fetch a batch by start sequence
+//! - `GET /storage/batches/{start}` - Fetch batch by start sequence (CBOR+zstd format)
 //! - `GET /storage/messages/{sequence}` - Fetch a single message
 //! - `GET /storage/latest` - Get the latest published sequence number
 
@@ -15,7 +15,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
-use synddb_shared::types::message::{SignedBatch, SignedMessage};
+use synddb_shared::types::{
+    cbor::batch::CborBatch,
+    message::{SignedBatch, SignedMessage},
+};
 use tracing::{debug, info, warn};
 
 /// Response from the `/storage/latest` endpoint
@@ -71,7 +74,7 @@ impl HttpFetcher {
         format!("{}/storage/batches", self.base_url)
     }
 
-    /// Get the URL for fetching a specific batch
+    /// Get the URL for fetching a specific batch (CBOR+zstd format)
     fn batch_url(&self, start_sequence: u64) -> String {
         format!("{}/storage/batches/{}", self.base_url, start_sequence)
     }
@@ -201,15 +204,25 @@ impl StorageFetcher for HttpFetcher {
 
         match response.status() {
             status if status.is_success() => {
-                let batch: SignedBatch = response
-                    .json()
+                let data = response
+                    .bytes()
                     .await
-                    .with_context(|| format!("Failed to parse batch {start_sequence}"))?;
+                    .with_context(|| format!("Failed to read batch {start_sequence} body"))?;
+
+                // Parse CBOR+zstd format
+                let cbor_batch = CborBatch::from_cbor_zstd(&data)
+                    .with_context(|| format!("Failed to parse CBOR batch {start_sequence}"))?;
+
+                // Convert to SignedBatch
+                let batch = cbor_batch
+                    .to_signed_batch()
+                    .with_context(|| format!("Failed to convert CBOR batch {start_sequence}"))?;
+
                 debug!(
                     start = batch.start_sequence,
                     end = batch.end_sequence,
                     messages = batch.messages.len(),
-                    "Fetched batch from HTTP"
+                    "Fetched CBOR batch from HTTP"
                 );
                 Ok(Some(batch))
             }

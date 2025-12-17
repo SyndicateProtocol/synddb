@@ -64,6 +64,13 @@ humantime = "2"
 hex = "0.4"
 base64 = "0.22"
 zstd = "0.13"
+sha2 = "0.10"
+sha3 = "0.10"
+
+# CBOR/COSE serialization
+ciborium = "0.2"
+coset = "0.3"
+serde_bytes = "0.11"
 
 # Blockchain / Cryptography
 alloy = { version = "1.0.25", features = [
@@ -71,7 +78,7 @@ alloy = { version = "1.0.25", features = [
   "rpc-types",
   "sol-types",
 ] }
-k256 = { version = "0.13", features = ["ecdsa"] }
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
 url = { version = "2.5", features = ["serde"] }
 async-trait = "0.1"
 

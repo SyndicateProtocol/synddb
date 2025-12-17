@@ -4,17 +4,17 @@
 //! ```text
 //! gs://{bucket}/{prefix}/
 //! └── batches/
-//!     ├── 000000000001_000000000050.json   # messages 1-50
-//!     ├── 000000000051_000000000100.json   # messages 51-100
+//!     ├── 000000000001_000000000050.cbor.zst
+//!     ├── 000000000051_000000000100.cbor.zst
 //!     └── ...
 //! ```
 //!
-//! Batch filenames follow the pattern `{start:012}_{end:012}.json` where:
+//! Batch filenames follow the pattern `{start:012}_{end:012}.cbor.zst` where:
 //! - `start` is the first sequence number in the batch (inclusive)
 //! - `end` is the last sequence number in the batch (inclusive)
 //! - Both are zero-padded to 12 digits
+//! - Format is CBOR with zstd compression
 //!
-//! TODO revisit this
 //! # Performance Note
 //!
 //! The `get()` method for single messages is inefficient as it lists all batches
@@ -25,7 +25,10 @@
 use crate::sync::fetcher::{BatchInfo, StorageFetcher};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use synddb_shared::types::message::{SignedBatch, SignedMessage};
+use synddb_shared::types::{
+    cbor::batch::CborBatch,
+    message::{SignedBatch, SignedMessage},
+};
 use tracing::{debug, info, warn};
 
 /// Google Cloud Storage fetcher
@@ -89,10 +92,15 @@ impl GcsFetcher {
 
     /// Parse a batch filename to extract start and end sequence numbers
     ///
-    /// Expected format: `{start:012}_{end:012}.json`
+    /// Expected format: `{start:012}_{end:012}.cbor.zst`
+    ///
     /// Returns `Some((start, end))` if valid, `None` otherwise
     fn parse_batch_filename(filename: &str) -> Option<(u64, u64)> {
-        let without_ext = filename.strip_suffix(".json")?;
+        if !filename.ends_with(".cbor.zst") {
+            return None;
+        }
+
+        let without_ext = &filename[..filename.len() - 9];
         let mut parts = without_ext.split('_');
         let start = parts.next()?.parse::<u64>().ok()?;
         let end = parts.next()?.parse::<u64>().ok()?;
@@ -208,6 +216,7 @@ impl StorageFetcher for GcsFetcher {
                     .filter_map(|obj| {
                         let filename = obj.name.rsplit('/').next()?;
                         let (start, end) = Self::parse_batch_filename(filename)?;
+                        debug!(filename, start, end, "Parsed batch file");
                         Some(BatchInfo::new(start, end, obj.name.clone()))
                     })
                     .collect();
@@ -215,7 +224,7 @@ impl StorageFetcher for GcsFetcher {
                 // Sort by start sequence
                 batches.sort_by_key(|b| b.start_sequence);
 
-                debug!(count = batches.len(), "Listed batches from GCS");
+                info!(count = batches.len(), "Listed batches from GCS");
                 Ok(batches)
             }
             Err(e) => Err(anyhow::anyhow!("Failed to list batch objects: {e}")),
@@ -247,12 +256,30 @@ impl StorageFetcher for GcsFetcher {
     async fn get_batch_by_path(&self, path: &str) -> Result<Option<SignedBatch>> {
         match self.download(path).await? {
             Some(data) => {
-                let batch: SignedBatch = serde_json::from_slice(&data)
-                    .with_context(|| format!("Failed to parse batch at {path}"))?;
-                debug!(
+                info!(path, bytes = data.len(), "Parsing CBOR batch");
+
+                // Parse CBOR + zstd format
+                let cbor_batch = CborBatch::from_cbor_zstd(&data)
+                    .with_context(|| format!("Failed to decompress/parse CBOR batch at {path}"))?;
+
+                info!(
+                    start = cbor_batch.start_sequence,
+                    end = cbor_batch.end_sequence,
+                    messages = cbor_batch.messages.len(),
+                    content_hash = %cbor_batch.content_hash_hex(),
+                    "Parsed CBOR batch, converting to SignedBatch"
+                );
+
+                // Convert to SignedBatch for unified processing
+                let batch = cbor_batch
+                    .to_signed_batch()
+                    .with_context(|| format!("Failed to convert CBOR batch at {path}"))?;
+
+                info!(
                     start = batch.start_sequence,
                     end = batch.end_sequence,
                     messages = batch.messages.len(),
+                    signer = %batch.signer,
                     "Fetched batch from GCS"
                 );
                 Ok(Some(batch))
@@ -272,37 +299,43 @@ mod tests {
     #[test]
     fn test_batch_path_format() {
         let prefix = "sequencer";
-        let path = format!("{}/batches/{:012}_{:012}.json", prefix, 1, 50);
-        assert_eq!(path, "sequencer/batches/000000000001_000000000050.json");
+        let path = format!("{}/batches/{:012}_{:012}.cbor.zst", prefix, 1, 50);
+        assert_eq!(path, "sequencer/batches/000000000001_000000000050.cbor.zst");
 
-        let path = format!("{}/batches/{:012}_{:012}.json", prefix, 0, 0);
-        assert_eq!(path, "sequencer/batches/000000000000_000000000000.json");
+        let path = format!("{}/batches/{:012}_{:012}.cbor.zst", prefix, 0, 0);
+        assert_eq!(path, "sequencer/batches/000000000000_000000000000.cbor.zst");
 
         let path = format!(
-            "{}/batches/{:012}_{:012}.json",
+            "{}/batches/{:012}_{:012}.cbor.zst",
             prefix, 999_999_999_999_u64, 999_999_999_999_u64
         );
-        assert_eq!(path, "sequencer/batches/999999999999_999999999999.json");
+        assert_eq!(path, "sequencer/batches/999999999999_999999999999.cbor.zst");
     }
 
     #[test]
-    fn test_parse_batch_filename_valid() {
-        let result = GcsFetcher::parse_batch_filename("000000000001_000000000050.json");
+    fn test_parse_batch_filename() {
+        let result = GcsFetcher::parse_batch_filename("000000000001_000000000050.cbor.zst");
         assert_eq!(result, Some((1, 50)));
 
-        let result = GcsFetcher::parse_batch_filename("000000001000_000000002000.json");
+        let result = GcsFetcher::parse_batch_filename("000000001000_000000002000.cbor.zst");
         assert_eq!(result, Some((1000, 2000)));
 
         // Single message batch
-        let result = GcsFetcher::parse_batch_filename("000000000042_000000000042.json");
+        let result = GcsFetcher::parse_batch_filename("000000000042_000000000042.cbor.zst");
         assert_eq!(result, Some((42, 42)));
     }
 
     #[test]
     fn test_parse_batch_filename_invalid() {
-        // Missing .json extension
+        // Missing extension
         assert_eq!(
             GcsFetcher::parse_batch_filename("000000000001_000000000050"),
+            None
+        );
+
+        // Wrong extension (legacy JSON format no longer supported)
+        assert_eq!(
+            GcsFetcher::parse_batch_filename("000000000001_000000000050.json"),
             None
         );
 
@@ -314,39 +347,48 @@ mod tests {
 
         // Missing underscore
         assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001000000000050.json"),
+            GcsFetcher::parse_batch_filename("000000000001000000000050.cbor.zst"),
             None
         );
 
         // Extra underscore
         assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050_extra.json"),
+            GcsFetcher::parse_batch_filename("000000000001_000000000050_extra.cbor.zst"),
             None
         );
 
         // Non-numeric
-        assert_eq!(GcsFetcher::parse_batch_filename("abcdef_ghijkl.json"), None);
+        assert_eq!(
+            GcsFetcher::parse_batch_filename("abcdef_ghijkl.cbor.zst"),
+            None
+        );
 
         // Empty
         assert_eq!(GcsFetcher::parse_batch_filename(""), None);
+
+        // Just .zst (not .cbor.zst)
+        assert_eq!(
+            GcsFetcher::parse_batch_filename("000000000001_000000000050.zst"),
+            None
+        );
     }
 
     #[test]
     fn test_batch_filename_sorting() {
         // Verify that batch filenames sort correctly lexicographically
         let mut filenames = vec![
-            "000000000051_000000000100.json",
-            "000000000001_000000000050.json",
-            "000000000101_000000000150.json",
+            "000000000051_000000000100.cbor.zst",
+            "000000000101_000000000150.cbor.zst",
+            "000000000001_000000000050.cbor.zst",
         ];
         filenames.sort();
 
         assert_eq!(
             filenames,
             vec![
-                "000000000001_000000000050.json",
-                "000000000051_000000000100.json",
-                "000000000101_000000000150.json",
+                "000000000001_000000000050.cbor.zst",
+                "000000000051_000000000100.cbor.zst",
+                "000000000101_000000000150.cbor.zst",
             ]
         );
     }

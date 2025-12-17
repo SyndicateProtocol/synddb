@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     runtime::init_logging(config.log_json);
 
     info!(
-        sequencer = %config.sequencer_address,
+        expected_sequencer_pubkey = %config.sequencer_pubkey,
         database = %config.database_path,
         state_db = %config.state_db_path,
         "`SyndDB` Validator starting"
@@ -105,9 +105,9 @@ async fn main() -> Result<()> {
             state_for_loop.update_sync_status(Some(sequence), current_timestamp());
         };
 
-        // Run continuous sync loop with callbacks
+        // Run a continuous sync batching loop with callbacks
         if let Err(e) = validator
-            .run_with_callbacks(&mut on_withdrawal, &mut on_sync)
+            .run_batched(&mut on_withdrawal, &mut on_sync)
             .await
         {
             error!(error = %e, "Sync loop error");
@@ -184,6 +184,8 @@ async fn sync_to_head_with_signing(
     let mut next_sequence = validator.last_sequence()?.map_or(0, |s| s + 1);
     let mut synced = 0;
     let mut on_withdrawal = create_withdrawal_callback(signer.cloned(), store.clone());
+
+    // TODO CLAUDE: check that received messages are all in order, or else break. maybe this is already covered
 
     loop {
         let result = validator

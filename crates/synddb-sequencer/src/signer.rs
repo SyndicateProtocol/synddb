@@ -1,16 +1,13 @@
 //! Message signing using secp256k1 (Ethereum-compatible)
 //!
-//! Signs messages with EIP-191 prefix for compatibility with Ethereum
-//! smart contracts and standard verification tools.
-//!
-//! This module uses the signing payload computation functions from `synddb_shared`
-//! to ensure consistency with signature verification.
+//! Provides 64-byte COSE-compatible signatures (r || s format, without recovery ID).
+//! Used by the inbox for signing individual messages and by the batcher for
+//! signing batches.
 
 use alloy::{
-    primitives::{keccak256, Address, B256},
-    signers::{local::PrivateKeySigner, Signer},
+    primitives::{Address, B256, B512},
+    signers::{local::PrivateKeySigner, SignerSync},
 };
-use synddb_shared::types::message::{SignedBatch, SignedMessage};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -31,7 +28,7 @@ pub struct MessageSigner {
 impl MessageSigner {
     /// Create a new signer from a hex-encoded private key
     ///
-    /// The key should be 64 hex characters (32 bytes), without "0x" prefix.
+    /// The key should be 64 hex characters (32 bytes), with or without "0x" prefix.
     pub fn new(private_key_hex: &str) -> Result<Self, SignerError> {
         // Strip 0x prefix if present
         let key_hex = private_key_hex
@@ -50,99 +47,39 @@ impl MessageSigner {
         self.signer.address()
     }
 
-    /// Create the signing payload for a sequenced message
+    /// Get the 64-byte uncompressed public key (without 0x04 prefix)
     ///
-    /// Format: `keccak256(sequence || timestamp || message_hash)`
+    /// This is the raw secp256k1 public key: 32 bytes X coordinate || 32 bytes Y coordinate.
+    /// Used for signature verification in COSE messages.
+    pub fn public_key(&self) -> [u8; 64] {
+        self.signer.public_key().0
+    }
+
+    /// Get the public key as a B512
+    pub fn public_key_b512(&self) -> B512 {
+        self.signer.public_key()
+    }
+
+    /// Sign a 32-byte hash synchronously
     ///
-    /// This delegates to [`SignedMessage::compute_signing_payload`] to ensure
-    /// consistency between signing and verification.
-    pub fn create_signing_payload(sequence: u64, timestamp: u64, message_hash: B256) -> B256 {
-        SignedMessage::compute_signing_payload(sequence, timestamp, message_hash)
+    /// Returns the full alloy Signature which contains r, s, and v.
+    /// Use this for COSE signing where only r || s (64 bytes) are needed.
+    pub fn sign_raw_sync(&self, hash: &[u8; 32]) -> Result<alloy::signers::Signature, SignerError> {
+        let hash = B256::from(*hash);
+        self.signer
+            .sign_hash_sync(&hash)
+            .map_err(|e| SignerError::SigningFailed(e.to_string()))
     }
 
-    /// Sign a message payload
-    ///
-    /// Uses EIP-191 personal sign prefix for Ethereum compatibility:
-    /// "\x19Ethereum Signed Message:\n32" + payload
-    pub async fn sign(&self, payload: B256) -> Result<SignatureBytes, SignerError> {
-        let signature = self
-            .signer
-            .sign_hash(&payload)
-            .await
-            .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
-
-        Ok(SignatureBytes::from_signature(&signature))
-    }
-
-    /// Sign a sequenced message (convenience method)
-    pub async fn sign_message(
-        &self,
-        sequence: u64,
-        timestamp: u64,
-        message_hash: B256,
-    ) -> Result<SignatureBytes, SignerError> {
-        let payload = Self::create_signing_payload(sequence, timestamp, message_hash);
-        self.sign(payload).await
-    }
-
-    /// Create the signing payload for a batch
-    ///
-    /// Format: `keccak256(start_sequence || end_sequence || messages_hash)`
-    /// where `messages_hash` is the keccak256 of the serialized messages JSON
-    ///
-    /// This delegates to [`SignedBatch::compute_signing_payload`] to ensure
-    /// consistency between signing and verification.
-    pub fn create_batch_signing_payload(
-        start_sequence: u64,
-        end_sequence: u64,
-        messages_hash: B256,
-    ) -> B256 {
-        SignedBatch::compute_signing_payload(start_sequence, end_sequence, messages_hash)
-    }
-
-    /// Compute the hash of serialized messages for batch signing
-    pub fn compute_messages_hash(messages_json: &[u8]) -> B256 {
-        keccak256(messages_json)
-    }
-
-    /// Sign a batch (convenience method)
-    pub async fn sign_batch(
-        &self,
-        start_sequence: u64,
-        end_sequence: u64,
-        messages_hash: B256,
-    ) -> Result<SignatureBytes, SignerError> {
-        let payload =
-            Self::create_batch_signing_payload(start_sequence, end_sequence, messages_hash);
-        self.sign(payload).await
-    }
-}
-
-/// Signature bytes in a format suitable for serialization
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SignatureBytes {
-    /// Full 65-byte signature (r: 32, s: 32, v: 1)
-    pub bytes: [u8; 65],
-}
-
-impl SignatureBytes {
-    fn from_signature(sig: &alloy::signers::Signature) -> Self {
-        let mut bytes = [0u8; 65];
-        bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
-        bytes[32..64].copy_from_slice(&sig.s().to_be_bytes::<32>());
-        // v is a bool (y_parity), convert to recovery id (27 or 28 for legacy, 0 or 1 for EIP-155)
-        bytes[64] = if sig.v() { 28 } else { 27 };
-        Self { bytes }
-    }
-
-    /// Convert to hex string (without 0x prefix)
-    pub fn to_hex(&self) -> String {
-        hex::encode(self.bytes)
-    }
-
-    /// Convert to hex string with 0x prefix
-    pub fn to_hex_prefixed(&self) -> String {
-        format!("0x{}", self.to_hex())
+    /// Compute SHA-256 content hash from serialized messages
+    pub fn compute_content_hash(messages_bytes: &[u8]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(messages_bytes);
+        let result = hasher.finalize();
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&result);
+        arr
     }
 }
 
@@ -184,56 +121,45 @@ mod tests {
     }
 
     #[test]
-    fn test_signing_payload_deterministic() {
-        let sequence = 123u64;
-        let timestamp = 1700000000u64;
-        let message_hash = B256::from([0x42; 32]);
-
-        let payload1 = MessageSigner::create_signing_payload(sequence, timestamp, message_hash);
-        let payload2 = MessageSigner::create_signing_payload(sequence, timestamp, message_hash);
-
-        assert_eq!(payload1, payload2);
+    fn test_public_key_length() {
+        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
+        let pubkey = signer.public_key();
+        assert_eq!(pubkey.len(), 64);
     }
 
     #[test]
-    fn test_signing_payload_varies_with_input() {
-        let message_hash = B256::from([0x42; 32]);
+    fn test_sign_raw_sync() {
+        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
+        let hash = [0x42u8; 32];
 
-        let p1 = MessageSigner::create_signing_payload(1, 1000, message_hash);
-        let p2 = MessageSigner::create_signing_payload(2, 1000, message_hash);
-        let p3 = MessageSigner::create_signing_payload(1, 1001, message_hash);
+        let sig = signer.sign_raw_sync(&hash).unwrap();
 
-        assert_ne!(p1, p2);
-        assert_ne!(p1, p3);
-        assert_ne!(p2, p3);
+        // Check r and s are populated
+        assert_ne!(sig.r(), alloy::primitives::U256::ZERO);
+        assert_ne!(sig.s(), alloy::primitives::U256::ZERO);
     }
 
-    #[tokio::test]
-    async fn test_sign_message() {
+    #[test]
+    fn test_sign_raw_sync_deterministic() {
         let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let message_hash = B256::from([0x42; 32]);
+        let hash = [0x42u8; 32];
 
-        let sig = signer
-            .sign_message(1, 1700000000, message_hash)
-            .await
-            .unwrap();
-
-        // Signature should be 65 bytes
-        assert_eq!(sig.bytes.len(), 65);
-
-        // Hex encoding should be 130 characters
-        assert_eq!(sig.to_hex().len(), 130);
-    }
-
-    #[tokio::test]
-    async fn test_signature_deterministic() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let message_hash = B256::from([0x42; 32]);
-
-        let sig1 = signer.sign_message(1, 1000, message_hash).await.unwrap();
-        let sig2 = signer.sign_message(1, 1000, message_hash).await.unwrap();
+        let sig1 = signer.sign_raw_sync(&hash).unwrap();
+        let sig2 = signer.sign_raw_sync(&hash).unwrap();
 
         // Same input should produce same signature (deterministic signing)
-        assert_eq!(sig1.bytes, sig2.bytes);
+        assert_eq!(sig1.r(), sig2.r());
+        assert_eq!(sig1.s(), sig2.s());
+    }
+
+    #[test]
+    fn test_content_hash() {
+        let data = b"test content";
+        let hash = MessageSigner::compute_content_hash(data);
+        assert_eq!(hash.len(), 32);
+
+        // Same input should produce same hash
+        let hash2 = MessageSigner::compute_content_hash(data);
+        assert_eq!(hash, hash2);
     }
 }

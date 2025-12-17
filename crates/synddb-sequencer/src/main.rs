@@ -11,14 +11,12 @@ use tracing::{error, info, warn};
 
 use synddb_sequencer::{
     attestation::{AttestationConfig, AttestationVerifier},
+    batcher::{Batcher, BatcherHandle},
     config::{PublisherType, SequencerConfig},
     http_api::{create_router, AppState},
     inbox::Inbox,
-    publish::{
-        local::{LocalConfig, LocalPublisher},
-        traits::StoragePublisher,
-    },
     signer::MessageSigner,
+    transport::local::{LocalTransport, LocalTransportConfig},
 };
 use synddb_shared::runtime;
 
@@ -42,78 +40,112 @@ async fn main() -> Result<()> {
     let signer = MessageSigner::new(&config.signing_key)
         .context("Failed to initialize signer from SIGNING_KEY")?;
 
-    info!(signer_address = %format!("{:?}", signer.address()), "Signer initialized");
+    // Log both address (for human readability) and public key (for verification)
+    let pubkey_hex = format!("0x{}", hex::encode(signer.public_key()));
+    info!(
+        address = %signer.address(),
+        public_key = %pubkey_hex,
+        "Signer initialized"
+    );
 
     let signer = Arc::new(signer);
 
-    // Initialize publisher based on publisher_type
-    let (publisher, local_publisher): (
-        Option<Arc<dyn StoragePublisher>>,
-        Option<Arc<LocalPublisher>>,
-    ) = match config.publisher_type {
-        PublisherType::None => {
-            info!("Publisher disabled (messages will not be persisted)");
-            (None, None)
-        }
-        PublisherType::Local => {
-            let path = config.local_storage_path.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("LOCAL_STORAGE_PATH is required when publisher_type=local")
-            })?;
-            let local_config = if path == ":memory:" {
-                LocalConfig::in_memory()
-            } else {
-                LocalConfig::file(path)
-            };
-            let local_pub = LocalPublisher::new_arc(local_config, Arc::clone(&signer))
-                .context("Failed to initialize local publisher")?;
-            (
-                Some(local_pub.clone() as Arc<dyn StoragePublisher>),
-                Some(local_pub),
-            )
-        }
-        PublisherType::Gcs => {
-            #[cfg(feature = "gcs")]
-            {
-                use synddb_sequencer::publish::gcs::{GcsConfig, GcsPublisher};
-                let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
-                })?;
-                let mut gcs_config = GcsConfig::new(bucket).with_prefix(&config.gcs_prefix);
-                if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
-                    gcs_config = gcs_config.with_emulator_host(emulator_host);
-                }
-                let gcs_pub = GcsPublisher::new(gcs_config, Arc::clone(&signer))
-                    .await
-                    .context("Failed to initialize GCS publisher")?;
-                (Some(Arc::new(gcs_pub) as Arc<dyn StoragePublisher>), None)
+    // Initialize CBOR batcher based on publisher_type
+    let (batcher, local_transport): (Option<BatcherHandle>, Option<Arc<LocalTransport>>) =
+        match config.publisher_type {
+            PublisherType::None => {
+                info!("Publisher disabled (messages will not be persisted)");
+                (None, None)
             }
-            #[cfg(not(feature = "gcs"))]
-            {
-                anyhow::bail!(
-                    "publisher_type=gcs requires the 'gcs' feature. Compile with --features gcs"
-                );
-            }
-        }
-    };
+            PublisherType::Local => {
+                use synddb_sequencer::transport::traits::TransportPublisher;
 
-    // Try to recover sequence from publisher
-    let start_sequence = match &publisher {
-        Some(pub_) => match pub_.load_state().await {
-            Ok(Some(seq)) => {
-                info!(sequence = seq, "Recovered sequence from publisher");
-                seq + 1 // Start from next sequence
+                // Use optional LOCAL_STORAGE_PATH for file persistence, else default to in-memory
+                let transport_config = config.local_storage_path.as_ref().map_or_else(
+                    || {
+                        info!("Using in-memory storage for local transport");
+                        LocalTransportConfig::in_memory()
+                    },
+                    |path| {
+                        info!(path = %path, "Using SQLite storage for local transport");
+                        LocalTransportConfig::file(path)
+                    },
+                );
+
+                let transport = Arc::new(LocalTransport::new(transport_config));
+                let batch_config = config.batch_config();
+                info!(
+                    max_messages = batch_config.max_messages,
+                    max_bytes = batch_config.max_batch_bytes,
+                    flush_interval_ms = batch_config.flush_interval.as_millis(),
+                    "Initializing CBOR batcher with local transport"
+                );
+
+                let batcher = Batcher::spawn(
+                    batch_config,
+                    Arc::clone(&transport) as Arc<dyn TransportPublisher>,
+                    Arc::clone(&signer),
+                );
+                (Some(batcher), Some(transport))
             }
-            Ok(None) => {
+            PublisherType::Gcs => {
+                #[cfg(feature = "gcs")]
+                {
+                    use synddb_sequencer::transport::gcs::{GcsTransport, GcsTransportConfig};
+
+                    let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
+                    })?;
+
+                    let mut transport_config =
+                        GcsTransportConfig::new(bucket).with_prefix(&config.gcs_prefix);
+                    if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
+                        transport_config = transport_config.with_emulator_host(emulator_host);
+                    }
+
+                    let transport = GcsTransport::new(transport_config)
+                        .await
+                        .context("Failed to initialize GCS transport")?;
+
+                    let batch_config = config.batch_config();
+                    info!(
+                        max_messages = batch_config.max_messages,
+                        max_bytes = batch_config.max_batch_bytes,
+                        flush_interval_ms = batch_config.flush_interval.as_millis(),
+                        "Initializing CBOR batcher with GCS transport"
+                    );
+
+                    (
+                        Some(Batcher::spawn(
+                            batch_config,
+                            Arc::new(transport),
+                            Arc::clone(&signer),
+                        )),
+                        None,
+                    )
+                }
+                #[cfg(not(feature = "gcs"))]
+                {
+                    anyhow::bail!(
+                        "publisher_type=gcs requires the 'gcs' feature. Compile with --features gcs"
+                    );
+                }
+            }
+        };
+
+    // Try to recover sequence from local transport
+    let start_sequence = local_transport.as_ref().map_or(0, |transport| {
+        transport.latest_sequence().map_or_else(
+            || {
                 info!("No previous state found, starting from sequence 0");
                 0
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to load state, starting from 0");
-                0
-            }
-        },
-        None => 0,
-    };
+            },
+            |seq| {
+                info!(sequence = seq, "Recovered sequence from local storage");
+                seq + 1 // Start from next sequence
+            },
+        )
+    });
 
     // Create the inbox (shares signer with publisher)
     let inbox = Arc::new(Inbox::with_start_sequence_arc(
@@ -142,17 +174,17 @@ async fn main() -> Result<()> {
     // Create application state
     let state = AppState {
         inbox: inbox.clone(),
-        publisher: publisher.clone(),
         attestation_verifier,
+        batcher: batcher.clone(),
     };
 
     // Create the HTTP router
     let mut app = create_router(state);
 
-    // Mount local publisher's storage fetch API if configured
-    if let Some(ref local_pub) = local_publisher {
+    // Mount storage fetch API if local transport is configured
+    if let Some(ref transport) = local_transport {
         info!("Mounting local storage fetch API at /storage/*");
-        app = app.nest("/storage", local_pub.routes());
+        app = app.nest("/storage", Arc::clone(transport).routes());
     }
 
     // Bind and serve
@@ -164,7 +196,7 @@ async fn main() -> Result<()> {
     // Run server with graceful shutdown
     let shutdown_timeout = config.shutdown_timeout;
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(inbox, publisher, shutdown_timeout))
+        .with_graceful_shutdown(shutdown_signal(batcher, shutdown_timeout))
         .await
         .map_err(|e| {
             error!(error = %e, "Server error");
@@ -177,11 +209,7 @@ async fn main() -> Result<()> {
 }
 
 /// Wait for shutdown signal and perform graceful shutdown
-async fn shutdown_signal(
-    inbox: Arc<Inbox>,
-    publisher: Option<Arc<dyn StoragePublisher>>,
-    timeout: std::time::Duration,
-) {
+async fn shutdown_signal(batcher: Option<BatcherHandle>, timeout: std::time::Duration) {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -208,16 +236,13 @@ async fn shutdown_signal(
         }
     }
 
-    // Save state before shutdown
-    if let Some(pub_) = publisher {
-        let current_seq = inbox.current_sequence();
-        if current_seq > 0 {
-            info!(sequence = current_seq - 1, "Saving state before shutdown");
-            match tokio::time::timeout(timeout, pub_.save_state(current_seq - 1)).await {
-                Ok(Ok(())) => info!("State saved successfully"),
-                Ok(Err(e)) => warn!(error = %e, "Failed to save state"),
-                Err(_) => warn!("State save timed out"),
-            }
+    // Flush batcher before shutdown
+    if let Some(batcher) = batcher {
+        info!("Flushing batcher before shutdown");
+        match tokio::time::timeout(timeout, batcher.shutdown()).await {
+            Ok(Ok(())) => info!("Batcher shutdown complete"),
+            Ok(Err(e)) => warn!(error = %e, "Batcher shutdown failed"),
+            Err(_) => warn!("Batcher shutdown timed out"),
         }
     }
 

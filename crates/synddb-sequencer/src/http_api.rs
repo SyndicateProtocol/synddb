@@ -6,7 +6,7 @@
 //! - Health and status checks
 
 use axum::{
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -18,32 +18,33 @@ use tracing::{error, info, warn};
 
 use crate::{
     attestation::AttestationVerifier,
+    batcher::{BatchStats, BatcherHandle},
+    cbor_extractor::Cbor,
     http_errors::{HttpError, SequencerError},
-    inbox::Inbox,
-    publish::traits::StoragePublisher,
+    inbox::{Inbox, SequenceReceipt},
 };
 use synddb_shared::types::{
-    message::{MessageType, SequenceReceipt, SignedMessage},
+    cbor::message::CborMessageType,
+    message::{MessageType, SignedMessage},
     payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest},
-    serde_helpers::base64_serde,
 };
 
 /// Shared application state
 #[derive(Clone)]
 pub struct AppState {
     pub inbox: Arc<Inbox>,
-    /// Optional publisher for persisting messages
-    pub publisher: Option<Arc<dyn StoragePublisher>>,
     /// Optional attestation verifier for TEE token validation
     pub attestation_verifier: Option<Arc<AttestationVerifier>>,
+    /// Optional batcher for CBOR batch publishing
+    pub batcher: Option<BatcherHandle>,
 }
 
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState")
             .field("inbox", &self.inbox)
-            .field("publisher", &self.publisher.is_some())
             .field("attestation_verifier", &self.attestation_verifier.is_some())
+            .field("batcher", &self.batcher.is_some())
             .finish()
     }
 }
@@ -54,19 +55,21 @@ pub fn create_router(state: AppState) -> Router {
     info!("  POST /changesets       - Submit changeset batch");
     info!("  POST /withdrawals      - Submit withdrawal request");
     info!("  POST /snapshots        - Submit database snapshot");
-    info!("  GET  /messages/:seq    - Retrieve message by sequence");
     info!("  GET  /health           - Health check (liveness)");
     info!("  GET  /ready            - Readiness check");
     info!("  GET  /status           - Sequencer status");
+    info!("  GET  /batch/stats      - CBOR batch statistics");
+    info!("  POST /batch/flush      - Force flush pending batch");
 
     Router::new()
         .route("/changesets", post(receive_changesets))
         .route("/withdrawals", post(receive_withdrawal))
         .route("/snapshots", post(receive_snapshot))
-        .route("/messages/{sequence}", get(get_message))
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
         .route("/status", get(status))
+        .route("/batch/stats", get(batch_stats))
+        .route("/batch/flush", post(batch_flush))
         .with_state(state)
 }
 
@@ -131,6 +134,61 @@ pub struct ReadinessResponse {
     pub checks: Vec<HealthCheck>,
 }
 
+/// Batch statistics response
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct BatchStatsResponse {
+    /// Whether batching is enabled
+    pub enabled: bool,
+    /// Total batches published
+    pub batches_published: u64,
+    /// Total messages published via batching
+    pub messages_published: u64,
+    /// Total compressed bytes published
+    pub bytes_published: u64,
+    /// Total uncompressed bytes (for compression ratio)
+    pub bytes_uncompressed: u64,
+    /// Average compression ratio
+    pub compression_ratio: f64,
+    /// Current pending message count
+    pub pending_messages: usize,
+    /// Current pending byte count
+    pub pending_bytes: usize,
+    /// Last flush timestamp (epoch seconds, 0 if never flushed)
+    pub last_flush_timestamp: u64,
+}
+
+impl From<BatchStats> for BatchStatsResponse {
+    fn from(stats: BatchStats) -> Self {
+        Self {
+            enabled: true,
+            batches_published: stats.batches_published,
+            messages_published: stats.messages_published,
+            bytes_published: stats.bytes_published,
+            bytes_uncompressed: stats.bytes_uncompressed,
+            compression_ratio: stats.compression_ratio(),
+            pending_messages: stats.pending_messages,
+            pending_bytes: stats.pending_bytes,
+            last_flush_timestamp: stats.last_flush_timestamp,
+        }
+    }
+}
+
+/// Batch flush response
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchFlushResponse {
+    /// Whether a batch was published
+    pub published: bool,
+    /// Reference to the published batch (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// Number of messages in the flushed batch
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_count: Option<usize>,
+    /// Compressed size of the batch
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compressed_bytes: Option<usize>,
+}
+
 /// Response for message retrieval
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MessageResponse {
@@ -140,8 +198,7 @@ pub struct MessageResponse {
     pub timestamp: u64,
     /// Message type
     pub message_type: String,
-    /// Original payload (base64 encoded)
-    #[serde(with = "base64_serde")]
+    /// Original payload (raw bytes)
     pub payload: Vec<u8>,
     /// Hash of the message
     pub message_hash: String,
@@ -173,10 +230,10 @@ impl From<SignedMessage> for MessageResponse {
 // Handlers
 // ============================================================================
 
-/// Receive and sequence a changeset batch
+/// Receive and sequence a changeset batch (CBOR format)
 async fn receive_changesets(
     State(state): State<AppState>,
-    Json(request): Json<ChangesetBatchRequest>,
+    Cbor(request): Cbor<ChangesetBatchRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
     info!(
         batch_id = %request.batch_id,
@@ -204,33 +261,29 @@ async fn receive_changesets(
         }
     }
 
-    // Serialize the batch as the payload
-    let payload = serde_json::to_vec(&request).map_err(|e| {
+    // Serialize the batch as CBOR payload
+    let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize changeset batch: {}", e);
-        SequencerError::from(e)
+        SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
-    // Sequence and sign the message
-    let (signed_message, receipt) = state
+    // Sequence and sign the message (creates COSE signed message)
+    let (cbor_message, receipt) = state
         .inbox
-        .sequence_message(MessageType::Changeset, payload)
-        .await
+        .sequence_message(CborMessageType::Changeset, payload)
         .map_err(|e| {
             error!("Failed to sequence message: {}", e);
             SequencerError::from(e)
         })?;
 
-    // Publish to storage layer if configured
-    if let Some(publisher) = &state.publisher {
-        let publish_result = publisher.publish(&signed_message).await;
-        if !publish_result.success {
+    // Send to batcher for batching if configured
+    if let Some(batcher) = &state.batcher {
+        if let Err(e) = batcher.add_message(cbor_message).await {
             warn!(
                 sequence = receipt.sequence,
-                error = ?publish_result.error,
-                "Failed to publish message (sequencing succeeded)"
+                error = %e,
+                "Failed to add to batcher (sequencing succeeded)"
             );
-            // Note: We still return success since the message was sequenced
-            // The publish failure should be retried asynchronously
         }
     }
 
@@ -243,10 +296,10 @@ async fn receive_changesets(
     Ok((StatusCode::CREATED, Json(SequenceResponse::from(receipt))))
 }
 
-/// Receive and sequence a withdrawal request
+/// Receive and sequence a withdrawal request (CBOR format)
 async fn receive_withdrawal(
     State(state): State<AppState>,
-    Json(request): Json<WithdrawalRequest>,
+    Cbor(request): Cbor<WithdrawalRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
     info!(
         request_id = %request.request_id,
@@ -278,30 +331,28 @@ async fn receive_withdrawal(
         return Err(SequencerError::EmptyRequestId.into());
     }
 
-    // Serialize the request as the payload
-    let payload = serde_json::to_vec(&request).map_err(|e| {
+    // Serialize the request as CBOR payload
+    let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize withdrawal request: {}", e);
-        SequencerError::from(e)
+        SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
-    // Sequence and sign the message
-    let (signed_message, receipt) = state
+    // Sequence and sign the message (creates COSE signed message)
+    let (cbor_message, receipt) = state
         .inbox
-        .sequence_message(MessageType::Withdrawal, payload)
-        .await
+        .sequence_message(CborMessageType::Withdrawal, payload)
         .map_err(|e| {
             error!("Failed to sequence withdrawal: {}", e);
             SequencerError::from(e)
         })?;
 
-    // Publish to storage layer if configured
-    if let Some(publisher) = &state.publisher {
-        let publish_result = publisher.publish(&signed_message).await;
-        if !publish_result.success {
+    // Send to batcher for batching if configured
+    if let Some(batcher) = &state.batcher {
+        if let Err(e) = batcher.add_message(cbor_message).await {
             warn!(
                 sequence = receipt.sequence,
-                error = ?publish_result.error,
-                "Failed to publish withdrawal (sequencing succeeded)"
+                error = %e,
+                "Failed to add to batcher (sequencing succeeded)"
             );
         }
     }
@@ -315,10 +366,10 @@ async fn receive_withdrawal(
     Ok((StatusCode::CREATED, Json(SequenceResponse::from(receipt))))
 }
 
-/// Receive and sequence a database snapshot
+/// Receive and sequence a database snapshot (CBOR format)
 async fn receive_snapshot(
     State(state): State<AppState>,
-    Json(request): Json<SnapshotRequest>,
+    Cbor(request): Cbor<SnapshotRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
     info!(
         message_id = %request.message_id,
@@ -347,30 +398,28 @@ async fn receive_snapshot(
         }
     }
 
-    // Serialize the snapshot request as the payload
-    let payload = serde_json::to_vec(&request).map_err(|e| {
+    // Serialize the snapshot request as CBOR payload
+    let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize snapshot: {}", e);
-        SequencerError::from(e)
+        SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
-    // Sequence and sign the message
-    let (signed_message, receipt) = state
+    // Sequence and sign the message (creates COSE signed message)
+    let (cbor_message, receipt) = state
         .inbox
-        .sequence_message(MessageType::Snapshot, payload)
-        .await
+        .sequence_message(CborMessageType::Snapshot, payload)
         .map_err(|e| {
             error!("Failed to sequence snapshot: {}", e);
             SequencerError::from(e)
         })?;
 
-    // Publish to storage layer if configured
-    if let Some(publisher) = &state.publisher {
-        let publish_result = publisher.publish(&signed_message).await;
-        if !publish_result.success {
+    // Send to batcher for batching if configured
+    if let Some(batcher) = &state.batcher {
+        if let Err(e) = batcher.add_message(cbor_message).await {
             warn!(
                 sequence = receipt.sequence,
-                error = ?publish_result.error,
-                "Failed to publish snapshot (sequencing succeeded)"
+                error = %e,
+                "Failed to add to batcher (sequencing succeeded)"
             );
         }
     }
@@ -396,7 +445,7 @@ async fn health_check() -> &'static str {
 /// Readiness check endpoint
 ///
 /// Returns OK if the server is ready to accept traffic.
-/// Checks that the publisher (if configured) is accessible.
+/// Checks that the batcher (if configured) is accessible.
 async fn readiness_check(
     State(state): State<AppState>,
 ) -> Result<Json<ReadinessResponse>, HttpError> {
@@ -409,19 +458,22 @@ async fn readiness_check(
         message: None,
     });
 
-    // Check publisher if configured
-    if let Some(publisher) = &state.publisher {
-        match publisher.get_latest_sequence().await {
-            Ok(_) => {
+    // Check batcher if configured
+    if let Some(batcher) = &state.batcher {
+        match batcher.stats().await {
+            Ok(stats) => {
                 checks.push(HealthCheck {
-                    name: "publisher".to_string(),
+                    name: "batcher".to_string(),
                     status: "ok".to_string(),
-                    message: Some(format!("Connected to {}", publisher.name())),
+                    message: Some(format!(
+                        "batches={}, messages={}, pending={}",
+                        stats.batches_published, stats.messages_published, stats.pending_messages
+                    )),
                 });
             }
             Err(e) => {
                 checks.push(HealthCheck {
-                    name: "publisher".to_string(),
+                    name: "batcher".to_string(),
                     status: "degraded".to_string(),
                     message: Some(format!("Error: {e}")),
                 });
@@ -429,7 +481,7 @@ async fn readiness_check(
         }
     } else {
         checks.push(HealthCheck {
-            name: "publisher".to_string(),
+            name: "batcher".to_string(),
             status: "not_configured".to_string(),
             message: None,
         });
@@ -455,22 +507,53 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     })
 }
 
-/// Get a message by sequence number
-async fn get_message(
-    State(state): State<AppState>,
-    Path(sequence): Path<u64>,
-) -> Result<impl IntoResponse, HttpError> {
-    let publisher = state
-        .publisher
-        .as_ref()
-        .ok_or(SequencerError::NoPublisher)?;
+/// Get CBOR batch statistics
+async fn batch_stats(State(state): State<AppState>) -> Json<BatchStatsResponse> {
+    match &state.batcher {
+        Some(batcher) => match batcher.stats().await {
+            Ok(stats) => Json(BatchStatsResponse::from(stats)),
+            Err(e) => {
+                warn!(error = %e, "Failed to get batch stats");
+                Json(BatchStatsResponse {
+                    enabled: true,
+                    ..Default::default()
+                })
+            }
+        },
+        None => Json(BatchStatsResponse {
+            enabled: false,
+            ..Default::default()
+        }),
+    }
+}
 
-    match publisher.get(sequence).await {
-        Ok(Some(message)) => Ok(Json(MessageResponse::from(message))),
-        Ok(None) => Err(SequencerError::MessageNotFound(sequence).into()),
+/// Force flush the current batch
+async fn batch_flush(State(state): State<AppState>) -> Result<Json<BatchFlushResponse>, HttpError> {
+    let batcher = state.batcher.as_ref().ok_or(SequencerError::NoBatcher)?;
+
+    match batcher.flush().await {
+        Ok(Some(metadata)) => {
+            info!(
+                reference = %metadata.reference,
+                compressed_bytes = metadata.compressed_bytes,
+                "Manual batch flush completed"
+            );
+            Ok(Json(BatchFlushResponse {
+                published: true,
+                reference: Some(metadata.reference),
+                message_count: None, // Could track this if needed
+                compressed_bytes: Some(metadata.compressed_bytes),
+            }))
+        }
+        Ok(None) => Ok(Json(BatchFlushResponse {
+            published: false,
+            reference: None,
+            message_count: None,
+            compressed_bytes: None,
+        })),
         Err(e) => {
-            error!(sequence, error = %e, "Failed to retrieve message");
-            Err(SequencerError::MessageRetrievalFailed(e.to_string()).into())
+            error!(error = %e, "Failed to flush batch");
+            Err(SequencerError::BatchFlushFailed(e.to_string()).into())
         }
     }
 }
@@ -478,14 +561,13 @@ async fn get_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{publish::mock::MockPublisher, signer::MessageSigner};
+    use crate::signer::MessageSigner;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
         response::Response,
     };
-    use base64::Engine;
-    use serde_json::Value;
+    use synddb_shared::types::payloads::{ChangesetData, SnapshotData};
     use tower::ServiceExt;
 
     const TEST_PRIVATE_KEY: &str =
@@ -496,10 +578,26 @@ mod tests {
         let inbox = Arc::new(Inbox::new(signer));
         let state = AppState {
             inbox,
-            publisher: None,
             attestation_verifier: None,
+            batcher: None,
         };
         create_router(state)
+    }
+
+    /// Send a CBOR-serialized request to the server
+    async fn send_cbor<T: Serialize>(app: Router, data: &T, uri: &str) -> Response {
+        let mut buf = Vec::new();
+        ciborium::into_writer(data, &mut buf).unwrap();
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("Content-Type", "application/cbor")
+                .body(Body::from(buf))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -548,19 +646,17 @@ mod tests {
     async fn test_receive_changesets() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "batch_id": "test-batch-1",
-            "changesets": [
-                {
-                    "data": "dGVzdCBkYXRh",  // "test data" in base64
-                    "sequence": 0,
-                    "timestamp": 1704067200  // Unix timestamp
-                }
-            ]
-        });
+        let request = ChangesetBatchRequest {
+            batch_id: "test-batch-1".to_string(),
+            changesets: vec![ChangesetData {
+                data: b"test data".to_vec(),
+                sequence: 0,
+                timestamp: 1704067200,
+            }],
+            attestation_token: None,
+        };
 
-        let uri = "/changesets";
-        let response = server_response(app, &request_body, uri).await;
+        let response = send_cbor(app, &request, "/changesets").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -574,33 +670,18 @@ mod tests {
         assert!(receipt.message_hash.starts_with("0x"));
     }
 
-    async fn server_response(app: Router, request_body: &Value, uri: &str) -> Response {
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(uri)
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        response
-    }
-
     #[tokio::test]
     async fn test_receive_withdrawal() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-1",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "1000000000000000000",
-            "data": ""
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-1".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "1000000000000000000".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
     }
@@ -609,13 +690,14 @@ mod tests {
     async fn test_withdrawal_invalid_address() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-1",
-            "recipient": "invalid-address",
-            "amount": "1000000000000000000"
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-1".to_string(),
+            recipient: "invalid-address".to_string(),
+            amount: "1000000000000000000".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -626,18 +708,19 @@ mod tests {
         let inbox = Arc::new(Inbox::new(signer));
         let state = AppState {
             inbox: inbox.clone(),
-            publisher: None,
             attestation_verifier: None,
+            batcher: None,
         };
         let app = create_router(state);
 
         // First request
-        let request_body = serde_json::json!({
-            "batch_id": "batch-1",
-            "changesets": []
-        });
+        let request1 = ChangesetBatchRequest {
+            batch_id: "batch-1".to_string(),
+            changesets: vec![],
+            attestation_token: None,
+        };
 
-        let response = server_response(app.clone(), &request_body, "/changesets").await;
+        let response = send_cbor(app.clone(), &request1, "/changesets").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -646,12 +729,13 @@ mod tests {
         assert_eq!(receipt1.sequence, 0);
 
         // Second request
-        let request_body = serde_json::json!({
-            "batch_id": "batch-2",
-            "changesets": []
-        });
+        let request2 = ChangesetBatchRequest {
+            batch_id: "batch-2".to_string(),
+            changesets: vec![],
+            attestation_token: None,
+        };
 
-        let response = server_response(app, &request_body, "/changesets").await;
+        let response = send_cbor(app, &request2, "/changesets").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -664,45 +748,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_receive_changesets_with_publisher() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox: inbox.clone(),
-            publisher: Some(publisher.clone()),
-            attestation_verifier: None,
-        };
-        let app = create_router(state);
-
-        let request_body = serde_json::json!({
-            "batch_id": "test-with-publisher",
-            "changesets": []
-        });
-
-        let response = server_response(app, &request_body, "/changesets").await;
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Verify message was published
-        let published = publisher.get(0).await.unwrap();
-        assert!(published.is_some());
-        assert_eq!(published.unwrap().sequence, 0);
-    }
-
-    #[tokio::test]
     async fn test_withdrawal_with_valid_data() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-valid",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "1000000000000000000",
-            "data": "SGVsbG8gV29ybGQ="  // "Hello World" in base64
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-valid".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "1000000000000000000".to_string(),
+            data: b"Hello World".to_vec(),
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -720,52 +776,51 @@ mod tests {
     async fn test_withdrawal_invalid_hex_in_address() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-1",
-            "recipient": "0xGGGG35Cc6634C0532925a3b844Bc454e4438f44e",  // Invalid hex
-            "amount": "1000000000000000000"
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-1".to_string(),
+            recipient: "0xGGGG35Cc6634C0532925a3b844Bc454e4438f44e".to_string(), // Invalid hex
+            amount: "1000000000000000000".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn test_withdrawal_invalid_amount_format() {
-        let app = test_app();
-
         // Test empty amount
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-1",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": ""
-        });
+        let request1 = WithdrawalRequest {
+            request_id: "withdrawal-1".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: String::new(),
+            data: vec![],
+        };
 
-        let response = server_response(app.clone(), &request_body, "/withdrawals").await;
-
+        let response = send_cbor(test_app(), &request1, "/withdrawals").await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // Test non-numeric amount
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-2",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "abc123"
-        });
+        let request2 = WithdrawalRequest {
+            request_id: "withdrawal-2".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "abc123".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app.clone(), &request_body, "/withdrawals").await;
-
+        let response = send_cbor(test_app(), &request2, "/withdrawals").await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // Test leading zeros
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-3",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "0123"
-        });
+        let request3 = WithdrawalRequest {
+            request_id: "withdrawal-3".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "0123".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
-
+        let response = send_cbor(test_app(), &request3, "/withdrawals").await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -773,13 +828,14 @@ mod tests {
     async fn test_withdrawal_empty_request_id() {
         let app = test_app();
 
-        let request_body = serde_json::json!({
-            "request_id": "",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "1000"
-        });
+        let request = WithdrawalRequest {
+            request_id: String::new(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "1000".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -789,108 +845,20 @@ mod tests {
         let app = test_app();
 
         // "0" should be valid (single zero is allowed)
-        let request_body = serde_json::json!({
-            "request_id": "withdrawal-zero",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-            "amount": "0"
-        });
+        let request = WithdrawalRequest {
+            request_id: "withdrawal-zero".to_string(),
+            recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            amount: "0".to_string(),
+            data: vec![],
+        };
 
-        let response = server_response(app, &request_body, "/withdrawals").await;
+        let response = send_cbor(app, &request, "/withdrawals").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
     }
 
     #[tokio::test]
-    async fn test_get_message_with_publisher() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox: inbox.clone(),
-            publisher: Some(publisher.clone()),
-            attestation_verifier: None,
-        };
-        let app = create_router(state);
-
-        // First, create a message
-        let request_body = serde_json::json!({
-            "batch_id": "test-get-message",
-            "changesets": []
-        });
-
-        let response = server_response(app.clone(), &request_body, "/changesets").await;
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Now retrieve the message
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/messages/0")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let message: MessageResponse = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(message.sequence, 0);
-        assert_eq!(message.message_type, "changeset");
-        assert!(message.signature.starts_with("0x"));
-    }
-
-    #[tokio::test]
-    async fn test_get_message_not_found() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox,
-            publisher: Some(publisher),
-            attestation_verifier: None,
-        };
-        let app = create_router(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/messages/999")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn test_get_message_no_publisher() {
-        let app = test_app(); // No publisher configured
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/messages/0")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
-    }
-
-    #[tokio::test]
-    async fn test_readiness_no_publisher() {
+    async fn test_readiness_no_batcher() {
         let app = test_app();
 
         let response = app
@@ -919,63 +887,24 @@ mod tests {
         assert!(readiness
             .checks
             .iter()
-            .any(|c| c.name == "publisher" && c.status == "not_configured"));
-    }
-
-    #[tokio::test]
-    async fn test_readiness_with_publisher() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox,
-            publisher: Some(publisher),
-            attestation_verifier: None,
-        };
-        let app = create_router(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/ready")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let readiness: ReadinessResponse = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(readiness.status, "ready");
-        assert!(readiness
-            .checks
-            .iter()
-            .any(|c| c.name == "publisher" && c.status == "ok"));
+            .any(|c| c.name == "batcher" && c.status == "not_configured"));
     }
 
     #[tokio::test]
     async fn test_receive_snapshot() {
         let app = test_app();
 
-        // Create a minimal SQLite database as snapshot data
-        let snapshot_data = b"SQLite format 3\x00"; // Minimal SQLite header
+        let request = SnapshotRequest {
+            message_id: "snapshot-test-1".to_string(),
+            snapshot: SnapshotData {
+                data: b"SQLite format 3\x00".to_vec(),
+                timestamp: 1704067200,
+                sequence: 100,
+            },
+            attestation_token: None,
+        };
 
-        let request_body = serde_json::json!({
-            "message_id": "snapshot-test-1",
-            "snapshot": {
-                "data": base64::engine::general_purpose::STANDARD.encode(snapshot_data),
-                "timestamp": 1704067200,
-                "sequence": 100
-            }
-        });
-
-        let response = server_response(app, &request_body, "/snapshots").await;
+        let response = send_cbor(app, &request, "/snapshots").await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
@@ -990,68 +919,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_receive_snapshot_with_publisher() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
-        let publisher = Arc::new(MockPublisher::new(inbox.signer()));
-
-        let state = AppState {
-            inbox: inbox.clone(),
-            publisher: Some(publisher.clone()),
-            attestation_verifier: None,
-        };
-        let app = create_router(state);
-
-        let snapshot_data = b"SQLite format 3\x00";
-
-        let request_body = serde_json::json!({
-            "message_id": "snapshot-with-publisher",
-            "snapshot": {
-                "data": base64::engine::general_purpose::STANDARD.encode(snapshot_data),
-                "timestamp": 1704067200,
-                "sequence": 50
-            }
-        });
-
-        let response = server_response(app, &request_body, "/snapshots").await;
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Verify message was published
-        let published = publisher.get(0).await.unwrap();
-        assert!(published.is_some());
-        let msg = published.unwrap();
-        assert_eq!(msg.sequence, 0);
-
-        // Payload is now compressed, so we can't directly deserialize it
-        // Just verify it exists and is non-empty
-        assert!(!msg.payload.is_empty());
-        assert!(msg.message_hash.starts_with("0x"));
-        assert!(msg.signature.starts_with("0x"));
-    }
-
-    #[tokio::test]
     async fn test_snapshot_sequence_independence() {
         let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
         let inbox = Arc::new(Inbox::new(signer));
         let state = AppState {
             inbox: inbox.clone(),
-            publisher: None,
             attestation_verifier: None,
+            batcher: None,
         };
         let app = create_router(state);
 
         // Send a snapshot with client sequence 100
-        let request_body = serde_json::json!({
-            "message_id": "snap-1",
-            "snapshot": {
-                "data": base64::engine::general_purpose::STANDARD.encode(b"data1"),
-                "timestamp": 1704067200,
-                "sequence": 100
-            }
-        });
+        let request1 = SnapshotRequest {
+            message_id: "snap-1".to_string(),
+            snapshot: SnapshotData {
+                data: b"data1".to_vec(),
+                timestamp: 1704067200,
+                sequence: 100,
+            },
+            attestation_token: None,
+        };
 
-        let response = server_response(app.clone(), &request_body, "/snapshots").await;
+        let response = send_cbor(app.clone(), &request1, "/snapshots").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -1059,16 +948,17 @@ mod tests {
         let receipt1: SequenceResponse = serde_json::from_slice(&body).unwrap();
 
         // Send another snapshot with client sequence 200
-        let request_body = serde_json::json!({
-            "message_id": "snap-2",
-            "snapshot": {
-                "data": base64::engine::general_purpose::STANDARD.encode(b"data2"),
-                "timestamp": 1704067300,
-                "sequence": 200
-            }
-        });
+        let request2 = SnapshotRequest {
+            message_id: "snap-2".to_string(),
+            snapshot: SnapshotData {
+                data: b"data2".to_vec(),
+                timestamp: 1704067300,
+                sequence: 200,
+            },
+            attestation_token: None,
+        };
 
-        let response = server_response(app, &request_body, "/snapshots").await;
+        let response = send_cbor(app, &request2, "/snapshots").await;
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await

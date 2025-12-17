@@ -3,11 +3,11 @@
 //! This module contains the core types used for communication between
 //! `synddb-sequencer`, `synddb-validator`, and `synddb-client`.
 //!
-//! Types are organized in submodules:
-//! - `message`: Core message types (`SignedMessage`, `MessageType`, `SequenceReceipt`)
-//! - `payloads`: Request/response payload types
-//! - `serde_helpers`: Serialization utilities (e.g., base64)
+//! All wire format uses CBOR/COSE binary encoding. Types are organized in submodules:
+//! - `cbor`: CBOR/COSE binary format types (primary wire format)
+//! - `message`: Internal message types after parsing from CBOR
+//! - `payloads`: Request/response payload types for HTTP API
 
+pub mod cbor;
 pub mod message;
 pub mod payloads;
-pub mod serde_helpers;
