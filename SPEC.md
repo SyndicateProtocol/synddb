@@ -14,6 +14,8 @@ The architecture is simple:
 4. **Enable permissionless read replicas** that sync the SQL operations to serve queries
 5. **Support message passing** through application-defined tables that trigger cross-chain operations
 
+**Deployment**: SyndDB is built on **Google Cloud Confidential Space** as its primary TEE platform, providing hardware-backed attestation and workload identity verification. One-click deployment is available through the **GCP Marketplace** for production-ready infrastructure.
+
 Developers integrate SyndDB by importing a lightweight client library (available for Rust, Python, Node.js, and any language via C FFI). The library automatically captures SQL operations and sends them to the sequencer service, which handles all DA layer publishing. This design delivers ultra-low latency (<1ms local writes) and high throughput while maintaining verifiability at the SQL level. Applications can use any programming language, frameworks, libraries, or external services - as long as the results are persisted to SQLite, the system captures everything needed for verification.
 
 ## Why SyndDB?
@@ -79,13 +81,14 @@ SyndDB makes any SQLite application blockchain-verifiable by automatically captu
    - Includes TEE attestation tokens proving application workload identity
    - Available for Rust, Python, Node.js, and any language via C FFI
 
-3. **Sequencer Service** (runs in separate TEE)
+3. **Sequencer Service** (runs in separate TEE on Google Cloud Confidential Space)
    - Receives changesets and snapshots from application client libraries via HTTP
-   - Verifies TEE attestation tokens from applications
+   - Verifies TEE attestation tokens from applications using Confidential Space workload identity
    - Batches and publishes to DA layers (Celestia, EigenDA) and storage layers (IPFS, Arweave)
    - Monitors blockchain for inbound messages and delivers them to applications
    - Holds signing keys for DA layer publishing (isolated from application)
    - **Security Note**: Runs in a separate TEE from the application to prevent key extraction, as deploying multiple containers in a single TEE is complex and creates attack surface
+   - **Deployment**: Available as a one-click deployment through **GCP Marketplace** for production-ready infrastructure
 
 4. **Read Replicas**
    - Anyone can run a read replica permissionlessly
@@ -372,12 +375,14 @@ impl CustomValidator {
 
 ### TEE Deployment (Required)
 
-Validators **must** run in Trusted Execution Environments to ensure they are running unmodified code:
+Validators **must** run in Trusted Execution Environments to ensure they are running unmodified code. **Google Cloud Confidential Space** is the primary supported TEE platform:
 
-- **Attestation**: TEE validators prove they're running unmodified code
-- **Protected Keys**: Settlement keys remain secure within the TEE
+- **Google Cloud Confidential Space**: Production-grade TEE platform with AMD SEV-SNP hardware isolation, workload identity verification, and built-in attestation services
+- **Attestation**: TEE validators prove they're running unmodified code via Confidential Space attestation tokens
+- **Protected Keys**: Settlement keys remain secure within the TEE boundary
 - **Changeset Verification**: Hardware-backed guarantees prevent validator subversion
 - **Message Processing**: TEE validators can hold bridge signing authority
+- **One-Click Deployment**: Validators are available through **GCP Marketplace** for streamlined production deployment
 
 ### Running the Default Validator
 
@@ -528,8 +533,21 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
    ```
 
 5. **Deploy in TEEs (Required for Production)**
+
+   SyndDB uses **Google Cloud Confidential Space** as its primary TEE platform. There are two deployment options:
+
+   **Option A: GCP Marketplace (Recommended)**
+
+   Deploy production-ready SyndDB infrastructure with one click via the **GCP Marketplace**:
+   - Pre-configured Confidential Space VMs with SyndDB sequencer and validator images
+   - Automatic attestation and workload identity setup
+   - Integrated monitoring and logging
+   - Managed updates and security patches
+
+   **Option B: Manual Deployment**
+
    ```bash
-   # Application TEE (GCP Confidential Space example)
+   # Application TEE (GCP Confidential Space)
    gcloud compute instances create app-tee \
      --confidential-compute \
      --image-project=confidential-space-images \
@@ -734,6 +752,11 @@ The `content_hash` field enables content-addressed lookup regardless of transpor
    - This prevents field substitution attacks
 
 ## Terminology Glossary
+
+### Platform and Deployment
+
+- **Google Cloud Confidential Space** - SyndDB's primary TEE platform, providing AMD SEV-SNP hardware isolation, workload identity verification, and built-in attestation services for secure application and sequencer deployment
+- **GCP Marketplace** - One-click deployment option for production-ready SyndDB infrastructure, including pre-configured Confidential Space VMs with sequencer and validator images
 
 ### Core Architecture Terms
 
