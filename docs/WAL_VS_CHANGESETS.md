@@ -1,204 +1,306 @@
-# WAL vs Changeset Replication: Tradeoffs for SyndDB
+# Design Doc: WAL vs Changeset Replication
 
-This document evaluates two approaches to SQLite replication and explains why SyndDB uses changeset-based replication via the SQLite Session Extension.
+**Status:** Draft - Open for Discussion
+**Author:** (auto-generated)
+**Last Updated:** 2024-12
 
-## Background
+## Context
 
-SyndDB needs to capture database changes and publish them for validator verification. Two primary approaches exist:
+SyndDB currently uses changeset-based replication via the SQLite Session Extension. This document evaluates whether WAL-based replication (e.g., Litestream) would be a better approach, and explores hybrid options.
 
-1. **WAL-based replication** - Capture Write-Ahead Log frames (physical page changes)
-2. **Changeset-based replication** - Capture logical changes via Session Extension
+### What Prompted This Discussion
 
-Tools like [Litestream](https://litestream.io/) use WAL-based replication for disaster recovery. This document evaluates whether that approach would work for SyndDB.
+- Litestream is a mature, well-maintained tool for SQLite replication
+- WAL-based replication requires zero application integration
+- Session Extension has lifecycle complexity (thread-local state, enable/disable timing)
+- Question: Are we overcomplicating capture when simpler tools exist?
 
-## Comparison Summary
+## Current Architecture
+
+```
+Application (TEE)
+└── SQLite + Session Extension
+    └── Changesets → HTTP → Sequencer → COSE Sign → DA Layer → Validators
+```
+
+**Key characteristics:**
+- Logical changes (INSERT/UPDATE/DELETE with values)
+- In-process, same TEE as application
+- Thread-local session state
+- Automatic schema change detection triggers snapshots
+- ~250 lines in `snapshot_sender.rs` + session integration
+
+## Options Under Consideration
+
+### Option A: Keep Current (Changeset-Based)
+
+Continue using SQLite Session Extension for change capture.
+
+### Option B: Replace with Litestream (WAL-Based)
+
+Use Litestream or similar WAL replication, adding sequencing/signing layer.
+
+### Option C: Hybrid Approach
+
+Use changesets for validator path, add Litestream for disaster recovery.
+
+### Option D: Custom WAL Parser
+
+Build our own WAL-to-logical-changes converter for more control.
+
+---
+
+## Technical Comparison
 
 | Aspect | WAL-Based | Changeset-Based |
 |--------|-----------|-----------------|
-| **Capture level** | Physical (pages) | Logical (rows) |
+| **Capture level** | Physical (4KB pages) | Logical (row changes) |
 | **Integration** | External daemon | In-process library |
-| **What's captured** | All page writes | INSERT/UPDATE/DELETE |
+| **What's captured** | Everything (data, pragmas, vacuum) | INSERT/UPDATE/DELETE only |
 | **Auditability** | Opaque bytes | Inspectable operations |
 | **Payload size** | Larger (full pages) | Smaller (changed values) |
 | **Determinism** | Architecture-dependent | Architecture-independent |
-| **Complexity** | Monitor files | Session lifecycle |
+| **Complexity location** | Checkpoint coordination | Session lifecycle |
+| **Maturity** | Litestream is battle-tested | Session Extension is SQLite core |
 
-## WAL-Based Replication
+### WAL-Based: Detailed Analysis
 
-### How It Works
+**How it works:**
+1. SQLite writes changes to `-wal` file
+2. External daemon monitors WAL for new frames
+3. Copies frames to replica storage before checkpoint
+4. Recovery = snapshot + WAL replay
 
-SQLite's Write-Ahead Log (WAL) mode writes changes to a `-wal` file before checkpointing them to the main database. WAL replication:
+**What Litestream provides:**
+- S3, GCS, Azure, SFTP backend support
+- Generation-based WAL sequencing
+- Point-in-time recovery
+- Automatic snapshot scheduling
 
-1. Monitors the WAL file for new frames
-2. Copies frames to replica storage
-3. Periodically captures full database snapshots
-4. Replays WAL frames on top of snapshots for recovery
-
-### Advantages
-
-| Benefit | Description |
-|---------|-------------|
-| **Zero application integration** | Just monitor file changes, no code modifications |
-| **Complete capture** | Gets everything: data, schema, pragmas, vacuum |
-| **No runtime overhead** | SQLite writes WAL anyway; just copy the frames |
-| **Stable format** | WAL format is well-documented and rarely changes |
-| **Point-in-time recovery** | Can restore to any WAL frame |
-
-### Disadvantages
-
-| Drawback | Description |
-|----------|-------------|
-| **Physical, not logical** | Contains page bytes, not "INSERT INTO users" |
-| **Architecture-dependent** | Page layout may differ across platforms |
-| **Larger payloads** | Full 4KB pages vs just changed column values |
-| **Opaque to validators** | Can't easily inspect "what operation occurred" |
-| **Checkpoint coordination** | Must prevent SQLite from checkpointing before capture |
-| **Schema changes implicit** | Must parse page content to detect DDL |
-
-### Litestream Specifics
-
-[Litestream](https://litestream.io/) is a well-maintained WAL replication tool that:
-
-- Runs as an external daemon or sidecar
-- Supports S3, GCS, Azure, SFTP, and other backends
-- Uses "generations" (WAL eras) with frame indices
-- Provides point-in-time recovery within retention window
-
-**What Litestream lacks for SyndDB:**
-
-- Global sequence numbers (has generation + frame index, not monotonic sequence)
-- Cryptographic signing (no COSE_Sign1 or similar)
+**What Litestream lacks:**
+- Global monotonic sequence numbers
+- Cryptographic signing (COSE_Sign1)
 - TEE attestation integration
-- Logical change visibility for validators
+- Logical change visibility
 
-## Changeset-Based Replication
+**Effort to adapt Litestream:**
+- Fork and modify, or wrap with signing layer
+- Add sequence number assignment (per-frame? per-commit?)
+- Integrate TEE attestation
+- Either: validators understand WAL, or parse WAL → logical changes
 
-### How It Works
+### Changeset-Based: Detailed Analysis
 
-The [SQLite Session Extension](https://www.sqlite.org/sessionintro.html) hooks into SQLite's internal change tracking:
+**How it works:**
+1. Attach session to SQLite connection
+2. Session hooks into SQLite's change tracking
+3. Generate changeset blob containing logical changes
+4. Changeset is deterministic and architecture-independent
 
-1. Attach a session to a database connection
-2. Session records logical changes (INSERT/UPDATE/DELETE with values)
-3. Generate changeset blob on commit
-4. Apply changesets to replicas for deterministic reconstruction
+**Current pain points:**
+- Thread-local state requires careful lifecycle management
+- Must enable/disable session around certain operations
+- Some operations not captured (PRAGMA, ATTACH, VACUUM)
+- Memory overhead from tracking pending changes
 
-### Advantages
+**What works well:**
+- Validators see exactly what changed
+- Compact payloads (only changed columns)
+- Schema change detection is automatic
+- Deterministic replay across architectures
 
-| Benefit | Description |
-|---------|-------------|
-| **Logical operations** | "UPDATE users SET balance=100 WHERE id=5" |
-| **Auditable** | Validators can inspect exactly what changed |
-| **Compact** | Only changed columns, not full pages |
-| **Deterministic** | Same changesets produce same results everywhere |
-| **Schema-aware** | Session extension knows about DDL changes |
-| **Row-level granularity** | Can filter, inspect, or reject individual changes |
+---
 
-### Disadvantages
+## Key Decision Factors
 
-| Drawback | Description |
-|----------|-------------|
-| **Requires integration** | Must attach session to connection in application |
-| **Thread-local state** | Sessions bound to creating thread |
-| **Some operations missed** | PRAGMA, ATTACH, VACUUM not captured |
-| **Memory overhead** | Tracks pending changes until changeset generated |
-| **Lifecycle management** | Must handle session enable/disable around transactions |
+### 1. Validator Verification Model
 
-## Why SyndDB Uses Changesets
+**Question:** Do validators need to see logical operations, or just reconstruct state?
 
-SyndDB's architecture requires validators to verify operations, not just reconstruct state. Key requirements:
+| If validators need to... | Then use... |
+|--------------------------|-------------|
+| Verify "balance >= withdrawal" | Changesets (logical) |
+| Check "no self-trading" | Changesets (logical) |
+| Just replay to same state | Either works |
+| Audit specific row changes | Changesets (logical) |
 
-### 1. SQL Operations as Audit Trail
+**Current SPEC says:** "SQL operations themselves become the verifiable audit trail"
 
-From the [SPEC](../SPEC.md):
-
-> "SQL operations themselves become the verifiable audit trail"
-
-Validators need to see logical operations to verify business rules (e.g., "withdrawals don't exceed balance"). WAL pages are opaque—you'd need to parse SQLite's internal B-tree format to extract logical changes.
+This implies validators inspect operations, not just replay them. **Does this requirement still hold?**
 
 ### 2. Cross-Architecture Determinism
 
-Validators may run on different hardware than the application. Changesets are architecture-independent (logical values), while WAL pages may have different layouts due to:
+WAL pages may differ across:
+- Endianness (big vs little endian)
+- Alignment/padding
+- Page size configuration
+- SQLite compile options
 
-- Endianness differences
-- Alignment/padding variations
-- Page size configurations
+Changesets are architecture-independent by design.
 
-### 3. Compact Wire Format
+**Question:** Will validators always run on identical architecture to the application?
 
-SyndDB's CBOR wire format achieves ~40% size reduction. Changesets contain only changed values, while WAL frames contain full 4KB pages even for single-column updates.
+### 3. Payload Size
 
-### 4. Schema Change Detection
+Rough comparison for a single-column UPDATE:
+- WAL: 4KB page (minimum)
+- Changeset: ~50-200 bytes (column value + metadata)
 
-SyndDB triggers immediate snapshots on schema changes to ensure validators can reconstruct the database. The Session Extension detects DDL operations directly; WAL replication would require parsing page content to detect schema changes.
+**Question:** Is bandwidth/storage cost a significant concern?
 
-### 5. Sequencing and Signing
+### 4. Operational Complexity
 
-Every message (changeset or snapshot) gets:
+| Approach | Application complexity | Infrastructure complexity |
+|----------|------------------------|---------------------------|
+| Changesets | Session lifecycle | None (in-process) |
+| Litestream | None | Sidecar daemon, checkpoint coordination |
+| Hybrid | Session lifecycle | Sidecar daemon |
 
-- A monotonic sequence number from the sequencer
-- A COSE_Sign1 signature
-- Optional TEE attestation
+**Question:** Where do we prefer complexity to live?
 
-WAL frames don't have this metadata. Adapting Litestream would require significant additions to provide sequencing and signing.
+### 5. What Operations Need Capturing?
 
-## Extracting Logical Changes from WAL
+| Operation | Changeset captures | WAL captures |
+|-----------|-------------------|--------------|
+| INSERT/UPDATE/DELETE | Yes | Yes |
+| Schema changes (DDL) | Yes (triggers snapshot) | Yes (in pages) |
+| PRAGMA changes | No | Yes |
+| VACUUM | No | Yes |
+| ATTACH/DETACH | No | Yes |
 
-Could you parse WAL to get changeset-like output? Yes, but it's complex:
+**Question:** Do we need to capture PRAGMAs or VACUUM?
 
-```
-WAL Frame → Page Content → B-tree Parsing → Row Extraction → Logical Diff
-```
+---
 
-This requires understanding:
-
-1. **WAL frame headers** - Documented, manageable
-2. **SQLite page format** - B-tree interior/leaf pages, overflow pages
-3. **B-tree structure** - Cell format, pointer maps, free lists
-4. **Schema mapping** - Column types from sqlite_schema
-5. **Change detection** - Diff before/after page content
-
-The Session Extension already does this correctly by hooking into SQLite's internal change tracking. Reimplementing it from the physical layer is substantial work with potential for subtle bugs.
-
-## When to Use Each Approach
-
-### Use WAL-Based (Litestream) When:
-
-- Disaster recovery / backup is the primary goal
-- You need zero application code changes
-- Validators just reconstruct state (don't verify operations)
-- Point-in-time recovery to arbitrary moments is needed
-- You're replicating to read-only replicas
-
-### Use Changeset-Based (Session Extension) When:
-
-- Validators need to audit logical operations
-- Cross-architecture determinism is required
-- Compact payloads matter
-- You need schema change awareness
-- Operations need sequencing and signing
-
-## Hybrid Approach
-
-These approaches can coexist for different purposes:
+## Hybrid Architecture (Option C)
 
 ```
 Application (TEE)
 ├── SQLite Database
-├── SyndDB Client (changesets) → Sequencer → DA Layer → Validators
-└── Litestream (WAL) → S3 → Disaster Recovery (not for validators)
+│
+├── SyndDB Client (changesets)
+│   └── Sequencer → DA Layer → Validators
+│   (validator verification path)
+│
+└── Litestream (WAL)
+    └── S3/GCS → Disaster Recovery
+    (application backup, not for validators)
 ```
 
-Use changesets for the validator verification path and WAL for application-level backup. However, this adds operational complexity.
+**Use cases for WAL backup:**
+- Application crashes before sending changesets
+- Need to recover local state quickly
+- Debug/forensics on raw database state
+- Belt-and-suspenders redundancy
 
-## Conclusion
+**Downsides:**
+- Two replication systems to operate
+- WAL backup not useful for validator bootstrap
+- Additional infrastructure (Litestream sidecar)
 
-SyndDB's requirements—auditable operations, deterministic replay, compact payloads, sequencing, and signing—align better with changeset-based replication. WAL-based tools like Litestream are excellent for backup and disaster recovery but don't provide the logical visibility that validators need.
+---
 
-The Session Extension's complexity (thread-local state, lifecycle management) is the cost of getting logical change capture. This complexity is bounded and well-understood, whereas parsing WAL to extract logical changes would be reimplementing Session Extension functionality from scratch.
+## Effort Estimates
+
+| Option | Estimated Effort | Risk Level |
+|--------|------------------|------------|
+| A: Keep current | None | Low |
+| B: Replace with Litestream | 2-4 weeks + ongoing maintenance | High |
+| C: Add Litestream for DR | 1 week | Low |
+| D: Custom WAL parser | 4-8 weeks | Very High |
+
+**Option B breakdown:**
+- Fork Litestream or build wrapper: 1 week
+- Add sequencing/signing: 1 week
+- Modify validators to handle WAL or parse to logical: 1-2 weeks
+- Testing and edge cases: 1 week
+
+**Option D risks:**
+- SQLite page format is internal/undocumented
+- B-tree parsing is complex (overflow pages, pointer maps)
+- Essentially reimplementing Session Extension from scratch
+
+---
+
+## Open Questions for Discussion
+
+### Architecture Questions
+
+1. **Do validators need logical auditability?**
+   If validators only replay state (not inspect operations), WAL becomes viable.
+
+2. **Is cross-architecture determinism required?**
+   If app and validators always share architecture, WAL determinism concerns go away.
+
+3. **Should snapshots be WAL-based or remain as full DB copies?**
+   Current: full SQLite file. Could be: WAL generation + frames.
+
+### Operational Questions
+
+4. **What are the actual pain points with Session Extension today?**
+   Thread-local state? Memory overhead? Something else?
+
+5. **Is application-level disaster recovery (Option C) valuable?**
+   Do we have a recovery gap if app crashes before changeset send?
+
+6. **Where should complexity live - application or infrastructure?**
+   Session Extension = app complexity. Litestream = infra complexity.
+
+### Performance Questions
+
+7. **Is changeset generation a performance bottleneck?**
+   Have we measured Session Extension overhead?
+
+8. **Is payload size a concern for DA layer costs?**
+   WAL would increase payload size significantly.
+
+### Future Questions
+
+9. **Do we anticipate needing PRAGMA/VACUUM capture?**
+   Currently not captured by changesets.
+
+10. **Would WAL simplify the FFI story for other languages?**
+    External daemon vs in-process library integration.
+
+---
+
+## Experiments We Could Run
+
+### Experiment 1: Measure Session Extension Overhead
+- Benchmark with/without session attached
+- Measure memory usage during large transactions
+- Identify actual (not theoretical) pain points
+
+### Experiment 2: Prototype Litestream Integration
+- Run Litestream alongside existing system
+- Measure WAL payload sizes vs changeset sizes
+- Test checkpoint coordination in TEE environment
+
+### Experiment 3: WAL-to-Changeset Feasibility
+- Prototype parsing WAL frames
+- Assess complexity of extracting logical changes
+- Determine if this is 2 weeks or 2 months of work
+
+---
+
+## Recommendation
+
+**Tentative recommendation: Option A (keep current) with possible Option C (add Litestream for DR)**
+
+Rationale:
+- Validator auditability requirement favors changesets
+- Session Extension complexity is bounded and understood
+- WAL adaptation would be significant effort for unclear benefit
+- Litestream for DR is low-effort and provides safety net
+
+**However, this should be validated against the open questions above.**
+
+---
 
 ## References
 
 - [SQLite Session Extension](https://www.sqlite.org/sessionintro.html)
 - [SQLite WAL Mode](https://www.sqlite.org/wal.html)
-- [Litestream Documentation](https://litestream.io/how-it-works/)
+- [Litestream How It Works](https://litestream.io/how-it-works/)
 - [SyndDB SPEC](../SPEC.md)
+- Current implementation: `crates/synddb-client/src/session.rs`, `snapshot_sender.rs`
