@@ -7,6 +7,7 @@ members = [
   "crates/synddb-client",
   "crates/synddb-chain-monitor",
   "crates/synddb-shared",
+  "crates/synddb-wal-sequencer",
   "tests/e2e/runner",
   "tests/e2e-gcs/runner",
 ]

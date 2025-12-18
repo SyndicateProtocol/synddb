@@ -4444,6 +4444,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "synddb-wal-sequencer"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "thiserror 1.0.69",
+ "zerocopy",
+]
+
+[[package]]
 name = "synstructure"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
