@@ -185,7 +185,8 @@ impl ChangesetApplier {
             DatabaseType::InMemory => {
                 static COUNTER: AtomicU64 = AtomicU64::new(0);
                 let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-                std::env::temp_dir().join(format!("synddb_snapshot_restore_{id}.db"))
+                let pid = std::process::id();
+                std::env::temp_dir().join(format!("synddb_snapshot_restore_{pid}_{id}.db"))
             }
         };
 
@@ -476,14 +477,15 @@ mod tests {
             sync::atomic::{AtomicU64, Ordering},
         };
 
-        // Use atomic counter for unique file names in parallel tests
+        // Use atomic counter + process ID for unique file names in parallel tests.
+        // Process ID is critical for nextest which runs each test in a separate process,
+        // causing static counters to reset and thread IDs to always be ThreadId(1).
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let thread_id = std::thread::current().id();
+        let pid = std::process::id();
 
         // Create a file-based database with some data (so we can read the bytes)
-        let temp_path =
-            std::env::temp_dir().join(format!("test_snapshot_source_{id}_{thread_id:?}.db"));
+        let temp_path = std::env::temp_dir().join(format!("test_snapshot_source_{pid}_{id}.db"));
         let _ = fs::remove_file(&temp_path); // clean up from previous runs
 
         {
@@ -543,10 +545,17 @@ mod tests {
 
     #[test]
     fn test_snapshot_restore_to_file() {
-        use std::fs;
+        use std::{
+            fs,
+            sync::atomic::{AtomicU64, Ordering},
+        };
 
-        // Create a file-based applier
-        let temp_path = std::env::temp_dir().join("test_snapshot_target.db");
+        // Create a file-based applier with unique path for parallel test execution.
+        // Use both process ID and atomic counter for consistency with other temp file paths.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let pid = std::process::id();
+        let temp_path = std::env::temp_dir().join(format!("test_snapshot_target_{pid}_{id}.db"));
         let temp_path_str = temp_path.to_str().unwrap();
 
         // Clean up any previous test
