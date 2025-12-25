@@ -632,3 +632,293 @@ event MessageTypeRegistered(string indexed messageType, address target, bytes32 
 event SchemaUpdated(string indexed messageType, bytes32 oldHash, bytes32 newHash);
 event MessageTypeEnabled(string indexed messageType, bool enabled);
 ```
+
+---
+
+## 6. Bridge Contract Interface
+
+### 6.1 Overview
+
+The Bridge smart contract is the trust anchor of the system. It:
+- Maintains the message type registry
+- Collects and aggregates validator signatures
+- Enforces signature thresholds
+- Executes validated messages on target contracts
+- Runs modular pre/post-execution checks
+
+### 6.2 Core Interface
+
+```solidity
+interface IMessageBridge {
+    // ==================== Message Submission ====================
+
+    /**
+     * Submit a message with aggregated signatures (batch submission)
+     * @param messageId Unique message identifier
+     * @param messageType ABI signature (e.g., "mint(address,uint256)")
+     * @param payload ABI-encoded metadata (matches function parameters)
+     * @param nonce Application nonce
+     * @param timestamp Message timestamp
+     * @param appId Application identifier
+     * @param signatures Array of validator signatures
+     */
+    function submitMessage(
+        bytes32 messageId,
+        string calldata messageType,
+        bytes calldata payload,
+        uint64 nonce,
+        uint64 timestamp,
+        bytes32 appId,
+        bytes[] calldata signatures
+    ) external payable;
+
+    /**
+     * Submit a single validator signature (on-chain aggregation)
+     * @param messageId Message to sign
+     * @param signature Validator's signature
+     */
+    function signMessage(bytes32 messageId, bytes calldata signature) external;
+
+    /**
+     * Execute a message after threshold is met
+     * @param messageId Message to execute
+     */
+    function executeMessage(bytes32 messageId) external;
+
+    // ==================== Validator Management ====================
+
+    /**
+     * Add a validator to the set
+     */
+    function addValidator(address validator) external;
+
+    /**
+     * Remove a validator from the set
+     */
+    function removeValidator(address validator) external;
+
+    /**
+     * Set the signature threshold (M of N)
+     */
+    function setSignatureThreshold(uint256 threshold) external;
+
+    // ==================== Queries ====================
+
+    function getSignatureCount(bytes32 messageId) external view returns (uint256);
+    function hasValidatorSigned(bytes32 messageId, address validator) external view returns (bool);
+    function isMessageExecuted(bytes32 messageId) external view returns (bool);
+    function getValidators() external view returns (address[] memory);
+    function getSignatureThreshold() external view returns (uint256);
+}
+```
+
+### 6.3 Message State Machine
+
+Messages progress through defined stages:
+
+```
+                    signMessage()
+                         │
+         ┌───────────────┴───────────────┐
+         │                               │
+         ▼                               ▼
+    ┌─────────┐                    ┌─────────────┐
+    │ PENDING │ ──────────────────▶│ READY       │
+    │         │  threshold met     │ (threshold) │
+    └─────────┘                    └─────────────┘
+                                         │
+                                         │ executeMessage()
+                                         ▼
+                                   ┌─────────────┐
+                                   │ PRE_EXEC    │
+                                   │ (modules)   │
+                                   └─────────────┘
+                                         │
+                                         │ pre-checks pass
+                                         ▼
+                                   ┌─────────────┐
+                                   │ EXECUTING   │
+                                   │ (target)    │
+                                   └─────────────┘
+                                         │
+                                         │ call returns
+                                         ▼
+                                   ┌─────────────┐
+                                   │ POST_EXEC   │
+                                   │ (modules)   │
+                                   └─────────────┘
+                                         │
+                                         │ post-checks pass
+                                         ▼
+                                   ┌─────────────┐
+                                   │ COMPLETED   │
+                                   └─────────────┘
+
+    Any stage can transition to REJECTED on failure
+```
+
+```solidity
+enum MessageStage {
+    Pending,      // Collecting signatures
+    Ready,        // Threshold met, awaiting execution
+    PreExecution, // Running pre-execution modules
+    Executing,    // Calling target contract
+    PostExecution,// Running post-execution modules
+    Completed,    // Successfully executed
+    Rejected      // Failed at some stage (terminal)
+}
+
+struct MessageState {
+    MessageStage stage;
+    string messageType;
+    bytes payload;
+    uint256 value;
+    uint64 nonce;
+    uint64 timestamp;
+    bytes32 appId;
+    uint256 signaturesCollected;
+}
+```
+
+### 6.4 Signature Verification
+
+Validators sign the message hash using secp256k1:
+
+```solidity
+function _verifySignature(
+    bytes32 messageId,
+    bytes calldata signature
+) internal view returns (address) {
+    // Construct EIP-712 typed data hash
+    bytes32 structHash = keccak256(abi.encode(
+        MESSAGE_TYPEHASH,
+        messageId,
+        messageStates[messageId].messageType,
+        keccak256(messageStates[messageId].payload),
+        messageStates[messageId].nonce,
+        messageStates[messageId].timestamp,
+        messageStates[messageId].appId
+    ));
+
+    bytes32 digest = keccak256(abi.encodePacked(
+        "\x19\x01",
+        DOMAIN_SEPARATOR,
+        structHash
+    ));
+
+    // Recover signer from signature
+    address signer = ECDSA.recover(digest, signature);
+
+    // Verify signer is a registered validator
+    require(isValidator[signer], "Not a validator");
+
+    return signer;
+}
+```
+
+### 6.5 Execution Logic
+
+```solidity
+function executeMessage(bytes32 messageId) external nonReentrant {
+    MessageState storage state = messageStates[messageId];
+
+    require(state.stage == MessageStage.Ready, "Not ready for execution");
+
+    // Get message type config
+    MessageTypeConfig memory config = messageTypes[state.messageType];
+    require(config.enabled, "Message type disabled");
+
+    // Stage: Pre-execution modules
+    state.stage = MessageStage.PreExecution;
+    _runPreModules(messageId, state);
+
+    // Stage: Execute
+    state.stage = MessageStage.Executing;
+
+    (bool success, bytes memory returnData) = config.target.call{value: state.value}(
+        state.payload
+    );
+
+    if (!success) {
+        state.stage = MessageStage.Rejected;
+        emit MessageRejected(messageId, "Execution failed", returnData);
+        revert ExecutionFailed(returnData);
+    }
+
+    // Stage: Post-execution modules
+    state.stage = MessageStage.PostExecution;
+    _runPostModules(messageId, state);
+
+    // Complete
+    state.stage = MessageStage.Completed;
+    emit MessageExecuted(messageId, state.messageType, config.target);
+}
+```
+
+### 6.6 Module System
+
+Pre and post-execution modules provide extensible validation:
+
+```solidity
+interface IModule {
+    /**
+     * Check if a message passes this module's validation
+     * @param messageId The message being validated
+     * @param stage Whether this is pre or post execution
+     * @return pass True if validation passes
+     * @return reason Explanation if validation fails
+     */
+    function check(bytes32 messageId, bool isPreExecution)
+        external view returns (bool pass, string memory reason);
+}
+
+// Module types
+contract RateLimitModule is IModule {
+    // Limit messages per time window
+}
+
+contract AmountThresholdModule is IModule {
+    // Flag/delay large value transfers
+}
+
+contract AllowlistModule is IModule {
+    // Restrict to known addresses
+}
+
+contract TimelockModule is IModule {
+    // Delay high-value operations
+}
+```
+
+### 6.7 Events
+
+```solidity
+// Signature events
+event SignatureSubmitted(bytes32 indexed messageId, address indexed validator, uint256 count);
+event ThresholdReached(bytes32 indexed messageId, uint256 signatures);
+
+// Execution events
+event MessageExecuted(bytes32 indexed messageId, string messageType, address target);
+event MessageRejected(bytes32 indexed messageId, string reason, bytes data);
+
+// Admin events
+event ValidatorAdded(address indexed validator);
+event ValidatorRemoved(address indexed validator);
+event ThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+```
+
+### 6.8 Access Control
+
+```solidity
+// Roles
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+bytes32 public constant REGISTRY_ROLE = keccak256("REGISTRY_ROLE");
+bytes32 public constant VALIDATOR_MANAGER_ROLE = keccak256("VALIDATOR_MANAGER_ROLE");
+
+// Permissions
+// - ADMIN_ROLE: Can grant/revoke all roles
+// - REGISTRY_ROLE: Can register/update message types
+// - VALIDATOR_MANAGER_ROLE: Can add/remove validators, set threshold
+
+// Consider timelock for sensitive operations
+```
