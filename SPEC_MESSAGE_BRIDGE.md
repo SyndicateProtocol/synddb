@@ -1159,3 +1159,474 @@ Mitigation:
 3. Add application-level rate limits
 4. Log all message submissions
 5. Monitor for failed validations
+
+---
+
+## 9. Data Availability Integration
+
+### 9.1 Purpose
+
+The DA layer serves audit and transparency purposes:
+
+1. **Audit Trail**: Complete history of all validated messages
+2. **Dispute Resolution**: Evidence for challenging fraudulent operations
+3. **Compliance**: Regulatory transparency requirements
+4. **Recovery**: Reconstruct message history if needed
+
+The DA layer is for auditability, not consensus. Validators do not need to wait for DA confirmation before submitting to Bridge.
+
+### 9.2 Publication Format
+
+Messages published to DA include:
+
+```typescript
+interface DARecord {
+  // The original message
+  message: {
+    id: bytes32;
+    messageType: string;
+    metadata: object;
+    nonce: uint64;
+    timestamp: uint64;
+    appId: bytes32;
+    value?: uint256;
+  };
+
+  // Validator attestations
+  signatures: Array<{
+    validator: address;
+    signature: bytes;
+    signedAt: uint64;
+    teeAttestation?: string;  // Optional TEE proof
+  }>;
+
+  // Publication metadata
+  publication: {
+    publishedBy: address;     // Validator that published
+    publishedAt: uint64;
+    daLayer: string;          // "celestia", "arweave", "ipfs"
+    daReference: string;      // Layer-specific reference
+  };
+
+  // Execution result (if known at publication time)
+  execution?: {
+    bridgeTxHash: bytes32;
+    blockNumber: uint64;
+    success: boolean;
+  };
+}
+```
+
+### 9.3 Publication Modes
+
+**Immediate Publication** (Default)
+- Validator publishes after signing, before Bridge submission
+- Provides pre-execution audit trail
+- Higher latency but maximum transparency
+
+```
+Application → Validator → [Sign] → [Publish to DA] → [Submit to Bridge]
+```
+
+**Batched Publication**
+- Validators batch multiple messages for efficiency
+- Publish every N seconds or M messages
+- Lower DA costs, slight delay in audit availability
+
+```
+Application → Validator → [Sign] → [Buffer] → [Batch Publish to DA] → [Submit to Bridge]
+```
+
+**Post-Execution Publication**
+- Publish after Bridge confirms execution
+- Includes execution result in DA record
+- Complete end-to-end audit in single record
+
+```
+Application → Validator → [Sign] → [Submit to Bridge] → [Wait for confirmation] → [Publish to DA]
+```
+
+### 9.4 DA Layer Options
+
+| Layer | Cost | Latency | Durability | Best For |
+|-------|------|---------|------------|----------|
+| **Celestia** | Low | ~12s | Network consensus | High-volume, low-cost |
+| **Arweave** | Medium | ~5min | Permanent | Compliance, archival |
+| **IPFS** | Free* | Instant | Best-effort | Development, testing |
+| **GCS/S3** | Low | Instant | Centralized | Internal audit only |
+
+*IPFS requires pinning service for durability
+
+### 9.5 Validator DA Configuration
+
+```yaml
+# Validator configuration
+da:
+  # Primary DA layer
+  primary: celestia
+
+  # Fallback if primary fails
+  fallback: arweave
+
+  # Publication mode
+  mode: immediate  # immediate | batched | post_execution
+
+  # Batching settings (if mode: batched)
+  batch:
+    max_messages: 100
+    max_delay_seconds: 30
+
+  # Layer-specific config
+  celestia:
+    rpc_url: "https://celestia-rpc.example.com"
+    namespace: "synd_bridge_01"
+    auth_token: "${CELESTIA_AUTH_TOKEN}"
+
+  arweave:
+    gateway: "https://arweave.net"
+    wallet_path: "/path/to/wallet.json"
+```
+
+### 9.6 DA Reference Tracking
+
+Validators track DA references for queries:
+
+```sql
+CREATE TABLE da_publications (
+    message_id BYTES32 PRIMARY KEY,
+    da_layer TEXT NOT NULL,
+    da_reference TEXT NOT NULL,
+    published_at INTEGER NOT NULL,
+    confirmed BOOLEAN DEFAULT FALSE,
+    INDEX idx_published_at (published_at)
+);
+```
+
+Query API:
+```
+GET /messages/{messageId}/da
+Response: {
+  layer: "celestia",
+  reference: "celestia://namespace/height/index",
+  publishedAt: 1735084800,
+  confirmed: true
+}
+```
+
+---
+
+## 10. Implementation Phases
+
+### Phase 1: Core Infrastructure (MVP)
+
+**Goal**: Minimal working system with single validator
+
+**Deliverables**:
+
+1. **Message Types and Schemas** (`synddb-shared`)
+   - New message structures (Message, SignedMessage)
+   - JSON Schema validation integration
+   - Remove changeset-related types
+
+2. **Validator Service** (`synddb-validator`)
+   - New operating mode: `--mode message-passing`
+   - HTTP API: `POST /messages`, `GET /messages/{id}`, `GET /health`
+   - Basic validation: type registration, schema, nonce
+   - Signing with existing key management
+
+3. **Bridge Contract** (`contracts/`)
+   - Message type registry
+   - Single-signature execution path
+   - Basic events and state tracking
+
+4. **Remove Legacy**
+   - Deprecate changeset code paths
+   - Remove sequencer dependency from validator
+
+**Success Criteria**:
+- Application can POST message to validator
+- Validator validates and signs
+- Message executes on Bridge
+
+### Phase 2: Multi-Validator Support
+
+**Goal**: Production-ready multi-signature support
+
+**Deliverables**:
+
+1. **On-Chain Signature Aggregation**
+   - `signMessage()` for individual signatures
+   - Threshold tracking per message
+   - Signature deduplication
+
+2. **Validator Coordination**
+   - Message status API across validators
+   - Relayer pattern for batched submission
+   - Signature expiration handling
+
+3. **Full Bridge Contract**
+   - Complete IMessageBridge implementation
+   - EIP-712 signature verification
+   - Module system integration
+
+**Success Criteria**:
+- 2-of-3 validators can approve message
+- Threshold enforcement works correctly
+- Validators operate independently
+
+### Phase 3: Schema Management
+
+**Goal**: Flexible schema storage and validation
+
+**Deliverables**:
+
+1. **IPFS/Arweave Schema Storage**
+   - Schema upload tooling
+   - Validator schema caching
+   - Cache invalidation on updates
+
+2. **Schema Versioning**
+   - Version tracking per message type
+   - Migration documentation
+   - Backward compatibility handling
+
+3. **Admin Tools**
+   - CLI for message type registration
+   - Schema validation testing
+   - Registry inspection
+
+**Success Criteria**:
+- Schemas can be stored on IPFS/Arweave
+- Validators cache and verify schemas
+- Admin can register new message types
+
+### Phase 4: DA Integration
+
+**Goal**: Audit trail for all messages
+
+**Deliverables**:
+
+1. **DA Publishers**
+   - Celestia publisher
+   - Arweave publisher
+   - IPFS publisher (development)
+
+2. **Publication Modes**
+   - Immediate publication
+   - Batched publication
+   - Configurable per validator
+
+3. **Query and Verification**
+   - DA reference tracking
+   - Message retrieval API
+   - Verification tooling
+
+**Success Criteria**:
+- All messages published to DA
+- Messages can be retrieved and verified
+- Publication is reliable and monitored
+
+### Phase 5: Production Hardening
+
+**Goal**: Production-ready security and operations
+
+**Deliverables**:
+
+1. **Additional Modules**
+   - Rate limiting module
+   - Amount threshold module
+   - Time delay module
+   - Allowlist module
+
+2. **Monitoring and Alerting**
+   - Prometheus metrics
+   - Alert rules for anomalies
+   - Dashboard templates
+
+3. **Documentation**
+   - Integration guide
+   - Security best practices
+   - Deployment runbooks
+   - Troubleshooting guide
+
+**Success Criteria**:
+- Modules deployed and tested
+- Monitoring operational
+- Documentation complete
+
+---
+
+## 11. Migration from SQLite Replication
+
+### 11.1 Coexistence Period
+
+Both systems can run in parallel:
+- Legacy: synddb-client + synddb-sequencer + synddb-validator (SQL replay mode)
+- New: synddb-validator (message-passing mode) only
+
+Bridge accepts messages from both sources during migration.
+
+### 11.2 Migration Steps
+
+1. **Analyze Existing Messages**
+   - Review withdrawal/message tables in current system
+   - Map to message types
+
+2. **Define Schemas**
+   - Create JSON Schema for each message type
+   - Register on Bridge
+
+3. **Update Application**
+   - Replace SQLite writes with HTTP POST
+   - Remove synddb-client dependency
+   - Implement nonce management
+
+4. **Parallel Testing**
+   - Run both systems simultaneously
+   - Compare results
+   - Verify consistency
+
+5. **Switch Over**
+   - Disable legacy path
+   - Monitor for issues
+   - Decommission old components
+
+### 11.3 Component Changes
+
+| Component | Change |
+|-----------|--------|
+| synddb-client | Deprecated (remove from application) |
+| synddb-sequencer | Removed (functionality absorbed by validators) |
+| synddb-validator | New mode added (`--mode message-passing`) |
+| synddb-shared | New message types, remove changeset types |
+| Bridge.sol | Extended with message type registry |
+
+---
+
+## 12. Appendix
+
+### A. Example Integration
+
+**Minimal Application Integration**:
+
+```python
+import requests
+import hashlib
+import time
+
+VALIDATOR_URL = "https://validator.example.com"
+APP_ID = "0x" + "00" * 31 + "01"
+
+nonce = 0
+
+def submit_message(message_type: str, metadata: dict, value: int = 0):
+    global nonce
+    nonce += 1
+
+    message = {
+        "messageType": message_type,
+        "metadata": metadata,
+        "nonce": nonce,
+        "timestamp": int(time.time()),
+        "appId": APP_ID,
+        "value": str(value) if value else None
+    }
+
+    response = requests.post(
+        f"{VALIDATOR_URL}/messages",
+        json=message
+    )
+
+    result = response.json()
+    if result["status"] == "accepted":
+        return result["messageId"]
+    else:
+        raise Exception(result["error"])
+
+# Example: Mint tokens
+message_id = submit_message(
+    "mint(address,uint256)",
+    {
+        "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+        "amount": "1000000000000000000",
+        "reason": "user_deposit"
+    }
+)
+print(f"Submitted: {message_id}")
+```
+
+### B. JSON Schema Examples
+
+**ERC20 Transfer**:
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "transfer(address,address,uint256)",
+  "type": "object",
+  "required": ["from", "to", "amount"],
+  "properties": {
+    "from": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$"
+    },
+    "to": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$"
+    },
+    "amount": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    }
+  }
+}
+```
+
+**NFT Batch Mint**:
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "batchMint(address[],uint256[],string[])",
+  "type": "object",
+  "required": ["recipients", "tokenIds", "tokenURIs"],
+  "properties": {
+    "recipients": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^0x[a-fA-F0-9]{40}$"
+      },
+      "minItems": 1,
+      "maxItems": 100
+    },
+    "tokenIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9]+$"
+      }
+    },
+    "tokenURIs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uri"
+      }
+    }
+  }
+}
+```
+
+### C. Glossary
+
+| Term | Definition |
+|------|------------|
+| **Message Type** | ABI function signature identifying the operation (e.g., `mint(address,uint256)`) |
+| **Metadata** | JSON payload containing operation parameters |
+| **Schema** | JSON Schema defining required/optional metadata fields |
+| **Validator** | Service that validates messages and signs them |
+| **Bridge** | Smart contract that aggregates signatures and executes messages |
+| **Module** | Pluggable validation component for pre/post execution checks |
+| **DA Layer** | Data Availability layer for audit trail storage |
+| **Threshold** | Minimum number of validator signatures required |
+| **Nonce** | Monotonically increasing counter for replay protection |
+| **TEE** | Trusted Execution Environment (e.g., Intel SGX, AMD SEV) |
