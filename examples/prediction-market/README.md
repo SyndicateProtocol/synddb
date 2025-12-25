@@ -50,24 +50,16 @@ prediction-market/
 ## Quick Start
 
 ```bash
-# Run everything locally with CLI demo
-./examples/prediction-market/scripts/dev-env.sh
-
-# Or run with HTTP server (demonstrates REST API)
+# Run everything locally with HTTP server (recommended)
 ./examples/prediction-market/scripts/dev-env.sh --http
+
+# Or run with CLI demo
+./examples/prediction-market/scripts/dev-env.sh
 ```
 
-### CLI Mode
+### HTTP Server (Production Pattern)
 
-```bash
-cargo run -p prediction-market -- init
-cargo run -p prediction-market -- create-account alice
-cargo run -p prediction-market -- create-market "Will ETH hit 5k?" --resolution-time 1767225600
-cargo run -p prediction-market -- buy --account 1 --market 1 --outcome yes --shares 100
-cargo run -p prediction-market -- status
-```
-
-### HTTP Mode
+Most applications serve their API over HTTP. The `serve` command runs an HTTP server with REST endpoints:
 
 ```bash
 # Start the server
@@ -90,6 +82,18 @@ curl -X POST http://localhost:8080/markets/1/buy \
 
 # Check status
 curl http://localhost:8080/status
+```
+
+### CLI (Development & Testing)
+
+The CLI is useful for quick testing during development and for scripts:
+
+```bash
+cargo run -p prediction-market -- init
+cargo run -p prediction-market -- create-account alice
+cargo run -p prediction-market -- create-market "Will ETH hit 5k?" --resolution-time 1767225600
+cargo run -p prediction-market -- buy --account 1 --market 1 --outcome yes --shares 100
+cargo run -p prediction-market -- status
 ```
 
 ## SyndDB Integration
