@@ -33,9 +33,72 @@ contracts/
     └── NonceManager.sol           # Per-domain nonce tracking
 ```
 
-## 2. Core Data Structures
+## 2. Constants
 
-### 2.1 Message State Machine
+```solidity
+// Timing
+uint256 public constant MAX_CLOCK_DRIFT = 60;          // 1 minute tolerance for timestamps
+uint256 public constant DEFAULT_EXPIRATION = 86400;    // 24 hours
+uint256 public constant UPGRADE_DELAY = 2 days;        // Timelock for upgrades
+
+// Limits
+uint256 public constant MAX_BATCH_SIZE = 50;           // Max messages per batch operation
+uint256 public constant MAX_MODULES_PER_TYPE = 10;     // Max modules per message type
+uint256 public constant MAX_STORAGE_REF_LENGTH = 500;  // Max length for storageRef URIs
+
+// Signatures
+uint256 public constant MIN_THRESHOLD = 1;             // Minimum signature threshold
+```
+
+## 3. Custom Errors
+
+```solidity
+// Authorization
+error NotPrimaryValidator(bytes32 domain, address caller);
+error NotValidator(address caller);
+error NotAuthorized(address caller, bytes32 role);
+
+// Message State
+error MessageNotInitialized(bytes32 messageId);
+error MessageAlreadyInitialized(bytes32 messageId);
+error MessageNotPending(bytes32 messageId, MessageStage currentStage);
+error MessageNotReady(bytes32 messageId, MessageStage currentStage);
+error MessageAlreadyTerminal(bytes32 messageId, MessageStage currentStage);
+
+// Nonce & Expiration
+error InvalidNonce(bytes32 domain, uint64 expected, uint64 provided);
+error MessageExpired(bytes32 messageId, uint256 expiredAt);
+error TimestampOutOfRange(uint64 timestamp, uint256 currentTime, uint256 maxDrift);
+
+// Signatures & Rejections
+error AlreadySigned(bytes32 messageId, address validator);
+error AlreadyRejected(bytes32 messageId, address validator);
+error ProposalAlreadyRejected(bytes32 messageId);
+error InvalidSignature(bytes32 messageId, address recoveredSigner);
+
+// Execution
+error ExecutionFailed(bytes32 messageId, bytes returnData);
+error ModuleCheckFailed(bytes32 messageId, address module, string reason);
+error InsufficientWETHBalance(uint256 required, uint256 available);
+
+// Configuration
+error MessageTypeNotRegistered(string messageType);
+error MessageTypeDisabled(string messageType);
+error ApplicationNotRegistered(bytes32 domain);
+error ApplicationNotActive(bytes32 domain);
+error InvalidThreshold(uint256 threshold, uint256 validatorCount);
+
+// Validation
+error InvalidAddress(string param);
+error InvalidAttestation(address validator);
+error VersionBelowMinimum(string provided, string minimum);
+error BatchSizeExceeded(uint256 provided, uint256 maximum);
+error StorageRefTooLong(uint256 provided, uint256 maximum);
+```
+
+## 4. Core Data Structures
+
+### 4.1 Message State Machine
 
 ```solidity
 enum MessageStage {
@@ -279,6 +342,43 @@ function _verifySignature(
 
     return signer;
 }
+```
+
+### 4.4 Message ID Computation
+
+Message IDs are deterministic hashes of message content, ensuring the same message always produces the same ID:
+
+```solidity
+function computeMessageId(
+    string calldata messageType,
+    bytes calldata calldata_,
+    bytes32 metadataHash,
+    uint64 nonce,
+    uint64 timestamp,
+    bytes32 domain
+) public pure returns (bytes32) {
+    return keccak256(abi.encode(
+        messageType,
+        keccak256(calldata_),
+        metadataHash,
+        nonce,
+        timestamp,
+        domain
+    ));
+}
+```
+
+**Key properties:**
+- Includes `nonce` and `domain` to prevent cross-application collisions
+- Includes `timestamp` to differentiate retries with same content
+- Uses `keccak256(calldata_)` to handle variable-length data
+- Deterministic: same inputs always produce same messageId
+
+**Validation in initializeMessage:**
+```solidity
+// Caller provides messageId, we verify it matches
+bytes32 computed = computeMessageId(messageType, calldata_, metadataHash, nonce, timestamp, domain);
+if (messageId != computed) revert InvalidMessageId(messageId, computed);
 ```
 
 ## 5. Message Lifecycle
@@ -848,7 +948,143 @@ if (state.value > 0) {
 - Failed execution leaves WETH in bridge (no stuck ETH)
 - The `msg.sender != WETH` check prevents infinite loops when unwrapping
 
-## 10. Upgrade Pattern
+## 10. Batch Operations
+
+For gas efficiency, the Bridge supports batch operations:
+
+### 10.1 Batch Signature Submission
+
+```solidity
+struct SignatureData {
+    bytes32 messageId;
+    bytes signature;
+}
+
+function batchSignMessages(SignatureData[] calldata signatures) external {
+    if (signatures.length > MAX_BATCH_SIZE) {
+        revert BatchSizeExceeded(signatures.length, MAX_BATCH_SIZE);
+    }
+
+    for (uint256 i = 0; i < signatures.length; i++) {
+        // Skip if already signed or not pending (don't revert entire batch)
+        if (hasValidatorSigned[signatures[i].messageId][msg.sender]) continue;
+        if (messageStates[signatures[i].messageId].stage != MessageStage.Pending) continue;
+
+        _signMessageInternal(signatures[i].messageId, signatures[i].signature);
+    }
+}
+```
+
+### 10.2 Batch Execution
+
+```solidity
+function batchExecuteMessages(bytes32[] calldata messageIds) external nonReentrant {
+    if (messageIds.length > MAX_BATCH_SIZE) {
+        revert BatchSizeExceeded(messageIds.length, MAX_BATCH_SIZE);
+    }
+
+    for (uint256 i = 0; i < messageIds.length; i++) {
+        // Skip if not ready (don't revert entire batch)
+        if (messageStates[messageIds[i]].stage != MessageStage.Ready) continue;
+        if (isExpired(messageIds[i])) continue;
+
+        _executeMessageInternal(messageIds[i]);
+    }
+}
+```
+
+### 10.3 Batch Query
+
+```solidity
+function batchGetMessageStates(bytes32[] calldata messageIds)
+    external view returns (MessageState[] memory)
+{
+    MessageState[] memory states = new MessageState[](messageIds.length);
+    for (uint256 i = 0; i < messageIds.length; i++) {
+        states[i] = messageStates[messageIds[i]];
+    }
+    return states;
+}
+```
+
+## 11. Emergency Functions
+
+### 11.1 Pause/Unpause
+
+```solidity
+bool public paused;
+
+modifier whenNotPaused() {
+    if (paused) revert ContractPaused();
+    _;
+}
+
+function pause() external onlyRole(ADMIN_ROLE) {
+    paused = true;
+    emit Paused(msg.sender);
+}
+
+function unpause() external onlyRole(ADMIN_ROLE) {
+    paused = false;
+    emit Unpaused(msg.sender);
+}
+```
+
+**Functions affected by pause:**
+- `initializeMessage()` / `initializeAndSign()`
+- `signMessage()` / `batchSignMessages()`
+- `executeMessage()` / `batchExecuteMessages()`
+
+**Functions NOT affected (always available):**
+- `rejectProposal()` / `rejectMessage()` - Allow rejections even when paused
+- `expireMessage()` - Allow cleanup
+- All query functions
+
+### 11.2 Emergency WETH Withdrawal
+
+For recovering stuck WETH (e.g., from failed executions or bugs):
+
+```solidity
+function emergencyWithdrawWETH(
+    address recipient,
+    uint256 amount
+) external onlyRole(ADMIN_ROLE) {
+    if (recipient == address(0)) revert InvalidAddress("recipient");
+
+    uint256 balance = WETH.balanceOf(address(this));
+    if (amount > balance) revert InsufficientWETHBalance(amount, balance);
+
+    WETH.transfer(recipient, amount);
+    emit EmergencyWithdrawal(recipient, amount);
+}
+```
+
+**Safety considerations:**
+- Only callable by ADMIN_ROLE
+- Consider adding timelock for large withdrawals
+- Log all emergency actions for audit trail
+
+### 11.3 Force Expire
+
+For cleaning up stuck messages (e.g., if expiration logic has a bug):
+
+```solidity
+function forceExpire(bytes32 messageId) external onlyRole(ADMIN_ROLE) {
+    MessageState storage state = messageStates[messageId];
+
+    if (state.stage == MessageStage.NotInitialized) {
+        revert MessageNotInitialized(messageId);
+    }
+    if (state.stage >= MessageStage.Completed) {
+        revert MessageAlreadyTerminal(messageId, state.stage);
+    }
+
+    state.stage = MessageStage.Expired;
+    emit MessageForceExpired(messageId, msg.sender);
+}
+```
+
+## 12. Upgrade Pattern
 
 Using UUPS (Universal Upgradeable Proxy Standard) with timelock:
 
@@ -878,7 +1114,7 @@ contract MessageBridge is UUPSUpgradeable, AccessControlUpgradeable {
 }
 ```
 
-## 11. Events
+## 13. Events
 
 ```solidity
 // Message lifecycle
@@ -931,11 +1167,17 @@ event NativeTokenUnwrapped(uint256 amount, address indexed target);
 
 // Upgrades
 event UpgradeProposed(address indexed implementation, uint256 effectiveAt);
+
+// Emergency
+event Paused(address indexed by);
+event Unpaused(address indexed by);
+event EmergencyWithdrawal(address indexed recipient, uint256 amount);
+event MessageForceExpired(bytes32 indexed messageId, address indexed by);
 ```
 
-## 12. Full Interfaces
+## 14. Full Interfaces
 
-### 12.1 IMessageBridge
+### 14.1 IMessageBridge
 
 ```solidity
 interface IMessageBridge {
@@ -1002,7 +1244,7 @@ interface IMessageBridge {
 }
 ```
 
-### 12.2 IMessageTypeRegistry
+### 14.2 IMessageTypeRegistry
 
 ```solidity
 interface IMessageTypeRegistry {
@@ -1028,7 +1270,7 @@ interface IMessageTypeRegistry {
 }
 ```
 
-## 13. Implementation Checklist
+## 15. Implementation Checklist
 
 ### Core Contract
 - [ ] MessageBridge.sol with UUPS upgradeable
@@ -1091,8 +1333,20 @@ interface IMessageTypeRegistry {
 - [ ] Wrap on deposit
 - [ ] Unwrap before execution
 
+### Batch Operations
+- [ ] batchSignMessages()
+- [ ] batchExecuteMessages()
+- [ ] batchGetMessageStates()
+- [ ] MAX_BATCH_SIZE enforcement
+
+### Emergency Functions
+- [ ] pause() / unpause()
+- [ ] whenNotPaused modifier
+- [ ] emergencyWithdrawWETH()
+- [ ] forceExpire()
+
 ### Events
-- [ ] All 20+ events with indexed parameters
+- [ ] All 25+ events with indexed parameters
 
 ### Testing
 - [ ] Unit tests for each function
