@@ -419,3 +419,216 @@ Error codes:
 - `SCHEMA_VALIDATION_FAILED` - Metadata doesn't match schema
 - `RATE_LIMIT_EXCEEDED` - Too many messages from this app
 - `CUSTOM_RULE_FAILED` - Custom validation rule failed
+
+---
+
+## 5. Schema Registration
+
+### 5.1 Overview
+
+The Bridge maintains a registry of allowed message types. Each message type has:
+- A target contract to call
+- A JSON Schema defining required/optional metadata fields
+- An enabled/disabled state
+
+New message types are added via Bridge admin functions. Validators fetch and cache schemas to validate incoming messages.
+
+### 5.2 Message Type Registry
+
+The Bridge stores message type configurations:
+
+```solidity
+struct MessageTypeConfig {
+    // Computed from messageType string
+    bytes4 selector;
+
+    // Contract to call when executing this message type
+    address target;
+
+    // Hash of the JSON Schema (keccak256)
+    bytes32 schemaHash;
+
+    // URI to fetch full schema (IPFS, Arweave, or empty for on-chain)
+    string schemaUri;
+
+    // Whether this message type is currently active
+    bool enabled;
+
+    // When this message type was registered
+    uint256 createdAt;
+
+    // When the schema was last updated
+    uint256 updatedAt;
+}
+
+// Registry: "mint(address,uint256)" => MessageTypeConfig
+mapping(string => MessageTypeConfig) public messageTypes;
+```
+
+### 5.3 JSON Schema Format
+
+Schemas use JSON Schema (draft 2020-12) to define metadata requirements:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mint(address,uint256)",
+  "title": "ERC20 Mint",
+  "description": "Mint tokens to a recipient address",
+  "type": "object",
+  "required": ["recipient", "amount"],
+  "properties": {
+    "recipient": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$",
+      "description": "Ethereum address to receive tokens"
+    },
+    "amount": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Amount to mint (wei, as string for large numbers)"
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["user_deposit", "reward", "airdrop", "migration"],
+      "description": "Reason for minting (optional, for audit)"
+    },
+    "sourceChain": {
+      "type": "string",
+      "description": "Source chain for cross-chain mints"
+    },
+    "sourceTxHash": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{64}$",
+      "description": "Source transaction hash for verification"
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+Key points:
+- `required` specifies mandatory fields
+- `additionalProperties: true` allows extra metadata without schema changes
+- Use `pattern` for format validation (addresses, hashes)
+- Use `enum` for constrained values
+
+### 5.4 Schema Storage Options
+
+**Option A: On-Chain (Small Schemas)**
+
+For simple schemas, store the full JSON on-chain:
+
+```solidity
+mapping(bytes32 => string) public schemas;
+// schemaHash => JSON Schema string
+
+function getSchema(string calldata messageType)
+    external view returns (string memory)
+{
+    bytes32 hash = messageTypes[messageType].schemaHash;
+    return schemas[hash];
+}
+```
+
+Pros: No external dependencies, always available
+Cons: Gas costs for large schemas
+
+**Option B: IPFS/Arweave (Large Schemas)**
+
+Store schema hash on-chain, full schema on decentralized storage:
+
+```solidity
+// On-chain: just the hash and URI
+schemaHash: 0x1234...
+schemaUri: "ipfs://QmXyz..." // or "ar://abc123..."
+
+// Validators fetch from URI and verify hash matches
+```
+
+Pros: Low gas costs, arbitrary schema size
+Cons: Requires fetching from external source
+
+**Option C: Hybrid (Recommended)**
+
+- Small/critical schemas stored on-chain
+- Large schemas stored on IPFS/Arweave with hash verification
+- Validators cache all schemas locally
+- Cache invalidated when `updatedAt` changes
+
+### 5.5 Schema Registration API
+
+```solidity
+interface IMessageTypeRegistry {
+    // Register a new message type
+    function registerMessageType(
+        string calldata messageType,  // e.g., "mint(address,uint256)"
+        address target,               // Contract to call
+        bytes32 schemaHash,           // keccak256 of JSON Schema
+        string calldata schemaUri     // Where to fetch schema
+    ) external;
+
+    // Update schema for existing message type
+    function updateSchema(
+        string calldata messageType,
+        bytes32 newSchemaHash,
+        string calldata newSchemaUri
+    ) external;
+
+    // Enable or disable a message type
+    function setEnabled(
+        string calldata messageType,
+        bool enabled
+    ) external;
+
+    // Update target contract
+    function setTarget(
+        string calldata messageType,
+        address newTarget
+    ) external;
+
+    // Query functions
+    function isRegistered(string calldata messageType)
+        external view returns (bool);
+
+    function isEnabled(string calldata messageType)
+        external view returns (bool);
+
+    function getConfig(string calldata messageType)
+        external view returns (MessageTypeConfig memory);
+}
+```
+
+### 5.6 Schema Versioning
+
+When schemas change:
+
+1. **Adding optional fields**: No schema update needed (`additionalProperties: true`)
+2. **Adding required fields**: New schema version required
+3. **Removing fields**: Careful - may break existing applications
+4. **Changing types**: New schema version required
+
+For breaking changes:
+1. Register new message type (e.g., `mintV2(address,uint256,uint256)`)
+2. Migrate applications to new type
+3. Disable old message type
+
+### 5.7 Validator Schema Caching
+
+Validators cache schemas for performance:
+
+```
+1. On startup: Fetch all registered message types from Bridge
+2. For each type: Fetch schema from URI (or chain)
+3. Verify: keccak256(schema) == schemaHash
+4. Cache: Store schema locally with hash
+5. On use: Validate metadata against cached schema
+6. On update: Watch for SchemaUpdated events, refresh cache
+```
+
+Cache invalidation events:
+```solidity
+event MessageTypeRegistered(string indexed messageType, address target, bytes32 schemaHash);
+event SchemaUpdated(string indexed messageType, bytes32 oldHash, bytes32 newHash);
+event MessageTypeEnabled(string indexed messageType, bool enabled);
+```
