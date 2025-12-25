@@ -367,6 +367,62 @@ bytes32 messageId = keccak256(abi.encode(
 
 This is consistent with how Ethereum transactions derive IDs - hashing the full content ensures uniqueness and tamper detection.
 
+### 3.8 JSON Canonicalization
+
+For deterministic message ID generation, metadata must be serialized consistently. We use **RFC 8785 (JCS - JSON Canonicalization Scheme)**.
+
+**Canonicalization Rules**:
+
+1. **Key ordering**: Object keys sorted lexicographically by UTF-16 code units
+2. **No whitespace**: No spaces or newlines between tokens
+3. **Number formatting**: No leading zeros, no trailing zeros after decimal, no positive sign
+4. **String escaping**: Minimal escaping (only required characters)
+5. **No duplicate keys**: Each key appears once per object
+
+**Example**:
+
+```json
+// Input (non-canonical)
+{
+  "amount": "1000",
+  "reason": "deposit",
+  "recipient": "0x123..."
+}
+
+// Canonical output
+{"amount":"1000","reason":"deposit","recipient":"0x123..."}
+```
+
+**Computing metadataHash**:
+
+```python
+import json
+import hashlib
+
+def canonicalize(obj):
+    """RFC 8785 JSON Canonicalization"""
+    return json.dumps(obj, separators=(',', ':'), sort_keys=True, ensure_ascii=False)
+
+def compute_metadata_hash(metadata: dict) -> bytes:
+    canonical = canonicalize(metadata)
+    return hashlib.sha3_256(canonical.encode('utf-8')).digest()  # keccak256
+```
+
+**Edge Cases to Watch**:
+
+| Case | Handling |
+|------|----------|
+| Unicode strings | UTF-8 encoding, no BOM |
+| Large integers | Use string representation (e.g., `"1000000000000000000"`) |
+| Floating point | Avoid floats; use string decimals if needed |
+| Null values | Include as `null`, don't omit |
+| Empty objects/arrays | Include as `{}` or `[]` |
+| Nested objects | Recursively canonicalize |
+
+**Validation**:
+
+Validators MUST verify that `metadataHash` matches the canonical hash of the metadata before signing. Witness Validators fetch metadata from `storageRef` and independently compute the hash.
+
 ---
 
 ## 4. Validation Protocol
@@ -903,38 +959,77 @@ The Bridge smart contract is the trust anchor of the system. It:
 
 ```solidity
 interface IMessageBridge {
-    // ==================== Message Submission ====================
+    // ==================== Message Initialization ====================
+    // Only the Primary Validator can initialize messages
 
     /**
-     * Submit a message with aggregated signatures (batch submission)
-     * @param messageId Unique message identifier
+     * Initialize a new message on the Bridge
+     * @param messageId Unique message identifier (hash of content)
      * @param messageType ABI signature (e.g., "mint(address,uint256)")
-     * @param calldata ABI-encoded function parameters
+     * @param calldata_ ABI-encoded function parameters
+     * @param metadataHash Hash of the metadata JSON (for verification)
+     * @param storageRef Reference to metadata in storage layer (e.g., "ar://...", "ipfs://...")
      * @param nonce Application nonce
      * @param timestamp Message timestamp
      * @param appId Application identifier
-     * @param signatures Array of validator signatures
+     * @dev Only callable by registered Primary Validator for this appId
      */
-    function submitMessage(
+    function initializeMessage(
         bytes32 messageId,
         string calldata messageType,
         bytes calldata calldata_,
+        bytes32 metadataHash,
+        string calldata storageRef,
         uint64 nonce,
         uint64 timestamp,
-        bytes32 appId,
-        bytes[] calldata signatures
+        bytes32 appId
     ) external payable;
 
     /**
-     * Submit a single validator signature (on-chain aggregation)
-     * @param messageId Message to sign
-     * @param signature Validator's signature
+     * Initialize and sign in one transaction (convenience for Primary)
+     * @dev Equivalent to initializeMessage() + signMessage()
+     */
+    function initializeAndSign(
+        bytes32 messageId,
+        string calldata messageType,
+        bytes calldata calldata_,
+        bytes32 metadataHash,
+        string calldata storageRef,
+        uint64 nonce,
+        uint64 timestamp,
+        bytes32 appId,
+        bytes calldata signature
+    ) external payable;
+
+    // ==================== Signature Submission ====================
+
+    /**
+     * Submit a validator signature for an initialized message
+     * @param messageId Message to sign (must already be initialized)
+     * @param signature Validator's EIP-712 signature
      */
     function signMessage(bytes32 messageId, bytes calldata signature) external;
 
     /**
-     * Execute a message after threshold is met
+     * Reject a message with reason (for audit trail)
+     * @param messageId Message being rejected
+     * @param reasonHash Hash of rejection reason JSON
+     * @param reasonRef Storage reference to full rejection reason
+     * @dev Validators call this to publicly log why they refused to sign
+     */
+    function rejectMessage(
+        bytes32 messageId,
+        bytes32 reasonHash,
+        string calldata reasonRef
+    ) external;
+
+    // ==================== Execution ====================
+
+    /**
+     * Execute a message after signature threshold is met
      * @param messageId Message to execute
+     * @dev Can be called by anyone (relayer, validator, etc.)
+     * @dev No built-in incentive; reimbursement handled out-of-band
      */
     function executeMessage(bytes32 messageId) external;
 
@@ -943,11 +1038,23 @@ interface IMessageBridge {
     // See Section 6.9 for bootstrapping details
 
     /**
-     * Add a validator after TEE bootstrapping
+     * Register Primary Validator for an application
+     * @param appId Application identifier
      * @param validator Address derived from TEE-attested signing key
      * @param attestation TEE attestation proving key was generated in enclave
      */
-    function addValidator(address validator, bytes calldata attestation) external;
+    function setPrimaryValidator(
+        bytes32 appId,
+        address validator,
+        bytes calldata attestation
+    ) external;
+
+    /**
+     * Add a Witness Validator to the set
+     * @param validator Address derived from TEE-attested signing key
+     * @param attestation TEE attestation proving key was generated in enclave
+     */
+    function addWitnessValidator(address validator, bytes calldata attestation) external;
 
     /**
      * Remove a validator from the set
@@ -961,10 +1068,14 @@ interface IMessageBridge {
 
     // ==================== Queries ====================
 
+    function getMessageState(bytes32 messageId) external view returns (MessageState memory);
     function getSignatureCount(bytes32 messageId) external view returns (uint256);
+    function getRejectionCount(bytes32 messageId) external view returns (uint256);
     function hasValidatorSigned(bytes32 messageId, address validator) external view returns (bool);
+    function hasValidatorRejected(bytes32 messageId, address validator) external view returns (bool);
     function isMessageExecuted(bytes32 messageId) external view returns (bool);
-    function getValidators() external view returns (address[] memory);
+    function getPrimaryValidator(bytes32 appId) external view returns (address);
+    function getWitnessValidators() external view returns (address[] memory);
     function getSignatureThreshold() external view returns (uint256);
 }
 ```
@@ -974,29 +1085,28 @@ interface IMessageBridge {
 Messages progress through defined stages:
 
 ```
-                    signMessage()
-                         │
-         ┌───────────────┴───────────────┐
-         │                               │
-         ▼                               ▼
-    ┌─────────┐                    ┌─────────────┐
-    │ PENDING │ ──────────────────▶│ READY       │
-    │         │  threshold met     │ (threshold) │
-    └─────────┘                    └─────────────┘
-                                         │
-                                         │ executeMessage()
-                                         ▼
-                                   ┌─────────────┐
-                                   │ PRE_EXEC    │
-                                   │ (modules)   │
-                                   └─────────────┘
-                                         │
-                                         │ pre-checks pass
-                                         ▼
-                                   ┌─────────────┐
-                                   │ EXECUTING   │
-                                   │ (target)    │
-                                   └─────────────┘
+  initializeMessage() or
+  initializeAndSign()
+         │
+         ▼
+    ┌──────────┐     signMessage()      ┌─────────────┐
+    │ PENDING  │ ──────────────────────▶│ READY       │
+    │          │     threshold met      │ (threshold) │
+    └──────────┘                        └─────────────┘
+         │                                    │
+         │ rejectMessage()                    │ executeMessage()
+         ▼                                    ▼
+    ┌──────────┐                        ┌─────────────┐
+    │ DISPUTED │                        │ PRE_EXEC    │
+    │ (logged) │                        │ (modules)   │
+    └──────────┘                        └─────────────┘
+                                              │
+                                              │ pre-checks pass
+                                              ▼
+                                        ┌─────────────┐
+                                        │ EXECUTING   │
+                                        │ (target)    │
+                                        └─────────────┘
                                          │
                                          │ call returns
                                          ▼
@@ -1016,25 +1126,41 @@ Messages progress through defined stages:
 
 ```solidity
 enum MessageStage {
-    Pending,      // Collecting signatures
-    Ready,        // Threshold met, awaiting execution
-    PreExecution, // Running pre-execution modules
-    Executing,    // Calling target contract
-    PostExecution,// Running post-execution modules
-    Completed,    // Successfully executed
-    Rejected      // Failed at some stage (terminal)
+    NotInitialized, // Message doesn't exist
+    Pending,        // Initialized, collecting signatures
+    Disputed,       // At least one validator rejected (can still reach threshold)
+    Ready,          // Threshold met, awaiting execution
+    PreExecution,   // Running pre-execution modules
+    Executing,      // Calling target contract
+    PostExecution,  // Running post-execution modules
+    Completed,      // Successfully executed
+    Failed          // Execution failed (terminal)
 }
 
 struct MessageState {
     MessageStage stage;
     string messageType;
-    bytes payload;
+    bytes calldata_;          // ABI-encoded function parameters
+    bytes32 metadataHash;     // Hash of metadata JSON (for verification)
+    string storageRef;        // Reference to full metadata in storage layer
     uint256 value;
     uint64 nonce;
     uint64 timestamp;
     bytes32 appId;
+    address primaryValidator; // Who initialized this message
     uint256 signaturesCollected;
+    uint256 rejectionsCollected;
 }
+
+struct Rejection {
+    address validator;
+    bytes32 reasonHash;
+    string reasonRef;         // Storage reference to rejection reason
+    uint64 timestamp;
+}
+
+// Rejections stored separately
+mapping(bytes32 => Rejection[]) public messageRejections;
 ```
 
 ### 6.4 Signature Verification
@@ -1152,16 +1278,30 @@ contract TimelockModule is IModule {
 These are enshrined Bridge events (not module events). The bridge-wide signature threshold can be extended for specific sensitive transactions via pre-execution modules.
 
 ```solidity
-// Signature events
+// Message lifecycle events
+event MessageInitialized(
+    bytes32 indexed messageId,
+    bytes32 indexed appId,
+    address primaryValidator,
+    string messageType,
+    string storageRef
+);
 event SignatureSubmitted(bytes32 indexed messageId, address indexed validator, uint256 count);
+event MessageRejected(
+    bytes32 indexed messageId,
+    address indexed validator,
+    bytes32 reasonHash,
+    string reasonRef
+);
 event ThresholdReached(bytes32 indexed messageId, uint256 signatures);
 
 // Execution events
 event MessageExecuted(bytes32 indexed messageId, string messageType, address target);
-event MessageRejected(bytes32 indexed messageId, string reason, bytes data);
+event MessageFailed(bytes32 indexed messageId, string reason, bytes data);
 
 // Validator events
-event ValidatorAdded(address indexed validator, bytes attestation);
+event PrimaryValidatorSet(bytes32 indexed appId, address indexed validator, bytes attestation);
+event WitnessValidatorAdded(address indexed validator, bytes attestation);
 event ValidatorRemoved(address indexed validator);
 event ThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
 
@@ -1550,7 +1690,30 @@ Mitigation:
 3. Nonce ordering prevents reordering
 ```
 
-**Scenario 4: Validator key theft**
+**Scenario 4: 1-of-1 Availability Attack**
+
+```
+Attack: Primary Validator submits to Bridge but fails to publish to storage
+Impact: Message executes, but no audit trail exists; Witness Validators
+        cannot verify (in multi-validator mode, this would block execution)
+
+In 1-of-1 mode:
+- Bridge is source of truth
+- Message executes with only Primary's signature
+- No Witness Validators to verify availability
+- Audit trail incomplete in storage layer
+
+Mitigation:
+1. For 1-of-1 mode, accept this risk as inherent to single-validator trust
+2. For multi-validator mode, Witnesses won't sign without storage access
+3. Bridge emits storageRef in MessageInitialized event for independent fetching
+4. Monitoring: Alert if messages execute without corresponding storage records
+5. Application can require multi-validator mode for high-value operations
+```
+
+This is a **known vulnerability in 1-of-1 mode**: availability is not checked by other validators. Applications using 1-of-1 mode implicitly trust the Primary Validator for both correctness AND availability.
+
+**Scenario 5: Validator key theft**
 
 ```
 Attacker: Steal validator private key
