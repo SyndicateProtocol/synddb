@@ -10,54 +10,88 @@ use crate::{
 };
 
 /// Prediction market application with optional `SyndDB` replication
+///
+/// # With Replication (recommended for production)
+///
+/// ```rust,no_run
+/// use prediction_market::app::PredictionMarket;
+///
+/// let app = PredictionMarket::new("market.db", Some("http://sequencer:8433"))?;
+///
+/// // All operations are automatically replicated
+/// app.create_account("alice")?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Without Replication (for testing/development)
+///
+/// ```rust,no_run
+/// use prediction_market::app::PredictionMarket;
+///
+/// let app = PredictionMarket::new("market.db", None)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[allow(missing_debug_implementations)]
 pub struct PredictionMarket {
-    conn: &'static Connection,
+    /// When replicated, `SyndDB` manages the connection
     synddb: Option<SyndDB>,
+    /// When not replicated, we manage the connection directly
+    standalone_conn: Option<&'static Connection>,
 }
 
 impl PredictionMarket {
     /// Create a new prediction market instance
     ///
-    /// If `sequencer_url` is provided, `SyndDB` replication is enabled and all
-    /// database changes will be captured and sent to the sequencer.
+    /// If `sequencer_url` is provided, uses `SyndDB::open()` which handles
+    /// all the connection management internally.
     pub fn new(db_path: &str, sequencer_url: Option<&str>) -> Result<Self> {
-        // SyndDB requires a 'static Connection lifetime.
-        // This is achieved by leaking the connection - it lives for the process lifetime.
-        // DX NOTE: This is the main ergonomic friction point. The Box::leak pattern
-        // is unusual and may surprise developers.
-        let conn: &'static Connection = Box::leak(Box::new(Connection::open(db_path)?));
-
-        schema::initialize_schema(conn)?;
-
-        let synddb = if let Some(url) = sequencer_url {
-            Some(SyndDB::attach(conn, url)?)
+        if let Some(url) = sequencer_url {
+            // Use SyndDB::open() - it handles connection management internally
+            let synddb = SyndDB::open(db_path, url)?;
+            schema::initialize_schema(synddb.connection())?;
+            Ok(Self {
+                synddb: Some(synddb),
+                standalone_conn: None,
+            })
         } else {
-            None
-        };
-
-        Ok(Self { conn, synddb })
+            // No replication - manage connection ourselves
+            let conn: &'static Connection = Box::leak(Box::new(Connection::open(db_path)?));
+            schema::initialize_schema(conn)?;
+            Ok(Self {
+                synddb: None,
+                standalone_conn: Some(conn),
+            })
+        }
     }
 
     /// Create an in-memory instance (for testing)
     pub fn in_memory(sequencer_url: Option<&str>) -> Result<Self> {
-        let conn: &'static Connection = Box::leak(Box::new(Connection::open_in_memory()?));
-        schema::initialize_schema(conn)?;
-
-        let synddb = if let Some(url) = sequencer_url {
-            Some(SyndDB::attach(conn, url)?)
+        if let Some(url) = sequencer_url {
+            let synddb = SyndDB::open_in_memory(url)?;
+            schema::initialize_schema(synddb.connection())?;
+            Ok(Self {
+                synddb: Some(synddb),
+                standalone_conn: None,
+            })
         } else {
-            None
-        };
-
-        Ok(Self { conn, synddb })
+            let conn: &'static Connection = Box::leak(Box::new(Connection::open_in_memory()?));
+            schema::initialize_schema(conn)?;
+            Ok(Self {
+                synddb: None,
+                standalone_conn: Some(conn),
+            })
+        }
     }
 
     /// Get a reference to the underlying connection
-    ///
-    /// This can be used for direct SQL queries when needed.
-    pub const fn conn(&self) -> &Connection {
-        self.conn
+    pub fn conn(&self) -> &Connection {
+        self.synddb.as_ref().map_or_else(
+            || {
+                self.standalone_conn
+                    .expect("Either synddb or standalone_conn must be set")
+            },
+            |synddb| synddb.connection(),
+        )
     }
 
     /// Check if `SyndDB` replication is enabled
@@ -66,18 +100,21 @@ impl PredictionMarket {
     }
 
     /// Explicitly publish pending changesets to the sequencer
-    ///
-    /// DX NOTE: When should this be called? Options:
-    /// 1. After every operation (high latency, guaranteed consistency)
-    /// 2. After a batch of operations (lower latency, batch consistency)
-    /// 3. Never (rely on auto-flush timer, eventual consistency)
-    ///
-    /// Current implementation: caller decides when to publish.
     pub fn publish(&self) -> Result<()> {
         if let Some(ref synddb) = self.synddb {
             synddb.publish()?;
         }
         Ok(())
+    }
+
+    /// Get replication statistics (if replicated)
+    pub fn stats(&self) -> Option<synddb_client::StatsSnapshot> {
+        self.synddb.as_ref().map(|s| s.stats())
+    }
+
+    /// Check if sequencer is healthy (if replicated)
+    pub fn is_healthy(&self) -> bool {
+        self.synddb.as_ref().is_some_and(|s| s.is_healthy())
     }
 
     // =========================================================================
@@ -86,16 +123,16 @@ impl PredictionMarket {
 
     /// Create a new account with default balance
     pub fn create_account(&self, name: &str) -> Result<i64> {
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO accounts (name) VALUES (?1)",
             rusqlite::params![name],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(self.conn().last_insert_rowid())
     }
 
     /// Get account by ID
     pub fn get_account(&self, account_id: i64) -> Result<Account> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT id, name, balance, created_at FROM accounts WHERE id = ?1",
                 rusqlite::params![account_id],
@@ -113,7 +150,7 @@ impl PredictionMarket {
 
     /// Get account by name
     pub fn get_account_by_name(&self, name: &str) -> Result<Account> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT id, name, balance, created_at FROM accounts WHERE name = ?1",
                 rusqlite::params![name],
@@ -132,7 +169,7 @@ impl PredictionMarket {
     /// List all accounts
     pub fn list_accounts(&self) -> Result<Vec<Account>> {
         let mut stmt = self
-            .conn
+            .conn()
             .prepare("SELECT id, name, balance, created_at FROM accounts ORDER BY id")?;
 
         let accounts = stmt
@@ -160,22 +197,22 @@ impl PredictionMarket {
         description: Option<&str>,
         resolution_time: i64,
     ) -> Result<i64> {
-        market::create_market(self.conn, question, description, resolution_time)
+        market::create_market(self.conn(), question, description, resolution_time)
     }
 
     /// Resolve a market with outcome "yes" or "no"
     pub fn resolve_market(&self, market_id: i64, outcome: &str) -> Result<()> {
-        market::resolve_market(self.conn, market_id, outcome)
+        market::resolve_market(self.conn(), market_id, outcome)
     }
 
     /// Get market by ID
     pub fn get_market(&self, market_id: i64) -> Result<Market> {
-        market::get_market(self.conn, market_id)
+        market::get_market(self.conn(), market_id)
     }
 
     /// List all markets
     pub fn list_markets(&self) -> Result<Vec<Market>> {
-        market::list_markets(self.conn)
+        market::list_markets(self.conn())
     }
 
     // =========================================================================
@@ -190,7 +227,7 @@ impl PredictionMarket {
         outcome: &str,
         shares: i64,
     ) -> Result<Trade> {
-        trading::buy_shares(self.conn, account_id, market_id, outcome, shares)
+        trading::buy_shares(self.conn(), account_id, market_id, outcome, shares)
     }
 
     /// Sell shares in a market outcome
@@ -201,12 +238,12 @@ impl PredictionMarket {
         outcome: &str,
         shares: i64,
     ) -> Result<Trade> {
-        trading::sell_shares(self.conn, account_id, market_id, outcome, shares)
+        trading::sell_shares(self.conn(), account_id, market_id, outcome, shares)
     }
 
     /// Get positions for an account
     pub fn get_positions(&self, account_id: i64) -> Result<Vec<Position>> {
-        trading::get_positions(self.conn, account_id)
+        trading::get_positions(self.conn(), account_id)
     }
 
     // =========================================================================
@@ -215,7 +252,7 @@ impl PredictionMarket {
 
     /// Process pending deposits from chain monitor
     pub fn process_deposits(&self) -> Result<usize> {
-        bridge::process_deposits(self.conn)
+        bridge::process_deposits(self.conn())
     }
 
     /// Request a withdrawal to L1
@@ -225,12 +262,12 @@ impl PredictionMarket {
         amount: i64,
         destination_address: &str,
     ) -> Result<i64> {
-        bridge::request_withdrawal(self.conn, account_id, amount, destination_address)
+        bridge::request_withdrawal(self.conn(), account_id, amount, destination_address)
     }
 
     /// List pending withdrawals
     pub fn list_pending_withdrawals(&self) -> Result<Vec<Withdrawal>> {
-        bridge::list_pending_withdrawals(self.conn)
+        bridge::list_pending_withdrawals(self.conn())
     }
 
     /// Simulate a deposit (for testing/demo)
@@ -241,7 +278,7 @@ impl PredictionMarket {
         amount: i64,
         block_number: i64,
     ) -> Result<i64> {
-        bridge::simulate_deposit(self.conn, tx_hash, account_name, amount, block_number)
+        bridge::simulate_deposit(self.conn(), tx_hash, account_name, amount, block_number)
     }
 }
 
