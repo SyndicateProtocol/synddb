@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-chain-monitor = ["synddb-chain-monitor", "alloy", "async-trait", "crossbeam-channel"]
+chain-monitor = ["synddb-chain-monitor", "alloy", "async-trait", "crossbeam-channel", "url"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -35,3 +35,4 @@ synddb-chain-monitor = { path = "../../crates/synddb-chain-monitor", optional = 
 alloy = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 crossbeam-channel = { workspace = true, optional = true }
+url = { workspace = true, optional = true }

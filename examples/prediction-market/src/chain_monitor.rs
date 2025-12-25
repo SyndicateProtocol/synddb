@@ -321,6 +321,156 @@ pub fn confirm_withdrawal(
     Ok(rows)
 }
 
+/// Composite handler that processes both Deposit and Withdrawal events
+///
+/// Since `ChainMonitor` accepts a single handler, this composite dispatches
+/// to both deposit and withdrawal processing logic. It does not filter by
+/// event signature, allowing all events from the bridge contract to be received.
+#[derive(Debug)]
+pub struct BridgeEventHandler {
+    deposit_tx: Sender<DepositData>,
+    withdrawal_tx: Sender<WithdrawalConfirmation>,
+    deposit_count: std::sync::atomic::AtomicU64,
+    withdrawal_count: std::sync::atomic::AtomicU64,
+}
+
+impl BridgeEventHandler {
+    /// Create a new bridge event handler
+    pub const fn new(
+        deposit_tx: Sender<DepositData>,
+        withdrawal_tx: Sender<WithdrawalConfirmation>,
+    ) -> Self {
+        Self {
+            deposit_tx,
+            withdrawal_tx,
+            deposit_count: std::sync::atomic::AtomicU64::new(0),
+            withdrawal_count: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Get the number of deposits processed
+    pub fn deposit_count(&self) -> u64 {
+        self.deposit_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Get the number of withdrawals processed
+    pub fn withdrawal_count(&self) -> u64 {
+        self.withdrawal_count
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl MessageHandler for BridgeEventHandler {
+    async fn handle_event(&self, log: &Log) -> Result<bool> {
+        // Try to decode as Deposit first
+        if let Ok(deposit) = Deposit::decode_log(&log.inner) {
+            let tx_hash = log
+                .transaction_hash
+                .map(|h| format!("{h:#x}"))
+                .unwrap_or_default();
+            let block_number = log.block_number.unwrap_or(0);
+            let log_index = log.log_index;
+
+            let amount: i64 = deposit.amount.try_into().unwrap_or_else(|_| {
+                warn!("Deposit amount too large, capping at i64::MAX");
+                i64::MAX
+            });
+
+            if amount == 0 {
+                warn!(tx_hash = %tx_hash, "Deposit with zero amount - skipping");
+                return Ok(false);
+            }
+
+            info!(
+                tx_hash = %tx_hash,
+                from = %format!("{:#x}", deposit.from),
+                to = %format!("{:#x}", deposit.to),
+                amount = amount,
+                block = block_number,
+                "Processing deposit event"
+            );
+
+            let data = DepositData {
+                tx_hash,
+                block_number,
+                log_index,
+                from_address: format!("{:#x}", deposit.from),
+                to_address: format!("{:#x}", deposit.to),
+                amount,
+            };
+
+            if self.deposit_tx.send(data).is_ok() {
+                self.deposit_count
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+
+        // Try to decode as Withdrawal
+        if let Ok(withdrawal) = Withdrawal::decode_log(&log.inner) {
+            let tx_hash = log
+                .transaction_hash
+                .map(|h| format!("{h:#x}"))
+                .unwrap_or_default();
+            let block_number = log.block_number.unwrap_or(0);
+
+            let amount: i64 = withdrawal.amount.try_into().unwrap_or_else(|_| {
+                warn!("Withdrawal amount too large, capping at i64::MAX");
+                i64::MAX
+            });
+
+            info!(
+                tx_hash = %tx_hash,
+                from = %format!("{:#x}", withdrawal.from),
+                recipient = %format!("{:#x}", withdrawal.recipient),
+                amount = amount,
+                block = block_number,
+                "Processing withdrawal confirmation"
+            );
+
+            let data = WithdrawalConfirmation {
+                tx_hash,
+                block_number,
+                from_address: format!("{:#x}", withdrawal.from),
+                recipient_address: format!("{:#x}", withdrawal.recipient),
+                amount,
+            };
+
+            if self.withdrawal_tx.send(data).is_ok() {
+                self.withdrawal_count
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+
+        // Event didn't match either type
+        warn!("Received unknown event type from bridge contract");
+        Ok(false)
+    }
+
+    fn event_signature(&self) -> Option<B256> {
+        // Return None to receive all events from the contract
+        None
+    }
+
+    async fn on_start(&self) -> Result<()> {
+        info!("BridgeEventHandler started - watching for deposits and withdrawals");
+        Ok(())
+    }
+
+    async fn on_stop(&self) -> Result<()> {
+        info!(
+            deposits = self.deposit_count(),
+            withdrawals = self.withdrawal_count(),
+            "BridgeEventHandler stopped"
+        );
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +490,15 @@ mod tests {
         let handler = WithdrawalHandler::new(tx);
         assert!(handler.event_signature().is_some());
         assert_eq!(handler.processed_count(), 0);
+    }
+
+    #[test]
+    fn test_bridge_event_handler_creation() {
+        let (deposit_tx, _deposit_rx) = unbounded();
+        let (withdrawal_tx, _withdrawal_rx) = unbounded();
+        let handler = BridgeEventHandler::new(deposit_tx, withdrawal_tx);
+        assert!(handler.event_signature().is_none()); // Receives all events
+        assert_eq!(handler.deposit_count(), 0);
+        assert_eq!(handler.withdrawal_count(), 0);
     }
 }

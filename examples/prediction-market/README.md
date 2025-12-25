@@ -223,6 +223,76 @@ CREATE TABLE outbound_withdrawals (
 );
 ```
 
+## Development Environment
+
+The `scripts/dev-env.sh` script provides a complete local development environment that demonstrates the full SyndDB architecture:
+
+```bash
+# Run the full development environment
+./examples/prediction-market/scripts/dev-env.sh
+
+# Skip the chain monitor (if you don't have anvil/forge)
+./examples/prediction-market/scripts/dev-env.sh --no-monitor
+
+# Clean up data files
+./examples/prediction-market/scripts/dev-env.sh --cleanup
+```
+
+### What It Does
+
+1. **Starts Anvil** - Local Ethereum node for testing
+2. **Deploys TestBridge** - Simple bridge contract that emits Deposit/Withdrawal events
+3. **Starts Sequencer** - With local SQLite storage (`publisher_type=local`)
+4. **Runs Prediction Market** - Creates accounts, markets, trades
+5. **Starts Validator** - Fetches from sequencer, reconstructs state, verifies signatures
+6. **Emits Bridge Events** - For chain monitor testing
+
+### Requirements
+
+- Rust toolchain (cargo)
+- Foundry (anvil, forge, cast) - Install with `curl -L https://foundry.paradigm.xyz | bash && foundryup`
+
+### Architecture Diagram
+
+```
+┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+│   Anvil     │◄────►│ TestBridge  │      │   Chain     │
+│  (L1 node)  │      │  Contract   │─────►│  Monitor    │
+└─────────────┘      └─────────────┘      └──────┬──────┘
+                                                  │
+                     ┌─────────────┐              │
+                     │ Prediction  │◄─────────────┘
+                     │   Market    │
+                     └──────┬──────┘
+                            │ changesets
+                            ▼
+                     ┌─────────────┐
+                     │  Sequencer  │
+                     │  (local)    │
+                     └──────┬──────┘
+                            │ signed batches
+                            ▼
+                     ┌─────────────┐
+                     │  Validator  │
+                     │  (replica)  │
+                     └─────────────┘
+```
+
+### Watching Bridge Events
+
+With the chain-monitor feature, you can watch for L1 bridge events:
+
+```bash
+# Build with chain-monitor feature
+cargo build -p prediction-market --features chain-monitor --release
+
+# Start watching (requires anvil running with TestBridge deployed)
+./target/release/prediction-market --db market.db watch \
+    --ws-url ws://localhost:8545 \
+    --bridge 0x5FbDB2315678afecb367f032d93F642f64180aa3 \
+    --start-block 1
+```
+
 ## Testing
 
 ```bash
