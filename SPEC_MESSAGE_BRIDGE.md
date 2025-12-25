@@ -147,6 +147,24 @@ We distinguish between two types of external data layers:
 - **Storage** (required): Arweave or IPFS with pinning for permanent schema storage and message archival
 - **DA** (optional): Celestia for applications requiring short-term availability guarantees
 
+**Relayer**
+
+Relayers are entities that call `executeMessage()` on the Bridge after signature threshold is met. This is an **untrusted, permissionless role** - anyone can relay.
+
+| Aspect | Description |
+|--------|-------------|
+| **Role** | Delivers validated messages to the Bridge for execution |
+| **Trust** | Untrusted - cannot forge signatures or bypass validation |
+| **Incentive** | Out-of-band (application pays relayer, or validator self-relays) |
+| **Who can relay** | Anyone - permissionless |
+
+Common relayer patterns:
+- **Validator as Relayer**: Primary or Witness Validator calls `executeMessage()` after signing
+- **Dedicated Relayer Service**: Third-party service monitors for threshold-met messages
+- **Application Self-Relay**: Application backend monitors and relays its own messages
+
+*Note: This aligns with Hyperlane's "Relayer" and LayerZero's "Executor" terminology.*
+
 ### 2.4 Application Authentication
 
 Securing the application-to-validator connection is critical. The Primary Validator must verify that incoming messages originate from an authorized application.
@@ -166,14 +184,14 @@ Securing the application-to-validator connection is critical. The Primary Valida
 2. Application registers with validator:
    POST /register
    {
-     "appId": "0x...",
+     "domain": "0x...",
      "publicKey": "-----BEGIN CERTIFICATE-----...",
      "allowedMessageTypes": ["mint(address,uint256)", ...],
      "rateLimit": { "maxPerSecond": 100, "maxPerDay": 10000 }
    }
-3. Validator stores registration, assigns appId
+3. Validator stores registration, assigns domain
 4. All subsequent requests use mTLS with client cert
-5. Validator verifies: cert → appId → authorized message types
+5. Validator verifies: cert → domain → authorized message types
 ```
 
 **For TEE-based Applications**:
@@ -206,23 +224,23 @@ Applications must be registered before they can submit messages.
 1. Application operator deploys/configures their application
 2. Application operator contacts Primary Validator operator (or self-operates)
 3. Primary Validator registers application on Bridge:
-   Bridge.registerApplication(appId, primaryValidator, config)
-4. Application receives appId and can begin submitting messages
+   Bridge.registerApplication(domain, primaryValidator, config)
+4. Application receives domain and can begin submitting messages
 ```
 
-**Recommended: Deterministic appId**
+**Recommended: Deterministic domain**
 
-We recommend deriving `appId` deterministically to avoid coordination:
+We recommend deriving `domain` deterministically to avoid coordination:
 
 ```solidity
 // Option A: From application's on-chain address
-bytes32 appId = keccak256(abi.encode(chainId, applicationAddress));
+bytes32 domain = keccak256(abi.encode(chainId, applicationAddress));
 
-// Option B: From domain name (for off-chain apps)
-bytes32 appId = keccak256(abi.encode("app.example.com"));
+// Option B: From DNS name (for off-chain apps)
+bytes32 domain = keccak256(abi.encode("app.example.com"));
 
 // Option C: From Primary Validator + nonce (for multi-tenant validators)
-bytes32 appId = keccak256(abi.encode(primaryValidator, registrationNonce));
+bytes32 domain = keccak256(abi.encode(primaryValidator, registrationNonce));
 ```
 
 **Bridge Registration Function**:
@@ -235,11 +253,11 @@ struct ApplicationConfig {
 }
 
 function registerApplication(
-    bytes32 appId,
+    bytes32 domain,
     ApplicationConfig calldata config
 ) external;
 
-function getApplicationConfig(bytes32 appId)
+function getApplicationConfig(bytes32 domain)
     external view returns (ApplicationConfig memory);
 ```
 
@@ -272,7 +290,7 @@ If a message fails or expires, the application must continue with the next nonce
 ```python
 class NonceTracker:
     def __init__(self):
-        self.last_nonce = {}  # appId -> last consumed nonce
+        self.last_nonce = {}  # domain -> last consumed nonce
 
     def validate_nonce(self, app_id: str, nonce: int) -> bool:
         expected = self.last_nonce.get(app_id, 0) + 1
@@ -302,7 +320,7 @@ Messages expire if they don't reach signature threshold within the expiration wi
 ```solidity
 function isExpired(bytes32 messageId) public view returns (bool) {
     MessageState storage state = messageStates[messageId];
-    ApplicationConfig storage config = applicationConfigs[state.appId];
+    ApplicationConfig storage config = applicationConfigs[state.domain];
 
     uint256 expirationTime = state.timestamp + config.expirationSeconds;
     return block.timestamp > expirationTime;
@@ -362,9 +380,10 @@ interface Message {
   // Unix timestamp in seconds
   timestamp: uint64;
 
-  // Application identifier - each application registers with validators
-  // and receives a unique appId for message attribution and rate limiting
-  appId: bytes32;
+  // Domain identifier - each application registers with validators
+  // and receives a unique domain ID for message attribution and rate limiting
+  // (Similar to Hyperlane's "domain" concept, but identifies application, not chain)
+  domain: bytes32;
 
   // Native token amount to send with execution (optional)
   value?: uint256;
@@ -428,7 +447,7 @@ Metadata is the application's evidence to convince validators. It's validated ag
   },
   "nonce": 42,
   "timestamp": 1735084800,
-  "appId": "0x0000000000000000000000000000000000000001"
+  "domain": "0x0000000000000000000000000000000000000001"
 }
 ```
 
@@ -489,7 +508,7 @@ bytes32 messageId = keccak256(abi.encode(
     keccak256(abi.encode(metadata)),  // Metadata included in ID
     nonce,
     timestamp,
-    appId
+    domain
 ));
 ```
 
@@ -586,7 +605,7 @@ Content-Type: application/json
   "metadata": { ... },
   "nonce": 42,
   "timestamp": 1735084800,
-  "appId": "0x..."
+  "domain": "0x..."
 }
 ```
 
@@ -602,13 +621,13 @@ The Primary Validator verifies application identity (see Section 2.4).
 │  2.1 REPLAY PROTECTION                                           │
 │      ├─ Compute message ID from content                          │
 │      ├─ Check: ID not already processed                          │
-│      └─ Check: nonce > lastNonce[appId]                          │
+│      └─ Check: nonce > lastNonce[domain]                          │
 │                                                                  │
 │  2.2 FRESHNESS CHECK                                             │
 │      └─ Check: |timestamp - now| < MAX_CLOCK_DRIFT               │
 │                                                                  │
 │  2.3 APPLICATION AUTHORIZATION                                   │
-│      └─ Check: appId is registered and active                    │
+│      └─ Check: domain is registered and active                    │
 │                                                                  │
 │  2.4 MESSAGE TYPE VALIDATION                                     │
 │      ├─ Query Bridge: getMessageTypeConfig(messageType)          │
@@ -653,7 +672,7 @@ Validation Failed
 │  2. Call Bridge.rejectProposal() with:                           │
 │     - messageId                                                  │
 │     - messageType                                                │
-│     - appId                                                      │
+│     - domain                                                      │
 │     - nonce                                                      │
 │     - reasonHash (hash of rejection reason)                      │
 │     - reasonRef (storage reference to full reason)               │
@@ -672,10 +691,10 @@ Validation Failed
 ```solidity
 /**
  * Reject a proposed message before initialization
- * @dev Only callable by registered Primary Validator for the appId
+ * @dev Only callable by registered Primary Validator for the domain
  * @param messageId Hash of the proposed message
  * @param messageType The message type that was proposed
- * @param appId Application that proposed the message
+ * @param domain Application that proposed the message
  * @param nonce The nonce of the rejected message
  * @param reasonHash Hash of rejection reason JSON
  * @param reasonRef Storage reference to full rejection reason
@@ -683,20 +702,20 @@ Validation Failed
 function rejectProposal(
     bytes32 messageId,
     string calldata messageType,
-    bytes32 appId,
+    bytes32 domain,
     uint64 nonce,
     bytes32 reasonHash,
     string calldata reasonRef
 ) external {
-    require(applicationConfigs[appId].primaryValidator == msg.sender, "Not primary");
+    require(applicationConfigs[domain].primaryValidator == msg.sender, "Not primary");
     require(!proposalRejected[messageId], "Already rejected");
-    require(nonce == lastNonce[appId] + 1, "Invalid nonce");
+    require(nonce == lastNonce[domain] + 1, "Invalid nonce");
 
     // Mark as rejected and consume nonce
     proposalRejected[messageId] = true;
-    lastNonce[appId] = nonce;
+    lastNonce[domain] = nonce;
 
-    emit ProposalRejected(messageId, appId, msg.sender, nonce, reasonHash, reasonRef);
+    emit ProposalRejected(messageId, domain, msg.sender, nonce, reasonHash, reasonRef);
 }
 ```
 
@@ -733,7 +752,7 @@ bytes32 structHash = keccak256(abi.encode(
     keccak256(abi.encode(metadata)),
     nonce,
     timestamp,
-    appId
+    domain
 ));
 
 bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
@@ -878,7 +897,7 @@ Witness Validators should implement retry logic with backoff when storageRef is 
 
 | Level | Enforced By | What's Validated |
 |-------|-------------|------------------|
-| **Protocol** | All Validators | Replay protection, nonce, timestamp, appId |
+| **Protocol** | All Validators | Replay protection, nonce, timestamp, domain |
 | **Calldata** | All Validators | ABI encoding matches messageType signature |
 | **Metadata** | All Validators | Schema compliance, required evidence fields |
 | **Invariants** | All Validators | Business rules from metadata (limits, balances) |
@@ -898,7 +917,7 @@ POST /messages
     metadata: object         # Evidence for validators
     nonce: uint64            # Application nonce
     timestamp: uint64        # Unix timestamp
-    appId: bytes32           # Application ID
+    domain: bytes32           # Application ID
     value?: uint256          # Native token amount (optional)
   Response:
     status: "accepted" | "rejected"
@@ -923,7 +942,7 @@ GET /health
     synced: boolean          # Synced with Bridge contract
     bridgeConnection: boolean
     daConnection: boolean
-    lastProcessedNonce: map[appId => nonce]
+    lastProcessedNonce: map[domain => nonce]
 
 # Get schema for a message type
 GET /schemas/{messageType}
@@ -1240,8 +1259,8 @@ interface IMessageBridge {
      * @param storageRef Reference to metadata in storage layer (e.g., "ar://...", "ipfs://...")
      * @param nonce Application nonce
      * @param timestamp Message timestamp
-     * @param appId Application identifier
-     * @dev Only callable by registered Primary Validator for this appId
+     * @param domain Application identifier
+     * @dev Only callable by registered Primary Validator for this domain
      */
     function initializeMessage(
         bytes32 messageId,
@@ -1251,7 +1270,7 @@ interface IMessageBridge {
         string calldata storageRef,
         uint64 nonce,
         uint64 timestamp,
-        bytes32 appId
+        bytes32 domain
     ) external payable;
 
     /**
@@ -1266,7 +1285,7 @@ interface IMessageBridge {
         string calldata storageRef,
         uint64 nonce,
         uint64 timestamp,
-        bytes32 appId,
+        bytes32 domain,
         bytes calldata signature
     ) external payable;
 
@@ -1296,17 +1315,17 @@ interface IMessageBridge {
      * Reject a proposed message before initialization (for Primary Validator)
      * @param messageId Hash of the proposed message
      * @param messageType The message type that was proposed
-     * @param appId Application that proposed the message
+     * @param domain Application that proposed the message
      * @param nonce The nonce of the rejected message (will be consumed)
      * @param reasonHash Hash of rejection reason JSON
      * @param reasonRef Storage reference to full rejection reason
-     * @dev Only callable by registered Primary Validator for the appId
+     * @dev Only callable by registered Primary Validator for the domain
      * @dev Consumes the nonce to prevent replay of rejected messages
      */
     function rejectProposal(
         bytes32 messageId,
         string calldata messageType,
-        bytes32 appId,
+        bytes32 domain,
         uint64 nonce,
         bytes32 reasonHash,
         string calldata reasonRef
@@ -1328,12 +1347,12 @@ interface IMessageBridge {
 
     /**
      * Register Primary Validator for an application
-     * @param appId Application identifier
+     * @param domain Application identifier
      * @param validator Address derived from TEE-attested signing key
      * @param attestation TEE attestation proving key was generated in enclave
      */
     function setPrimaryValidator(
-        bytes32 appId,
+        bytes32 domain,
         address validator,
         bytes calldata attestation
     ) external;
@@ -1363,7 +1382,7 @@ interface IMessageBridge {
     function hasValidatorSigned(bytes32 messageId, address validator) external view returns (bool);
     function hasValidatorRejected(bytes32 messageId, address validator) external view returns (bool);
     function isMessageExecuted(bytes32 messageId) external view returns (bool);
-    function getPrimaryValidator(bytes32 appId) external view returns (address);
+    function getPrimaryValidator(bytes32 domain) external view returns (address);
     function getWitnessValidators() external view returns (address[] memory);
     function getSignatureThreshold() external view returns (uint256);
 }
@@ -1438,7 +1457,7 @@ struct MessageState {
     uint256 value;
     uint64 nonce;
     uint64 timestamp;
-    bytes32 appId;
+    bytes32 domain;
     address primaryValidator; // Who initialized this message
     uint256 signaturesCollected;
     uint256 rejectionsCollected;
@@ -1472,7 +1491,7 @@ function _verifySignature(
         keccak256(messageStates[messageId].payload),
         messageStates[messageId].nonce,
         messageStates[messageId].timestamp,
-        messageStates[messageId].appId
+        messageStates[messageId].domain
     ));
 
     bytes32 digest = keccak256(abi.encodePacked(
@@ -1676,7 +1695,7 @@ These are enshrined Bridge events (not module events). The bridge-wide signature
 // Message lifecycle events
 event MessageInitialized(
     bytes32 indexed messageId,
-    bytes32 indexed appId,
+    bytes32 indexed domain,
     address primaryValidator,
     string messageType,
     string storageRef
@@ -1690,7 +1709,7 @@ event MessageRejected(
 );
 event ProposalRejected(
     bytes32 indexed messageId,
-    bytes32 indexed appId,
+    bytes32 indexed domain,
     address indexed primaryValidator,
     uint64 nonce,
     bytes32 reasonHash,
@@ -1703,7 +1722,7 @@ event MessageExecuted(bytes32 indexed messageId, string messageType, address tar
 event MessageFailed(bytes32 indexed messageId, string reason, bytes data);
 
 // Validator events
-event PrimaryValidatorSet(bytes32 indexed appId, address indexed validator, bytes attestation);
+event PrimaryValidatorSet(bytes32 indexed domain, address indexed validator, bytes attestation);
 event WitnessValidatorAdded(address indexed validator, bytes attestation);
 event ValidatorRemoved(address indexed validator);
 event ThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
@@ -2393,7 +2412,7 @@ interface StorageRecord {
     metadata: object;     // Validator evidence
     nonce: uint64;
     timestamp: uint64;
-    appId: bytes32;
+    domain: bytes32;
     value?: uint256;
   };
 
@@ -2720,7 +2739,7 @@ def submit_message(message_type: str, calldata: str, metadata: dict, value: int 
         "metadata": metadata,           # Evidence for validators
         "nonce": nonce,
         "timestamp": int(time.time()),
-        "appId": APP_ID,
+        "domain": APP_ID,
         "value": str(value) if value else None
     }
 
@@ -2826,19 +2845,52 @@ These schemas define **metadata** (validator evidence), NOT function parameters.
 
 ### C. Glossary
 
-| Term | Definition |
-|------|------------|
-| **Message Type** | ABI function signature (e.g., `mint(address,uint256)`) |
-| **Calldata** | ABI-encoded function parameters executed on-chain |
-| **Metadata** | Evidence/context provided to convince validators to sign |
-| **Schema** | JSON Schema defining required metadata fields |
-| **Primary Validator** | Validator connected to application via HTTP, publishes to storage |
-| **Witness Validator** | Validator that reads from storage, verifies independently |
-| **Bridge** | Smart contract that aggregates signatures and executes messages |
-| **Module** | Pluggable validation for pre/post execution checks |
-| **Storage Layer** | Long-term archival (Arweave, IPFS) |
-| **DA Layer** | Short-term data availability (Celestia, EigenDA) |
-| **Threshold** | Minimum validator signatures required |
-| **Nonce** | Monotonically increasing counter for replay protection |
-| **TEE** | Trusted Execution Environment (GCP Confidential Space, etc.) |
-| **Attestation** | Cryptographic proof of TEE integrity |
+#### Core Terms
+
+| Term | Definition | Industry Comparison |
+|------|------------|---------------------|
+| **Message** | The complete data structure submitted by an application for validation and execution | Same as Hyperlane, LayerZero |
+| **Message Type** | ABI function signature (e.g., `mint(address,uint256)`) | Similar to function selector |
+| **Calldata** | ABI-encoded function parameters executed on-chain. This is the actual data passed to the target contract's function | LayerZero uses "payload"; we use Ethereum-native terminology for precision |
+| **Metadata** | Evidence/context provided to convince validators to sign. NOT executed on-chain | Novel concept - no direct industry equivalent |
+| **Domain** | Unique identifier for an application using the Bridge. Used for nonce tracking and message attribution | Similar to Hyperlane's "domain" (chain ID) but identifies application, not chain |
+
+#### Validation Terms
+
+| Term | Definition | Industry Comparison |
+|------|------------|---------------------|
+| **Primary Validator** | Validator connected to application via HTTP, publishes to storage, can initialize messages | Novel - other protocols don't distinguish validator roles |
+| **Witness Validator** | Validator that reads from storage, verifies independently, cannot initialize | Novel - provides independent verification |
+| **Threshold** | Minimum validator signatures required (M-of-N) | Same as Hyperlane MultisigISM, Gnosis Safe |
+| **Schema** | JSON Schema defining required metadata fields | Standard JSON Schema usage |
+
+#### Infrastructure Terms
+
+| Term | Definition | Industry Comparison |
+|------|------------|---------------------|
+| **Bridge** | Smart contract that aggregates signatures, enforces rules, and executes messages. Can hold assets | Hyperlane: "Mailbox"; LayerZero: "Endpoint". We use "Bridge" as it can hold assets |
+| **Module** | Pluggable validation for pre/post execution checks | Similar to Hyperlane ISM; Gnosis Safe calls these "Guards" |
+| **Relayer** | Entity that calls `executeMessage()` after threshold is met. Untrusted, permissionless role | Same as Hyperlane "Relayer", LayerZero "Executor" |
+| **Storage Layer** | Long-term archival (Arweave, IPFS) for messages and schemas | We distinguish from DA; industry often conflates |
+| **DA Layer** | Short-term data availability (Celestia, EigenDA) | Standard industry term |
+
+#### Security Terms
+
+| Term | Definition | Industry Comparison |
+|------|------------|---------------------|
+| **TEE** | Trusted Execution Environment (GCP Confidential Space, AWS Nitro, etc.) | Standard industry term |
+| **Attestation** | Cryptographic proof of TEE integrity, binding signing key to enclave | Standard industry term |
+| **Nonce** | Monotonically increasing counter for replay protection | Same as Ethereum transaction nonce |
+
+#### Cross-Reference with Other Protocols
+
+| Our Term | Hyperlane Equivalent | LayerZero Equivalent | IBC Equivalent |
+|----------|---------------------|---------------------|----------------|
+| Message | Message | Message | Packet |
+| Calldata | Message body | Payload | Packet data |
+| Bridge | Mailbox | Endpoint | IBC Handler |
+| Validator | Validator | DVN | Light Client |
+| Relayer | Relayer | Executor | Relayer |
+| Module | ISM | Security Stack | - |
+| Domain | Domain (chain ID) | eid (endpoint ID) | Channel |
+| Threshold | MultisigISM threshold | Required DVNs | - |
