@@ -21,7 +21,8 @@ if echo "$COMMIT_MSG" | grep -qE "^Merge branch|^Revert"; then
 fi
 
 # Pattern for conventional commits (scope is optional)
-CONVENTIONAL_COMMIT_PATTERN='^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?!?: [^\s].{2,}'
+# Note: Use [^ ] instead of [^\s] for BSD grep compatibility (macOS)
+CONVENTIONAL_COMMIT_PATTERN='^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?!?: [^ ].{2,}'
 
 if ! echo "$COMMIT_MSG" | head -n1 | grep -qE "$CONVENTIONAL_COMMIT_PATTERN"; then
     echo -e "${RED}Error: Commit message does not follow Conventional Commits format${NC}"
