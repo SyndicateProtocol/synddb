@@ -628,18 +628,24 @@ Validators return structured errors for rejected messages:
 }
 ```
 
-CLAUDE: Any others we're missing here?
 Error codes:
 
 - `REPLAY_DETECTED` - Message ID already processed
 - `INVALID_NONCE` - Nonce not greater than last seen
 - `TIMESTAMP_EXPIRED` - Timestamp outside acceptable window
-- `APP_NOT_AUTHORIZED` - Application ID not registered
+- `APP_NOT_AUTHORIZED` - Application ID not registered or inactive
+- `AUTH_FAILED` - mTLS certificate or API key invalid
 - `MESSAGE_TYPE_NOT_REGISTERED` - Unknown message type
 - `MESSAGE_TYPE_DISABLED` - Message type currently disabled
+- `CALLDATA_INVALID` - Calldata doesn't match ABI signature
+- `CALLDATA_DECODE_FAILED` - Cannot decode calldata with messageType ABI
 - `SCHEMA_VALIDATION_FAILED` - Metadata doesn't match schema
+- `INVARIANT_VIOLATED` - Metadata invariant check failed
+- `METADATA_REDERIVATION_FAILED` - Witness validator couldn't verify metadata claim
 - `RATE_LIMIT_EXCEEDED` - Too many messages from this app
 - `CUSTOM_RULE_FAILED` - Custom validation rule failed
+- `STORAGE_PUBLISH_FAILED` - Failed to publish to storage layer
+- `BRIDGE_SUBMIT_FAILED` - Failed to submit signature to Bridge
 
 ---
 
@@ -647,14 +653,15 @@ Error codes:
 
 ### 5.1 Overview
 
-CLAUDE: This isn't calldata, instead it's additional metadata to convince the validator to sign the message. We should be clear on that distinction.
 The Bridge maintains a registry of allowed message types. Each message type has:
 
-- A target contract to call
-- A JSON Schema defining required/optional metadata fields
+- A target contract to call (calldata is executed here)
+- A JSON Schema defining required **metadata** fields (evidence for validators)
 - An enabled/disabled state
 
-New message types are added via Bridge admin functions. Validators fetch and cache schemas to validate incoming messages.
+**Important distinction**: The schema defines metadata requirements, NOT calldata. Calldata follows the standard Ethereum ABI encoding based on the function signature. Metadata is the additional evidence applications provide to convince validators.
+
+New message types are added via Bridge admin functions. Validators fetch and cache schemas to validate incoming metadata.
 
 ### 5.2 Message Type Registry
 
@@ -668,7 +675,8 @@ struct MessageTypeConfig {
     // Contract to call when executing this message type
     address target;
 
-    // Hash of the JSON Schema (keccak256)
+    // Hash of the metadata JSON Schema (keccak256)
+    // NOTE: This is for metadata validation, not calldata
     bytes32 schemaHash;
 
     // URI to fetch full schema (IPFS, Arweave, or empty for on-chain)
@@ -690,56 +698,66 @@ mapping(string => MessageTypeConfig) public messageTypes;
 
 ### 5.3 JSON Schema Format
 
-CLAUDE: Revise this to account for metadata. Keep in mind that the actual function parameters are not part of the metadata, but rather the calldata. The metadata is additional information provided to convince the validator to sign the message. The function parameters themselves already contain complete information by including argument names and types, which is sufficient for all parties since these tend to be quite standardized.
+Schemas define the **metadata** (validator evidence) required for each message type. Remember: calldata follows standard ABI encoding and doesn't need a schema.
 
-Schemas use JSON Schema (draft 2020-12) to define metadata requirements:
+**Example: ERC20 Mint Metadata Schema**
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "mint(address,uint256)",
-  "title": "ERC20 Mint",
-  "description": "Mint tokens to a recipient address",
+  "title": "ERC20 Mint Metadata",
+  "description": "Evidence required to validate a mint request",
   "type": "object",
-  "required": ["recipient", "amount"],
+  "required": ["reason", "sourceChain", "sourceTxHash"],
   "properties": {
-    "recipient": {
-      "type": "string",
-      "pattern": "^0x[a-fA-F0-9]{40}$",
-      "description": "Ethereum address to receive tokens"
-    },
-    "amount": {
-      "type": "string",
-      "pattern": "^[0-9]+$",
-      "description": "Amount to mint (wei, as string for large numbers)"
-    },
     "reason": {
       "type": "string",
       "enum": ["user_deposit", "reward", "airdrop", "migration"],
-      "description": "Reason for minting (optional, for audit)"
+      "description": "Why this mint is being requested"
     },
     "sourceChain": {
       "type": "string",
-      "description": "Source chain for cross-chain mints"
+      "description": "Chain where the triggering event occurred"
     },
     "sourceTxHash": {
       "type": "string",
       "pattern": "^0x[a-fA-F0-9]{64}$",
-      "description": "Source transaction hash for verification"
+      "description": "Transaction hash on source chain (verifiable by witness validators)"
+    },
+    "depositAmount": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Amount deposited on source chain"
+    },
+    "userTotalMinted": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "User's total minted balance (invariant check)"
+    },
+    "contractTotalSupply": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Contract's current total supply (invariant check)"
+    },
+    "maxSupply": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Maximum allowed supply (invariant limit)"
     }
   },
   "additionalProperties": true
 }
 ```
 
+Note: The actual mint parameters (recipient address, amount) are in the **calldata**, not the metadata. The metadata provides context for why validators should approve this mint.
+
 Key points:
 
-- `required` specifies mandatory fields
+- `required` specifies mandatory evidence fields
 - `additionalProperties: true` allows extra metadata without schema changes
-- Use `pattern` for format validation (addresses, hashes)
-- Use `enum` for constrained values
-
-CLAUDE: This is wrong. The original validator that first received a message (the application-attached one or whatever we want to call it) should store in the storage layer. The rest use the bridge.
+- Invariant values (limits, balances) are included for validation
+- Verifiable fields (sourceTxHash) can be re-derived by Witness Validators
 
 ### 5.4 Schema Storage Options
 
@@ -784,8 +802,6 @@ Cons: Requires fetching from external source
 - Validators cache all schemas locally
 - Cache invalidated when `updatedAt` changes
 
-CLAUDE: This is good! Make sure that all of this still holds true with your new understanding of metadata.
-
 ### 5.5 Schema Registration API
 
 ```solidity
@@ -829,13 +845,9 @@ interface IMessageTypeRegistry {
 }
 ```
 
-CLAUDE: This is good! But note that function signatures will NOT change in most
-cases. For example, in an ERC-20 transfer, it will always be transfer(address
-to, uint256 amount). The metadata is what may change over time to add
-additional invariants or context for the validators. So function signatures
-will remain stable, while metadata schemas may evolve.
-
 ### 5.6 Schema Versioning
+
+**Key insight**: Function signatures (messageType) are stable. `transfer(address,uint256)` doesn't change. What evolves is the metadata schema as applications add new invariants or context for validators.
 
 When schemas change:
 
@@ -850,11 +862,9 @@ For breaking changes:
 2. Migrate applications to new type
 3. Disable old message type
 
-CLAUDE: Good insight to add this here. Make it clear that the Bridge is the
-canonical source of truth for what schemas are valid, and validators should
-derive this information from indexing Bridge events.
-
 ### 5.7 Validator Schema Caching
+
+**The Bridge is the canonical source of truth** for message types and schemas. Validators derive schema information by indexing Bridge events.
 
 Validators cache schemas for performance:
 
@@ -889,8 +899,6 @@ The Bridge smart contract is the trust anchor of the system. It:
 - Executes validated messages on target contracts
 - Runs modular pre/post-execution checks
 
-CLAUDE: This is good. These interfaces are clearer than our current contracts.
-
 ### 6.2 Core Interface
 
 ```solidity
@@ -901,7 +909,7 @@ interface IMessageBridge {
      * Submit a message with aggregated signatures (batch submission)
      * @param messageId Unique message identifier
      * @param messageType ABI signature (e.g., "mint(address,uint256)")
-     * @param payload ABI-encoded metadata (matches function parameters)
+     * @param calldata ABI-encoded function parameters
      * @param nonce Application nonce
      * @param timestamp Message timestamp
      * @param appId Application identifier
@@ -910,7 +918,7 @@ interface IMessageBridge {
     function submitMessage(
         bytes32 messageId,
         string calldata messageType,
-        bytes calldata payload,
+        bytes calldata calldata_,
         uint64 nonce,
         uint64 timestamp,
         bytes32 appId,
@@ -931,12 +939,15 @@ interface IMessageBridge {
     function executeMessage(bytes32 messageId) external;
 
     // ==================== Validator Management ====================
+    // Note: Validators must complete TEE bootstrapping before being added
+    // See Section 6.9 for bootstrapping details
 
-    // CLAUDE: Make it clear that this requires TEE bootstrapping for validators
     /**
-     * Add a validator to the set
+     * Add a validator after TEE bootstrapping
+     * @param validator Address derived from TEE-attested signing key
+     * @param attestation TEE attestation proving key was generated in enclave
      */
-    function addValidator(address validator) external;
+    function addValidator(address validator, bytes calldata attestation) external;
 
     /**
      * Remove a validator from the set
@@ -957,8 +968,6 @@ interface IMessageBridge {
     function getSignatureThreshold() external view returns (uint256);
 }
 ```
-
-CLAUDE: This is excellent.
 
 ### 6.3 Message State Machine
 
@@ -1138,16 +1147,11 @@ contract TimelockModule is IModule {
 }
 ```
 
-CLAUDE: Make it clear that these are enshrined bridge events, not module
-events. Speaking of which, should we include module added/removed events here
-as well?
-
 ### 6.7 Events
 
+These are enshrined Bridge events (not module events). The bridge-wide signature threshold can be extended for specific sensitive transactions via pre-execution modules.
+
 ```solidity
-// CLAUDE: Note that this is bridge-wide signature requirements, but this can
-// always be extended for specific sensitive transactions via pre-execution
-// modules.
 // Signature events
 event SignatureSubmitted(bytes32 indexed messageId, address indexed validator, uint256 count);
 event ThresholdReached(bytes32 indexed messageId, uint256 signatures);
@@ -1156,13 +1160,20 @@ event ThresholdReached(bytes32 indexed messageId, uint256 signatures);
 event MessageExecuted(bytes32 indexed messageId, string messageType, address target);
 event MessageRejected(bytes32 indexed messageId, string reason, bytes data);
 
-// Admin events
-event ValidatorAdded(address indexed validator);
+// Validator events
+event ValidatorAdded(address indexed validator, bytes attestation);
 event ValidatorRemoved(address indexed validator);
 event ThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
-```
 
-CLAUDE: We should explain TEE bootstrapping in this section.
+// Module events
+event ModuleAdded(address indexed module, bool preExecution, bool postExecution);
+event ModuleRemoved(address indexed module);
+
+// Registry events
+event MessageTypeRegistered(string indexed messageType, address target, bytes32 schemaHash);
+event MessageTypeUpdated(string indexed messageType, bytes32 oldSchemaHash, bytes32 newSchemaHash);
+event MessageTypeEnabled(string indexed messageType, bool enabled);
+```
 
 ### 6.8 Access Control
 
@@ -1177,7 +1188,77 @@ bytes32 public constant VALIDATOR_MANAGER_ROLE = keccak256("VALIDATOR_MANAGER_RO
 // - REGISTRY_ROLE: Can register/update message types
 // - VALIDATOR_MANAGER_ROLE: Can add/remove validators, set threshold
 
-// Consider timelock for sensitive operations
+// Timelock recommended for: threshold changes, validator removal, message type disabling
+```
+
+### 6.9 TEE Bootstrapping
+
+Validators must complete TEE bootstrapping before they can sign messages. This ensures signing keys are generated and protected within a Trusted Execution Environment.
+
+**Bootstrapping Flow**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TEE BOOTSTRAPPING                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. ENCLAVE STARTUP                                              │
+│     ├─ Validator starts in TEE (GCP Confidential Space, etc.)   │
+│     └─ TEE generates attestation token                           │
+│                                                                  │
+│  2. KEY GENERATION                                               │
+│     ├─ Generate secp256k1 signing key INSIDE enclave            │
+│     ├─ Key never leaves enclave memory                           │
+│     └─ Derive Ethereum address from public key                   │
+│                                                                  │
+│  3. ATTESTATION                                                  │
+│     ├─ Create attestation binding key to enclave                 │
+│     ├─ Attestation includes: code hash, key fingerprint          │
+│     └─ Sign attestation with TEE platform key                    │
+│                                                                  │
+│  4. REGISTRATION                                                 │
+│     ├─ Submit to Bridge: addValidator(address, attestation)     │
+│     ├─ Bridge verifies attestation (on-chain or via oracle)     │
+│     └─ Validator added to signing set                            │
+│                                                                  │
+│  5. ONGOING OPERATION                                            │
+│     ├─ Validator signs messages with enclave-protected key       │
+│     └─ No per-message attestation needed (key already attested) │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why TEE Bootstrapping Matters**:
+
+1. **Key Protection**: Signing keys cannot be extracted from the enclave
+2. **Code Integrity**: Attestation proves validator runs expected code
+3. **One-Time Cost**: Attestation happens once at registration, not per-message
+4. **Audit Trail**: Attestation stored on-chain for verification
+
+**Supported TEE Platforms**:
+
+| Platform | Provider | Attestation Format |
+|----------|----------|-------------------|
+| GCP Confidential Space | Google Cloud | OIDC token with claims |
+| AWS Nitro Enclaves | Amazon Web Services | Nitro attestation document |
+| Azure Confidential VMs | Microsoft Azure | AMD SEV-SNP attestation |
+| Intel SGX | Various | DCAP attestation |
+
+**Example Attestation Verification**:
+
+```solidity
+function addValidator(address validator, bytes calldata attestation) external {
+    require(hasRole(VALIDATOR_MANAGER_ROLE, msg.sender), "Not authorized");
+
+    // Verify attestation (implementation depends on TEE platform)
+    require(_verifyAttestation(validator, attestation), "Invalid attestation");
+
+    // Add to validator set
+    isValidator[validator] = true;
+    validators.push(validator);
+
+    emit ValidatorAdded(validator, attestation);
+}
 ```
 
 ---
