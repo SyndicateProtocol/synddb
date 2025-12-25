@@ -455,47 +455,399 @@ Note: The calldata contains the ABI-encoded `mint(0x742d..., 1000000000000000000
 
 ### 3.6 Invariant Specification
 
-Invariants are constraints that must hold true. They can be specified at two levels:
+Invariants are constraints that must hold true for a message to be valid. Validators enforce these constraints before signing, and Bridge Modules can enforce additional constraints during execution.
 
-**Schema-Level Invariants** (in JSON Schema):
-- Required fields and their types
-- Value ranges and patterns
-- Field relationships
+#### 3.6.1 Invariant Categories
 
-**Application-Reported Invariants** (in metadata):
-- Current state values (e.g., `userTotalMinted`, `contractTotalSupply`)
-- Limits (e.g., `maxSupply`, `maxPerUser`)
-- Pre-computed checks the validator can verify
+Invariants fall into three categories based on their data source:
 
-**Example: NFT with Per-User and Global Limits**
+| Category | Verified By | Data Source | Examples |
+|----------|-------------|-------------|----------|
+| **On-Chain State** | Validators (pre-sign) + Modules (post-exec) | RPC calls to contracts | Total supply caps, balance checks, allowance limits |
+| **Off-Chain Oracle** | Validators (pre-sign) | Oracle feeds, price APIs | Price deviation thresholds, exchange rate bounds |
+| **Application Logic** | Validators (pre-sign) | Metadata fields, optional app API | Game rules, rate limits, business constraints |
+
+Each category has different trust properties and verification patterns.
+
+#### 3.6.2 On-Chain State Invariants
+
+On-chain invariants verify that blockchain state satisfies required conditions. Validators query contract state via RPC and compare against limits specified in metadata or schema.
+
+**Common Patterns**:
+
+| Pattern | What Validators Check | Data Source |
+|---------|----------------------|-------------|
+| Supply Cap | `currentSupply + mintAmount <= maxSupply` | `totalSupply()` on target contract |
+| Balance Check | `senderBalance >= transferAmount` | `balanceOf(sender)` on token contract |
+| Allowance Check | `allowance >= spendAmount` | `allowance(owner, spender)` on token contract |
+| Ownership | `ownerOf(tokenId) == expectedOwner` | `ownerOf(tokenId)` on NFT contract |
+
+**Pre-Execution vs Post-Execution**:
+
+- **Pre-execution checks** (by validators): Verify state *before* the message is signed. Use when current state determines validity.
+- **Post-execution checks** (by Bridge Modules): Verify state *after* execution completes. Use when the invariant depends on the result of the operation (e.g., "total supply must still be <= max after this mint").
+
+**Example: Total Supply Cap**
+
+For a `mint(address,uint256)` message, validators enforce that minting won't exceed the maximum supply:
 
 ```json
 {
-  "messageType": "safeMint(address,uint256,string)",
-  "calldata": "0x...",
+  "messageType": "mint(address,uint256)",
+  "calldata": "0x40c10f19...",
   "metadata": {
-    "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-    "tokenId": "12345",
-
-    "userCurrentBalance": 2,
-    "maxPerUser": 3,
-
-    "currentTotalSupply": 9500,
-    "maxTotalSupply": 10000,
-
-    "reason": "game_reward",
-    "gameSessionId": "session_abc123",
-    "achievementId": "first_win"
+    "reason": "user_deposit",
+    "maxSupply": "10000000000000000000000000",
+    "sourceChain": "ethereum",
+    "sourceTxHash": "0xabc..."
   }
 }
 ```
 
-Validators verify:
-1. `userCurrentBalance + 1 <= maxPerUser` (user can receive this NFT)
-2. `currentTotalSupply + 1 <= maxTotalSupply` (supply cap not exceeded)
-3. Additional custom rules (e.g., verify game session via external API)
+**Validator logic**:
 
-The schema defines which invariant fields are required; validators enforce the logic.
+```python
+def check_supply_cap_invariant(message, rpc_client):
+    # 1. Extract mint amount from calldata
+    _, recipient, amount = decode_calldata(message.calldata)
+
+    # 2. Query current supply from target contract
+    target_contract = get_target_contract(message.messageType)
+    current_supply = rpc_client.call(target_contract, "totalSupply()")
+
+    # 3. Get max supply from metadata
+    max_supply = int(message.metadata["maxSupply"])
+
+    # 4. Check invariant: current + mint <= max
+    if current_supply + amount > max_supply:
+        raise InvariantViolation(
+            f"Supply cap exceeded: {current_supply} + {amount} > {max_supply}"
+        )
+
+    return True
+```
+
+**Witness Validator behavior**: Witnesses independently query `totalSupply()` from their own RPC connection. If the value differs significantly from what the Primary observed (due to race conditions), the Witness should wait and retry, or reject if the invariant no longer holds.
+
+**Bridge Module enforcement**: For critical supply caps, a post-execution module can provide on-chain enforcement as a final safety check:
+
+```solidity
+contract SupplyCapModule is IModule {
+    IERC20 public token;
+    uint256 public maxSupply;
+
+    function check(bytes32 messageId, bool isPreExecution)
+        external view returns (bool pass, string memory reason)
+    {
+        if (isPreExecution) return (true, ""); // Skip pre-check
+
+        // Post-execution: verify supply is still within cap
+        if (token.totalSupply() > maxSupply) {
+            return (false, "Supply cap exceeded");
+        }
+        return (true, "");
+    }
+}
+```
+
+#### 3.6.3 Off-Chain Oracle Invariants
+
+Oracle invariants verify that off-chain data (prices, exchange rates, external state) satisfies required conditions. Validators fetch data from oracles or APIs and compare against thresholds.
+
+**Common Patterns**:
+
+| Pattern | What Validators Check | Data Source |
+|---------|----------------------|-------------|
+| Price Deviation | `|appPrice - oraclePrice| / oraclePrice <= threshold` | Chainlink, Pyth, Redstone |
+| Rate Bounds | `minRate <= exchangeRate <= maxRate` | Price API, DEX oracle |
+| Freshness | `oracleTimestamp >= now - maxAge` | Oracle heartbeat |
+
+**Freshness Requirements**:
+
+Oracle data can become stale. Validators should:
+1. Check the oracle's last update timestamp
+2. Reject if data is older than a configured maximum age (e.g., 5 minutes for volatile assets)
+3. Use time-weighted averages (TWAP) for manipulation resistance when appropriate
+
+**Example: Price Deviation Threshold**
+
+For a cross-chain swap, validate that the application's claimed exchange rate is within 5% of the Chainlink oracle price:
+
+```json
+{
+  "messageType": "swap(address,address,uint256,uint256)",
+  "calldata": "0x...",
+  "metadata": {
+    "reason": "cross_chain_swap",
+    "fromToken": "ETH",
+    "toToken": "USDC",
+    "fromAmount": "1000000000000000000",
+    "toAmount": "3500000000",
+    "exchangeRate": "3500.00",
+    "priceSource": "app_internal",
+    "maxDeviation": "5"
+  }
+}
+```
+
+**Validator logic**:
+
+```python
+def check_price_deviation_invariant(message, oracle_client):
+    # 1. Get application's claimed rate
+    app_rate = Decimal(message.metadata["exchangeRate"])
+    max_deviation_pct = Decimal(message.metadata["maxDeviation"])
+
+    # 2. Fetch oracle price
+    from_token = message.metadata["fromToken"]
+    to_token = message.metadata["toToken"]
+
+    oracle_price = oracle_client.get_price(
+        feed=f"{from_token}/{to_token}",
+        provider="chainlink"
+    )
+
+    # 3. Check freshness
+    if oracle_price.timestamp < time.now() - MAX_ORACLE_AGE:
+        raise InvariantViolation("Oracle price is stale")
+
+    # 4. Calculate deviation
+    deviation_pct = abs(app_rate - oracle_price.value) / oracle_price.value * 100
+
+    # 5. Check threshold
+    if deviation_pct > max_deviation_pct:
+        raise InvariantViolation(
+            f"Price deviation {deviation_pct:.2f}% exceeds max {max_deviation_pct}%"
+        )
+
+    return True
+```
+
+**Witness Validator behavior**: Witnesses independently query the same oracle (or a different oracle for the same price feed). Minor deviations between Primary and Witness oracle reads are expected due to timing; significant deviations should trigger rejection.
+
+**Supported Oracle Providers**:
+
+| Provider | Query Method | Notes |
+|----------|--------------|-------|
+| Chainlink | On-chain read of `latestRoundData()` | Most common, on-chain availability |
+| Pyth | On-chain or off-chain API | Cross-chain, pull-based |
+| Redstone | Off-chain with on-chain verification | Flexible data types |
+| Custom API | HTTP GET to price endpoint | For non-standard data |
+
+#### 3.6.4 Application Logic Invariants
+
+Application logic invariants enforce business rules specific to the application. These cannot be independently verified from public data sources - they depend on application state.
+
+**Common Patterns**:
+
+| Pattern | What Validators Check | Data Source |
+|---------|----------------------|-------------|
+| Rate Limiting | User hasn't exceeded action frequency | App database/API |
+| Game Rules | Game state allows this action | Game server API |
+| Access Control | User has permission for this action | App permission system |
+| Uniqueness | Action hasn't already been performed | App state |
+
+**Trust Model**:
+
+Application logic invariants have a different trust model than on-chain or oracle invariants:
+
+- **Primary Validator**: Validates based on metadata fields provided by the application. Trusts the application to report accurate state.
+- **Witness Validator**: Cannot independently verify application state. Options:
+  1. Trust Primary's validation (default)
+  2. Query application's Verification API (if provided)
+  3. Require application to run in TEE with attestation
+
+**Example: Game Invariants**
+
+For a game that awards prizes, enforce that each game has only one winner and players can't play more than once every 10 minutes:
+
+```json
+{
+  "messageType": "claimPrize(address,bytes32,uint256)",
+  "calldata": "0x...",
+  "metadata": {
+    "reason": "game_winner",
+    "gameId": "game_12345",
+    "playerId": "player_0x742d...",
+    "prizeAmount": "1000000000000000000",
+
+    "gameWinnerCount": 0,
+    "playerLastPlayTimestamp": 1735080000,
+    "currentTimestamp": 1735084800,
+    "minPlayInterval": 600,
+
+    "verificationApiUrl": "https://api.game.example.com/verify"
+  }
+}
+```
+
+**Validator logic**:
+
+```python
+def check_game_invariants(message):
+    metadata = message.metadata
+
+    # Invariant 1: Only one winner per game
+    if metadata["gameWinnerCount"] != 0:
+        raise InvariantViolation(
+            f"Game {metadata['gameId']} already has a winner"
+        )
+
+    # Invariant 2: Minimum play interval
+    time_since_last_play = (
+        metadata["currentTimestamp"] - metadata["playerLastPlayTimestamp"]
+    )
+    if time_since_last_play < metadata["minPlayInterval"]:
+        raise InvariantViolation(
+            f"Player must wait {metadata['minPlayInterval'] - time_since_last_play}s"
+        )
+
+    return True
+```
+
+**Witness Validator with Verification API** (optional):
+
+If the application provides a `verificationApiUrl`, Witnesses can independently verify:
+
+```python
+def verify_via_api(message):
+    api_url = message.metadata.get("verificationApiUrl")
+    if not api_url:
+        # No verification API - trust Primary
+        return True
+
+    response = http_client.post(
+        f"{api_url}/verify",
+        json={
+            "messageId": message.id,
+            "gameId": message.metadata["gameId"],
+            "playerId": message.metadata["playerId"]
+        }
+    )
+
+    if not response.json()["valid"]:
+        raise InvariantViolation(response.json()["reason"])
+
+    return True
+```
+
+#### 3.6.5 Verification API Pattern (Optional)
+
+Applications can implement a standard Verification API to allow Witness Validators to independently verify application logic invariants. This is optional but recommended for applications requiring higher trust guarantees.
+
+**API Specification**:
+
+```yaml
+POST /verify
+  Description: Verify invariants for a proposed message
+
+  Request:
+    Content-Type: application/json
+    Body:
+      messageId: bytes32      # Message being verified
+      invariantIds: string[]  # Which invariants to check (optional, default: all)
+      metadata: object        # Full metadata from message
+
+  Response:
+    valid: boolean           # True if all invariants pass
+    results: array           # Per-invariant results
+      - invariantId: string
+        valid: boolean
+        reason: string?      # Explanation if invalid
+
+  Example Request:
+    {
+      "messageId": "0x1234...",
+      "invariantIds": ["single_winner", "play_cooldown"],
+      "metadata": {
+        "gameId": "game_12345",
+        "playerId": "player_0x742d...",
+        "gameWinnerCount": 0,
+        "playerLastPlayTimestamp": 1735080000
+      }
+    }
+
+  Example Response:
+    {
+      "valid": true,
+      "results": [
+        { "invariantId": "single_winner", "valid": true },
+        { "invariantId": "play_cooldown", "valid": true }
+      ]
+    }
+```
+
+**When to Implement**:
+
+| Scenario | Recommendation |
+|----------|----------------|
+| Internal tools, low value | Skip - trust Primary |
+| Gaming, moderate value | Implement - adds Witness verification |
+| Financial, high value | Implement + run app in TEE |
+| Multi-tenant bridge | Required - Witnesses need independent verification |
+
+**Trust Hierarchy**:
+
+| Verification Method | Trust Level | Use Case |
+|---------------------|-------------|----------|
+| Trust Primary only | Low | Internal apps, testing |
+| Verification API | Medium | Production apps |
+| Verification API + App in TEE | High | Financial apps |
+| Open source + deterministic replay | Maximum | Critical infrastructure |
+
+#### 3.6.6 Schema-Level vs Runtime Invariants
+
+Invariants can be enforced at two levels:
+
+**Schema-Level** (in JSON Schema):
+- Field presence and types (`required`, `type`)
+- Value constraints (`minimum`, `maximum`, `pattern`)
+- Enum restrictions (`enum`)
+- Field relationships (`if/then/else` in JSON Schema)
+
+**Runtime** (in validator logic):
+- Cross-field calculations (`amount <= balance`)
+- External data queries (`currentSupply + amount <= maxSupply`)
+- Temporal constraints (`now - lastAction >= minInterval`)
+- Business logic (`gameWinnerCount == 0`)
+
+**Example: Combined Enforcement**
+
+Schema ensures required fields and types:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["maxSupply", "reason"],
+  "properties": {
+    "maxSupply": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Maximum token supply (required for supply cap invariant)"
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["user_deposit", "reward", "migration"],
+      "description": "Reason for minting"
+    }
+  }
+}
+```
+
+Validator logic enforces runtime invariants:
+
+```python
+def validate_message(message):
+    # Schema validation (JSON Schema)
+    validate_schema(message.metadata, schema)
+
+    # Runtime invariants
+    check_supply_cap_invariant(message, rpc_client)
+    check_rate_limit_invariant(message)
+
+    return True
+```
 
 ### 3.7 Message ID Generation
 
@@ -643,9 +995,17 @@ The Primary Validator verifies application identity (see Section 2.4).
 │      ├─ Validate metadata against JSON Schema                    │
 │      └─ Check: all required evidence fields present              │
 │                                                                  │
-│  2.7 INVARIANT CHECKS                                            │
-│      ├─ Verify metadata invariants (e.g., supply limits)         │
-│      └─ Check: invariant conditions hold                         │
+│  2.7 INVARIANT CHECKS (see Section 3.6 for details)              │
+│      ├─ On-chain state invariants:                               │
+│      │   └─ Query contract state via RPC (totalSupply, balances) │
+│      │   └─ Compare against limits in metadata/schema            │
+│      ├─ Off-chain oracle invariants:                             │
+│      │   └─ Fetch price/rate from oracle (Chainlink, etc.)       │
+│      │   └─ Check freshness, verify deviation within threshold   │
+│      ├─ Application logic invariants:                            │
+│      │   └─ Validate metadata fields satisfy business rules      │
+│      │   └─ (e.g., gameWinnerCount == 0, play cooldown met)      │
+│      └─ On any invariant failure: REJECT message                 │
 │                                                                  │
 │  2.8 CUSTOM RULES (validator-specific)                           │
 │      ├─ Rate limiting (messages per second/minute)               │
@@ -824,6 +1184,76 @@ Witness Validators should independently verify metadata claims when possible:
 
 This is the key security benefit of Witness Validators - they don't just trust the application's claims.
 
+**Stage 3b: Invariant Re-Verification**
+
+Witness Validators re-verify invariants based on category (see Section 3.6):
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  INVARIANT RE-VERIFICATION                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  On-chain state invariants:                                      │
+│    ├─ Query contract state via own RPC connection                │
+│    ├─ Re-evaluate all conditions (supply caps, balances)         │
+│    └─ Minor timing differences expected; reject if violated      │
+│                                                                  │
+│  Off-chain oracle invariants:                                    │
+│    ├─ Query same or different oracle source                      │
+│    ├─ Check freshness independently                              │
+│    └─ Accept minor deviations due to timing; reject if large     │
+│                                                                  │
+│  Application logic invariants:                                   │
+│    ├─ Option A: Trust Primary's validation (default)             │
+│    ├─ Option B: Query app's Verification API (if provided)       │
+│    │   └─ POST to verificationApiUrl with message details        │
+│    └─ Option C: Require app TEE attestation for high-value       │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Handling Verification API** (for application logic invariants):
+
+If metadata includes `verificationApiUrl`, Witnesses can independently verify:
+
+```python
+def witness_verify_app_invariants(message):
+    api_url = message.metadata.get("verificationApiUrl")
+
+    if not api_url:
+        # No verification API provided - trust Primary
+        log.info("No verificationApiUrl, trusting Primary validation")
+        return True
+
+    # Call application's verification endpoint
+    response = http_client.post(
+        f"{api_url}/verify",
+        json={
+            "messageId": message.id,
+            "metadata": message.metadata
+        },
+        timeout=5
+    )
+
+    result = response.json()
+    if not result["valid"]:
+        raise InvariantViolation(
+            f"Verification API rejected: {result.get('reason', 'unknown')}"
+        )
+
+    return True
+```
+
+**Trust Implications**:
+
+| Invariant Type | Witness Can Re-verify? | Trust Model |
+|----------------|----------------------|-------------|
+| On-chain state | Yes (own RPC) | Independent verification |
+| Oracle data | Yes (query oracle) | Independent verification |
+| App logic (no API) | No | Trust Primary |
+| App logic (with API) | Yes | Independent verification |
+| App logic (TEE app) | Attestation | Cryptographic proof |
+
 **Stage 4: Sign and Submit**
 
 Same as Primary Validator (Stage 3 + Stage 5), but **skip storage publication**.
@@ -984,7 +1414,10 @@ Error codes:
 - `CALLDATA_INVALID` - Calldata doesn't match ABI signature
 - `CALLDATA_DECODE_FAILED` - Cannot decode calldata with messageType ABI
 - `SCHEMA_VALIDATION_FAILED` - Metadata doesn't match schema
-- `INVARIANT_VIOLATED` - Metadata invariant check failed
+- `INVARIANT_VIOLATED` - Invariant condition failed (on-chain, oracle, or app logic)
+- `INVARIANT_DATA_STALE` - Data source value exceeds freshness requirements
+- `INVARIANT_DATA_UNAVAILABLE` - Could not fetch required data from source (RPC, oracle, or API)
+- `INVARIANT_VERIFICATION_FAILED` - Verification API returned invalid or error response
 - `METADATA_REDERIVATION_FAILED` - Witness validator couldn't verify metadata claim
 - `RATE_LIMIT_EXCEEDED` - Too many messages from this app
 - `CUSTOM_RULE_FAILED` - Custom validation rule failed
@@ -2378,6 +2811,134 @@ Mitigation:
 4. Log all message submissions
 5. Monitor for failed validations
 6. **Provide rich metadata** to increase validator confidence (Section 7.6)
+
+### 8.6 Invariant Security
+
+Invariant checking introduces additional attack surfaces and security considerations. This section covers data source trust, timing attacks, and oracle manipulation.
+
+#### 8.6.1 Data Source Trust Hierarchy
+
+Not all data sources are equally trustworthy. Validators should apply appropriate skepticism based on source:
+
+| Data Source | Trust Level | Manipulation Risk | Mitigation |
+|-------------|-------------|-------------------|------------|
+| Target chain state (via RPC) | High | Low - protected by blockchain consensus | Use reputable RPC providers |
+| Other chain state (cross-chain) | Medium-High | Medium - depends on bridge/RPC | Multiple RPC sources, finality checks |
+| Chainlink/Pyth oracles | Medium-High | Medium - oracle manipulation possible | Use TWAP, check multiple feeds |
+| Public price APIs | Medium | Medium - API can be compromised | Multiple sources, sanity bounds |
+| Application HTTP API | Low | High - application controls response | Verification API pattern, TEE attestation |
+| Metadata fields only | None | High - application provides all data | On-chain/oracle verification required |
+
+**Key principle**: Validators should independently verify claims whenever possible. Metadata fields alone should never be trusted for high-value operations.
+
+#### 8.6.2 Stale Data Attacks
+
+**Attack**: Attacker exploits timing gap between data fetch and message execution.
+
+```
+1. Validator fetches price at T=0: $100
+2. Attacker manipulates market, price drops to $80 at T=1
+3. Message executes at T=2 with stale $100 price assumption
+4. Attacker profits from price discrepancy
+```
+
+**Mitigations**:
+
+| Strategy | Description | Trade-off |
+|----------|-------------|-----------|
+| Freshness bounds | Reject data older than N seconds | May reject valid messages during high latency |
+| Post-execution modules | Re-check state after execution | Reverts cost gas but catch stale data |
+| TWAP pricing | Use time-weighted averages | More manipulation-resistant, less responsive |
+| Price bounds in calldata | Hard-code acceptable price range | Execution fails if price moves too far |
+
+**Recommended freshness limits**:
+
+| Asset Type | Max Data Age | Rationale |
+|------------|--------------|-----------|
+| Stablecoins | 5 minutes | Low volatility |
+| Major tokens (ETH, BTC) | 1-2 minutes | Moderate volatility |
+| Volatile/small-cap | 30 seconds | High volatility |
+| Real-time (swaps) | 15 seconds | Price-sensitive |
+
+#### 8.6.3 Oracle Manipulation
+
+**Attack vectors**:
+
+1. **Flash loan attacks**: Attacker borrows large amounts, manipulates on-chain price, executes transaction, repays loan - all in one block
+2. **Low liquidity manipulation**: Attacker moves thin markets with relatively small capital
+3. **Oracle front-running**: Attacker sees oracle update in mempool, front-runs with stale price
+
+**Mitigations**:
+
+| Attack | Mitigation | Implementation |
+|--------|------------|----------------|
+| Flash loans | Use TWAP oracles | Chainlink TWAP, Uniswap TWAP |
+| Low liquidity | Minimum liquidity requirements | Check pool depth before trusting price |
+| Front-running | Post-execution price checks | Module verifies price still valid after execution |
+| Single oracle failure | Multiple oracle sources | Require 2-of-3 oracle agreement |
+
+**Example: Multi-oracle verification**
+
+```python
+def verify_price_multi_oracle(expected_price, tolerance_pct):
+    oracles = [
+        query_chainlink(feed),
+        query_pyth(feed),
+        query_uniswap_twap(pool)
+    ]
+
+    # Require at least 2 oracles within tolerance
+    valid_count = sum(
+        1 for oracle_price in oracles
+        if abs(oracle_price - expected_price) / expected_price <= tolerance_pct
+    )
+
+    if valid_count < 2:
+        raise InvariantViolation("Price not confirmed by multiple oracles")
+```
+
+#### 8.6.4 Application Logic Invariant Risks
+
+Application logic invariants carry unique risks because they depend on application-controlled state.
+
+**Risks**:
+
+| Risk | Description | Mitigation |
+|------|-------------|------------|
+| False state reporting | App lies about gameWinnerCount, balances | Verification API, TEE attestation |
+| API unavailability | Verification API goes down | Fallback to trust Primary, or reject |
+| API compromise | Attacker controls verification endpoint | mTLS, signed responses, multiple endpoints |
+| Race conditions | State changes between check and execution | Idempotency, optimistic locking |
+
+**Trust escalation pattern**:
+
+For applications handling increasing value, progressively add trust mechanisms:
+
+```
+Low value ($0-1K):
+  └─ Trust Primary validation only
+
+Medium value ($1K-100K):
+  └─ Require Verification API
+  └─ Multiple Witness validators
+
+High value ($100K+):
+  └─ Verification API + App runs in TEE
+  └─ App attestation in metadata
+  └─ 3-of-5 or higher validator threshold
+```
+
+#### 8.6.5 Invariant Failure Modes
+
+All invariant failures result in message rejection. There are no warning or soft-failure modes.
+
+| Failure Type | Validator Behavior | Application Response |
+|--------------|-------------------|---------------------|
+| On-chain state violation | Reject with `INVARIANT_VIOLATED` | Fix state or adjust parameters, resubmit |
+| Oracle data stale | Reject with `INVARIANT_DATA_STALE` | Wait for fresh oracle update, resubmit |
+| Oracle data unavailable | Reject with `INVARIANT_DATA_UNAVAILABLE` | Wait for oracle recovery, resubmit |
+| Verification API failure | Reject with `INVARIANT_VIOLATED` | Fix app state, resubmit |
+| Verification API timeout | Configurable: reject or trust Primary | Ensure API availability |
 
 ---
 
