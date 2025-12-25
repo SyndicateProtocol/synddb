@@ -1,7 +1,7 @@
-//! Shared types for `SyndDB` wire format
+//! Shared types for Message Passing Bridge wire format
 //!
 //! This module contains the core types used for communication between
-//! `synddb-sequencer`, `synddb-validator`, and `synddb-client`.
+//! validators and the Bridge contract.
 //!
 //! All wire format uses CBOR/COSE binary encoding. Types are organized in submodules:
 //! - `cbor`: CBOR/COSE binary format types (primary wire format)

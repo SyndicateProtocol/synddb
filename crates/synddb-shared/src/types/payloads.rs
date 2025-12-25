@@ -1,6 +1,6 @@
-//! Payload types for sequencer messages
+//! Payload types for validator messages
 //!
-//! These types represent the payloads sent from clients to the sequencer.
+//! These types represent the payloads sent between applications and validators.
 //! The primary wire format is CBOR, but JSON with base64-encoded binary fields
 //! is also supported for HTTP API compatibility.
 
@@ -70,7 +70,7 @@ mod bytes_serde {
     }
 }
 
-/// Changeset data from `synddb-client`
+/// Changeset data payload
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangesetData {
     /// Raw changeset bytes (base64-encoded in JSON, raw bytes in CBOR)
@@ -82,7 +82,7 @@ pub struct ChangesetData {
     pub timestamp: u64,
 }
 
-/// Changeset batch request from `synddb-client`
+/// Changeset batch request payload
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangesetBatchRequest {
     /// Batch identifier for tracking
@@ -108,7 +108,7 @@ pub struct WithdrawalRequest {
     pub data: Vec<u8>,
 }
 
-/// Snapshot data from `synddb-client`
+/// Snapshot data payload
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotData {
     /// Complete `SQLite` database file bytes (base64-encoded in JSON, raw bytes in CBOR)
@@ -120,7 +120,7 @@ pub struct SnapshotData {
     pub sequence: u64,
 }
 
-/// Snapshot request from `synddb-client`
+/// Snapshot request payload
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotRequest {
     /// Snapshot data

@@ -1,4 +1,4 @@
-//! Core message types for sequencer wire format
+//! Core message types for validator wire format
 //!
 //! All messages use CBOR/COSE binary format. The types in this module are used
 //! as internal representations after parsing from CBOR.
@@ -44,19 +44,19 @@ pub enum VerificationError {
     ProtectedHeaderParse(String),
 }
 
-/// Message types that can be sequenced
+/// Message types that can be validated
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageType {
-    /// `SQLite` changeset batch from `synddb-client`
+    /// SQLite changeset batch
     Changeset,
     /// Withdrawal request to be processed on L1
     Withdrawal,
-    /// Database snapshot from `synddb-client`
+    /// Database snapshot
     Snapshot,
 }
 
-/// A message that has been sequenced and signed by the sequencer.
+/// A message that has been validated and signed by a validator.
 ///
 /// This is the internal representation after parsing from CBOR/COSE format.
 /// All messages use `COSE_Sign1` signatures with 64-byte (r || s) format.
