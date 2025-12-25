@@ -247,3 +247,175 @@ bytes memory calldata = abi.encodeWithSelector(
 // Execute on target
 target.call{value: msg.value}(calldata);
 ```
+
+---
+
+## 4. Validation Protocol
+
+### 4.1 Validator Processing Flow
+
+When a validator receives a message, it processes through these stages:
+
+```
+RECEIVE → VALIDATE → SIGN → PUBLISH → SUBMIT
+```
+
+**Stage 1: Receive**
+```
+POST /messages
+Content-Type: application/json
+
+{
+  "messageType": "mint(address,uint256)",
+  "metadata": { ... },
+  "nonce": 42,
+  "timestamp": 1735084800,
+  "appId": "0x..."
+}
+```
+
+**Stage 2: Validate**
+
+The validator performs multiple validation checks in sequence:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     VALIDATION PIPELINE                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  2.1 REPLAY PROTECTION                                           │
+│      ├─ Compute message ID from content                          │
+│      ├─ Check: ID not already processed                          │
+│      └─ Check: nonce > lastNonce[appId]                          │
+│                                                                  │
+│  2.2 FRESHNESS CHECK                                             │
+│      └─ Check: |timestamp - now| < MAX_CLOCK_DRIFT               │
+│                                                                  │
+│  2.3 APPLICATION AUTHORIZATION                                   │
+│      └─ Check: appId is registered and active                    │
+│                                                                  │
+│  2.4 MESSAGE TYPE VALIDATION                                     │
+│      ├─ Query Bridge: getMessageTypeConfig(messageType)          │
+│      ├─ Check: message type is registered                        │
+│      └─ Check: message type is enabled                           │
+│                                                                  │
+│  2.5 SCHEMA VALIDATION                                           │
+│      ├─ Fetch schema (from cache, chain, or IPFS/Arweave)        │
+│      ├─ Validate metadata against JSON Schema                    │
+│      └─ Check: all required fields present with correct types    │
+│                                                                  │
+│  2.6 CUSTOM RULES (optional, validator-specific)                 │
+│      ├─ Rate limiting (messages per second/minute)               │
+│      ├─ Amount thresholds (flag large transfers)                 │
+│      ├─ Business logic (game rules, allowlists)                  │
+│      └─ External verification (check source chain, etc.)         │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Stage 3: Sign**
+
+If all validations pass:
+1. Compute the signing payload (EIP-712 typed data or raw hash)
+2. Sign with validator's private key (protected by TEE)
+3. Attach TEE attestation token if available
+
+**Stage 4: Publish (DA Layer)**
+
+Publish signed message to DA layer for audit:
+1. Serialize message + signature + attestation
+2. Submit to configured DA backend (Celestia, Arweave, etc.)
+3. Store DA reference for future queries
+
+**Stage 5: Submit (Bridge)**
+
+Submit signature to Bridge for on-chain aggregation:
+1. Call `Bridge.signMessage(messageId, signature)`
+2. Or return signature to relayer for batched submission
+
+### 4.2 Validation Levels
+
+Validation is hierarchical, with different levels enforced by different components:
+
+| Level | Enforced By | Examples |
+|-------|-------------|----------|
+| **Protocol** | All Validators | Replay protection, nonce ordering, timestamp freshness |
+| **Bridge** | Smart Contract | Message type registration, signature threshold |
+| **Schema** | Validators + Bridge | Required fields, field types, value constraints |
+| **Custom** | Individual Validators | Rate limits, business rules, external checks |
+
+### 4.3 Validator HTTP API
+
+```yaml
+# Submit a message for validation and signing
+POST /messages
+  Request:
+    messageType: string      # Required: ABI signature
+    metadata: object         # Required: JSON payload
+    nonce: uint64            # Required: Application nonce
+    timestamp: uint64        # Required: Unix timestamp
+    appId: bytes32           # Required: Application ID
+    value?: uint256          # Optional: Native token amount
+  Response:
+    status: "accepted" | "rejected"
+    messageId?: bytes32      # If accepted
+    signature?: bytes        # Validator signature
+    daReference?: string     # DA layer reference
+    error?: string           # If rejected
+
+# Check status of a submitted message
+GET /messages/{messageId}
+  Response:
+    id: bytes32
+    status: "pending" | "signed" | "published" | "submitted" | "executed"
+    signatures: address[]    # Validators who have signed
+    daReference?: string
+    bridgeTxHash?: bytes32   # If submitted to bridge
+
+# Get validator health and sync status
+GET /health
+  Response:
+    healthy: boolean
+    synced: boolean          # Synced with Bridge contract
+    bridgeConnection: boolean
+    daConnection: boolean
+    lastProcessedNonce: map[appId => nonce]
+
+# Get schema for a message type
+GET /schemas/{messageType}
+  Response:
+    schema: object           # JSON Schema
+    hash: bytes32            # Schema hash (for verification)
+    source: "chain" | "ipfs" | "arweave"
+    cached: boolean
+```
+
+### 4.4 Error Handling
+
+Validators return structured errors for rejected messages:
+
+```json
+{
+  "status": "rejected",
+  "error": {
+    "code": "SCHEMA_VALIDATION_FAILED",
+    "message": "Missing required field: recipient",
+    "details": {
+      "field": "recipient",
+      "constraint": "required",
+      "schema": "mint(address,uint256)"
+    }
+  }
+}
+```
+
+Error codes:
+- `REPLAY_DETECTED` - Message ID already processed
+- `INVALID_NONCE` - Nonce not greater than last seen
+- `TIMESTAMP_EXPIRED` - Timestamp outside acceptable window
+- `APP_NOT_AUTHORIZED` - Application ID not registered
+- `MESSAGE_TYPE_NOT_REGISTERED` - Unknown message type
+- `MESSAGE_TYPE_DISABLED` - Message type currently disabled
+- `SCHEMA_VALIDATION_FAILED` - Metadata doesn't match schema
+- `RATE_LIMIT_EXCEEDED` - Too many messages from this app
+- `CUSTOM_RULE_FAILED` - Custom validation rule failed
