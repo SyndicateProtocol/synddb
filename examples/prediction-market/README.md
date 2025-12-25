@@ -50,23 +50,46 @@ prediction-market/
 ## Quick Start
 
 ```bash
-# Run everything locally (anvil, sequencer, validator, app)
+# Run everything locally with CLI demo
 ./examples/prediction-market/scripts/dev-env.sh
+
+# Or run with HTTP server (demonstrates REST API)
+./examples/prediction-market/scripts/dev-env.sh --http
 ```
 
-Or run manually:
+### CLI Mode
 
 ```bash
-# Without replication (standalone SQLite)
 cargo run -p prediction-market -- init
 cargo run -p prediction-market -- create-account alice
 cargo run -p prediction-market -- create-market "Will ETH hit 5k?" --resolution-time 1767225600
 cargo run -p prediction-market -- buy --account 1 --market 1 --outcome yes --shares 100
 cargo run -p prediction-market -- status
+```
 
-# With replication (start sequencer first)
-cargo run -p synddb-sequencer -- --signing-key 0x0000000000000000000000000000000000000000000000000000000000000001
-cargo run -p prediction-market -- --sequencer http://localhost:8433 create-account alice
+### HTTP Mode
+
+```bash
+# Start the server
+cargo run -p prediction-market -- serve --port 8080
+
+# Create account
+curl -X POST http://localhost:8080/accounts \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "alice"}'
+
+# Create market
+curl -X POST http://localhost:8080/markets \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "Will ETH hit 5k?", "resolution_time": 1767225600}'
+
+# Buy shares
+curl -X POST http://localhost:8080/markets/1/buy \
+  -H 'Content-Type: application/json' \
+  -d '{"account_id": 1, "outcome": "yes", "shares": 100}'
+
+# Check status
+curl http://localhost:8080/status
 ```
 
 ## SyndDB Integration

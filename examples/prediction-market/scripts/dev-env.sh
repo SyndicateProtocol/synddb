@@ -13,7 +13,8 @@
 #   6. Chain Monitor (optional - watches bridge events)
 #
 # Usage:
-#   ./scripts/dev-env.sh              # Run full demo
+#   ./scripts/dev-env.sh              # Run full demo with CLI
+#   ./scripts/dev-env.sh --http       # Run demo with HTTP server
 #   ./scripts/dev-env.sh --no-monitor # Skip chain monitor
 #   ./scripts/dev-env.sh --cleanup    # Clean up data files
 #
@@ -41,7 +42,8 @@ DATA_DIR="$EXAMPLE_DIR/.dev-data"
 # Ports
 ANVIL_PORT=8545
 SEQUENCER_PORT=8433
-VALIDATOR_PORT=8080
+VALIDATOR_PORT=8434
+APP_PORT=8080
 
 # Test private key (anvil default account 0)
 # WARNING: Never use this key with real funds!
@@ -53,9 +55,15 @@ SEQUENCER_PUBKEY="8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed
 ANVIL_PID=""
 SEQUENCER_PID=""
 VALIDATOR_PID=""
+APP_PID=""
 
 cleanup() {
     echo -e "\n${YELLOW}Cleaning up...${NC}"
+
+    if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
+        echo "Stopping app (PID $APP_PID)"
+        kill "$APP_PID" 2>/dev/null || true
+    fi
 
     if [ -n "$VALIDATOR_PID" ] && kill -0 "$VALIDATOR_PID" 2>/dev/null; then
         echo "Stopping validator (PID $VALIDATOR_PID)"
@@ -116,6 +124,7 @@ wait_for_port() {
 # Parse arguments
 SKIP_MONITOR=false
 CLEANUP_ONLY=false
+HTTP_MODE=false
 
 for arg in "$@"; do
     case $arg in
@@ -124,6 +133,9 @@ for arg in "$@"; do
             ;;
         --cleanup)
             CLEANUP_ONLY=true
+            ;;
+        --http)
+            HTTP_MODE=true
             ;;
     esac
 done
@@ -222,29 +234,64 @@ export PM_DATABASE="$DATA_DIR/market.db"
 print_step "Initializing database..."
 $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" init
 
-print_step "Creating accounts..."
-$PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" create-account alice
-$PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" create-account bob
+if [ "$HTTP_MODE" = true ]; then
+    # HTTP mode: Start server and use curl for demo
+    print_step "Starting HTTP server on port $APP_PORT..."
+    $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" serve --port $APP_PORT > "$DATA_DIR/app.log" 2>&1 &
+    APP_PID=$!
+    wait_for_port $APP_PORT "app"
+    print_info "HTTP server running with PID $APP_PID"
+    print_info "Log: $DATA_DIR/app.log"
 
-print_step "Creating prediction market..."
-$PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" create-market "Will ETH hit 5k in 2025?" --resolution-time 1767225600
+    print_step "Creating accounts via HTTP..."
+    curl -s -X POST "http://localhost:$APP_PORT/accounts" \
+        -H "Content-Type: application/json" \
+        -d '{"name": "alice"}' | jq .
+    curl -s -X POST "http://localhost:$APP_PORT/accounts" \
+        -H "Content-Type: application/json" \
+        -d '{"name": "bob"}' | jq .
 
-print_step "Simulating deposit from L1..."
-$PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" simulate-deposit \
-    --tx-hash "0x$(openssl rand -hex 32)" \
-    --from "0x1111111111111111111111111111111111111111" \
-    --to "0xdepositor" \
-    --amount 100000
+    print_step "Creating prediction market via HTTP..."
+    curl -s -X POST "http://localhost:$APP_PORT/markets" \
+        -H "Content-Type: application/json" \
+        -d '{"question": "Will ETH hit 5k in 2025?", "resolution_time": 1767225600}' | jq .
 
-print_step "Processing deposits..."
-$PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" process-deposits
+    print_step "Trading via HTTP: Alice buys YES, Bob buys NO..."
+    curl -s -X POST "http://localhost:$APP_PORT/markets/1/buy" \
+        -H "Content-Type: application/json" \
+        -d '{"account_id": 1, "outcome": "yes", "shares": 50}' | jq .
+    curl -s -X POST "http://localhost:$APP_PORT/markets/1/buy" \
+        -H "Content-Type: application/json" \
+        -d '{"account_id": 2, "outcome": "no", "shares": 30}' | jq .
 
-print_step "Trading: Alice buys YES, Bob buys NO..."
-$PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" buy --account 1 --market 1 --outcome yes --shares 50
-$PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" buy --account 2 --market 1 --outcome no --shares 30
+    print_step "Checking status via HTTP..."
+    curl -s "http://localhost:$APP_PORT/status" | jq .
+else
+    # CLI mode: Use CLI commands for demo
+    print_step "Creating accounts..."
+    $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" create-account alice
+    $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" create-account bob
 
-print_step "Checking status..."
-$PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" status
+    print_step "Creating prediction market..."
+    $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" create-market "Will ETH hit 5k in 2025?" --resolution-time 1767225600
+
+    print_step "Simulating deposit from L1..."
+    $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" simulate-deposit \
+        --tx-hash "0x$(openssl rand -hex 32)" \
+        --from "0x1111111111111111111111111111111111111111" \
+        --to "0xdepositor" \
+        --amount 100000
+
+    print_step "Processing deposits..."
+    $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" process-deposits
+
+    print_step "Trading: Alice buys YES, Bob buys NO..."
+    $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" buy --account 1 --market 1 --outcome yes --shares 50
+    $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" buy --account 2 --market 1 --outcome no --shares 30
+
+    print_step "Checking status..."
+    $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" status
+fi
 
 # Wait for changeset to be published
 sleep 2
@@ -305,6 +352,62 @@ print_info "Bridge events emitted. Check anvil logs or use 'cast logs' to verify
 # ============================================================================
 print_header "Development Environment Ready"
 
+if [ "$HTTP_MODE" = true ]; then
+echo -e "
+${GREEN}Components running:${NC}
+  - Anvil (L1):     http://localhost:$ANVIL_PORT (PID: $ANVIL_PID)
+  - Sequencer:      http://localhost:$SEQUENCER_PORT (PID: $SEQUENCER_PID)
+  - App (HTTP):     http://localhost:$APP_PORT (PID: $APP_PID)
+  - Validator:      http://localhost:$VALIDATOR_PORT (PID: $VALIDATOR_PID)
+
+${GREEN}Deployed contracts:${NC}
+  - TestBridge:     $BRIDGE_ADDRESS
+
+${GREEN}Data files:${NC}
+  - Market DB:      $PM_DATABASE
+  - Sequencer DB:   $DATA_DIR/sequencer.db
+  - Validator DB:   $DATA_DIR/validator.db
+
+${GREEN}Logs:${NC}
+  - App:            $DATA_DIR/app.log
+  - Sequencer:      $DATA_DIR/sequencer.log
+  - Validator:      $DATA_DIR/validator.log
+
+${YELLOW}HTTP API Examples:${NC}
+  # Get system status
+  curl http://localhost:$APP_PORT/status | jq .
+
+  # List accounts
+  curl http://localhost:$APP_PORT/accounts | jq .
+
+  # Create a new account
+  curl -X POST http://localhost:$APP_PORT/accounts \\
+    -H 'Content-Type: application/json' \\
+    -d '{\"name\": \"charlie\"}' | jq .
+
+  # List markets
+  curl http://localhost:$APP_PORT/markets | jq .
+
+  # Buy shares
+  curl -X POST http://localhost:$APP_PORT/markets/1/buy \\
+    -H 'Content-Type: application/json' \\
+    -d '{\"account_id\": 1, \"outcome\": \"yes\", \"shares\": 10}' | jq .
+
+  # Resolve a market
+  curl -X POST http://localhost:$APP_PORT/markets/1/resolve \\
+    -H 'Content-Type: application/json' \\
+    -d '{\"outcome\": \"yes\"}'
+
+${YELLOW}Useful commands:${NC}
+  # Check sequencer status
+  curl http://localhost:$SEQUENCER_PORT/health
+
+  # Check validator status
+  curl http://localhost:$VALIDATOR_PORT/health
+
+${YELLOW}Press Ctrl+C to stop all services${NC}
+"
+else
 echo -e "
 ${GREEN}Components running:${NC}
   - Anvil (L1):     http://localhost:$ANVIL_PORT (PID: $ANVIL_PID)
@@ -339,6 +442,9 @@ ${YELLOW}Useful commands:${NC}
   # Run more prediction market commands
   ./target/release/prediction-market --db $PM_DATABASE --sequencer http://localhost:$SEQUENCER_PORT status
 
+  # Start HTTP server instead
+  ./target/release/prediction-market --db $PM_DATABASE --sequencer http://localhost:$SEQUENCER_PORT serve --port 8080
+
   # Emit more bridge events
   cast send $BRIDGE_ADDRESS \"deposit(address,uint256)\" 0x4444444444444444444444444444444444444444 100000000000000000000 --rpc-url http://localhost:$ANVIL_PORT --private-key $PRIVATE_KEY
 
@@ -347,6 +453,7 @@ ${YELLOW}Useful commands:${NC}
 
 ${YELLOW}Press Ctrl+C to stop all services${NC}
 "
+fi
 
 # Keep running until interrupted
 wait

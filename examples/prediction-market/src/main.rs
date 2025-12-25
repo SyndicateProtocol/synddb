@@ -166,6 +166,13 @@ enum Commands {
         #[arg(long, default_value = "1")]
         start_block: u64,
     },
+
+    /// Run the HTTP server
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
 }
 
 fn main() -> Result<()> {
@@ -329,6 +336,17 @@ fn main() -> Result<()> {
             start_block,
         } => {
             run_chain_monitor(&app, &ws_url, &bridge, start_block)?;
+        }
+
+        Commands::Serve { port } => {
+            // Note: We don't use the 'app' created above - the HTTP server manages its own connections
+            drop(app);
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(prediction_market::http::serve(
+                db_path.to_string(),
+                cli.sequencer.clone(),
+                port,
+            ))?;
         }
     }
 
