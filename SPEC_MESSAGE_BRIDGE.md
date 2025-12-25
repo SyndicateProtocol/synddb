@@ -922,3 +922,240 @@ bytes32 public constant VALIDATOR_MANAGER_ROLE = keccak256("VALIDATOR_MANAGER_RO
 
 // Consider timelock for sensitive operations
 ```
+
+---
+
+## 7. Trust Model
+
+### 7.1 Core Security Property
+
+**The application does not control Bridge funds.**
+
+This is the fundamental security invariant. Even if an application is fully compromised:
+- It cannot request operations outside registered message types
+- It cannot bypass schema validation
+- It cannot forge validator signatures
+- It cannot directly access Bridge funds
+- It cannot modify Bridge configuration
+
+The Bridge rules are the trust anchor.
+
+### 7.2 Single Validator Mode
+
+**Use Case**: Non-financial applications, low-value operations, development/testing
+
+```
+Application ───▶ Single Validator ───▶ Bridge
+                       │
+                       └───▶ DA Layer (audit)
+```
+
+**Configuration**:
+```solidity
+signatureThreshold = 1;
+validators = [validatorAddress];
+```
+
+**Characteristics**:
+- Fastest path to execution (single signature)
+- Single point of trust (the validator)
+- Bridge still enforces all rules
+- Suitable for: gaming state, social feeds, metadata updates, internal tools
+
+**Trust assumption**: You trust the validator operator not to sign malicious messages.
+
+### 7.3 Multi-Validator Mode
+
+**Use Case**: Financial applications, high-value operations, production systems
+
+```
+                   ┌───▶ Validator 1 ───┐
+                   │                    │
+Application ───────┼───▶ Validator 2 ───┼───▶ Bridge (M-of-N)
+                   │                    │
+                   └───▶ Validator N ───┘
+                              │
+                              └───▶ DA Layer (audit)
+```
+
+**Configuration**:
+```solidity
+signatureThreshold = 2;  // 2-of-3
+validators = [validator1, validator2, validator3];
+```
+
+**Characteristics**:
+- Byzantine fault tolerant (tolerates (N-M) malicious validators)
+- Distributed trust (no single point of failure)
+- Higher latency (multiple signatures needed)
+- Suitable for: token bridges, DeFi, high-value transfers
+
+**Common configurations**:
+- 2-of-3: Tolerates 1 malicious/offline validator
+- 3-of-5: Tolerates 2 malicious/offline validators
+- 5-of-9: High security for critical operations
+
+### 7.4 Trust Boundaries
+
+| Component | Trust Assumption | Consequence if Compromised |
+|-----------|------------------|---------------------------|
+| Application | Minimal | Can only request allowed operations |
+| Single Validator | Full | Can sign any allowed operation |
+| M-of-N Validators | M validators collude | Can sign any allowed operation |
+| Bridge Contract | Immutable/audited | System broken (upgrade needed) |
+| Bridge Admin | Timelock protected | Can change rules (with delay) |
+
+### 7.5 Security Gradient
+
+Different applications require different security postures:
+
+| Value at Risk | Validator Setup | Additional Measures |
+|---------------|-----------------|---------------------|
+| Low (<$1K) | Single validator, no TEE | Basic rate limiting |
+| Medium ($1K-$100K) | Single validator in TEE | Rate limits, DA audit |
+| High ($100K-$1M) | 2-of-3 validators in TEE | Amount thresholds, allowlists |
+| Critical (>$1M) | 3-of-5+ validators in TEE | Timelocks, monitoring, incident response |
+
+### 7.6 Application Security Upgrades
+
+Applications can progressively upgrade their security without protocol changes:
+
+**Level 1: Basic**
+- HTTP application, no special security
+- Trust application operator for business logic
+
+**Level 2: Logging**
+- Comprehensive audit logs
+- Validators can verify claims against logs
+
+**Level 3: TEE**
+- Application runs in Trusted Execution Environment
+- TEE attestation proves application integrity
+
+**Level 4: Checkpointing**
+- Periodic database/state snapshots
+- Validators can re-derive application state
+
+**Level 5: Full Verification**
+- Application code is open and deterministic
+- Validators re-execute all logic
+
+The protocol supports all levels; applications choose based on value at risk.
+
+---
+
+## 8. Security Analysis
+
+### 8.1 Threat Model
+
+**Attackers**:
+1. **Malicious Application**: Compromised or malicious application operator
+2. **External Attacker**: No access to any system component
+3. **Compromised Validator**: One or more validators colluding
+4. **Insider Threat**: Bridge admin or operator
+
+**Goals**:
+1. Steal funds from Bridge
+2. Execute unauthorized operations
+3. Manipulate message ordering
+4. Cause denial of service
+
+### 8.2 Threat Mitigation
+
+| Threat | Attack Vector | Mitigation |
+|--------|---------------|------------|
+| Malicious App | Submit fraudulent messages | Bridge rules limit possible operations; validators add checks |
+| External | Forge message signatures | secp256k1 signatures; validators in TEE |
+| External | Replay old messages | Unique message IDs; nonce ordering; timestamp freshness |
+| External | Tamper with messages | Signature over full message content |
+| Compromised Validator (1) | Sign malicious messages | M-of-N threshold; other validators must also sign |
+| Compromised Validators (M) | Collude to sign malicious | Defense in depth with modules; monitoring; timelocks |
+| Insider | Modify Bridge rules | Role-based access; timelocks on admin operations |
+| DoS | Flood with invalid messages | Rate limiting; application authorization |
+
+### 8.3 Security Properties
+
+**Integrity**: Messages cannot be modified after signing
+- Validators sign over complete message hash
+- Bridge verifies signature before storing
+- Any modification invalidates signature
+
+**Authenticity**: Only registered validators can approve messages
+- Validator registry on Bridge contract
+- Signature recovery proves signer identity
+- TEE attestation proves validator integrity
+
+**Non-repudiation**: All operations are auditable
+- DA layer stores all validated messages
+- On-chain events for all state changes
+- Complete audit trail for disputes
+
+**Authorization**: Bridge controls possible operations
+- Message type registry limits allowed operations
+- Schema validation ensures correct parameters
+- Modules enforce additional constraints
+
+### 8.4 Attack Scenarios
+
+**Scenario 1: Application tries to steal funds**
+```
+App: "transfer(address,uint256)" with attacker address
+Mitigation:
+1. Message type must be registered (limited by Bridge admin)
+2. Schema requires specific fields (validated by validators)
+3. Allowlist module restricts to known addresses
+4. Rate limit module prevents draining
+5. Amount threshold module flags large transfers
+```
+
+**Scenario 2: Replay attack**
+```
+Attacker: Re-submit old valid message
+Mitigation:
+1. Message ID is unique (hash of content)
+2. Nonce must be strictly increasing
+3. Timestamp must be recent
+4. Bridge tracks executed message IDs
+```
+
+**Scenario 3: Front-running**
+```
+Attacker: See pending message, submit conflicting transaction
+Mitigation:
+1. Application can use private mempools
+2. Commit-reveal schemes for sensitive operations
+3. Nonce ordering prevents reordering
+```
+
+**Scenario 4: Validator key theft**
+```
+Attacker: Steal validator private key
+Mitigation:
+1. Keys stored in TEE (hardware protected)
+2. M-of-N threshold requires multiple keys
+3. Key rotation procedures
+4. Monitoring for anomalous signing patterns
+```
+
+### 8.5 Security Recommendations
+
+**For Bridge Operators**:
+1. Use multisig for admin operations
+2. Implement timelocks for sensitive changes
+3. Regular security audits of contracts
+4. Monitoring and alerting for anomalies
+5. Incident response procedures
+
+**For Validator Operators**:
+1. Run validators in TEE
+2. Implement key rotation
+3. Monitor signing patterns
+4. Rate limit per application
+5. Geographic distribution
+
+**For Application Developers**:
+1. Use appropriate validator configuration for value at risk
+2. Implement nonce management correctly
+3. Add application-level rate limits
+4. Log all message submissions
+5. Monitor for failed validations
