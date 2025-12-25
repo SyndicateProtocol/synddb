@@ -287,27 +287,9 @@ If a message fails or expires, the application must continue with the next nonce
 
 **Primary Validator Nonce Tracking**:
 
-```python
-class NonceTracker:
-    def __init__(self):
-        self.last_nonce = {}  # domain -> last consumed nonce
+The Primary Validator tracks `last_nonce` per domain. It validates that each incoming nonce equals `last_nonce + 1`, then consumes the nonce on both `initialize` and `reject` operations.
 
-    def validate_nonce(self, app_id: str, nonce: int) -> bool:
-        expected = self.last_nonce.get(app_id, 0) + 1
-        return nonce == expected
-
-    def consume_nonce(self, app_id: str, nonce: int):
-        """Called when message is initialized OR rejected on Bridge"""
-        self.last_nonce[app_id] = nonce
-
-    def on_initialize(self, app_id: str, nonce: int):
-        """Message accepted and initialized"""
-        self.consume_nonce(app_id, nonce)
-
-    def on_reject(self, app_id: str, nonce: int):
-        """Message rejected via rejectProposal()"""
-        self.consume_nonce(app_id, nonce)
-```
+> See `PLAN_VALIDATORS.md` Section 2.2 for implementation.
 
 ### 2.7 Message Expiration
 
@@ -317,23 +299,7 @@ Messages expire if they don't reach signature threshold within the expiration wi
 
 **Expiration Check**:
 
-```solidity
-function isExpired(bytes32 messageId) public view returns (bool) {
-    MessageState storage state = messageStates[messageId];
-    ApplicationConfig storage config = applicationConfigs[state.domain];
-
-    uint256 expirationTime = state.timestamp + config.expirationSeconds;
-    return block.timestamp > expirationTime;
-}
-
-function expireMessage(bytes32 messageId) external {
-    require(isExpired(messageId), "Not expired");
-    require(messageStates[messageId].stage == MessageStage.Pending, "Not pending");
-
-    messageStates[messageId].stage = MessageStage.Expired;
-    emit MessageExpired(messageId, block.timestamp);
-}
-```
+Bridge provides `isExpired(messageId)` and `expireMessage(messageId)` functions. Expiration is computed as `message.timestamp + config.expirationSeconds`. Anyone can call `expireMessage()` for pending messages past their deadline.
 
 **Expiration as Terminal State**:
 
@@ -636,19 +602,7 @@ Schema ensures required fields and types:
 }
 ```
 
-Validator logic enforces runtime invariants:
-
-```python
-def validate_message(message):
-    # Schema validation (JSON Schema)
-    validate_schema(message.metadata, schema)
-
-    # Runtime invariants
-    check_supply_cap_invariant(message, rpc_client)
-    check_rate_limit_invariant(message)
-
-    return True
-```
+Validator logic enforces runtime invariants: first run schema validation, then check supply cap via RPC, then check rate limits. All checks must pass.
 
 ### 3.7 Message ID Generation
 
@@ -695,18 +649,7 @@ For deterministic message ID generation, metadata must be serialized consistentl
 
 **Computing metadataHash**:
 
-```python
-import json
-import hashlib
-
-def canonicalize(obj):
-    """RFC 8785 JSON Canonicalization"""
-    return json.dumps(obj, separators=(',', ':'), sort_keys=True, ensure_ascii=False)
-
-def compute_metadata_hash(metadata: dict) -> bytes:
-    canonical = canonicalize(metadata)
-    return hashlib.sha3_256(canonical.encode('utf-8')).digest()  # keccak256
-```
+Canonicalize the metadata object using RFC 8785 rules, then compute `keccak256(canonical_bytes)`. Use `separators=(',', ':')` and `sort_keys=True` when serializing JSON.
 
 **Edge Cases to Watch**:
 
@@ -849,36 +792,9 @@ Validation Failed
 
 **On-Chain Rejection Function**:
 
-```solidity
-/**
- * Reject a proposed message before initialization
- * @dev Only callable by registered Primary Validator for the domain
- * @param messageId Hash of the proposed message
- * @param messageType The message type that was proposed
- * @param domain Application that proposed the message
- * @param nonce The nonce of the rejected message
- * @param reasonHash Hash of rejection reason JSON
- * @param reasonRef Storage reference to full rejection reason
- */
-function rejectProposal(
-    bytes32 messageId,
-    string calldata messageType,
-    bytes32 domain,
-    uint64 nonce,
-    bytes32 reasonHash,
-    string calldata reasonRef
-) external {
-    require(applicationConfigs[domain].primaryValidator == msg.sender, "Not primary");
-    require(!proposalRejected[messageId], "Already rejected");
-    require(nonce == lastNonce[domain] + 1, "Invalid nonce");
+`rejectProposal(messageId, messageType, domain, nonce, reasonHash, reasonRef)` - Only callable by the Primary Validator for the domain. Marks the proposal as rejected, consumes the nonce, and emits `ProposalRejected` event.
 
-    // Mark as rejected and consume nonce
-    proposalRejected[messageId] = true;
-    lastNonce[domain] = nonce;
-
-    emit ProposalRejected(messageId, domain, msg.sender, nonce, reasonHash, reasonRef);
-}
-```
+> See `PLAN_CONTRACTS.md` Section 6.2 for implementation.
 
 **Key Points**:
 - All rejections are explicit and on-chain (both Primary and Witness)
@@ -894,33 +810,11 @@ function rejectProposal(
 
 **Stage 3: Sign**
 
-We use **EIP-712 typed data signing** for structured, verifiable signatures:
+Use **EIP-712 typed data signing**. The digest includes: messageId, messageType, calldata hash, metadata hash, nonce, timestamp, domain.
 
-```solidity
-bytes32 DOMAIN_SEPARATOR = keccak256(abi.encode(
-    keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-    keccak256("SyndBridge"),
-    keccak256("1"),
-    chainId,
-    bridgeAddress
-));
+Validators are registered during TEE bootstrapping (Section 6.9). No per-message attestation required.
 
-bytes32 structHash = keccak256(abi.encode(
-    MESSAGE_TYPEHASH,
-    messageId,
-    keccak256(bytes(messageType)),
-    keccak256(calldata),
-    keccak256(abi.encode(metadata)),
-    nonce,
-    timestamp,
-    domain
-));
-
-bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-signature = sign(digest, validatorPrivateKey);
-```
-
-Validators are registered on the Bridge during TEE bootstrapping (see Section 6.9). No per-message TEE attestation is required - the validator's signing key is already attested.
+> See `PLAN_VALIDATORS.md` Section 7 for EIP-712 implementation.
 
 **Stage 4: Publish to Storage Layer**
 
@@ -1013,37 +907,9 @@ Witness Validators re-verify invariants based on category (see Section 3.6):
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Handling Verification API** (for application logic invariants):
+**Verification API**: If metadata includes `verificationApiUrl`, Witnesses call the app's API to independently verify invariants.
 
-If metadata includes `verificationApiUrl`, Witnesses can independently verify:
-
-```python
-def witness_verify_app_invariants(message):
-    api_url = message.metadata.get("verificationApiUrl")
-
-    if not api_url:
-        # No verification API provided - trust Primary
-        log.info("No verificationApiUrl, trusting Primary validation")
-        return True
-
-    # Call application's verification endpoint
-    response = http_client.post(
-        f"{api_url}/verify",
-        json={
-            "messageId": message.id,
-            "metadata": message.metadata
-        },
-        timeout=5
-    )
-
-    result = response.json()
-    if not result["valid"]:
-        raise InvariantViolation(
-            f"Verification API rejected: {result.get('reason', 'unknown')}"
-        )
-
-    return True
-```
+> See `PLAN_VALIDATORS.md` Section 3.4 for implementation.
 
 **Trust Implications**:
 
@@ -1243,36 +1109,14 @@ New message types are added via Bridge admin functions. Validators fetch and cac
 
 ### 5.2 Message Type Registry
 
-The Bridge stores message type configurations:
+Each registered message type has:
+- `selector` - Function selector computed from message type string
+- `target` - Contract to call when executing
+- `schemaHash` - keccak256 of metadata JSON Schema
+- `schemaUri` - Where to fetch full schema (IPFS, Arweave)
+- `enabled` - Whether currently active
 
-```solidity
-struct MessageTypeConfig {
-    // Computed from messageType string
-    bytes4 selector;
-
-    // Contract to call when executing this message type
-    address target;
-
-    // Hash of the metadata JSON Schema (keccak256)
-    // NOTE: This is for metadata validation, not calldata
-    bytes32 schemaHash;
-
-    // URI to fetch full schema (IPFS, Arweave, or empty for on-chain)
-    string schemaUri;
-
-    // Whether this message type is currently active
-    bool enabled;
-
-    // When this message type was registered
-    uint256 createdAt;
-
-    // When the schema was last updated
-    uint256 updatedAt;
-}
-
-// Registry: "mint(address,uint256)" => MessageTypeConfig
-mapping(string => MessageTypeConfig) public messageTypes;
-```
+> See `PLAN_CONTRACTS.md` for `MessageTypeConfig` struct definition.
 
 ### 5.3 JSON Schema Format
 
@@ -1382,46 +1226,17 @@ Cons: Requires fetching from external source
 
 ### 5.5 Schema Registration API
 
-```solidity
-interface IMessageTypeRegistry {
-    // Register a new message type
-    function registerMessageType(
-        string calldata messageType,  // e.g., "mint(address,uint256)"
-        address target,               // Contract to call
-        bytes32 schemaHash,           // keccak256 of JSON Schema
-        string calldata schemaUri     // Where to fetch schema
-    ) external;
+| Function | Description |
+|----------|-------------|
+| `registerMessageType(messageType, target, schemaHash, schemaUri)` | Register new message type |
+| `updateSchema(messageType, newSchemaHash, newSchemaUri)` | Update schema for existing type |
+| `setEnabled(messageType, enabled)` | Enable/disable message type |
+| `setTarget(messageType, newTarget)` | Update target contract |
+| `isRegistered(messageType)` | Query if type exists |
+| `isEnabled(messageType)` | Query if type is active |
+| `getConfig(messageType)` | Get full MessageTypeConfig |
 
-    // Update schema for existing message type
-    function updateSchema(
-        string calldata messageType,
-        bytes32 newSchemaHash,
-        string calldata newSchemaUri
-    ) external;
-
-    // Enable or disable a message type
-    function setEnabled(
-        string calldata messageType,
-        bool enabled
-    ) external;
-
-    // Update target contract
-    function setTarget(
-        string calldata messageType,
-        address newTarget
-    ) external;
-
-    // Query functions
-    function isRegistered(string calldata messageType)
-        external view returns (bool);
-
-    function isEnabled(string calldata messageType)
-        external view returns (bool);
-
-    function getConfig(string calldata messageType)
-        external view returns (MessageTypeConfig memory);
-}
-```
+> See `PLAN_CONTRACTS.md` for full interface.
 
 ### 5.6 Schema Versioning
 
@@ -1479,148 +1294,39 @@ The Bridge smart contract is the trust anchor of the system. It:
 
 ### 6.2 Core Interface
 
-```solidity
-interface IMessageBridge {
-    // ==================== Message Initialization ====================
-    // Only the Primary Validator can initialize messages
+**Message Initialization** (Primary Validator only):
 
-    /**
-     * Initialize a new message on the Bridge
-     * @param messageId Unique message identifier (hash of content)
-     * @param messageType ABI signature (e.g., "mint(address,uint256)")
-     * @param calldata_ ABI-encoded function parameters
-     * @param metadataHash Hash of the metadata JSON (for verification)
-     * @param storageRef Reference to metadata in storage layer (e.g., "ar://...", "ipfs://...")
-     * @param nonce Application nonce
-     * @param timestamp Message timestamp
-     * @param domain Application identifier
-     * @dev Only callable by registered Primary Validator for this domain
-     */
-    function initializeMessage(
-        bytes32 messageId,
-        string calldata messageType,
-        bytes calldata calldata_,
-        bytes32 metadataHash,
-        string calldata storageRef,
-        uint64 nonce,
-        uint64 timestamp,
-        bytes32 domain
-    ) external payable;
+| Function | Description |
+|----------|-------------|
+| `initializeMessage(messageId, messageType, calldata_, metadataHash, storageRef, nonce, timestamp, domain)` | Initialize a new message on Bridge |
+| `initializeAndSign(...)` | Initialize and sign in one transaction |
 
-    /**
-     * Initialize and sign in one transaction (convenience for Primary)
-     * @dev Equivalent to initializeMessage() + signMessage()
-     */
-    function initializeAndSign(
-        bytes32 messageId,
-        string calldata messageType,
-        bytes calldata calldata_,
-        bytes32 metadataHash,
-        string calldata storageRef,
-        uint64 nonce,
-        uint64 timestamp,
-        bytes32 domain,
-        bytes calldata signature
-    ) external payable;
+**Signature Submission**:
 
-    // ==================== Signature Submission ====================
+| Function | Description |
+|----------|-------------|
+| `signMessage(messageId, signature)` | Submit validator's EIP-712 signature |
+| `rejectMessage(messageId, reasonHash, reasonRef)` | Witness rejects initialized message |
+| `rejectProposal(messageId, messageType, domain, nonce, reasonHash, reasonRef)` | Primary rejects before initialization |
 
-    /**
-     * Submit a validator signature for an initialized message
-     * @param messageId Message to sign (must already be initialized)
-     * @param signature Validator's EIP-712 signature
-     */
-    function signMessage(bytes32 messageId, bytes calldata signature) external;
+**Execution**:
 
-    /**
-     * Reject an initialized message with reason (for Witness Validators)
-     * @param messageId Message being rejected (must be initialized)
-     * @param reasonHash Hash of rejection reason JSON
-     * @param reasonRef Storage reference to full rejection reason
-     * @dev Witness Validators call this to publicly log why they refused to sign
-     */
-    function rejectMessage(
-        bytes32 messageId,
-        bytes32 reasonHash,
-        string calldata reasonRef
-    ) external;
+| Function | Description |
+|----------|-------------|
+| `executeMessage(messageId)` | Execute after threshold met (permissionless) |
 
-    /**
-     * Reject a proposed message before initialization (for Primary Validator)
-     * @param messageId Hash of the proposed message
-     * @param messageType The message type that was proposed
-     * @param domain Application that proposed the message
-     * @param nonce The nonce of the rejected message (will be consumed)
-     * @param reasonHash Hash of rejection reason JSON
-     * @param reasonRef Storage reference to full rejection reason
-     * @dev Only callable by registered Primary Validator for the domain
-     * @dev Consumes the nonce to prevent replay of rejected messages
-     */
-    function rejectProposal(
-        bytes32 messageId,
-        string calldata messageType,
-        bytes32 domain,
-        uint64 nonce,
-        bytes32 reasonHash,
-        string calldata reasonRef
-    ) external;
+**Validator Management** (requires TEE bootstrapping, see Section 6.9):
 
-    // ==================== Execution ====================
+| Function | Description |
+|----------|-------------|
+| `setPrimaryValidator(domain, validator, attestation)` | Register Primary for application |
+| `addWitnessValidator(validator, attestation)` | Add Witness to signing set |
+| `removeValidator(validator)` | Remove validator |
+| `setSignatureThreshold(threshold)` | Set M-of-N threshold |
 
-    /**
-     * Execute a message after signature threshold is met
-     * @param messageId Message to execute
-     * @dev Can be called by anyone (relayer, validator, etc.)
-     * @dev No built-in incentive; reimbursement handled out-of-band
-     */
-    function executeMessage(bytes32 messageId) external;
+**Queries**: `getMessageState`, `getSignatureCount`, `getRejectionCount`, `hasValidatorSigned`, `hasValidatorRejected`, `isMessageExecuted`, `getPrimaryValidator`, `getWitnessValidators`, `getSignatureThreshold`
 
-    // ==================== Validator Management ====================
-    // Note: Validators must complete TEE bootstrapping before being added
-    // See Section 6.9 for bootstrapping details
-
-    /**
-     * Register Primary Validator for an application
-     * @param domain Application identifier
-     * @param validator Address derived from TEE-attested signing key
-     * @param attestation TEE attestation proving key was generated in enclave
-     */
-    function setPrimaryValidator(
-        bytes32 domain,
-        address validator,
-        bytes calldata attestation
-    ) external;
-
-    /**
-     * Add a Witness Validator to the set
-     * @param validator Address derived from TEE-attested signing key
-     * @param attestation TEE attestation proving key was generated in enclave
-     */
-    function addWitnessValidator(address validator, bytes calldata attestation) external;
-
-    /**
-     * Remove a validator from the set
-     */
-    function removeValidator(address validator) external;
-
-    /**
-     * Set the signature threshold (M of N)
-     */
-    function setSignatureThreshold(uint256 threshold) external;
-
-    // ==================== Queries ====================
-
-    function getMessageState(bytes32 messageId) external view returns (MessageState memory);
-    function getSignatureCount(bytes32 messageId) external view returns (uint256);
-    function getRejectionCount(bytes32 messageId) external view returns (uint256);
-    function hasValidatorSigned(bytes32 messageId, address validator) external view returns (bool);
-    function hasValidatorRejected(bytes32 messageId, address validator) external view returns (bool);
-    function isMessageExecuted(bytes32 messageId) external view returns (bool);
-    function getPrimaryValidator(bytes32 domain) external view returns (address);
-    function getWitnessValidators() external view returns (address[] memory);
-    function getSignatureThreshold() external view returns (uint256);
-}
-```
+> See `PLAN_CONTRACTS.md` for full `IMessageBridge` interface.
 
 ### 6.3 Message State Machine
 
@@ -1669,44 +1375,11 @@ Note: rejectMessage() logs a rejection but doesn't block execution.
       EXPIRED and FAILED are terminal states (nonce consumed).
 ```
 
-```solidity
-enum MessageStage {
-    NotInitialized, // Message doesn't exist
-    Pending,        // Initialized, collecting signatures
-    Ready,          // Threshold met, awaiting execution
-    PreExecution,   // Running pre-execution modules
-    Executing,      // Calling target contract
-    PostExecution,  // Running post-execution modules
-    Completed,      // Successfully executed (terminal, nonce consumed)
-    Failed,         // Execution failed (terminal, nonce consumed)
-    Expired         // Threshold not reached in time (terminal, nonce consumed)
-}
+**Message Stages**: `NotInitialized` → `Pending` → `Ready` → `PreExecution` → `Executing` → `PostExecution` → `Completed`
 
-struct MessageState {
-    MessageStage stage;
-    string messageType;
-    bytes calldata_;          // ABI-encoded function parameters
-    bytes32 metadataHash;     // Hash of metadata JSON (for verification)
-    string storageRef;        // Reference to full metadata in storage layer
-    uint256 value;
-    uint64 nonce;
-    uint64 timestamp;
-    bytes32 domain;
-    address primaryValidator; // Who initialized this message
-    uint256 signaturesCollected;
-    uint256 rejectionsCollected;
-}
+Terminal states: `Completed`, `Failed`, `Expired` (all consume nonce)
 
-struct Rejection {
-    address validator;
-    bytes32 reasonHash;
-    string reasonRef;         // Storage reference to rejection reason
-    uint64 timestamp;
-}
-
-// Rejections stored separately
-mapping(bytes32 => Rejection[]) public messageRejections;
-```
+> See `PLAN_CONTRACTS.md` Section 2.1 for struct definitions.
 
 ### 6.4 Signature Verification
 
@@ -1761,69 +1434,27 @@ interface IModule {
 
 ### 6.7 Events
 
-These are enshrined Bridge events (not module events). The bridge-wide signature threshold can be extended for specific sensitive transactions via pre-execution modules.
+Bridge emits events for all state changes:
 
-```solidity
-// Message lifecycle events
-event MessageInitialized(
-    bytes32 indexed messageId,
-    bytes32 indexed domain,
-    address primaryValidator,
-    string messageType,
-    string storageRef
-);
-event SignatureSubmitted(bytes32 indexed messageId, address indexed validator, uint256 count);
-event MessageRejected(
-    bytes32 indexed messageId,
-    address indexed validator,
-    bytes32 reasonHash,
-    string reasonRef
-);
-event ProposalRejected(
-    bytes32 indexed messageId,
-    bytes32 indexed domain,
-    address indexed primaryValidator,
-    uint64 nonce,
-    bytes32 reasonHash,
-    string reasonRef
-);
-event ThresholdReached(bytes32 indexed messageId, uint256 signatures);
+| Category | Events |
+|----------|--------|
+| Message Lifecycle | `MessageInitialized`, `SignatureSubmitted`, `MessageRejected`, `ProposalRejected`, `ThresholdReached` |
+| Execution | `MessageExecuted`, `MessageFailed` |
+| Validators | `PrimaryValidatorSet`, `WitnessValidatorAdded`, `ValidatorRemoved`, `ThresholdUpdated` |
+| Modules | `ModuleAdded`, `ModuleRemoved` |
+| Registry | `MessageTypeRegistered`, `MessageTypeUpdated`, `MessageTypeEnabled` |
 
-// Execution events
-event MessageExecuted(bytes32 indexed messageId, string messageType, address target);
-event MessageFailed(bytes32 indexed messageId, string reason, bytes data);
-
-// Validator events
-event PrimaryValidatorSet(bytes32 indexed domain, address indexed validator, bytes attestation);
-event WitnessValidatorAdded(address indexed validator, bytes attestation);
-event ValidatorRemoved(address indexed validator);
-event ThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
-
-// Module events
-event ModuleAdded(address indexed module, bool preExecution, bool postExecution);
-event ModuleRemoved(address indexed module);
-
-// Registry events
-event MessageTypeRegistered(string indexed messageType, address target, bytes32 schemaHash);
-event MessageTypeUpdated(string indexed messageType, bytes32 oldSchemaHash, bytes32 newSchemaHash);
-event MessageTypeEnabled(string indexed messageType, bool enabled);
-```
+> See `PLAN_CONTRACTS.md` Section 8 for event signatures.
 
 ### 6.8 Access Control
 
-```solidity
-// Roles
-bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-bytes32 public constant REGISTRY_ROLE = keccak256("REGISTRY_ROLE");
-bytes32 public constant VALIDATOR_MANAGER_ROLE = keccak256("VALIDATOR_MANAGER_ROLE");
+| Role | Permissions |
+|------|-------------|
+| `ADMIN_ROLE` | Grant/revoke all roles |
+| `REGISTRY_ROLE` | Register/update message types |
+| `VALIDATOR_MANAGER_ROLE` | Add/remove validators, set threshold |
 
-// Permissions
-// - ADMIN_ROLE: Can grant/revoke all roles
-// - REGISTRY_ROLE: Can register/update message types
-// - VALIDATOR_MANAGER_ROLE: Can add/remove validators, set threshold
-
-// Timelock recommended for: threshold changes, validator removal, message type disabling
-```
+Timelock recommended for: threshold changes, validator removal, message type disabling.
 
 ### 6.9 TEE Bootstrapping
 
@@ -2282,26 +1913,6 @@ Not all data sources are equally trustworthy. Validators should apply appropriat
 | Front-running | Post-execution price checks | Module verifies price still valid after execution |
 | Single oracle failure | Multiple oracle sources | Require 2-of-3 oracle agreement |
 
-**Example: Multi-oracle verification**
-
-```python
-def verify_price_multi_oracle(expected_price, tolerance_pct):
-    oracles = [
-        query_chainlink(feed),
-        query_pyth(feed),
-        query_uniswap_twap(pool)
-    ]
-
-    # Require at least 2 oracles within tolerance
-    valid_count = sum(
-        1 for oracle_price in oracles
-        if abs(oracle_price - expected_price) / expected_price <= tolerance_pct
-    )
-
-    if valid_count < 2:
-        raise InvariantViolation("Price not confirmed by multiple oracles")
-```
-
 #### 8.6.4 Application Logic Invariant Risks
 
 Application logic invariants carry unique risks because they depend on application-controlled state.
@@ -2366,38 +1977,9 @@ Storage and DA layers serve different purposes:
 
 ### 9.2 Publication Format
 
-Messages published to storage include:
+Storage records include: message content (id, type, calldata, metadata, nonce, timestamp, domain, value), Primary Validator signature, and publication metadata.
 
-```typescript
-interface StorageRecord {
-  // The original message
-  message: {
-    id: bytes32;
-    messageType: string;
-    calldata: bytes;      // ABI-encoded function parameters
-    metadata: object;     // Validator evidence
-    nonce: uint64;
-    timestamp: uint64;
-    domain: bytes32;
-    value?: uint256;
-  };
-
-  // Primary Validator signature
-  primarySignature: {
-    validator: address;
-    signature: bytes;
-    signedAt: uint64;
-  };
-
-  // Publication metadata
-  publication: {
-    publishedBy: address;
-    publishedAt: uint64;
-    storageLayer: string;
-    storageReference: string;
-  };
-}
-```
+> See `PLAN_VALIDATORS.md` Section 6 for `StorageRecord` interface.
 
 ### 9.3 Publication Timing
 
