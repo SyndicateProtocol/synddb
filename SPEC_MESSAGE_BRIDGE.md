@@ -371,27 +371,34 @@ This is consistent with how Ethereum transactions derive IDs - hashing the full 
 
 ## 4. Validation Protocol
 
-CLAUDE: We should differentiate between messages that are submitted by the
-application to a validator via HTTP endpoint (which is only one validator) and
-messages retrieved by validators from the storage layer. We should also figure
-out a good naming schema that accounts for this.
+### 4.1 Two Validator Flows
 
-### 4.1 Validator Processing Flow
+The validation flow differs based on validator mode:
 
-When a validator receives a message, it processes through these stages:
-
+**Primary Validator Flow** (receives from application):
 ```
-RECEIVE → VALIDATE → SIGN → PUBLISH → SUBMIT
+HTTP Receive → Authenticate → Validate → Sign → Publish to Storage → Submit to Bridge
 ```
 
-**Stage 1: Receive**
+**Witness Validator Flow** (reads from storage):
+```
+Read from Storage → Validate → Re-derive Metadata → Sign → Submit to Bridge
+```
+
+### 4.2 Primary Validator Processing
+
+The Primary Validator is the single validator connected to the application via HTTP.
+
+**Stage 1: Receive and Authenticate**
 
 ```
 POST /messages
+Authorization: <mTLS client cert or API key>
 Content-Type: application/json
 
 {
   "messageType": "mint(address,uint256)",
+  "calldata": "0x40c10f19...",
   "metadata": { ... },
   "nonce": 42,
   "timestamp": 1735084800,
@@ -399,12 +406,9 @@ Content-Type: application/json
 }
 ```
 
-CLAUDE: The validator should also re-derive relevant metadata when possible.
-For example, if prices are available, the validators should query the public
-price API to check the prices for itself.
-**Stage 2: Validate**
+The Primary Validator verifies application identity (see Section 2.4).
 
-The validator performs multiple validation checks in sequence:
+**Stage 2: Validate**
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -427,15 +431,22 @@ The validator performs multiple validation checks in sequence:
 │      ├─ Check: message type is registered                        │
 │      └─ Check: message type is enabled                           │
 │                                                                  │
-│  2.5 SCHEMA VALIDATION                                           │
-│      ├─ Fetch schema (from cache, chain, or IPFS/Arweave)        │
-│      ├─ Validate metadata against JSON Schema                    │
-│      └─ Check: all required fields present with correct types    │
+│  2.5 CALLDATA VALIDATION                                         │
+│      ├─ Decode calldata using messageType ABI                    │
+│      └─ Check: calldata matches expected parameter types         │
 │                                                                  │
-│  2.6 CUSTOM RULES (optional, validator-specific)                 │
+│  2.6 METADATA SCHEMA VALIDATION                                  │
+│      ├─ Fetch schema (from cache or IPFS/Arweave)                │
+│      ├─ Validate metadata against JSON Schema                    │
+│      └─ Check: all required evidence fields present              │
+│                                                                  │
+│  2.7 INVARIANT CHECKS                                            │
+│      ├─ Verify metadata invariants (e.g., supply limits)         │
+│      └─ Check: invariant conditions hold                         │
+│                                                                  │
+│  2.8 CUSTOM RULES (validator-specific)                           │
 │      ├─ Rate limiting (messages per second/minute)               │
 │      ├─ Amount thresholds (flag large transfers)                 │
-│      ├─ Business logic (game rules, allowlists)                  │
 │      └─ External verification (check source chain, etc.)         │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -443,71 +454,142 @@ The validator performs multiple validation checks in sequence:
 
 **Stage 3: Sign**
 
-If all validations pass:
+We use **EIP-712 typed data signing** for structured, verifiable signatures:
 
-CLAUDE: We can be opinionated here. What signing scheme should we use?
+```solidity
+bytes32 DOMAIN_SEPARATOR = keccak256(abi.encode(
+    keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+    keccak256("SyndBridge"),
+    keccak256("1"),
+    chainId,
+    bridgeAddress
+));
 
-1. Compute the signing payload (EIP-712 typed data or raw hash)
-2. Sign with validator's private key (protected by TEE)
-   CLAUDE: The validator should already be registered via bootstrapping in the bridge. A TEE attestation token should NOT be attached every time.
-3. Attach TEE attestation token if available
+bytes32 structHash = keccak256(abi.encode(
+    MESSAGE_TYPEHASH,
+    messageId,
+    keccak256(bytes(messageType)),
+    keccak256(calldata),
+    keccak256(abi.encode(metadata)),
+    nonce,
+    timestamp,
+    appId
+));
 
-CLAUDE: This only matters for the first validator that receives the original message from the application. All other validators should aggregate signatures in the bridge and should skip this step.
-**Stage 4: Publish (DA Layer)**
+bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+signature = sign(digest, validatorPrivateKey);
+```
 
-Publish signed message to DA layer for audit:
+Validators are registered on the Bridge during TEE bootstrapping (see Section 6.9). No per-message TEE attestation is required - the validator's signing key is already attested.
 
-1. Serialize message + signature + attestation
-2. Submit to configured DA backend (Celestia, Arweave, etc.)
-3. Store DA reference for future queries
+**Stage 4: Publish to Storage Layer**
 
-**Stage 5: Submit (Bridge)**
+**Only the Primary Validator publishes to storage.** This is critical for the Witness flow.
 
-Submit signature to Bridge for on-chain aggregation:
+```
+1. Serialize: message + signature + storageReference
+2. Publish to configured storage (Arweave, IPFS, GCS)
+3. Record storage reference locally
+```
 
-1. Call `Bridge.signMessage(messageId, signature)`
-2. Or return signature to relayer for batched submission
+Witness Validators will read from this storage layer.
 
-### 4.2 Validation Levels
+**Stage 5: Submit to Bridge**
 
-Validation is hierarchical, with different levels enforced by different components:
+Submit signature for on-chain aggregation:
 
-| Level        | Enforced By           | Examples                                               |
-| ------------ | --------------------- | ------------------------------------------------------ |
-| **Protocol** | All Validators        | Replay protection, nonce ordering, timestamp freshness |
-| **Bridge**   | Smart Contract        | Message type registration, signature threshold         |
-| **Schema**   | Validators + Bridge   | Required fields, field types, value constraints        |
-| **Custom**   | Individual Validators | Rate limits, business rules, external checks           |
+```solidity
+Bridge.signMessage(messageId, signature)
+```
 
-CLAUDE: We will need to revise this to account for the calldata vs metadata distinction
+### 4.3 Witness Validator Processing
 
-### 4.3 Validator HTTP API
+Witness Validators provide independent verification without trusting the Primary Validator's HTTP connection.
+
+**Stage 1: Read from Storage**
+
+Poll or subscribe to the storage layer for new messages:
+
+```
+1. Watch storage layer for new entries
+2. Fetch message: calldata, metadata, primary signature
+3. Verify primary signature is from registered Primary Validator
+```
+
+**Stage 2: Validate (Same as Primary)**
+
+Run the same validation pipeline as the Primary Validator.
+
+**Stage 3: Re-derive Verifiable Metadata**
+
+Witness Validators should independently verify metadata claims when possible:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    METADATA RE-DERIVATION                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  For each metadata field:                                        │
+│                                                                  │
+│  - sourceTxHash: Query source chain RPC to verify tx exists     │
+│  - depositAmount: Verify amount in source chain event logs      │
+│  - price: Query public price API (Chainlink, CoinGecko)         │
+│  - currentSupply: Query target contract view function            │
+│  - userBalance: Query target contract balanceOf()                │
+│                                                                  │
+│  If re-derived value differs from metadata:                      │
+│    → REJECT message                                              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+This is the key security benefit of Witness Validators - they don't just trust the application's claims.
+
+**Stage 4: Sign and Submit**
+
+Same as Primary Validator (Stage 3 + Stage 5), but **skip storage publication**.
+
+### 4.4 Validation Levels
+
+| Level | Enforced By | What's Validated |
+|-------|-------------|------------------|
+| **Protocol** | All Validators | Replay protection, nonce, timestamp, appId |
+| **Calldata** | All Validators | ABI encoding matches messageType signature |
+| **Metadata** | All Validators | Schema compliance, required evidence fields |
+| **Invariants** | All Validators | Business rules from metadata (limits, balances) |
+| **Re-derivation** | Witness Validators | Independent verification of verifiable claims |
+| **Bridge** | Smart Contract | Message type registration, signature threshold |
+
+### 4.5 Primary Validator HTTP API
 
 ```yaml
 # Submit a message for validation and signing
 POST /messages
+  Headers:
+    Authorization: mTLS client cert or API key
   Request:
-    messageType: string      # Required: ABI signature
-    metadata: object         # Required: JSON payload
-    nonce: uint64            # Required: Application nonce
-    timestamp: uint64        # Required: Unix timestamp
-    appId: bytes32           # Required: Application ID
-    value?: uint256          # Optional: Native token amount
+    messageType: string      # ABI signature
+    calldata: bytes          # ABI-encoded function parameters
+    metadata: object         # Evidence for validators
+    nonce: uint64            # Application nonce
+    timestamp: uint64        # Unix timestamp
+    appId: bytes32           # Application ID
+    value?: uint256          # Native token amount (optional)
   Response:
     status: "accepted" | "rejected"
-    messageId?: bytes32      # If accepted
-    signature?: bytes        # Validator signature
-    daReference?: string     # DA layer reference
-    error?: string           # If rejected
+    messageId?: bytes32
+    signature?: bytes
+    storageReference?: string
+    error?: object
 
 # Check status of a submitted message
 GET /messages/{messageId}
   Response:
     id: bytes32
     status: "pending" | "signed" | "published" | "submitted" | "executed"
-    signatures: address[]    # Validators who have signed
-    daReference?: string
-    bridgeTxHash?: bytes32   # If submitted to bridge
+    signatures: address[]
+    storageReference?: string
+    bridgeTxHash?: bytes32
 
 # Get validator health and sync status
 GET /health
