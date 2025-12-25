@@ -271,9 +271,10 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
         // 5. Validate and consume nonce
         _lastNonces.validateAndConsume(domain, nonce);
 
-        // 6. Validate timestamp freshness
+        // 6. Validate timestamp freshness (avoiding underflow)
+        // Message timestamp should be within MAX_CLOCK_DRIFT of current time
         if (
-            block.timestamp < timestamp - MAX_CLOCK_DRIFT || block.timestamp > timestamp + MAX_CLOCK_DRIFT
+            block.timestamp + MAX_CLOCK_DRIFT < timestamp || block.timestamp > timestamp + MAX_CLOCK_DRIFT
         ) {
             revert TimestampOutOfRange(timestamp, block.timestamp, MAX_CLOCK_DRIFT);
         }
