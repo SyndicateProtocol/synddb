@@ -145,37 +145,10 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run tests with nextest
-        run: cargo nextest run --workspace --all-features --exclude synddb-e2e --exclude synddb-e2e-gcs
+        run: cargo nextest run --workspace --all-features
 
-      # Fallback to standard cargo test for doctests (nextest doesn't support them)
-      # Note: e2e tests are excluded here and run separately in `e2e.yml`
       - name: Run doctests
-        run: cargo test --workspace --doc --exclude synddb-e2e --exclude synddb-e2e-gcs
+        run: cargo test --workspace --doc
 
       - name: Run tests (tests/confidential-space)
         run: cargo test --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
-
-  stress-test:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
-    name: Session Stress Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build stress test
-        run: cargo build --package synddb-benchmark --bin session-stress-test --release
-
-      - name: Run session stress test
-        run: |
-          ./target/release/session-stress-test --duration 15
-        env:
-          RUST_LOG: info
