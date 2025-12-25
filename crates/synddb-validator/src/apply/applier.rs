@@ -68,8 +68,26 @@ impl ChangesetApplier {
     /// - `Snapshot`: Restore database from snapshot
     /// - `Withdrawal`: Log only (no database changes)
     pub fn apply_message(&mut self, message: &SignedMessage) -> Result<()> {
+        self.apply_message_with_rules(message, None)
+    }
+
+    /// Apply a signed message with optional validation rules
+    ///
+    /// If rules are provided, they are run after the changeset is applied
+    /// but before the transaction is committed. If any rule fails,
+    /// the transaction is rolled back and an error is returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The signed message to apply
+    /// * `rules` - Optional validation rules to run after applying the changeset
+    pub fn apply_message_with_rules(
+        &mut self,
+        message: &SignedMessage,
+        rules: Option<&crate::rules::RuleRegistry>,
+    ) -> Result<()> {
         match message.message_type {
-            MessageType::Changeset => self.apply_changeset_message(message),
+            MessageType::Changeset => self.apply_changeset_message_with_rules(message, rules),
             MessageType::Snapshot => self.apply_snapshot_message(message),
             MessageType::Withdrawal => {
                 debug!(
@@ -103,8 +121,12 @@ impl ChangesetApplier {
         })
     }
 
-    /// Apply a changeset message
-    fn apply_changeset_message(&mut self, message: &SignedMessage) -> Result<()> {
+    /// Apply a changeset message with optional validation rules
+    fn apply_changeset_message_with_rules(
+        &mut self,
+        message: &SignedMessage,
+        rules: Option<&crate::rules::RuleRegistry>,
+    ) -> Result<()> {
         let batch: ChangesetBatchRequest = self.decompress_and_parse(message, "changeset batch")?;
 
         debug!(
@@ -135,6 +157,11 @@ impl ChangesetApplier {
                     reason: format!("Changeset {} in batch {}: {e}", i, batch.batch_id),
                 }
             })?;
+        }
+
+        // Run validation rules before committing (if any)
+        if let Some(registry) = rules {
+            registry.validate_all(&tx, message.sequence)?;
         }
 
         tx.commit().map_err(|e| {

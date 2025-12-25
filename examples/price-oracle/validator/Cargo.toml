@@ -1,0 +1,30 @@
+[package]
+name = "price-oracle-validator"
+version = "0.1.0"
+edition = "2021"
+description = "Custom SyndDB validator with price consistency rules for the price oracle example"
+publish = false
+
+[dependencies]
+# SyndDB crates
+synddb-validator = { path = "../../../crates/synddb-validator" }
+synddb-shared = { path = "../../../crates/synddb-shared" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Error handling
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# HTTP server
+axum = { version = "0.8", features = ["json"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }

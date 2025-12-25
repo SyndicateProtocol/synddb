@@ -8,6 +8,7 @@ members = [
   "crates/synddb-chain-monitor",
   "crates/synddb-shared",
   "examples/prediction-market",
+  "examples/price-oracle/validator",
   "tests/e2e/runner",
   "tests/e2e-gcs/runner",
 ]
