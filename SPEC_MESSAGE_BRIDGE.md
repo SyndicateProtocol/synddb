@@ -504,51 +504,13 @@ For a `mint(address,uint256)` message, validators enforce that minting won't exc
 }
 ```
 
-**Validator logic**:
+**Validator logic**: Extract mint amount from calldata, query `totalSupply()` via RPC, verify `currentSupply + amount <= maxSupply`.
 
-```python
-def check_supply_cap_invariant(message, rpc_client):
-    # 1. Extract mint amount from calldata
-    _, recipient, amount = decode_calldata(message.calldata)
+**Witness behavior**: Witnesses independently query state via their own RPC. Minor timing differences are expected.
 
-    # 2. Query current supply from target contract
-    target_contract = get_target_contract(message.messageType)
-    current_supply = rpc_client.call(target_contract, "totalSupply()")
+**Bridge Module**: For critical supply caps, a post-execution `SupplyCapModule` provides on-chain enforcement.
 
-    # 3. Get max supply from metadata
-    max_supply = int(message.metadata["maxSupply"])
-
-    # 4. Check invariant: current + mint <= max
-    if current_supply + amount > max_supply:
-        raise InvariantViolation(
-            f"Supply cap exceeded: {current_supply} + {amount} > {max_supply}"
-        )
-
-    return True
-```
-
-**Witness Validator behavior**: Witnesses independently query `totalSupply()` from their own RPC connection. If the value differs significantly from what the Primary observed (due to race conditions), the Witness should wait and retry, or reject if the invariant no longer holds.
-
-**Bridge Module enforcement**: For critical supply caps, a post-execution module can provide on-chain enforcement as a final safety check:
-
-```solidity
-contract SupplyCapModule is IModule {
-    IERC20 public token;
-    uint256 public maxSupply;
-
-    function check(bytes32 messageId, bool isPreExecution)
-        external view returns (bool pass, string memory reason)
-    {
-        if (isPreExecution) return (true, ""); // Skip pre-check
-
-        // Post-execution: verify supply is still within cap
-        if (token.totalSupply() > maxSupply) {
-            return (false, "Supply cap exceeded");
-        }
-        return (true, "");
-    }
-}
-```
+> See `PLAN_VALIDATORS.md` Section 3.1 and `PLAN_CONTRACTS.md` Section 3.4 for implementation.
 
 #### 3.6.3 Off-Chain Oracle Invariants
 
@@ -571,68 +533,11 @@ Oracle data can become stale. Validators should:
 
 **Example: Price Deviation Threshold**
 
-For a cross-chain swap, validate that the application's claimed exchange rate is within 5% of the Chainlink oracle price:
+Metadata includes `exchangeRate`, `maxDeviation`, token identifiers. Validator fetches oracle price, checks freshness, calculates deviation percentage, rejects if exceeds threshold.
 
-```json
-{
-  "messageType": "swap(address,address,uint256,uint256)",
-  "calldata": "0x...",
-  "metadata": {
-    "reason": "cross_chain_swap",
-    "fromToken": "ETH",
-    "toToken": "USDC",
-    "fromAmount": "1000000000000000000",
-    "toAmount": "3500000000",
-    "exchangeRate": "3500.00",
-    "priceSource": "app_internal",
-    "maxDeviation": "5"
-  }
-}
-```
+**Supported Oracle Providers**: Chainlink (on-chain), Pyth (cross-chain), Redstone, Custom API
 
-**Validator logic**:
-
-```python
-def check_price_deviation_invariant(message, oracle_client):
-    # 1. Get application's claimed rate
-    app_rate = Decimal(message.metadata["exchangeRate"])
-    max_deviation_pct = Decimal(message.metadata["maxDeviation"])
-
-    # 2. Fetch oracle price
-    from_token = message.metadata["fromToken"]
-    to_token = message.metadata["toToken"]
-
-    oracle_price = oracle_client.get_price(
-        feed=f"{from_token}/{to_token}",
-        provider="chainlink"
-    )
-
-    # 3. Check freshness
-    if oracle_price.timestamp < time.now() - MAX_ORACLE_AGE:
-        raise InvariantViolation("Oracle price is stale")
-
-    # 4. Calculate deviation
-    deviation_pct = abs(app_rate - oracle_price.value) / oracle_price.value * 100
-
-    # 5. Check threshold
-    if deviation_pct > max_deviation_pct:
-        raise InvariantViolation(
-            f"Price deviation {deviation_pct:.2f}% exceeds max {max_deviation_pct}%"
-        )
-
-    return True
-```
-
-**Witness Validator behavior**: Witnesses independently query the same oracle (or a different oracle for the same price feed). Minor deviations between Primary and Witness oracle reads are expected due to timing; significant deviations should trigger rejection.
-
-**Supported Oracle Providers**:
-
-| Provider | Query Method | Notes |
-|----------|--------------|-------|
-| Chainlink | On-chain read of `latestRoundData()` | Most common, on-chain availability |
-| Pyth | On-chain or off-chain API | Cross-chain, pull-based |
-| Redstone | Off-chain with on-chain verification | Flexible data types |
-| Custom API | HTTP GET to price endpoint | For non-standard data |
+> See `PLAN_VALIDATORS.md` Section 3.2 for implementation.
 
 #### 3.6.4 Application Logic Invariants
 
@@ -659,123 +564,19 @@ Application logic invariants have a different trust model than on-chain or oracl
 
 **Example: Game Invariants**
 
-For a game that awards prizes, enforce that each game has only one winner and players can't play more than once every 10 minutes:
+Metadata includes `gameWinnerCount`, `playerLastPlayTimestamp`, `minPlayInterval`. Validator checks:
+- `gameWinnerCount == 0` (only one winner per game)
+- `currentTimestamp - playerLastPlayTimestamp >= minPlayInterval` (play cooldown)
 
-```json
-{
-  "messageType": "claimPrize(address,bytes32,uint256)",
-  "calldata": "0x...",
-  "metadata": {
-    "reason": "game_winner",
-    "gameId": "game_12345",
-    "playerId": "player_0x742d...",
-    "prizeAmount": "1000000000000000000",
+If `verificationApiUrl` is provided, Witnesses can independently verify via the application's API.
 
-    "gameWinnerCount": 0,
-    "playerLastPlayTimestamp": 1735080000,
-    "currentTimestamp": 1735084800,
-    "minPlayInterval": 600,
-
-    "verificationApiUrl": "https://api.game.example.com/verify"
-  }
-}
-```
-
-**Validator logic**:
-
-```python
-def check_game_invariants(message):
-    metadata = message.metadata
-
-    # Invariant 1: Only one winner per game
-    if metadata["gameWinnerCount"] != 0:
-        raise InvariantViolation(
-            f"Game {metadata['gameId']} already has a winner"
-        )
-
-    # Invariant 2: Minimum play interval
-    time_since_last_play = (
-        metadata["currentTimestamp"] - metadata["playerLastPlayTimestamp"]
-    )
-    if time_since_last_play < metadata["minPlayInterval"]:
-        raise InvariantViolation(
-            f"Player must wait {metadata['minPlayInterval'] - time_since_last_play}s"
-        )
-
-    return True
-```
-
-**Witness Validator with Verification API** (optional):
-
-If the application provides a `verificationApiUrl`, Witnesses can independently verify:
-
-```python
-def verify_via_api(message):
-    api_url = message.metadata.get("verificationApiUrl")
-    if not api_url:
-        # No verification API - trust Primary
-        return True
-
-    response = http_client.post(
-        f"{api_url}/verify",
-        json={
-            "messageId": message.id,
-            "gameId": message.metadata["gameId"],
-            "playerId": message.metadata["playerId"]
-        }
-    )
-
-    if not response.json()["valid"]:
-        raise InvariantViolation(response.json()["reason"])
-
-    return True
-```
+> See `PLAN_VALIDATORS.md` Section 3.3-3.4 for implementation.
 
 #### 3.6.5 Verification API Pattern (Optional)
 
-Applications can implement a standard Verification API to allow Witness Validators to independently verify application logic invariants. This is optional but recommended for applications requiring higher trust guarantees.
+Applications can implement a Verification API (`POST /verify`) to allow Witness Validators to independently verify application logic invariants. Request includes `messageId` and `metadata`; response returns `valid: boolean` with per-invariant results.
 
-**API Specification**:
-
-```yaml
-POST /verify
-  Description: Verify invariants for a proposed message
-
-  Request:
-    Content-Type: application/json
-    Body:
-      messageId: bytes32      # Message being verified
-      invariantIds: string[]  # Which invariants to check (optional, default: all)
-      metadata: object        # Full metadata from message
-
-  Response:
-    valid: boolean           # True if all invariants pass
-    results: array           # Per-invariant results
-      - invariantId: string
-        valid: boolean
-        reason: string?      # Explanation if invalid
-
-  Example Request:
-    {
-      "messageId": "0x1234...",
-      "invariantIds": ["single_winner", "play_cooldown"],
-      "metadata": {
-        "gameId": "game_12345",
-        "playerId": "player_0x742d...",
-        "gameWinnerCount": 0,
-        "playerLastPlayTimestamp": 1735080000
-      }
-    }
-
-  Example Response:
-    {
-      "valid": true,
-      "results": [
-        { "invariantId": "single_winner", "valid": true },
-        { "invariantId": "play_cooldown", "valid": true }
-      ]
-    }
-```
+> See `PLAN_VALIDATORS.md` Section 3.4 for API specification.
 
 **When to Implement**:
 
@@ -1909,160 +1710,38 @@ mapping(bytes32 => Rejection[]) public messageRejections;
 
 ### 6.4 Signature Verification
 
-Validators sign the message hash using secp256k1:
+Signatures use **EIP-712 typed data** for structured, verifiable signing. The digest includes messageId, messageType, calldata hash, metadata hash, nonce, timestamp, and domain.
 
-```solidity
-function _verifySignature(
-    bytes32 messageId,
-    bytes calldata signature
-) internal view returns (address) {
-    // Construct EIP-712 typed data hash
-    bytes32 structHash = keccak256(abi.encode(
-        MESSAGE_TYPEHASH,
-        messageId,
-        messageStates[messageId].messageType,
-        keccak256(messageStates[messageId].payload),
-        messageStates[messageId].nonce,
-        messageStates[messageId].timestamp,
-        messageStates[messageId].domain
-    ));
-
-    bytes32 digest = keccak256(abi.encodePacked(
-        "\x19\x01",
-        DOMAIN_SEPARATOR,
-        structHash
-    ));
-
-    // Recover signer from signature
-    address signer = ECDSA.recover(digest, signature);
-
-    // Verify signer is a registered validator
-    require(isValidator[signer], "Not a validator");
-
-    return signer;
-}
-```
+> See `PLAN_CONTRACTS.md` Section 2.2 for implementation details.
 
 ### 6.5 Execution Logic
 
-```solidity
-function executeMessage(bytes32 messageId) external nonReentrant {
-    MessageState storage state = messageStates[messageId];
+Execution proceeds through stages: Ready → PreExecution → Executing → PostExecution → Completed (or Failed).
 
-    require(state.stage == MessageStage.Ready, "Not ready for execution");
+1. Verify message is Ready (threshold met)
+2. Run pre-execution modules
+3. Call target contract with calldata and value
+4. If failed, mark as Failed (terminal) and emit event
+5. Run post-execution modules
+6. Mark as Completed and emit event
 
-    // Get message type config
-    MessageTypeConfig memory config = messageTypes[state.messageType];
-    require(config.enabled, "Message type disabled");
-
-    // Stage: Pre-execution modules
-    state.stage = MessageStage.PreExecution;
-    _runPreModules(messageId, state);
-
-    // Stage: Execute
-    state.stage = MessageStage.Executing;
-
-    (bool success, bytes memory returnData) = config.target.call{value: state.value}(
-        state.payload
-    );
-
-    if (!success) {
-        state.stage = MessageStage.Failed;
-        emit MessageFailed(messageId, "Execution reverted", returnData);
-        // Note: Failed is terminal. Nonce is consumed. Application must retry with new nonce.
-        return;
-    }
-
-    // Stage: Post-execution modules
-    state.stage = MessageStage.PostExecution;
-    _runPostModules(messageId, state);
-
-    // Complete
-    state.stage = MessageStage.Completed;
-    emit MessageExecuted(messageId, state.messageType, config.target);
-}
-```
+> See `PLAN_CONTRACTS.md` Section 2.3 for implementation details.
 
 ### 6.6 Module System
 
-Pre and post-execution modules provide extensible validation.
+Modules provide extensible pre/post-execution validation.
 
 **Module Scope**:
-
-Modules can be configured at two levels:
 
 | Scope | Applies To | Use Case |
 |-------|------------|----------|
 | **Global** | All message types | Rate limiting, monitoring |
-| **Per-Message-Type** | Specific message types | Amount thresholds for transfers, timelocks for withdrawals |
-
-**Module Registration**:
-
-```solidity
-struct ModuleConfig {
-    address module;
-    bool preExecution;      // Run before execution
-    bool postExecution;     // Run after execution
-    bool global;            // Apply to all message types
-    string[] messageTypes;  // If not global, which message types
-}
-
-// Storage
-mapping(address => ModuleConfig) public modules;
-mapping(string => address[]) public messageTypeModules; // messageType => module addresses
-
-// Register a global module
-function addGlobalModule(
-    address module,
-    bool preExecution,
-    bool postExecution
-) external;
-
-// Register a module for specific message types
-function addModuleForTypes(
-    address module,
-    bool preExecution,
-    bool postExecution,
-    string[] calldata messageTypes
-) external;
-
-// Remove module from a message type
-function removeModuleFromType(address module, string calldata messageType) external;
-```
-
-**Module Execution Logic**:
-
-```solidity
-function _runPreModules(bytes32 messageId, MessageState storage state) internal {
-    // Run global pre-modules
-    for (uint i = 0; i < globalPreModules.length; i++) {
-        (bool pass, string memory reason) = IModule(globalPreModules[i]).check(messageId, true);
-        require(pass, reason);
-    }
-
-    // Run message-type-specific pre-modules
-    address[] storage typeModules = messageTypeModules[state.messageType];
-    for (uint i = 0; i < typeModules.length; i++) {
-        ModuleConfig storage config = modules[typeModules[i]];
-        if (config.preExecution) {
-            (bool pass, string memory reason) = IModule(typeModules[i]).check(messageId, true);
-            require(pass, reason);
-        }
-    }
-}
-```
+| **Per-Message-Type** | Specific message types | Amount thresholds, timelocks |
 
 **Module Interface**:
 
 ```solidity
 interface IModule {
-    /**
-     * Check if a message passes this module's validation
-     * @param messageId The message being validated
-     * @param isPreExecution True for pre-execution, false for post-execution
-     * @return pass True if validation passes
-     * @return reason Explanation if validation fails
-     */
     function check(bytes32 messageId, bool isPreExecution)
         external view returns (bool pass, string memory reason);
 }
@@ -2070,55 +1749,15 @@ interface IModule {
 
 **Common Module Types**:
 
-```solidity
-// Global modules (apply to all messages)
-contract RateLimitModule is IModule {
-    // Limit messages per time window per application
-}
+| Module | Timing | Purpose |
+|--------|--------|---------|
+| RateLimitModule | Pre | Limit messages per time window |
+| AmountThresholdModule | Pre | Flag/delay large transfers |
+| AllowlistModule | Pre | Restrict to known addresses |
+| TimelockModule | Pre | Delay sensitive operations |
+| SupplyCapModule | Post | Verify supply invariants |
 
-contract MonitoringModule is IModule {
-    // Log all messages for external monitoring (always passes)
-}
-
-// Per-message-type modules
-contract AmountThresholdModule is IModule {
-    // For transfer/withdraw: flag or delay large value transfers
-    // Configured per message type with different thresholds
-}
-
-contract AllowlistModule is IModule {
-    // For mint/transfer: restrict to known addresses
-}
-
-contract TimelockModule is IModule {
-    // For withdraw/upgrade: delay high-value or sensitive operations
-}
-
-contract InvariantModule is IModule {
-    // For mint: verify post-execution invariants (e.g., supply cap)
-}
-```
-
-**Example Configuration**:
-
-```solidity
-// Global rate limit for all messages
-addGlobalModule(rateLimitModule, true, false);
-
-// Amount threshold only for transfers and withdrawals
-addModuleForTypes(
-    amountThresholdModule,
-    true,   // pre-execution
-    false,  // no post-execution
-    ["transfer(address,uint256)", "withdraw(address,uint256)"]
-);
-
-// Timelock only for withdrawals over certain amount
-addModuleForTypes(timelockModule, true, false, ["withdraw(address,uint256)"]);
-
-// Supply cap check after mints
-addModuleForTypes(invariantModule, false, true, ["mint(address,uint256)"]);
-```
+> See `PLAN_CONTRACTS.md` Section 3 for implementation details.
 
 ### 6.7 Events
 
@@ -2188,273 +1827,39 @@ bytes32 public constant VALIDATOR_MANAGER_ROLE = keccak256("VALIDATOR_MANAGER_RO
 
 ### 6.9 TEE Bootstrapping
 
-Validators must complete TEE bootstrapping before they can sign messages. This ensures signing keys are generated and protected within a Trusted Execution Environment.
+Validators must complete TEE bootstrapping before signing. Key generation happens inside the enclave, and attestation is submitted during registration.
 
-**Bootstrapping Flow**:
+**Bootstrapping Steps**:
+1. Validator starts in TEE, generates signing key inside enclave
+2. TEE creates attestation (code hash + key fingerprint)
+3. Submit `addValidator(address, attestation)` to Bridge
+4. Bridge verifies attestation and adds to signing set
+5. Key is already attested; no per-message attestation needed
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TEE BOOTSTRAPPING                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  1. ENCLAVE STARTUP                                              │
-│     ├─ Validator starts in TEE (GCP Confidential Space, etc.)   │
-│     └─ TEE generates attestation token                           │
-│                                                                  │
-│  2. KEY GENERATION                                               │
-│     ├─ Generate secp256k1 signing key INSIDE enclave            │
-│     ├─ Key never leaves enclave memory                           │
-│     └─ Derive Ethereum address from public key                   │
-│                                                                  │
-│  3. ATTESTATION                                                  │
-│     ├─ Create attestation binding key to enclave                 │
-│     ├─ Attestation includes: code hash, key fingerprint          │
-│     └─ Sign attestation with TEE platform key                    │
-│                                                                  │
-│  4. REGISTRATION                                                 │
-│     ├─ Submit to Bridge: addValidator(address, attestation)     │
-│     ├─ Bridge verifies attestation (on-chain or via oracle)     │
-│     └─ Validator added to signing set                            │
-│                                                                  │
-│  5. ONGOING OPERATION                                            │
-│     ├─ Validator signs messages with enclave-protected key       │
-│     └─ No per-message attestation needed (key already attested) │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+**Supported TEE Platforms**: GCP Confidential Space, AWS Nitro Enclaves, Azure Confidential VMs, Intel SGX
 
-**Why TEE Bootstrapping Matters**:
-
-1. **Key Protection**: Signing keys cannot be extracted from the enclave
-2. **Code Integrity**: Attestation proves validator runs expected code
-3. **One-Time Cost**: Attestation happens once at registration, not per-message
-4. **Audit Trail**: Attestation stored on-chain for verification
-
-**Supported TEE Platforms**:
-
-| Platform | Provider | Attestation Format |
-|----------|----------|-------------------|
-| GCP Confidential Space | Google Cloud | OIDC token with claims |
-| AWS Nitro Enclaves | Amazon Web Services | Nitro attestation document |
-| Azure Confidential VMs | Microsoft Azure | AMD SEV-SNP attestation |
-| Intel SGX | Various | DCAP attestation |
-
-**Example Attestation Verification**:
-
-```solidity
-function addValidator(address validator, bytes calldata attestation) external {
-    require(hasRole(VALIDATOR_MANAGER_ROLE, msg.sender), "Not authorized");
-
-    // Verify attestation (implementation depends on TEE platform)
-    require(_verifyAttestation(validator, attestation), "Invalid attestation");
-
-    // Add to validator set
-    isValidator[validator] = true;
-    validators.push(validator);
-
-    emit ValidatorAdded(validator, attestation);
-}
-```
+> See `PLAN_CONTRACTS.md` Section 4 for implementation details.
 
 ### 6.10 Bridge Upgrades and TEE Versioning
 
-Bridges are designed to be **upgradable** to allow security patches and feature additions without disrupting operations.
+Bridge uses **UUPS upgradeable proxy** pattern with timelock for admin operations.
 
-**Upgrade Pattern**:
-
-Use the UUPS (Universal Upgradeable Proxy Standard) pattern:
-
-```solidity
-contract MessageBridge is UUPSUpgradeable, AccessControlUpgradeable {
-    // Implementation logic
-
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        override
-        onlyRole(ADMIN_ROLE)
-    {
-        // Optional: Require timelock for upgrades
-        require(
-            block.timestamp >= upgradeProposedAt + UPGRADE_DELAY,
-            "Upgrade delay not met"
-        );
-    }
-}
-```
-
-**Upgrade Safety**:
+**TEE Version Tracking**: Bridge tracks `minimumTeeVersion` and each validator's current version. Old validators must re-attest after upgrades.
 
 | Concern | Mitigation |
 |---------|------------|
 | Malicious upgrade | Timelock + multisig admin |
-| Broken upgrade | Comprehensive test suite, staging deployment |
-| State corruption | Storage layout compatibility checks |
-| Validator disruption | Graceful version transition period |
+| Validator disruption | Grace period for re-attestation |
 
-**TEE Version Tracking**:
+> See `PLAN_CONTRACTS.md` Section 5 for implementation details.
 
-The Bridge tracks the TEE code version for each validator. This enables:
-- Enforcing minimum TEE version for signing
-- Graceful migration to new validator code
-- Audit trail of validator software
+### 6.11 WETH Handling
 
-```solidity
-struct ValidatorInfo {
-    address validator;
-    bool active;
-    uint64 registeredAt;
-    bytes32 teeCodeHash;        // Hash of validator code running in TEE
-    string teeVersion;          // Semantic version (e.g., "1.2.3")
-    uint64 lastAttestationAt;   // When attestation was last verified
-}
+Bridge holds **WETH only** (not native ETH) for consistency and reentrancy safety. When executing payable calls, Bridge unwraps WETH to ETH before the call.
 
-mapping(address => ValidatorInfo) public validatorInfo;
+**Relayer Reimbursement**: Handled out-of-band (no built-in mechanism).
 
-// Minimum TEE version required for signing
-string public minimumTeeVersion;
-
-function setMinimumTeeVersion(string calldata version) external onlyRole(ADMIN_ROLE);
-
-function updateValidatorAttestation(
-    address validator,
-    bytes calldata attestation,
-    string calldata teeVersion
-) external {
-    // Verify new attestation
-    require(_verifyAttestation(validator, attestation), "Invalid attestation");
-
-    // Update validator info
-    ValidatorInfo storage info = validatorInfo[validator];
-    info.teeCodeHash = _extractCodeHash(attestation);
-    info.teeVersion = teeVersion;
-    info.lastAttestationAt = uint64(block.timestamp);
-
-    emit ValidatorAttestationUpdated(validator, info.teeCodeHash, teeVersion);
-}
-```
-
-**Version Enforcement**:
-
-```solidity
-function signMessage(bytes32 messageId, bytes calldata signature) external {
-    address signer = _verifySignature(messageId, signature);
-
-    // Check validator is active and has valid attestation
-    ValidatorInfo storage info = validatorInfo[signer];
-    require(info.active, "Validator not active");
-
-    // Check TEE version meets minimum
-    require(
-        _compareVersions(info.teeVersion, minimumTeeVersion) >= 0,
-        "TEE version too old"
-    );
-
-    // ... rest of signing logic
-}
-```
-
-**Upgrade Flow for Validators**:
-
-```
-1. New validator version released
-2. Admin sets new minimumTeeVersion with grace period
-3. Validators upgrade TEE code
-4. Validators re-attest with new version
-5. After grace period, old versions can't sign
-```
-
-**Events**:
-
-```solidity
-event BridgeUpgraded(address indexed implementation, uint256 timestamp);
-event MinimumTeeVersionUpdated(string oldVersion, string newVersion);
-event ValidatorAttestationUpdated(
-    address indexed validator,
-    bytes32 codeHash,
-    string version
-);
-```
-
-### 6.11 WETH Handling and msg.value
-
-For consistency and security, the Bridge only holds and manages **WETH (Wrapped ETH)**, not native ETH.
-
-**Why WETH Only**:
-
-1. **Consistency**: All value transfers use the same ERC-20 interface
-2. **Accounting**: Easier to track balances and approvals
-3. **Security**: Prevents reentrancy issues with native ETH transfers
-4. **Composability**: Works with DeFi protocols that expect ERC-20
-
-**Execution Flow for Payable Calls**:
-
-When executing a message with `value > 0`:
-
-```solidity
-function executeMessage(bytes32 messageId) external nonReentrant {
-    MessageState storage state = messageStates[messageId];
-
-    // ... validation ...
-
-    // If message has value, unwrap WETH before calling
-    if (state.value > 0) {
-        // Bridge holds WETH, unwrap to native ETH for the call
-        IWETH(WETH).withdraw(state.value);
-    }
-
-    // Execute with native ETH
-    (bool success, bytes memory returnData) = config.target.call{value: state.value}(
-        state.calldata_
-    );
-
-    // ... handle result ...
-}
-```
-
-**Funding the Bridge**:
-
-Applications that need to execute payable calls must:
-
-1. Wrap ETH to WETH
-2. Transfer WETH to the Bridge
-3. Include `value` in messages
-
-```solidity
-// Application or relayer funds the Bridge
-IWETH(WETH).deposit{value: 1 ether}();
-IWETH(WETH).transfer(bridgeAddress, 1 ether);
-```
-
-**Receiving Value (from executed calls)**:
-
-If target contracts return ETH to the Bridge:
-
-```solidity
-// Bridge can re-wrap received ETH
-receive() external payable {
-    IWETH(WETH).deposit{value: msg.value}();
-}
-```
-
-**WETH Interface**:
-
-```solidity
-interface IWETH {
-    function deposit() external payable;
-    function withdraw(uint256 amount) external;
-    function transfer(address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}
-```
-
-**Relayer Gas Reimbursement**:
-
-Relayers who call `executeMessage()` pay gas costs. Reimbursement is handled out-of-band:
-- Direct payment from application
-- On-chain reimbursement module (tracks and pays relayers)
-- Priority fee on messages
-
-There is no built-in gas reimbursement mechanism in the core protocol.
+> See `PLAN_CONTRACTS.md` Section 6 for implementation details.
 
 ---
 
@@ -3096,175 +2501,7 @@ Response: {
 
 ---
 
-## 10. Implementation Phases
-
-### Phase 1: Core Infrastructure (MVP)
-
-**Goal**: Minimal working system with single validator
-
-**Deliverables**:
-
-1. **Message Types and Schemas** (`synddb-shared`)
-   - New message structures (Message, SignedMessage)
-   - JSON Schema validation integration
-   - Remove changeset-related types
-
-2. **Validator Service** (`synddb-validator`)
-   - New operating mode: `--mode message-passing`
-   - HTTP API: `POST /messages`, `GET /messages/{id}`, `GET /health`
-   - Basic validation: type registration, schema, nonce
-   - Signing with existing key management
-
-3. **Bridge Contract** (`contracts/`)
-   - Message type registry
-   - Single-signature execution path
-   - Basic events and state tracking
-
-4. **Remove Legacy**
-   - Deprecate changeset code paths
-   - Remove sequencer dependency from validator
-
-**Success Criteria**:
-
-- Application can POST message to validator
-- Validator validates and signs
-- Message executes on Bridge
-
-### Phase 2: Multi-Validator Support
-
-**Goal**: Production-ready multi-signature support
-
-**Deliverables**:
-
-1. **On-Chain Signature Aggregation**
-   - `signMessage()` for individual signatures
-   - Threshold tracking per message
-   - Signature deduplication
-
-2. **Validator Coordination**
-   - Message status API across validators
-   - Relayer pattern for batched submission
-   - Signature expiration handling
-
-3. **Full Bridge Contract**
-   - Complete IMessageBridge implementation
-   - EIP-712 signature verification
-   - Module system integration
-
-**Success Criteria**:
-
-- 2-of-3 validators can approve message
-- Threshold enforcement works correctly
-- Validators operate independently
-
-### Phase 3: Schema Management
-
-**Goal**: Flexible schema storage and validation
-
-**Deliverables**:
-
-1. **IPFS/Arweave Schema Storage**
-   - Schema upload tooling
-   - Validator schema caching
-   - Cache invalidation on updates
-
-2. **Schema Versioning**
-   - Version tracking per message type
-   - Migration documentation
-   - Backward compatibility handling
-
-3. **Admin Tools**
-   - CLI for message type registration
-   - Schema validation testing
-   - Registry inspection
-
-**Success Criteria**:
-
-- Schemas can be stored on IPFS/Arweave
-- Validators cache and verify schemas
-- Admin can register new message types
-
-### Phase 4: DA Integration
-
-**Goal**: Audit trail for all messages
-
-**Deliverables**:
-
-1. **DA Publishers**
-   - Celestia publisher
-   - Arweave publisher
-   - IPFS publisher (development)
-
-2. **Publication Modes**
-   - Immediate publication
-   - Batched publication
-   - Configurable per validator
-
-3. **Query and Verification**
-   - DA reference tracking
-   - Message retrieval API
-   - Verification tooling
-
-**Success Criteria**:
-
-- All messages published to DA
-- Messages can be retrieved and verified
-- Publication is reliable and monitored
-
-### Phase 5: Production Hardening
-
-**Goal**: Production-ready security and operations
-
-**Deliverables**:
-
-1. **Additional Modules**
-   - Rate limiting module
-   - Amount threshold module
-   - Time delay module
-   - Allowlist module
-
-2. **Monitoring and Alerting**
-   - Prometheus metrics
-   - Alert rules for anomalies
-   - Dashboard templates
-
-3. **Documentation**
-   - Integration guide
-   - Security best practices
-   - Deployment runbooks
-   - Troubleshooting guide
-
-**Success Criteria**:
-
-- Modules deployed and tested
-- Monitoring operational
-- Documentation complete
-
----
-
-## 11. Implementation Notes
-
-### 11.1 Clean Slate Implementation
-
-This specification describes a **new system**, not a migration from the SQLite replication architecture. SyndDB is not yet deployed to production, so there are no backward compatibility requirements.
-
-**What's new**:
-- Message passing replaces SQLite changeset capture
-- Validators replace the sequencer concept
-- Primary/Witness validator model for multi-validator security
-- Metadata-based validation instead of SQL replay
-
-**Crate changes**:
-| Crate | Status |
-|-------|--------|
-| `synddb-client` | Deprecated (no longer needed) |
-| `synddb-sequencer` | Deprecated (validators handle this) |
-| `synddb-validator` | Evolves to support message-passing mode |
-| `synddb-shared` | New message types for this spec |
-
----
-
-## 12. Appendix
+## 10. Appendix
 
 ### A. Example Integration
 
