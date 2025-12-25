@@ -95,47 +95,106 @@ This means more trust can be placed in the application for non-critical decision
 
 ### 2.3 Component Responsibilities
 
-CLAUDE: How do we ensure that the application is properly authenticated to the
-validators? Securing this auth will be absolutely essential. We should do a
-deep dive into that.
 **Application**
-
-- Constructs messages with correct type and metadata
-- Sends messages to validator endpoint(s)
-- No blockchain interaction required
+- Constructs messages with calldata and metadata
+- Authenticates to Primary Validator (see Section 2.4)
+- Sends messages via HTTP POST
 - Responsible for its own security based on value at risk
 
-CLAUDE: We should make this clear that a validator either publishes to or reads
-from DA/storage layers, depending on whether it's connected to the application
-or not. What name do you suggest for these modes?
-**Validator**
+**Validator (Two Modes)**
 
-- Validates message types against Bridge registry
-- Validates metadata against JSON Schemas
-- Applies custom validation rules
-- Signs valid messages with TEE-protected keys
-- Publishes to DA layer for audit trail
-- Submits signatures to Bridge
+Validators operate in one of two modes:
+
+| Mode | Role | Data Flow |
+|------|------|-----------|
+| **Primary Validator** | Connected directly to application | Receives messages via HTTP, publishes to storage layer |
+| **Witness Validator** | Independent verification | Reads messages from storage layer, verifies independently |
+
+*Primary Validator*:
+- Receives messages directly from authenticated application
+- Validates calldata and metadata against schemas
+- Signs valid messages
+- **Publishes to storage layer** (Arweave, IPFS, GCS) for other validators
+- Submits signature to Bridge
+
+*Witness Validator*:
+- **Reads messages from storage layer** (does NOT receive from application)
+- Independently validates calldata and metadata
+- Re-derives verifiable metadata when possible (e.g., checks prices via public APIs)
+- Signs valid messages
+- Submits signature to Bridge
+
+This separation ensures witness validators can independently verify without trusting the primary validator's HTTP connection.
 
 **Bridge (Smart Contract)**
-
 - Maintains registry of allowed message types
-- Stores schema hashes for metadata validation
-- Aggregates validator signatures
+- Stores metadata schema hashes (schemas on IPFS/Arweave)
+- Aggregates validator signatures (on-chain)
 - Enforces signature threshold
 - Executes messages via modular pre/post hooks
 - Controls funds and enforces security invariants
 
-CLAUDE: These are DA or storage layers. We recommend using at least one storage
-layer (such as Arweave or IPFS or GCS) for schema storage and auditability, and
-optionally a DA layer (such as Celestia) for short-term data availability
-guarantees.
-**DA Layer**
+**Storage Layer vs DA Layer**
 
-- Stores all validated messages for audit
-- Enables historical replay
-- Provides evidence for dispute resolution
-- Supports compliance requirements
+We distinguish between two types of external data layers:
+
+| Type | Purpose | Examples | Recommendation |
+|------|---------|----------|----------------|
+| **Storage Layer** | Long-term archival, schema storage, audit trail | Arweave, IPFS, GCS | **Required** - at least one |
+| **DA Layer** | Short-term data availability guarantees | Celestia, EigenDA | Optional - for high-throughput |
+
+**Recommended configuration**:
+- **Storage** (required): Arweave or IPFS with pinning for permanent schema storage and message archival
+- **DA** (optional): Celestia for applications requiring short-term availability guarantees
+
+### 2.4 Application Authentication
+
+Securing the application-to-validator connection is critical. The Primary Validator must verify that incoming messages originate from an authorized application.
+
+**Authentication Methods**:
+
+| Method | Security Level | Use Case |
+|--------|---------------|----------|
+| API Key + HTTPS | Basic | Development, internal tools |
+| mTLS (Mutual TLS) | High | Production applications |
+| TEE Attestation | Highest | Financial applications |
+
+**Recommended: mTLS with Application Registration**
+
+```
+1. Application generates TLS client certificate
+2. Application registers with validator:
+   POST /register
+   {
+     "appId": "0x...",
+     "publicKey": "-----BEGIN CERTIFICATE-----...",
+     "allowedMessageTypes": ["mint(address,uint256)", ...],
+     "rateLimit": { "maxPerSecond": 100, "maxPerDay": 10000 }
+   }
+3. Validator stores registration, assigns appId
+4. All subsequent requests use mTLS with client cert
+5. Validator verifies: cert → appId → authorized message types
+```
+
+**For TEE-based Applications**:
+
+Applications running in TEE can include attestation tokens:
+
+```
+POST /messages
+Headers:
+  X-TEE-Attestation: <attestation_token>
+  X-TEE-Platform: gcp-confidential-space
+
+Body: { message... }
+```
+
+The validator verifies:
+1. Attestation token is valid and recent
+2. Application code hash matches registered hash
+3. TEE platform is trusted
+
+This provides cryptographic proof of application integrity, not just identity.
 
 ---
 
