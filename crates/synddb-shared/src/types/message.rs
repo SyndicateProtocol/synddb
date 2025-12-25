@@ -48,7 +48,7 @@ pub enum VerificationError {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageType {
-    /// SQLite changeset batch
+    /// `SQLite` changeset batch
     Changeset,
     /// Withdrawal request to be processed on L1
     Withdrawal,
