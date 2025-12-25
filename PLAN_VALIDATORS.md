@@ -65,7 +65,129 @@ validator/
     └── tracing.rs             # Distributed tracing
 ```
 
-## 2. Error Types
+## 2. Application Authentication
+
+### 2.1 Authentication Methods
+
+```rust
+pub enum AuthMethod {
+    ApiKey { key: String },
+    MTls { client_cert: X509Certificate },
+    TeeAttestation { token: String, platform: TeePlatform },
+}
+
+pub struct AuthConfig {
+    pub method: AuthMethod,
+    pub allowed_domains: Vec<[u8; 32]>,
+    pub allowed_message_types: Vec<String>,
+    pub rate_limit: RateLimitConfig,
+}
+
+pub struct RateLimitConfig {
+    pub max_per_second: u32,
+    pub max_per_day: u32,
+}
+```
+
+### 2.2 mTLS Authentication
+
+```rust
+use rustls::{Certificate, RootCertStore};
+
+pub struct MTlsAuth {
+    client_ca: RootCertStore,
+    registrations: HashMap<CertFingerprint, AuthConfig>,
+}
+
+impl MTlsAuth {
+    pub fn verify(&self, cert: &Certificate) -> Result<AuthConfig, AuthError> {
+        // Verify certificate chain against CA
+        let chain = verify_certificate_chain(cert, &self.client_ca)?;
+
+        // Extract fingerprint for lookup
+        let fingerprint = compute_cert_fingerprint(cert);
+
+        // Find registration for this client
+        self.registrations.get(&fingerprint)
+            .cloned()
+            .ok_or(AuthError::UnknownClient(fingerprint))
+    }
+}
+
+// Axum middleware for mTLS
+pub async fn mtls_middleware<B>(
+    State(auth): State<Arc<MTlsAuth>>,
+    ConnectInfo(info): ConnectInfo<TlsConnectInfo>,
+    request: Request<B>,
+    next: Next<B>,
+) -> Result<Response, StatusCode> {
+    let cert = info.peer_certificate()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let config = auth.verify(&cert)
+        .map_err(|_| StatusCode::FORBIDDEN)?;
+
+    // Store config in request extensions
+    let mut request = request;
+    request.extensions_mut().insert(config);
+
+    Ok(next.run(request).await)
+}
+```
+
+### 2.3 TEE Attestation Headers
+
+```rust
+pub struct TeeAttestation {
+    pub token: String,
+    pub platform: TeePlatform,
+    pub code_hash: [u8; 32],
+}
+
+#[derive(Clone, Copy)]
+pub enum TeePlatform {
+    GcpConfidentialSpace,
+    AwsNitroEnclaves,
+    AzureConfidentialVm,
+    IntelSgx,
+}
+
+pub fn extract_tee_attestation(headers: &HeaderMap) -> Option<TeeAttestation> {
+    let token = headers.get("X-TEE-Attestation")?.to_str().ok()?;
+    let platform = headers.get("X-TEE-Platform")?.to_str().ok()?;
+
+    let platform = match platform {
+        "gcp-confidential-space" => TeePlatform::GcpConfidentialSpace,
+        "aws-nitro" => TeePlatform::AwsNitroEnclaves,
+        "azure-confidential" => TeePlatform::AzureConfidentialVm,
+        "intel-sgx" => TeePlatform::IntelSgx,
+        _ => return None,
+    };
+
+    Some(TeeAttestation {
+        token: token.to_string(),
+        platform,
+        code_hash: [0u8; 32], // Extracted during verification
+    })
+}
+
+pub async fn verify_tee_attestation(
+    attestation: &TeeAttestation,
+    expected_code_hash: &[u8; 32],
+) -> Result<(), AuthError> {
+    match attestation.platform {
+        TeePlatform::GcpConfidentialSpace => {
+            verify_gcp_attestation(&attestation.token, expected_code_hash).await
+        }
+        TeePlatform::AwsNitroEnclaves => {
+            verify_aws_nitro_attestation(&attestation.token, expected_code_hash).await
+        }
+        // ... other platforms
+    }
+}
+```
+
+## 3. Error Types
 
 ```rust
 #[derive(Debug, thiserror::Error)]
@@ -251,6 +373,94 @@ pub fn compute_metadata_hash(metadata: &serde_json::Value) -> [u8; 32] {
     // RFC 8785 JSON Canonicalization
     let canonical = json_canonicalize(metadata);
     keccak256(canonical.as_bytes())
+}
+
+/// RFC 8785 JSON Canonicalization Scheme (JCS)
+///
+/// Rules:
+/// 1. Object keys sorted lexicographically by UTF-16 code units
+/// 2. No whitespace between tokens
+/// 3. Number formatting: no leading zeros, no trailing zeros after decimal, no positive sign
+/// 4. String escaping: minimal escaping (only required characters)
+/// 5. No duplicate keys
+pub fn json_canonicalize(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        serde_json::Value::Number(n) => canonicalize_number(n),
+        serde_json::Value::String(s) => canonicalize_string(s),
+        serde_json::Value::Array(arr) => {
+            let elements: Vec<String> = arr.iter()
+                .map(|v| json_canonicalize(v))
+                .collect();
+            format!("[{}]", elements.join(","))
+        }
+        serde_json::Value::Object(obj) => {
+            // Sort keys lexicographically (UTF-16 code units)
+            let mut sorted_keys: Vec<&String> = obj.keys().collect();
+            sorted_keys.sort_by(|a, b| {
+                a.encode_utf16().cmp(b.encode_utf16())
+            });
+
+            let pairs: Vec<String> = sorted_keys.iter()
+                .map(|k| {
+                    let v = json_canonicalize(&obj[*k]);
+                    format!("{}:{}", canonicalize_string(k), v)
+                })
+                .collect();
+            format!("{{{}}}", pairs.join(","))
+        }
+    }
+}
+
+fn canonicalize_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 2);
+    result.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => result.push_str("\\\""),
+            '\\' => result.push_str("\\\\"),
+            '\x08' => result.push_str("\\b"),
+            '\x0c' => result.push_str("\\f"),
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            c if c < '\x20' => result.push_str(&format!("\\u{:04x}", c as u32)),
+            c => result.push(c),
+        }
+    }
+    result.push('"');
+    result
+}
+
+fn canonicalize_number(n: &serde_json::Number) -> String {
+    // RFC 8785: Use ES6 number serialization
+    // - No leading zeros
+    // - No trailing zeros after decimal
+    // - No positive sign
+    // - Use exponential notation for very large/small numbers
+    if let Some(i) = n.as_i64() {
+        i.to_string()
+    } else if let Some(f) = n.as_f64() {
+        // ES6 compatible formatting
+        format_es6_number(f)
+    } else {
+        n.to_string()
+    }
+}
+
+fn format_es6_number(n: f64) -> String {
+    if n.is_nan() || n.is_infinite() {
+        panic!("NaN and Infinity not allowed in canonical JSON");
+    }
+    // Use Rust's default float formatting which matches ES6 for most cases
+    let s = format!("{}", n);
+    // Ensure no trailing .0 for integers
+    if s.ends_with(".0") && !s.contains('e') {
+        s[..s.len()-2].to_string()
+    } else {
+        s
+    }
 }
 ```
 
@@ -568,7 +778,162 @@ impl WitnessEventMonitor {
 }
 ```
 
-### 5.2 Metadata Re-Derivation
+### 5.2 storageRef URI Parsing
+
+```rust
+/// Parse pipe-separated storage URIs
+/// Format: "ar://tx_id|ipfs://QmHash|gcs://bucket/path"
+pub struct StorageRef {
+    pub uris: Vec<StorageUri>,
+}
+
+#[derive(Clone)]
+pub enum StorageUri {
+    Arweave { tx_id: String },
+    Ipfs { cid: String },
+    Gcs { bucket: String, path: String },
+}
+
+impl StorageRef {
+    pub fn parse(storage_ref: &str) -> Result<Self, Error> {
+        let uris = storage_ref
+            .split('|')
+            .map(|uri| Self::parse_uri(uri.trim()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if uris.is_empty() {
+            return Err(Error::InvalidStorageRef("empty storage ref".into()));
+        }
+
+        Ok(Self { uris })
+    }
+
+    fn parse_uri(uri: &str) -> Result<StorageUri, Error> {
+        if let Some(tx_id) = uri.strip_prefix("ar://") {
+            Ok(StorageUri::Arweave { tx_id: tx_id.to_string() })
+        } else if let Some(cid) = uri.strip_prefix("ipfs://") {
+            Ok(StorageUri::Ipfs { cid: cid.to_string() })
+        } else if let Some(path) = uri.strip_prefix("gcs://") {
+            let parts: Vec<&str> = path.splitn(2, '/').collect();
+            if parts.len() != 2 {
+                return Err(Error::InvalidStorageRef(format!("invalid gcs path: {}", uri)));
+            }
+            Ok(StorageUri::Gcs {
+                bucket: parts[0].to_string(),
+                path: parts[1].to_string(),
+            })
+        } else {
+            Err(Error::InvalidStorageRef(format!("unknown scheme: {}", uri)))
+        }
+    }
+}
+```
+
+### 5.3 Storage Fetcher with Fallback
+
+```rust
+pub struct StorageFetcher {
+    arweave: Option<ArweaveClient>,
+    ipfs: Option<IpfsClient>,
+    gcs: Option<GcsClient>,
+    retry_config: RetryConfig,
+}
+
+impl StorageFetcher {
+    /// Fetch message from storage with fallback through multiple URIs
+    pub async fn fetch(&self, storage_ref: &str) -> Result<StorageRecord, Error> {
+        let parsed = StorageRef::parse(storage_ref)?;
+
+        // Try URIs in order of reliability
+        let prioritized = self.prioritize_uris(&parsed.uris);
+
+        let mut last_error = None;
+
+        for uri in prioritized {
+            match self.fetch_uri(&uri).await {
+                Ok(record) => return Ok(record),
+                Err(e) => {
+                    tracing::warn!(uri = ?uri, error = %e, "Failed to fetch from storage");
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| Error::StorageFetchFailed("no valid URIs".into())))
+    }
+
+    fn prioritize_uris(&self, uris: &[StorageUri]) -> Vec<StorageUri> {
+        // Priority: Arweave > IPFS > GCS
+        let mut sorted = uris.to_vec();
+        sorted.sort_by_key(|uri| match uri {
+            StorageUri::Arweave { .. } => 0,
+            StorageUri::Ipfs { .. } => 1,
+            StorageUri::Gcs { .. } => 2,
+        });
+        sorted
+    }
+
+    async fn fetch_uri(&self, uri: &StorageUri) -> Result<StorageRecord, Error> {
+        let json = match uri {
+            StorageUri::Arweave { tx_id } => {
+                let client = self.arweave.as_ref()
+                    .ok_or_else(|| Error::StorageFetchFailed("arweave not configured".into()))?;
+                self.with_retry(|| client.fetch(tx_id)).await?
+            }
+            StorageUri::Ipfs { cid } => {
+                let client = self.ipfs.as_ref()
+                    .ok_or_else(|| Error::StorageFetchFailed("ipfs not configured".into()))?;
+                self.with_retry(|| client.fetch(cid)).await?
+            }
+            StorageUri::Gcs { bucket, path } => {
+                let client = self.gcs.as_ref()
+                    .ok_or_else(|| Error::StorageFetchFailed("gcs not configured".into()))?;
+                self.with_retry(|| client.fetch(bucket, path)).await?
+            }
+        };
+
+        serde_json::from_str(&json)
+            .map_err(|e| Error::StorageFetchFailed(format!("invalid json: {}", e)))
+    }
+
+    async fn with_retry<F, Fut, T>(&self, f: F) -> Result<T, Error>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, Error>>,
+    {
+        let mut attempts = 0;
+        loop {
+            match f().await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= self.retry_config.max_attempts {
+                        return Err(e);
+                    }
+                    let delay = self.retry_config.base_delay * 2u32.pow(attempts - 1);
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    }
+}
+
+pub struct RetryConfig {
+    pub max_attempts: u32,
+    pub base_delay: Duration,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            base_delay: Duration::from_millis(500),
+        }
+    }
+}
+```
+
+### 5.4 Metadata Re-Derivation
 
 ```rust
 pub struct MetadataRederivation {
@@ -1204,7 +1569,346 @@ impl StoragePublisher {
 }
 ```
 
-## 10. EIP-712 Signing
+## 10. Schema Caching
+
+### 10.1 Schema Cache
+
+```rust
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+pub struct SchemaCache {
+    cache: Arc<RwLock<HashMap<String, CachedSchema>>>,
+    bridge: BridgeClient,
+    storage: StorageFetcher,
+    ttl: Duration,
+}
+
+struct CachedSchema {
+    schema: jsonschema::JSONSchema,
+    schema_hash: [u8; 32],
+    fetched_at: Instant,
+    uri: String,
+}
+
+impl SchemaCache {
+    pub async fn get_or_fetch(&self, uri: &str) -> Result<Arc<jsonschema::JSONSchema>, Error> {
+        // Check cache first
+        {
+            let cache = self.cache.read().await;
+            if let Some(cached) = cache.get(uri) {
+                if cached.fetched_at.elapsed() < self.ttl {
+                    return Ok(Arc::new(cached.schema.clone()));
+                }
+            }
+        }
+
+        // Fetch from storage
+        let json = self.storage.fetch_schema(uri).await?;
+        let schema_hash = keccak256(json.as_bytes());
+
+        let schema = jsonschema::JSONSchema::compile(&serde_json::from_str(&json)?)
+            .map_err(|e| Error::InvalidSchema(e.to_string()))?;
+
+        // Store in cache
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(uri.to_string(), CachedSchema {
+                schema: schema.clone(),
+                schema_hash,
+                fetched_at: Instant::now(),
+                uri: uri.to_string(),
+            });
+        }
+
+        Ok(Arc::new(schema))
+    }
+
+    pub async fn get_by_message_type(&self, message_type: &str) -> Result<Arc<jsonschema::JSONSchema>, Error> {
+        let config = self.bridge.get_message_type_config(message_type).await?
+            .ok_or_else(|| Error::MessageTypeNotRegistered(message_type.to_string()))?;
+
+        self.get_or_fetch(&config.schema_uri).await
+    }
+}
+```
+
+### 10.2 Event-Based Cache Invalidation
+
+```rust
+pub struct SchemaEventMonitor {
+    bridge: BridgeClient,
+    cache: Arc<SchemaCache>,
+}
+
+impl SchemaEventMonitor {
+    pub async fn run(&self, mut shutdown: watch::Receiver<bool>) -> Result<(), Error> {
+        // Subscribe to schema update events
+        let mut schema_events = self.bridge.subscribe_events("MessageTypeRegistered").await?;
+        let mut update_events = self.bridge.subscribe_events("MessageTypeUpdated").await?;
+        let mut enable_events = self.bridge.subscribe_events("MessageTypeEnabled").await?;
+
+        loop {
+            tokio::select! {
+                Some(event) = schema_events.next() => {
+                    self.handle_registered(event).await;
+                }
+                Some(event) = update_events.next() => {
+                    self.handle_updated(event).await;
+                }
+                Some(event) = enable_events.next() => {
+                    self.handle_enabled(event).await;
+                }
+                _ = shutdown.changed() => {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_registered(&self, event: MessageTypeRegisteredEvent) {
+        tracing::info!(
+            message_type = %event.message_type,
+            schema_hash = %hex::encode(event.schema_hash),
+            "New message type registered, pre-caching schema"
+        );
+
+        // Pre-fetch and cache the schema
+        if let Err(e) = self.cache.get_by_message_type(&event.message_type).await {
+            tracing::warn!(error = %e, "Failed to pre-cache schema");
+        }
+    }
+
+    async fn handle_updated(&self, event: MessageTypeUpdatedEvent) {
+        tracing::info!(
+            message_type = %event.message_type,
+            old_hash = %hex::encode(event.old_hash),
+            new_hash = %hex::encode(event.new_hash),
+            "Schema updated, invalidating cache"
+        );
+
+        // Invalidate cached schema
+        self.cache.invalidate(&event.message_type).await;
+
+        // Re-fetch new schema
+        if let Err(e) = self.cache.get_by_message_type(&event.message_type).await {
+            tracing::warn!(error = %e, "Failed to fetch updated schema");
+        }
+    }
+
+    async fn handle_enabled(&self, event: MessageTypeEnabledEvent) {
+        tracing::info!(
+            message_type = %event.message_type,
+            enabled = event.enabled,
+            "Message type enabled state changed"
+        );
+
+        // Update local enabled state (doesn't affect schema cache)
+        self.cache.set_enabled(&event.message_type, event.enabled).await;
+    }
+}
+
+// Event types
+struct MessageTypeRegisteredEvent {
+    message_type: String,
+    target: Address,
+    schema_hash: [u8; 32],
+}
+
+struct MessageTypeUpdatedEvent {
+    message_type: String,
+    old_hash: [u8; 32],
+    new_hash: [u8; 32],
+}
+
+struct MessageTypeEnabledEvent {
+    message_type: String,
+    enabled: bool,
+}
+```
+
+### 10.3 Startup Schema Sync
+
+```rust
+impl SchemaCache {
+    /// Sync all schemas from Bridge on startup
+    pub async fn sync_from_bridge(&self) -> Result<(), Error> {
+        tracing::info!("Syncing schemas from Bridge...");
+
+        // Get all registered message types
+        let message_types = self.bridge.get_all_message_types().await?;
+
+        for message_type in &message_types {
+            let config = self.bridge.get_message_type_config(message_type).await?;
+
+            if let Some(config) = config {
+                if config.enabled {
+                    if let Err(e) = self.get_or_fetch(&config.schema_uri).await {
+                        tracing::warn!(
+                            message_type = %message_type,
+                            error = %e,
+                            "Failed to cache schema"
+                        );
+                    }
+                }
+            }
+        }
+
+        tracing::info!(count = message_types.len(), "Schema sync complete");
+        Ok(())
+    }
+
+    pub async fn invalidate(&self, message_type: &str) {
+        let mut cache = self.cache.write().await;
+        // Find and remove by message type (need to look up URI first)
+        cache.retain(|_, v| !v.uri.contains(message_type));
+    }
+
+    pub async fn set_enabled(&self, _message_type: &str, _enabled: bool) {
+        // Track enabled state separately if needed for fast lookups
+    }
+}
+```
+
+## 11. DA Reference Tracking
+
+```rust
+/// Track DA publication references for audit and queries
+pub struct DaReferenceTracker {
+    db: Database,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DaPublication {
+    pub message_id: String,
+    pub da_layer: String,
+    pub da_reference: String,
+    pub published_at: u64,
+    pub confirmed: bool,
+}
+
+impl DaReferenceTracker {
+    /// Record a DA publication
+    pub async fn record(&self, publication: &DaPublication) -> Result<(), Error> {
+        self.db.execute(
+            "INSERT INTO da_publications (message_id, da_layer, da_reference, published_at, confirmed)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(message_id, da_layer) DO UPDATE SET
+                 da_reference = ?3, published_at = ?4, confirmed = ?5",
+            &[
+                &publication.message_id,
+                &publication.da_layer,
+                &publication.da_reference,
+                &(publication.published_at as i64),
+                &publication.confirmed,
+            ],
+        ).await
+    }
+
+    /// Mark a publication as confirmed
+    pub async fn confirm(&self, message_id: &str, da_layer: &str) -> Result<(), Error> {
+        self.db.execute(
+            "UPDATE da_publications SET confirmed = true WHERE message_id = ?1 AND da_layer = ?2",
+            &[message_id, da_layer],
+        ).await
+    }
+
+    /// Get all publications for a message
+    pub async fn get_publications(&self, message_id: &str) -> Result<Vec<DaPublication>, Error> {
+        self.db.query(
+            "SELECT message_id, da_layer, da_reference, published_at, confirmed
+             FROM da_publications WHERE message_id = ?1",
+            &[message_id],
+        ).await
+    }
+
+    /// Get messages published in a time range
+    pub async fn get_by_time_range(&self, start: u64, end: u64) -> Result<Vec<DaPublication>, Error> {
+        self.db.query(
+            "SELECT message_id, da_layer, da_reference, published_at, confirmed
+             FROM da_publications WHERE published_at >= ?1 AND published_at <= ?2
+             ORDER BY published_at DESC",
+            &[&(start as i64), &(end as i64)],
+        ).await
+    }
+
+    /// Database schema
+    pub async fn create_tables(&self) -> Result<(), Error> {
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS da_publications (
+                message_id TEXT NOT NULL,
+                da_layer TEXT NOT NULL,
+                da_reference TEXT NOT NULL,
+                published_at INTEGER NOT NULL,
+                confirmed INTEGER DEFAULT 0,
+                PRIMARY KEY (message_id, da_layer)
+            )",
+            &[],
+        ).await?;
+
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_da_published_at ON da_publications(published_at)",
+            &[],
+        ).await?;
+
+        Ok(())
+    }
+}
+```
+
+### 11.1 DA Query API Endpoint
+
+```rust
+// Add to HTTP handlers
+async fn get_message_da(
+    Path(message_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<DaResponse>, StatusCode> {
+    let publications = state.da_tracker.get_publications(&message_id).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if publications.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    // Return primary (first confirmed, or first)
+    let primary = publications.iter()
+        .find(|p| p.confirmed)
+        .or_else(|| publications.first())
+        .unwrap();
+
+    Ok(Json(DaResponse {
+        layer: primary.da_layer.clone(),
+        reference: primary.da_reference.clone(),
+        published_at: primary.published_at,
+        confirmed: primary.confirmed,
+        all_layers: publications.iter().map(|p| LayerInfo {
+            layer: p.da_layer.clone(),
+            reference: p.da_reference.clone(),
+            confirmed: p.confirmed,
+        }).collect(),
+    }))
+}
+
+#[derive(Serialize)]
+struct DaResponse {
+    layer: String,
+    reference: String,
+    published_at: u64,
+    confirmed: bool,
+    all_layers: Vec<LayerInfo>,
+}
+
+#[derive(Serialize)]
+struct LayerInfo {
+    layer: String,
+    reference: String,
+    confirmed: bool,
+}
+```
+
+## 12. EIP-712 Signing
 
 ```rust
 use alloy::sol_types::{eip712_domain, SolStruct};
@@ -1264,9 +1968,9 @@ impl EIP712Signer {
 }
 ```
 
-## 11. TEE Key Management
+## 13. TEE Key Management
 
-### 11.1 Key Generation in TEE
+### 13.1 Key Generation in TEE
 
 ```rust
 pub struct TeeKeyManager {
@@ -1307,7 +2011,7 @@ pub struct TeeKey {
 }
 ```
 
-### 11.2 Attestation Verification
+### 13.2 Attestation Verification
 
 ```rust
 pub fn verify_attestation(attestation: &[u8], expected_address: Address) -> Result<AttestationInfo, Error> {
@@ -1343,7 +2047,7 @@ pub struct AttestationInfo {
 }
 ```
 
-## 12. Configuration
+## 14. Configuration
 
 ```toml
 [validator]
@@ -1418,7 +2122,7 @@ level = "info"
 format = "json"
 ```
 
-## 13. Metrics & Observability
+## 15. Metrics & Observability
 
 ```rust
 use prometheus::{Counter, Histogram, IntGauge};
@@ -1476,7 +2180,7 @@ lazy_static! {
 }
 ```
 
-## 14. Implementation Checklist
+## 16. Implementation Checklist
 
 ### Primary Validator
 - [ ] HTTP server with mTLS/API key auth
@@ -1507,6 +2211,36 @@ lazy_static! {
 - [ ] Logging (structured, JSON)
 - [ ] Metrics (Prometheus)
 - [ ] Graceful shutdown
+
+### Authentication (Section 2)
+- [ ] mTLS authentication middleware
+- [ ] API key authentication
+- [ ] TEE attestation header extraction
+- [ ] Client registration storage
+
+### JSON Canonicalization (Section 4.2)
+- [ ] RFC 8785 implementation
+- [ ] UTF-16 key sorting
+- [ ] Number normalization
+- [ ] String escaping
+
+### storageRef Parsing (Section 5.2-5.3)
+- [ ] URI parsing (ar://, ipfs://, gcs://)
+- [ ] Pipe-separated multi-URI support
+- [ ] Storage fetcher with fallback
+- [ ] Retry with exponential backoff
+
+### Schema Caching (Section 10)
+- [ ] Schema cache with TTL
+- [ ] Event-based invalidation
+- [ ] Startup schema sync
+- [ ] jsonschema validation
+
+### DA Reference Tracking (Section 11)
+- [ ] SQLite table for publications
+- [ ] Record/confirm operations
+- [ ] Time-range queries
+- [ ] API endpoint (/messages/{id}/da)
 
 ### Testing
 - [ ] Unit tests for validation pipeline
