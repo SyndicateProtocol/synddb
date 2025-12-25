@@ -545,11 +545,17 @@ mod tests {
 
     #[test]
     fn test_snapshot_restore_to_file() {
-        use std::fs;
+        use std::{
+            fs,
+            sync::atomic::{AtomicU64, Ordering},
+        };
 
-        // Create a file-based applier with unique path for parallel test execution
+        // Create a file-based applier with unique path for parallel test execution.
+        // Use both process ID and atomic counter for consistency with other temp file paths.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
         let pid = std::process::id();
-        let temp_path = std::env::temp_dir().join(format!("test_snapshot_target_{pid}.db"));
+        let temp_path = std::env::temp_dir().join(format!("test_snapshot_target_{pid}_{id}.db"));
         let temp_path_str = temp_path.to_str().unwrap();
 
         // Clean up any previous test
