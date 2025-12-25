@@ -196,6 +196,125 @@ The validator verifies:
 
 This provides cryptographic proof of application integrity, not just identity.
 
+### 2.5 Application Registration
+
+Applications must be registered before they can submit messages.
+
+**Registration Flow**:
+
+```
+1. Application operator deploys/configures their application
+2. Application operator contacts Primary Validator operator (or self-operates)
+3. Primary Validator registers application on Bridge:
+   Bridge.registerApplication(appId, primaryValidator, config)
+4. Application receives appId and can begin submitting messages
+```
+
+**Recommended: Deterministic appId**
+
+We recommend deriving `appId` deterministically to avoid coordination:
+
+```solidity
+// Option A: From application's on-chain address
+bytes32 appId = keccak256(abi.encode(chainId, applicationAddress));
+
+// Option B: From domain name (for off-chain apps)
+bytes32 appId = keccak256(abi.encode("app.example.com"));
+
+// Option C: From Primary Validator + nonce (for multi-tenant validators)
+bytes32 appId = keccak256(abi.encode(primaryValidator, registrationNonce));
+```
+
+**Bridge Registration Function**:
+
+```solidity
+struct ApplicationConfig {
+    address primaryValidator;      // Who can initialize messages
+    uint64 expirationSeconds;      // Message expiration (default: 86400 = 24h)
+    bool requireWitnessSignatures; // Require multi-validator mode
+}
+
+function registerApplication(
+    bytes32 appId,
+    ApplicationConfig calldata config
+) external;
+
+function getApplicationConfig(bytes32 appId)
+    external view returns (ApplicationConfig memory);
+```
+
+### 2.6 Nonce Management
+
+Nonces prevent replay and ensure ordering. The Primary Validator is the sole authority on nonce tracking.
+
+**Semantics** (follows Ethereum transaction nonces):
+
+1. Nonces must be strictly sequential (no gaps)
+2. A nonce is **consumed** when the message reaches any terminal state:
+   - `Completed` (execution succeeded)
+   - `Failed` (execution reverted)
+   - `Expired` (threshold not reached in time)
+3. Validator rejections do NOT consume nonces (message never initialized)
+4. Once initialized on Bridge, the nonce is consumed regardless of outcome
+
+**No Gap Tolerance**:
+
+```
+Valid:   nonce 1 → nonce 2 → nonce 3
+Invalid: nonce 1 → nonce 3 (gap at 2)
+```
+
+If a message fails or expires, the application must continue with the next nonce. There is no retry-with-same-nonce mechanism.
+
+**Primary Validator Nonce Tracking**:
+
+```python
+class NonceTracker:
+    def __init__(self):
+        self.last_nonce = {}  # appId -> last accepted nonce
+
+    def validate_nonce(self, app_id: str, nonce: int) -> bool:
+        expected = self.last_nonce.get(app_id, 0) + 1
+        return nonce == expected
+
+    def consume_nonce(self, app_id: str, nonce: int):
+        """Called when message is initialized on Bridge"""
+        self.last_nonce[app_id] = nonce
+```
+
+### 2.7 Message Expiration
+
+Messages expire if they don't reach signature threshold within the expiration window.
+
+**Default**: 24 hours from message timestamp
+
+**Expiration Check**:
+
+```solidity
+function isExpired(bytes32 messageId) public view returns (bool) {
+    MessageState storage state = messageStates[messageId];
+    ApplicationConfig storage config = applicationConfigs[state.appId];
+
+    uint256 expirationTime = state.timestamp + config.expirationSeconds;
+    return block.timestamp > expirationTime;
+}
+
+function expireMessage(bytes32 messageId) external {
+    require(isExpired(messageId), "Not expired");
+    require(messageStates[messageId].stage == MessageStage.Pending, "Not pending");
+
+    messageStates[messageId].stage = MessageStage.Expired;
+    emit MessageExpired(messageId, block.timestamp);
+}
+```
+
+**Expiration as Terminal State**:
+
+- Expired messages cannot be signed or executed
+- Nonce is consumed (no retry with same nonce)
+- Application must submit new message with new nonce
+- Expiration reason logged on-chain for audit
+
 ---
 
 ## 3. Message Format
@@ -508,6 +627,44 @@ The Primary Validator verifies application identity (see Section 2.4).
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**Primary Rejection Path**:
+
+If any validation check fails, the Primary Validator rejects the message. This is an **implicit rejection** - the message is never initialized on-chain.
+
+```
+Validation Failed
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     PRIMARY REJECTION                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. Return error response to application (HTTP 400/422)          │
+│                                                                  │
+│  2. Log rejection locally (for audit)                            │
+│     - Message content                                            │
+│     - Rejection reason                                           │
+│     - Timestamp                                                  │
+│                                                                  │
+│  3. Optionally publish rejection to storage layer                │
+│     - For audit trail                                            │
+│     - Not required for protocol                                  │
+│                                                                  │
+│  4. Do NOT:                                                      │
+│     - Call initializeMessage() on Bridge                         │
+│     - Call rejectMessage() on Bridge (message doesn't exist)     │
+│     - Consume the nonce                                          │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key distinction**: Primary rejection is implicit (no on-chain state), while Witness rejection is explicit (calls `rejectMessage()` on-chain to log dissent for an already-initialized message).
+
+**Nonce behavior on Primary rejection**:
+- Nonce is NOT consumed
+- Application can retry with the same nonce after fixing the issue
+- This differs from on-chain failures where nonce is consumed
+
 **Stage 3: Sign**
 
 We use **EIP-712 typed data signing** for structured, verifiable signatures:
@@ -605,7 +762,72 @@ This is the key security benefit of Witness Validators - they don't just trust t
 
 Same as Primary Validator (Stage 3 + Stage 5), but **skip storage publication**.
 
-### 4.4 Validation Levels
+### 4.4 Witness Discovery via storageRef
+
+Witness Validators discover messages through the `storageRef` field, which is included in the `MessageInitialized` event on the Bridge.
+
+**storageRef URI Format**:
+
+The `storageRef` is a URI that tells Witness Validators where to fetch the full message and metadata. Multiple storage locations can be specified for redundancy:
+
+```
+# Single storage layer
+ar://tx_id_here
+ipfs://QmHash...
+gcs://bucket/path/to/message.json
+
+# Multiple storage layers (separated by |)
+ar://tx_id_here|ipfs://QmHash...|gcs://bucket/path
+
+# With multiple Primary Validators (each publishes to their own storage)
+ar://primary1_tx|ar://primary2_tx
+```
+
+**Witness Discovery Flow**:
+
+```
+1. Witness watches for MessageInitialized events on Bridge
+2. Extract storageRef from event: "ar://abc123|ipfs://Qm..."
+3. Parse URI(s) and attempt to fetch from each in order
+4. Verify fetched content:
+   - messageId matches event
+   - metadataHash matches hash of fetched metadata
+   - Primary signature is valid
+5. If fetch fails from all URIs → wait and retry (storage propagation delay)
+6. If content hash mismatch → reject message
+7. Proceed with validation
+```
+
+**Storage Layer Priorities**:
+
+Witness Validators should try storage layers in order of reliability:
+
+| Priority | Layer | Rationale |
+|----------|-------|-----------|
+| 1 | Arweave | Permanent, content-addressed |
+| 2 | IPFS (pinned) | Content-addressed, widely available |
+| 3 | GCS/S3 | Centralized but fast |
+
+**Multiple Primary Validators**:
+
+For applications with redundant Primaries (high availability), each Primary publishes to its own storage. The storageRef contains all publication URIs:
+
+```
+storageRef: "ar://primary1_tx|ar://primary2_tx|ar://primary3_tx"
+```
+
+Witness Validators fetch from any available source and verify content matches the metadataHash.
+
+**Handling Storage Propagation Delays**:
+
+Storage layers have different propagation times:
+- GCS/S3: Instant
+- IPFS: Seconds (with pinning) to minutes
+- Arweave: 5-10 minutes for confirmation
+
+Witness Validators should implement retry logic with backoff when storageRef is not yet available.
+
+### 4.5 Validation Levels
 
 | Level | Enforced By | What's Validated |
 |-------|-------------|------------------|
@@ -616,7 +838,7 @@ Same as Primary Validator (Stage 3 + Stage 5), but **skip storage publication**.
 | **Re-derivation** | Witness Validators | Independent verification of verifiable claims |
 | **Bridge** | Smart Contract | Message type registration, signature threshold |
 
-### 4.5 Primary Validator HTTP API
+### 4.6 Primary Validator HTTP API
 
 ```yaml
 # Submit a message for validation and signing
@@ -665,7 +887,7 @@ GET /schemas/{messageType}
     cached: boolean
 ```
 
-### 4.4 Error Handling
+### 4.7 Error Handling
 
 Validators return structured errors for rejected messages:
 
@@ -1094,47 +1316,50 @@ Messages progress through defined stages:
     │          │     threshold met      │ (threshold) │
     └──────────┘                        └─────────────┘
          │                                    │
-         │ rejectMessage()                    │ executeMessage()
-         ▼                                    ▼
-    ┌──────────┐                        ┌─────────────┐
-    │ DISPUTED │                        │ PRE_EXEC    │
-    │ (logged) │                        │ (modules)   │
-    └──────────┘                        └─────────────┘
-                                              │
-                                              │ pre-checks pass
-                                              ▼
-                                        ┌─────────────┐
+         ├─ rejectMessage()                   │ executeMessage()
+         │  (logs rejection)                  ▼
+         │                              ┌─────────────┐
+         ├─ expireMessage()             │ PRE_EXEC    │
+         │  (after 24h)                 │ (modules)   │
+         ▼                              └─────────────┘
+    ┌──────────┐                              │
+    │ EXPIRED  │                              │ pre-checks pass
+    │(terminal)│                              ▼
+    └──────────┘                        ┌─────────────┐
                                         │ EXECUTING   │
                                         │ (target)    │
                                         └─────────────┘
-                                         │
-                                         │ call returns
-                                         ▼
-                                   ┌─────────────┐
-                                   │ POST_EXEC   │
-                                   │ (modules)   │
-                                   └─────────────┘
+                                              │
+                                         success │ failure
+                                              ▼      ▼
+                                   ┌─────────────┐  ┌──────────┐
+                                   │ POST_EXEC   │  │ FAILED   │
+                                   │ (modules)   │  │(terminal)│
+                                   └─────────────┘  └──────────┘
                                          │
                                          │ post-checks pass
                                          ▼
                                    ┌─────────────┐
                                    │ COMPLETED   │
+                                   │ (terminal)  │
                                    └─────────────┘
 
-    Any stage can transition to REJECTED on failure
+Note: rejectMessage() logs a rejection but doesn't block execution.
+      A message can have rejections AND still reach threshold.
+      EXPIRED and FAILED are terminal states (nonce consumed).
 ```
 
 ```solidity
 enum MessageStage {
     NotInitialized, // Message doesn't exist
     Pending,        // Initialized, collecting signatures
-    Disputed,       // At least one validator rejected (can still reach threshold)
     Ready,          // Threshold met, awaiting execution
     PreExecution,   // Running pre-execution modules
     Executing,      // Calling target contract
     PostExecution,  // Running post-execution modules
-    Completed,      // Successfully executed
-    Failed          // Execution failed (terminal)
+    Completed,      // Successfully executed (terminal, nonce consumed)
+    Failed,         // Execution failed (terminal, nonce consumed)
+    Expired         // Threshold not reached in time (terminal, nonce consumed)
 }
 
 struct MessageState {
@@ -1223,9 +1448,10 @@ function executeMessage(bytes32 messageId) external nonReentrant {
     );
 
     if (!success) {
-        state.stage = MessageStage.Rejected;
-        emit MessageRejected(messageId, "Execution failed", returnData);
-        revert ExecutionFailed(returnData);
+        state.stage = MessageStage.Failed;
+        emit MessageFailed(messageId, "Execution reverted", returnData);
+        // Note: Failed is terminal. Nonce is consumed. Application must retry with new nonce.
+        return;
     }
 
     // Stage: Post-execution modules
@@ -1240,37 +1466,139 @@ function executeMessage(bytes32 messageId) external nonReentrant {
 
 ### 6.6 Module System
 
-Pre and post-execution modules provide extensible validation:
+Pre and post-execution modules provide extensible validation.
+
+**Module Scope**:
+
+Modules can be configured at two levels:
+
+| Scope | Applies To | Use Case |
+|-------|------------|----------|
+| **Global** | All message types | Rate limiting, monitoring |
+| **Per-Message-Type** | Specific message types | Amount thresholds for transfers, timelocks for withdrawals |
+
+**Module Registration**:
+
+```solidity
+struct ModuleConfig {
+    address module;
+    bool preExecution;      // Run before execution
+    bool postExecution;     // Run after execution
+    bool global;            // Apply to all message types
+    string[] messageTypes;  // If not global, which message types
+}
+
+// Storage
+mapping(address => ModuleConfig) public modules;
+mapping(string => address[]) public messageTypeModules; // messageType => module addresses
+
+// Register a global module
+function addGlobalModule(
+    address module,
+    bool preExecution,
+    bool postExecution
+) external;
+
+// Register a module for specific message types
+function addModuleForTypes(
+    address module,
+    bool preExecution,
+    bool postExecution,
+    string[] calldata messageTypes
+) external;
+
+// Remove module from a message type
+function removeModuleFromType(address module, string calldata messageType) external;
+```
+
+**Module Execution Logic**:
+
+```solidity
+function _runPreModules(bytes32 messageId, MessageState storage state) internal {
+    // Run global pre-modules
+    for (uint i = 0; i < globalPreModules.length; i++) {
+        (bool pass, string memory reason) = IModule(globalPreModules[i]).check(messageId, true);
+        require(pass, reason);
+    }
+
+    // Run message-type-specific pre-modules
+    address[] storage typeModules = messageTypeModules[state.messageType];
+    for (uint i = 0; i < typeModules.length; i++) {
+        ModuleConfig storage config = modules[typeModules[i]];
+        if (config.preExecution) {
+            (bool pass, string memory reason) = IModule(typeModules[i]).check(messageId, true);
+            require(pass, reason);
+        }
+    }
+}
+```
+
+**Module Interface**:
 
 ```solidity
 interface IModule {
     /**
      * Check if a message passes this module's validation
      * @param messageId The message being validated
-     * @param stage Whether this is pre or post execution
+     * @param isPreExecution True for pre-execution, false for post-execution
      * @return pass True if validation passes
      * @return reason Explanation if validation fails
      */
     function check(bytes32 messageId, bool isPreExecution)
         external view returns (bool pass, string memory reason);
 }
+```
 
-// Module types
+**Common Module Types**:
+
+```solidity
+// Global modules (apply to all messages)
 contract RateLimitModule is IModule {
-    // Limit messages per time window
+    // Limit messages per time window per application
 }
 
+contract MonitoringModule is IModule {
+    // Log all messages for external monitoring (always passes)
+}
+
+// Per-message-type modules
 contract AmountThresholdModule is IModule {
-    // Flag/delay large value transfers
+    // For transfer/withdraw: flag or delay large value transfers
+    // Configured per message type with different thresholds
 }
 
 contract AllowlistModule is IModule {
-    // Restrict to known addresses
+    // For mint/transfer: restrict to known addresses
 }
 
 contract TimelockModule is IModule {
-    // Delay high-value operations
+    // For withdraw/upgrade: delay high-value or sensitive operations
 }
+
+contract InvariantModule is IModule {
+    // For mint: verify post-execution invariants (e.g., supply cap)
+}
+```
+
+**Example Configuration**:
+
+```solidity
+// Global rate limit for all messages
+addGlobalModule(rateLimitModule, true, false);
+
+// Amount threshold only for transfers and withdrawals
+addModuleForTypes(
+    amountThresholdModule,
+    true,   // pre-execution
+    false,  // no post-execution
+    ["transfer(address,uint256)", "withdraw(address,uint256)"]
+);
+
+// Timelock only for withdrawals over certain amount
+addModuleForTypes(timelockModule, true, false, ["withdraw(address,uint256)"]);
+
+// Supply cap check after mints
+addModuleForTypes(invariantModule, false, true, ["mint(address,uint256)"]);
 ```
 
 ### 6.7 Events
@@ -1400,6 +1728,206 @@ function addValidator(address validator, bytes calldata attestation) external {
     emit ValidatorAdded(validator, attestation);
 }
 ```
+
+### 6.10 Bridge Upgrades and TEE Versioning
+
+Bridges are designed to be **upgradable** to allow security patches and feature additions without disrupting operations.
+
+**Upgrade Pattern**:
+
+Use the UUPS (Universal Upgradeable Proxy Standard) pattern:
+
+```solidity
+contract MessageBridge is UUPSUpgradeable, AccessControlUpgradeable {
+    // Implementation logic
+
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(ADMIN_ROLE)
+    {
+        // Optional: Require timelock for upgrades
+        require(
+            block.timestamp >= upgradeProposedAt + UPGRADE_DELAY,
+            "Upgrade delay not met"
+        );
+    }
+}
+```
+
+**Upgrade Safety**:
+
+| Concern | Mitigation |
+|---------|------------|
+| Malicious upgrade | Timelock + multisig admin |
+| Broken upgrade | Comprehensive test suite, staging deployment |
+| State corruption | Storage layout compatibility checks |
+| Validator disruption | Graceful version transition period |
+
+**TEE Version Tracking**:
+
+The Bridge tracks the TEE code version for each validator. This enables:
+- Enforcing minimum TEE version for signing
+- Graceful migration to new validator code
+- Audit trail of validator software
+
+```solidity
+struct ValidatorInfo {
+    address validator;
+    bool active;
+    uint64 registeredAt;
+    bytes32 teeCodeHash;        // Hash of validator code running in TEE
+    string teeVersion;          // Semantic version (e.g., "1.2.3")
+    uint64 lastAttestationAt;   // When attestation was last verified
+}
+
+mapping(address => ValidatorInfo) public validatorInfo;
+
+// Minimum TEE version required for signing
+string public minimumTeeVersion;
+
+function setMinimumTeeVersion(string calldata version) external onlyRole(ADMIN_ROLE);
+
+function updateValidatorAttestation(
+    address validator,
+    bytes calldata attestation,
+    string calldata teeVersion
+) external {
+    // Verify new attestation
+    require(_verifyAttestation(validator, attestation), "Invalid attestation");
+
+    // Update validator info
+    ValidatorInfo storage info = validatorInfo[validator];
+    info.teeCodeHash = _extractCodeHash(attestation);
+    info.teeVersion = teeVersion;
+    info.lastAttestationAt = uint64(block.timestamp);
+
+    emit ValidatorAttestationUpdated(validator, info.teeCodeHash, teeVersion);
+}
+```
+
+**Version Enforcement**:
+
+```solidity
+function signMessage(bytes32 messageId, bytes calldata signature) external {
+    address signer = _verifySignature(messageId, signature);
+
+    // Check validator is active and has valid attestation
+    ValidatorInfo storage info = validatorInfo[signer];
+    require(info.active, "Validator not active");
+
+    // Check TEE version meets minimum
+    require(
+        _compareVersions(info.teeVersion, minimumTeeVersion) >= 0,
+        "TEE version too old"
+    );
+
+    // ... rest of signing logic
+}
+```
+
+**Upgrade Flow for Validators**:
+
+```
+1. New validator version released
+2. Admin sets new minimumTeeVersion with grace period
+3. Validators upgrade TEE code
+4. Validators re-attest with new version
+5. After grace period, old versions can't sign
+```
+
+**Events**:
+
+```solidity
+event BridgeUpgraded(address indexed implementation, uint256 timestamp);
+event MinimumTeeVersionUpdated(string oldVersion, string newVersion);
+event ValidatorAttestationUpdated(
+    address indexed validator,
+    bytes32 codeHash,
+    string version
+);
+```
+
+### 6.11 WETH Handling and msg.value
+
+For consistency and security, the Bridge only holds and manages **WETH (Wrapped ETH)**, not native ETH.
+
+**Why WETH Only**:
+
+1. **Consistency**: All value transfers use the same ERC-20 interface
+2. **Accounting**: Easier to track balances and approvals
+3. **Security**: Prevents reentrancy issues with native ETH transfers
+4. **Composability**: Works with DeFi protocols that expect ERC-20
+
+**Execution Flow for Payable Calls**:
+
+When executing a message with `value > 0`:
+
+```solidity
+function executeMessage(bytes32 messageId) external nonReentrant {
+    MessageState storage state = messageStates[messageId];
+
+    // ... validation ...
+
+    // If message has value, unwrap WETH before calling
+    if (state.value > 0) {
+        // Bridge holds WETH, unwrap to native ETH for the call
+        IWETH(WETH).withdraw(state.value);
+    }
+
+    // Execute with native ETH
+    (bool success, bytes memory returnData) = config.target.call{value: state.value}(
+        state.calldata_
+    );
+
+    // ... handle result ...
+}
+```
+
+**Funding the Bridge**:
+
+Applications that need to execute payable calls must:
+
+1. Wrap ETH to WETH
+2. Transfer WETH to the Bridge
+3. Include `value` in messages
+
+```solidity
+// Application or relayer funds the Bridge
+IWETH(WETH).deposit{value: 1 ether}();
+IWETH(WETH).transfer(bridgeAddress, 1 ether);
+```
+
+**Receiving Value (from executed calls)**:
+
+If target contracts return ETH to the Bridge:
+
+```solidity
+// Bridge can re-wrap received ETH
+receive() external payable {
+    IWETH(WETH).deposit{value: msg.value}();
+}
+```
+
+**WETH Interface**:
+
+```solidity
+interface IWETH {
+    function deposit() external payable;
+    function withdraw(uint256 amount) external;
+    function transfer(address to, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
+}
+```
+
+**Relayer Gas Reimbursement**:
+
+Relayers who call `executeMessage()` pay gas costs. Reimbursement is handled out-of-band:
+- Direct payment from application
+- On-chain reimbursement module (tracks and pays relayers)
+- Priority fee on messages
+
+There is no built-in gas reimbursement mechanism in the core protocol.
 
 ---
 
