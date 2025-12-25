@@ -84,24 +84,26 @@ This means more trust can be placed in the application for non-critical decision
 
 ### 2.2 Comparison with Previous Architecture
 
-| Aspect | SQLite Replication (Old) | Message Passing (New) |
-|--------|--------------------------|----------------------|
-| Client Integration | Required SDK, SQLite hooks | HTTP POST |
-| Data Format | SQLite changesets (binary) | JSON + ABI signature |
-| Sequencer | Required (separate TEE) | Eliminated |
-| Message Origin | Database writes | Direct API calls |
-| Validation | SQL replay + invariants | Schema + custom rules |
-| Developer Effort | High (library integration) | Low (HTTP calls) |
+| Aspect             | SQLite Replication (Old)   | Message Passing (New) |
+| ------------------ | -------------------------- | --------------------- |
+| Client Integration | Required SDK, SQLite hooks | HTTP POST             |
+| Data Format        | SQLite changesets (binary) | JSON + ABI signature  |
+| Sequencer          | Required (separate TEE)    | Eliminated            |
+| Message Origin     | Database writes            | Direct API calls      |
+| Validation         | SQL replay + invariants    | Schema + custom rules |
+| Developer Effort   | High (library integration) | Low (HTTP calls)      |
 
 ### 2.3 Component Responsibilities
 
 **Application**
+
 - Constructs messages with correct type and metadata
 - Sends messages to validator endpoint(s)
 - No blockchain interaction required
 - Responsible for its own security based on value at risk
 
 **Validator**
+
 - Validates message types against Bridge registry
 - Validates metadata against JSON Schemas
 - Applies custom validation rules
@@ -110,6 +112,7 @@ This means more trust can be placed in the application for non-critical decision
 - Submits signatures to Bridge
 
 **Bridge (Smart Contract)**
+
 - Maintains registry of allowed message types
 - Stores schema hashes for metadata validation
 - Aggregates validator signatures
@@ -118,6 +121,7 @@ This means more trust can be placed in the application for non-critical decision
 - Controls funds and enforces security invariants
 
 **DA Layer**
+
 - Stores all validated messages for audit
 - Enables historical replay
 - Provides evidence for dispute resolution
@@ -166,6 +170,7 @@ messageType = "functionName(type1,type2,...)"
 ```
 
 Examples:
+
 - `mint(address,uint256)` - Mint tokens to address
 - `transfer(address,address,uint256)` - Transfer between addresses
 - `safeMint(address,uint256,string)` - Mint NFT with URI
@@ -179,6 +184,7 @@ The 4-byte function selector is derived as: `bytes4(keccak256(messageType))`
 Metadata is a JSON object containing the parameters for the message type. The fields must match the registered JSON Schema for that message type.
 
 **Example: ERC20 Mint**
+
 ```json
 {
   "id": "0x1234567890abcdef...",
@@ -197,6 +203,7 @@ Metadata is a JSON object containing the parameters for the message type. The fi
 ```
 
 **Example: NFT Mint**
+
 ```json
 {
   "id": "0xfedcba0987654321...",
@@ -227,6 +234,7 @@ bytes32 messageId = keccak256(abi.encode(
 ```
 
 This ensures:
+
 - Unique ID for each distinct message
 - Replay protection via nonce
 - Tamper detection (any change invalidates signatures)
@@ -261,6 +269,7 @@ RECEIVE → VALIDATE → SIGN → PUBLISH → SUBMIT
 ```
 
 **Stage 1: Receive**
+
 ```
 POST /messages
 Content-Type: application/json
@@ -316,6 +325,7 @@ The validator performs multiple validation checks in sequence:
 **Stage 3: Sign**
 
 If all validations pass:
+
 1. Compute the signing payload (EIP-712 typed data or raw hash)
 2. Sign with validator's private key (protected by TEE)
 3. Attach TEE attestation token if available
@@ -323,6 +333,7 @@ If all validations pass:
 **Stage 4: Publish (DA Layer)**
 
 Publish signed message to DA layer for audit:
+
 1. Serialize message + signature + attestation
 2. Submit to configured DA backend (Celestia, Arweave, etc.)
 3. Store DA reference for future queries
@@ -330,6 +341,7 @@ Publish signed message to DA layer for audit:
 **Stage 5: Submit (Bridge)**
 
 Submit signature to Bridge for on-chain aggregation:
+
 1. Call `Bridge.signMessage(messageId, signature)`
 2. Or return signature to relayer for batched submission
 
@@ -337,12 +349,12 @@ Submit signature to Bridge for on-chain aggregation:
 
 Validation is hierarchical, with different levels enforced by different components:
 
-| Level | Enforced By | Examples |
-|-------|-------------|----------|
-| **Protocol** | All Validators | Replay protection, nonce ordering, timestamp freshness |
-| **Bridge** | Smart Contract | Message type registration, signature threshold |
-| **Schema** | Validators + Bridge | Required fields, field types, value constraints |
-| **Custom** | Individual Validators | Rate limits, business rules, external checks |
+| Level        | Enforced By           | Examples                                               |
+| ------------ | --------------------- | ------------------------------------------------------ |
+| **Protocol** | All Validators        | Replay protection, nonce ordering, timestamp freshness |
+| **Bridge**   | Smart Contract        | Message type registration, signature threshold         |
+| **Schema**   | Validators + Bridge   | Required fields, field types, value constraints        |
+| **Custom**   | Individual Validators | Rate limits, business rules, external checks           |
 
 ### 4.3 Validator HTTP API
 
@@ -410,6 +422,7 @@ Validators return structured errors for rejected messages:
 ```
 
 Error codes:
+
 - `REPLAY_DETECTED` - Message ID already processed
 - `INVALID_NONCE` - Nonce not greater than last seen
 - `TIMESTAMP_EXPIRED` - Timestamp outside acceptable window
@@ -427,6 +440,7 @@ Error codes:
 ### 5.1 Overview
 
 The Bridge maintains a registry of allowed message types. Each message type has:
+
 - A target contract to call
 - A JSON Schema defining required/optional metadata fields
 - An enabled/disabled state
@@ -508,6 +522,7 @@ Schemas use JSON Schema (draft 2020-12) to define metadata requirements:
 ```
 
 Key points:
+
 - `required` specifies mandatory fields
 - `additionalProperties: true` allows extra metadata without schema changes
 - Use `pattern` for format validation (addresses, hashes)
@@ -609,6 +624,7 @@ When schemas change:
 4. **Changing types**: New schema version required
 
 For breaking changes:
+
 1. Register new message type (e.g., `mintV2(address,uint256,uint256)`)
 2. Migrate applications to new type
 3. Disable old message type
@@ -627,6 +643,7 @@ Validators cache schemas for performance:
 ```
 
 Cache invalidation events:
+
 ```solidity
 event MessageTypeRegistered(string indexed messageType, address target, bytes32 schemaHash);
 event SchemaUpdated(string indexed messageType, bytes32 oldHash, bytes32 newHash);
@@ -640,6 +657,7 @@ event MessageTypeEnabled(string indexed messageType, bool enabled);
 ### 6.1 Overview
 
 The Bridge smart contract is the trust anchor of the system. It:
+
 - Maintains the message type registry
 - Collects and aggregates validator signatures
 - Enforces signature thresholds
@@ -932,6 +950,7 @@ bytes32 public constant VALIDATOR_MANAGER_ROLE = keccak256("VALIDATOR_MANAGER_RO
 **The application does not control Bridge funds.**
 
 This is the fundamental security invariant. Even if an application is fully compromised:
+
 - It cannot request operations outside registered message types
 - It cannot bypass schema validation
 - It cannot forge validator signatures
@@ -951,12 +970,14 @@ Application ───▶ Single Validator ───▶ Bridge
 ```
 
 **Configuration**:
+
 ```solidity
 signatureThreshold = 1;
 validators = [validatorAddress];
 ```
 
 **Characteristics**:
+
 - Fastest path to execution (single signature)
 - Single point of trust (the validator)
 - Bridge still enforces all rules
@@ -979,64 +1000,72 @@ Application ───────┼───▶ Validator 2 ───┼──�
 ```
 
 **Configuration**:
+
 ```solidity
 signatureThreshold = 2;  // 2-of-3
 validators = [validator1, validator2, validator3];
 ```
 
 **Characteristics**:
+
 - Byzantine fault tolerant (tolerates (N-M) malicious validators)
 - Distributed trust (no single point of failure)
 - Higher latency (multiple signatures needed)
 - Suitable for: token bridges, DeFi, high-value transfers
 
 **Common configurations**:
+
 - 2-of-3: Tolerates 1 malicious/offline validator
 - 3-of-5: Tolerates 2 malicious/offline validators
 - 5-of-9: High security for critical operations
 
 ### 7.4 Trust Boundaries
 
-| Component | Trust Assumption | Consequence if Compromised |
-|-----------|------------------|---------------------------|
-| Application | Minimal | Can only request allowed operations |
-| Single Validator | Full | Can sign any allowed operation |
-| M-of-N Validators | M validators collude | Can sign any allowed operation |
-| Bridge Contract | Immutable/audited | System broken (upgrade needed) |
-| Bridge Admin | Timelock protected | Can change rules (with delay) |
+| Component         | Trust Assumption     | Consequence if Compromised          |
+| ----------------- | -------------------- | ----------------------------------- |
+| Application       | Minimal              | Can only request allowed operations |
+| Single Validator  | Full                 | Can sign any allowed operation      |
+| M-of-N Validators | M validators collude | Can sign any allowed operation      |
+| Bridge Contract   | Immutable/audited    | System broken (upgrade needed)      |
+| Bridge Admin      | Timelock protected   | Can change rules (with delay)       |
 
 ### 7.5 Security Gradient
 
 Different applications require different security postures:
 
-| Value at Risk | Validator Setup | Additional Measures |
-|---------------|-----------------|---------------------|
-| Low (<$1K) | Single validator, no TEE | Basic rate limiting |
-| Medium ($1K-$100K) | Single validator in TEE | Rate limits, DA audit |
-| High ($100K-$1M) | 2-of-3 validators in TEE | Amount thresholds, allowlists |
-| Critical (>$1M) | 3-of-5+ validators in TEE | Timelocks, monitoring, incident response |
+| Value at Risk      | Validator Setup           | Additional Measures                      |
+| ------------------ | ------------------------- | ---------------------------------------- |
+| Low (<$1K)         | Single validator, no TEE  | Basic rate limiting                      |
+| Medium ($1K-$100K) | Single validator in TEE   | Rate limits, DA audit                    |
+| High ($100K-$1M)   | 2-of-3 validators in TEE  | Amount thresholds, allowlists            |
+| Critical (>$1M)    | 3-of-5+ validators in TEE | Timelocks, monitoring, incident response |
 
 ### 7.6 Application Security Upgrades
 
 Applications can progressively upgrade their security without protocol changes:
 
 **Level 1: Basic**
+
 - HTTP application, no special security
 - Trust application operator for business logic
 
 **Level 2: Logging**
+
 - Comprehensive audit logs
 - Validators can verify claims against logs
 
 **Level 3: TEE**
+
 - Application runs in Trusted Execution Environment
 - TEE attestation proves application integrity
 
 **Level 4: Checkpointing**
+
 - Periodic database/state snapshots
 - Validators can re-derive application state
 
 **Level 5: Full Verification**
+
 - Application code is open and deterministic
 - Validators re-execute all logic
 
@@ -1049,12 +1078,14 @@ The protocol supports all levels; applications choose based on value at risk.
 ### 8.1 Threat Model
 
 **Attackers**:
+
 1. **Malicious Application**: Compromised or malicious application operator
 2. **External Attacker**: No access to any system component
 3. **Compromised Validator**: One or more validators colluding
 4. **Insider Threat**: Bridge admin or operator
 
 **Goals**:
+
 1. Steal funds from Bridge
 2. Execute unauthorized operations
 3. Manipulate message ordering
@@ -1062,35 +1093,39 @@ The protocol supports all levels; applications choose based on value at risk.
 
 ### 8.2 Threat Mitigation
 
-| Threat | Attack Vector | Mitigation |
-|--------|---------------|------------|
-| Malicious App | Submit fraudulent messages | Bridge rules limit possible operations; validators add checks |
-| External | Forge message signatures | secp256k1 signatures; validators in TEE |
-| External | Replay old messages | Unique message IDs; nonce ordering; timestamp freshness |
-| External | Tamper with messages | Signature over full message content |
-| Compromised Validator (1) | Sign malicious messages | M-of-N threshold; other validators must also sign |
-| Compromised Validators (M) | Collude to sign malicious | Defense in depth with modules; monitoring; timelocks |
-| Insider | Modify Bridge rules | Role-based access; timelocks on admin operations |
-| DoS | Flood with invalid messages | Rate limiting; application authorization |
+| Threat                     | Attack Vector               | Mitigation                                                    |
+| -------------------------- | --------------------------- | ------------------------------------------------------------- |
+| Malicious App              | Submit fraudulent messages  | Bridge rules limit possible operations; validators add checks |
+| External                   | Forge message signatures    | secp256k1 signatures; validators in TEE                       |
+| External                   | Replay old messages         | Unique message IDs; nonce ordering; timestamp freshness       |
+| External                   | Tamper with messages        | Signature over full message content                           |
+| Compromised Validator (1)  | Sign malicious messages     | M-of-N threshold; other validators must also sign             |
+| Compromised Validators (M) | Collude to sign malicious   | Defense in depth with modules; monitoring; timelocks          |
+| Insider                    | Modify Bridge rules         | Role-based access; timelocks on admin operations              |
+| DoS                        | Flood with invalid messages | Rate limiting; application authorization                      |
 
 ### 8.3 Security Properties
 
 **Integrity**: Messages cannot be modified after signing
+
 - Validators sign over complete message hash
 - Bridge verifies signature before storing
 - Any modification invalidates signature
 
 **Authenticity**: Only registered validators can approve messages
+
 - Validator registry on Bridge contract
 - Signature recovery proves signer identity
 - TEE attestation proves validator integrity
 
 **Non-repudiation**: All operations are auditable
+
 - DA layer stores all validated messages
 - On-chain events for all state changes
 - Complete audit trail for disputes
 
 **Authorization**: Bridge controls possible operations
+
 - Message type registry limits allowed operations
 - Schema validation ensures correct parameters
 - Modules enforce additional constraints
@@ -1098,6 +1133,7 @@ The protocol supports all levels; applications choose based on value at risk.
 ### 8.4 Attack Scenarios
 
 **Scenario 1: Application tries to steal funds**
+
 ```
 App: "transfer(address,uint256)" with attacker address
 Mitigation:
@@ -1109,6 +1145,7 @@ Mitigation:
 ```
 
 **Scenario 2: Replay attack**
+
 ```
 Attacker: Re-submit old valid message
 Mitigation:
@@ -1119,6 +1156,7 @@ Mitigation:
 ```
 
 **Scenario 3: Front-running**
+
 ```
 Attacker: See pending message, submit conflicting transaction
 Mitigation:
@@ -1128,6 +1166,7 @@ Mitigation:
 ```
 
 **Scenario 4: Validator key theft**
+
 ```
 Attacker: Steal validator private key
 Mitigation:
@@ -1140,6 +1179,7 @@ Mitigation:
 ### 8.5 Security Recommendations
 
 **For Bridge Operators**:
+
 1. Use multisig for admin operations
 2. Implement timelocks for sensitive changes
 3. Regular security audits of contracts
@@ -1147,6 +1187,7 @@ Mitigation:
 5. Incident response procedures
 
 **For Validator Operators**:
+
 1. Run validators in TEE
 2. Implement key rotation
 3. Monitor signing patterns
@@ -1154,6 +1195,7 @@ Mitigation:
 5. Geographic distribution
 
 **For Application Developers**:
+
 1. Use appropriate validator configuration for value at risk
 2. Implement nonce management correctly
 3. Add application-level rate limits
@@ -1197,15 +1239,15 @@ interface DARecord {
     validator: address;
     signature: bytes;
     signedAt: uint64;
-    teeAttestation?: string;  // Optional TEE proof
+    teeAttestation?: string; // Optional TEE proof
   }>;
 
   // Publication metadata
   publication: {
-    publishedBy: address;     // Validator that published
+    publishedBy: address; // Validator that published
     publishedAt: uint64;
-    daLayer: string;          // "celestia", "arweave", "ipfs"
-    daReference: string;      // Layer-specific reference
+    daLayer: string; // "celestia", "arweave", "ipfs"
+    daReference: string; // Layer-specific reference
   };
 
   // Execution result (if known at publication time)
@@ -1220,6 +1262,7 @@ interface DARecord {
 ### 9.3 Publication Modes
 
 **Immediate Publication** (Default)
+
 - Validator publishes after signing, before Bridge submission
 - Provides pre-execution audit trail
 - Higher latency but maximum transparency
@@ -1229,6 +1272,7 @@ Application → Validator → [Sign] → [Publish to DA] → [Submit to Bridge]
 ```
 
 **Batched Publication**
+
 - Validators batch multiple messages for efficiency
 - Publish every N seconds or M messages
 - Lower DA costs, slight delay in audit availability
@@ -1238,6 +1282,7 @@ Application → Validator → [Sign] → [Buffer] → [Batch Publish to DA] → 
 ```
 
 **Post-Execution Publication**
+
 - Publish after Bridge confirms execution
 - Includes execution result in DA record
 - Complete end-to-end audit in single record
@@ -1248,14 +1293,14 @@ Application → Validator → [Sign] → [Submit to Bridge] → [Wait for confir
 
 ### 9.4 DA Layer Options
 
-| Layer | Cost | Latency | Durability | Best For |
-|-------|------|---------|------------|----------|
-| **Celestia** | Low | ~12s | Network consensus | High-volume, low-cost |
-| **Arweave** | Medium | ~5min | Permanent | Compliance, archival |
-| **IPFS** | Free* | Instant | Best-effort | Development, testing |
-| **GCS/S3** | Low | Instant | Centralized | Internal audit only |
+| Layer        | Cost   | Latency | Durability        | Best For              |
+| ------------ | ------ | ------- | ----------------- | --------------------- |
+| **Celestia** | Low    | ~12s    | Network consensus | High-volume, low-cost |
+| **Arweave**  | Medium | ~5min   | Permanent         | Compliance, archival  |
+| **IPFS**     | Free\* | Instant | Best-effort       | Development, testing  |
+| **GCS/S3**   | Low    | Instant | Centralized       | Internal audit only   |
 
-*IPFS requires pinning service for durability
+\*IPFS requires pinning service for durability
 
 ### 9.5 Validator DA Configuration
 
@@ -1269,7 +1314,7 @@ da:
   fallback: arweave
 
   # Publication mode
-  mode: immediate  # immediate | batched | post_execution
+  mode: immediate # immediate | batched | post_execution
 
   # Batching settings (if mode: batched)
   batch:
@@ -1303,6 +1348,7 @@ CREATE TABLE da_publications (
 ```
 
 Query API:
+
 ```
 GET /messages/{messageId}/da
 Response: {
@@ -1344,6 +1390,7 @@ Response: {
    - Remove sequencer dependency from validator
 
 **Success Criteria**:
+
 - Application can POST message to validator
 - Validator validates and signs
 - Message executes on Bridge
@@ -1370,6 +1417,7 @@ Response: {
    - Module system integration
 
 **Success Criteria**:
+
 - 2-of-3 validators can approve message
 - Threshold enforcement works correctly
 - Validators operate independently
@@ -1396,6 +1444,7 @@ Response: {
    - Registry inspection
 
 **Success Criteria**:
+
 - Schemas can be stored on IPFS/Arweave
 - Validators cache and verify schemas
 - Admin can register new message types
@@ -1422,6 +1471,7 @@ Response: {
    - Verification tooling
 
 **Success Criteria**:
+
 - All messages published to DA
 - Messages can be retrieved and verified
 - Publication is reliable and monitored
@@ -1450,6 +1500,7 @@ Response: {
    - Troubleshooting guide
 
 **Success Criteria**:
+
 - Modules deployed and tested
 - Monitoring operational
 - Documentation complete
@@ -1461,6 +1512,7 @@ Response: {
 ### 11.1 Coexistence Period
 
 Both systems can run in parallel:
+
 - Legacy: synddb-client + synddb-sequencer + synddb-validator (SQL replay mode)
 - New: synddb-validator (message-passing mode) only
 
@@ -1493,13 +1545,13 @@ Bridge accepts messages from both sources during migration.
 
 ### 11.3 Component Changes
 
-| Component | Change |
-|-----------|--------|
-| synddb-client | Deprecated (remove from application) |
+| Component        | Change                                         |
+| ---------------- | ---------------------------------------------- |
+| synddb-client    | Deprecated (remove from application)           |
 | synddb-sequencer | Removed (functionality absorbed by validators) |
-| synddb-validator | New mode added (`--mode message-passing`) |
-| synddb-shared | New message types, remove changeset types |
-| Bridge.sol | Extended with message type registry |
+| synddb-validator | New mode added (`--mode message-passing`)      |
+| synddb-shared    | New message types, remove changeset types      |
+| Bridge.sol       | Extended with message type registry            |
 
 ---
 
@@ -1558,6 +1610,7 @@ print(f"Submitted: {message_id}")
 ### B. JSON Schema Examples
 
 **ERC20 Transfer**:
+
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1582,6 +1635,7 @@ print(f"Submitted: {message_id}")
 ```
 
 **NFT Batch Mint**:
+
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1618,15 +1672,15 @@ print(f"Submitted: {message_id}")
 
 ### C. Glossary
 
-| Term | Definition |
-|------|------------|
+| Term             | Definition                                                                       |
+| ---------------- | -------------------------------------------------------------------------------- |
 | **Message Type** | ABI function signature identifying the operation (e.g., `mint(address,uint256)`) |
-| **Metadata** | JSON payload containing operation parameters |
-| **Schema** | JSON Schema defining required/optional metadata fields |
-| **Validator** | Service that validates messages and signs them |
-| **Bridge** | Smart contract that aggregates signatures and executes messages |
-| **Module** | Pluggable validation component for pre/post execution checks |
-| **DA Layer** | Data Availability layer for audit trail storage |
-| **Threshold** | Minimum number of validator signatures required |
-| **Nonce** | Monotonically increasing counter for replay protection |
-| **TEE** | Trusted Execution Environment (e.g., Intel SGX, AMD SEV) |
+| **Metadata**     | JSON payload containing operation parameters                                     |
+| **Schema**       | JSON Schema defining required/optional metadata fields                           |
+| **Validator**    | Service that validates messages and signs them                                   |
+| **Bridge**       | Smart contract that aggregates signatures and executes messages                  |
+| **Module**       | Pluggable validation component for pre/post execution checks                     |
+| **DA Layer**     | Data Availability layer for audit trail storage                                  |
+| **Threshold**    | Minimum number of validator signatures required                                  |
+| **Nonce**        | Monotonically increasing counter for replay protection                           |
+| **TEE**          | Trusted Execution Environment (e.g., Intel SGX, AMD SEV)                         |
