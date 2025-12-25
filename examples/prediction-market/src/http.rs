@@ -161,7 +161,7 @@ pub struct SimulateDepositRequest {
     pub block_number: i64,
 }
 
-fn default_block() -> i64 {
+const fn default_block() -> i64 {
     1
 }
 
