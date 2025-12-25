@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-This is the guide for Claude Code when working with the SyndDB monorepo.
+This is the guide for Claude Code when working with the Message Passing Bridge monorepo.
 
 ## Project Overview
 
-SyndDB is a SQLite replication system for blockchain-based applications. It captures SQLite changesets, sequences them through a trusted sequencer, and publishes to data availability layers for deterministic state reconstruction.
+Message Passing Bridge is a system for validating and executing cross-chain messages with configurable trust models. Applications send typed messages to validators, who validate them against Bridge-defined rules before signing and submitting for on-chain execution.
 
-**Architecture**: Two-VM security model where the application (VM1) captures changes and the sequencer (VM2) signs them with isolated keys.
+**Architecture**: Primary Validators receive messages directly from applications via HTTP, validate and sign them, then publish to storage layers. Witness Validators read from storage layers and independently verify before signing.
 
 **Status**: Greenfield codebase not yet in production. No backwards compatibility requirements - feel free to make breaking changes to APIs, data formats, or interfaces as needed.
 
@@ -14,12 +14,9 @@ SyndDB is a SQLite replication system for blockchain-based applications. It capt
 
 ```
 crates/
-├── synddb-client/        # Client library for changeset capture (Rust + FFI)
-├── synddb-sequencer/     # Message ordering and signing service
-├── synddb-validator/     # State validation and replica reconstruction
+├── synddb-validator/     # Primary/Witness validator service
 ├── synddb-chain-monitor/ # Blockchain event monitoring (WebSocket/RPC)
-├── synddb-shared/        # Shared types and utilities across crates
-└── synddb-benchmark/     # Orderbook simulator for performance testing
+└── synddb-shared/        # Shared types and utilities across crates
 ```
 
 ## Development Patterns
@@ -87,11 +84,6 @@ The `SPEC.md` and `PLAN_*.md` files document the specifications and implementati
 | Errors | `anyhow`, `thiserror` |
 | Logging | `tracing`, `tracing-subscriber` |
 
-## Feature Flags
-
-- `synddb-client`: `chain-monitor`, `ffi`
-- `synddb-sequencer`: `gcs`, `tee`, `celestia`, `eigenda`, `ipfs`, `arweave`
-
 ## CI Validation
 
 This project relies heavily on GitHub Actions for CI. After pushing to a branch, check workflow status with the `gh` CLI:
@@ -142,8 +134,8 @@ cargo test --workspace
 cargo build --workspace --all-features
 
 # Check specific crate
-cargo clippy -p synddb-sequencer --all-features
-cargo test -p synddb-sequencer
+cargo clippy -p synddb-validator --all-features
+cargo test -p synddb-validator
 ```
 
 **Required tools:**
@@ -173,17 +165,17 @@ let mut validator = Validator::new(&config, fetcher.clone(), shutdown_rx.clone()
 
 ## Common Workflows
 
-### Adding a new endpoint (synddb-sequencer)
-1. Add request/response types in `http_api.rs`
+### Adding a new endpoint (synddb-validator)
+1. Add request/response types in `http/handlers.rs`
 2. Add handler function
-3. Register route in `create_router()`
+3. Register route in `http/server.rs`
 4. Add tests
 
-### Adding a new publisher (synddb-sequencer)
-1. Implement `DAPublisher` trait in `publish/`
+### Adding a new storage publisher (synddb-validator)
+1. Implement publisher trait in `storage/`
 2. Add feature flag to `Cargo.toml`
 3. Wire up in `main.rs` with feature gate
 
-### Adding chain monitor handler (synddb-client)
+### Adding chain monitor handler (synddb-chain-monitor)
 1. Implement `MessageHandler` trait
 2. Register with `ChainMonitor::add_handler()`

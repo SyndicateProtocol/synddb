@@ -1,14 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/synddb-benchmark",
-  "crates/synddb-sequencer",
   "crates/synddb-validator",
-  "crates/synddb-client",
   "crates/synddb-chain-monitor",
   "crates/synddb-shared",
-  "tests/e2e/runner",
-  "tests/e2e-gcs/runner",
 ]
 
 [workspace.package]
