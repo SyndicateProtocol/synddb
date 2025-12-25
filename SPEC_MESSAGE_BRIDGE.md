@@ -95,6 +95,9 @@ This means more trust can be placed in the application for non-critical decision
 
 ### 2.3 Component Responsibilities
 
+CLAUDE: How do we ensure that the application is properly authenticated to the
+validators? Securing this auth will be absolutely essential. We should do a
+deep dive into that.
 **Application**
 
 - Constructs messages with correct type and metadata
@@ -102,6 +105,9 @@ This means more trust can be placed in the application for non-critical decision
 - No blockchain interaction required
 - Responsible for its own security based on value at risk
 
+CLAUDE: We should make this clear that a validator either publishes to or reads
+from DA/storage layers, depending on whether it's connected to the application
+or not. What name do you suggest for these modes?
 **Validator**
 
 - Validates message types against Bridge registry
@@ -120,6 +126,10 @@ This means more trust can be placed in the application for non-critical decision
 - Executes messages via modular pre/post hooks
 - Controls funds and enforces security invariants
 
+CLAUDE: These are DA or storage layers. We recommend using at least one storage
+layer (such as Arweave or IPFS or GCS) for schema storage and auditability, and
+optionally a DA layer (such as Celestia) for short-term data availability
+guarantees.
 **DA Layer**
 
 - Stores all validated messages for audit
@@ -144,6 +154,7 @@ interface Message {
   // Examples: "mint(address,uint256)", "transfer(address,address,uint256)"
   messageType: string;
 
+  // CLAUDE: How do I find the schema for the metadata? This would be the minimum required metadata fields for bridging
   // JSON metadata payload - validated against schema
   metadata: object;
 
@@ -153,6 +164,7 @@ interface Message {
   // Unix timestamp in seconds
   timestamp: uint64;
 
+  // CLAUDE: What do you mean by multi-tenant validators here?
   // Application identifier (for multi-tenant validators)
   appId: bytes32;
 
@@ -180,6 +192,15 @@ Examples:
 The 4-byte function selector is derived as: `bytes4(keccak256(messageType))`
 
 ### 3.3 Metadata Payload
+
+CLAUDE: How do I find the JSON Schema for that message type? This would be the
+minimum required metadata fields for bridging. Give an example of the JSON
+schema for an ERC20 mint message type (e.g. user- and contract-level counts, to
+specify invariants that should not be violated). In addition, how do we specify
+e.g. that no user should receive more than 3 NFTs, and that the total supply
+should not exceed 10,000? Should that be in the JSON Schema or somewhere else?
+Validators can always add their own additional invariants, but we do want to
+make sure that the minimum invariants are clearly specified and easy to read.
 
 Metadata is a JSON object containing the parameters for the message type. The fields must match the registered JSON Schema for that message type.
 
@@ -219,6 +240,8 @@ Metadata is a JSON object containing the parameters for the message type. The fi
 }
 ```
 
+CLAUDE: Is this idiomatic to the way other cryptocurrency use cases do ID generation?
+
 ### 3.4 Message ID Generation
 
 The message ID is computed as:
@@ -238,6 +261,18 @@ This ensures:
 - Unique ID for each distinct message
 - Replay protection via nonce
 - Tamper detection (any change invalidates signatures)
+
+CLAUDE: Ohh, now I see the confusion. Metadata refers to the additional
+information provided by the application so that a validator can confidently
+sign. It's essentially the "evidence" that the application provides to the
+validator to prove that the action being requested is valid. The metadata is
+validated against the JSON Schema registered for that message type, and it
+includes details like invariants, additional context, etc. The actual function
+content should not be treated as metadata, but is instead function calldata. As
+a side note, make sure that we are using Ethereum-standard terms for functions
+and calldata. The metadata is our own addition for proving that a message
+should be signed by a validator. Think of the validators as independent
+entities and the application needs to convince them.
 
 ### 3.5 Payload Encoding for Execution
 
@@ -259,6 +294,11 @@ target.call{value: msg.value}(calldata);
 ---
 
 ## 4. Validation Protocol
+
+CLAUDE: We should differentiate between messages that are submitted by the
+application to a validator via HTTP endpoint (which is only one validator) and
+messages retrieved by validators from the storage layer. We should also figure
+out a good naming schema that accounts for this.
 
 ### 4.1 Validator Processing Flow
 
@@ -283,6 +323,9 @@ Content-Type: application/json
 }
 ```
 
+CLAUDE: The validator should also re-derive relevant metadata when possible.
+For example, if prices are available, the validators should query the public
+price API to check the prices for itself.
 **Stage 2: Validate**
 
 The validator performs multiple validation checks in sequence:
@@ -326,10 +369,14 @@ The validator performs multiple validation checks in sequence:
 
 If all validations pass:
 
+CLAUDE: We can be opinionated here. What signing scheme should we use?
+
 1. Compute the signing payload (EIP-712 typed data or raw hash)
 2. Sign with validator's private key (protected by TEE)
+   CLAUDE: The validator should already be registered via bootstrapping in the bridge. A TEE attestation token should NOT be attached every time.
 3. Attach TEE attestation token if available
 
+CLAUDE: This only matters for the first validator that receives the original message from the application. All other validators should aggregate signatures in the bridge and should skip this step.
 **Stage 4: Publish (DA Layer)**
 
 Publish signed message to DA layer for audit:
@@ -355,6 +402,8 @@ Validation is hierarchical, with different levels enforced by different componen
 | **Bridge**   | Smart Contract        | Message type registration, signature threshold         |
 | **Schema**   | Validators + Bridge   | Required fields, field types, value constraints        |
 | **Custom**   | Individual Validators | Rate limits, business rules, external checks           |
+
+CLAUDE: We will need to revise this to account for the calldata vs metadata distinction
 
 ### 4.3 Validator HTTP API
 
@@ -421,6 +470,7 @@ Validators return structured errors for rejected messages:
 }
 ```
 
+CLAUDE: Any others we're missing here?
 Error codes:
 
 - `REPLAY_DETECTED` - Message ID already processed
@@ -439,6 +489,7 @@ Error codes:
 
 ### 5.1 Overview
 
+CLAUDE: This isn't calldata, instead it's additional metadata to convince the validator to sign the message. We should be clear on that distinction.
 The Bridge maintains a registry of allowed message types. Each message type has:
 
 - A target contract to call
@@ -480,6 +531,8 @@ mapping(string => MessageTypeConfig) public messageTypes;
 ```
 
 ### 5.3 JSON Schema Format
+
+CLAUDE: Revise this to account for metadata. Keep in mind that the actual function parameters are not part of the metadata, but rather the calldata. The metadata is additional information provided to convince the validator to sign the message. The function parameters themselves already contain complete information by including argument names and types, which is sufficient for all parties since these tend to be quite standardized.
 
 Schemas use JSON Schema (draft 2020-12) to define metadata requirements:
 
@@ -528,6 +581,8 @@ Key points:
 - Use `pattern` for format validation (addresses, hashes)
 - Use `enum` for constrained values
 
+CLAUDE: This is wrong. The original validator that first received a message (the application-attached one or whatever we want to call it) should store in the storage layer. The rest use the bridge.
+
 ### 5.4 Schema Storage Options
 
 **Option A: On-Chain (Small Schemas)**
@@ -570,6 +625,8 @@ Cons: Requires fetching from external source
 - Large schemas stored on IPFS/Arweave with hash verification
 - Validators cache all schemas locally
 - Cache invalidated when `updatedAt` changes
+
+CLAUDE: This is good! Make sure that all of this still holds true with your new understanding of metadata.
 
 ### 5.5 Schema Registration API
 
@@ -614,6 +671,12 @@ interface IMessageTypeRegistry {
 }
 ```
 
+CLAUDE: This is good! But note that function signatures will NOT change in most
+cases. For example, in an ERC-20 transfer, it will always be transfer(address
+to, uint256 amount). The metadata is what may change over time to add
+additional invariants or context for the validators. So function signatures
+will remain stable, while metadata schemas may evolve.
+
 ### 5.6 Schema Versioning
 
 When schemas change:
@@ -628,6 +691,10 @@ For breaking changes:
 1. Register new message type (e.g., `mintV2(address,uint256,uint256)`)
 2. Migrate applications to new type
 3. Disable old message type
+
+CLAUDE: Good insight to add this here. Make it clear that the Bridge is the
+canonical source of truth for what schemas are valid, and validators should
+derive this information from indexing Bridge events.
 
 ### 5.7 Validator Schema Caching
 
@@ -663,6 +730,8 @@ The Bridge smart contract is the trust anchor of the system. It:
 - Enforces signature thresholds
 - Executes validated messages on target contracts
 - Runs modular pre/post-execution checks
+
+CLAUDE: This is good. These interfaces are clearer than our current contracts.
 
 ### 6.2 Core Interface
 
@@ -705,6 +774,7 @@ interface IMessageBridge {
 
     // ==================== Validator Management ====================
 
+    // CLAUDE: Make it clear that this requires TEE bootstrapping for validators
     /**
      * Add a validator to the set
      */
@@ -729,6 +799,8 @@ interface IMessageBridge {
     function getSignatureThreshold() external view returns (uint256);
 }
 ```
+
+CLAUDE: This is excellent.
 
 ### 6.3 Message State Machine
 
@@ -908,9 +980,16 @@ contract TimelockModule is IModule {
 }
 ```
 
+CLAUDE: Make it clear that these are enshrined bridge events, not module
+events. Speaking of which, should we include module added/removed events here
+as well?
+
 ### 6.7 Events
 
 ```solidity
+// CLAUDE: Note that this is bridge-wide signature requirements, but this can
+// always be extended for specific sensitive transactions via pre-execution
+// modules.
 // Signature events
 event SignatureSubmitted(bytes32 indexed messageId, address indexed validator, uint256 count);
 event ThresholdReached(bytes32 indexed messageId, uint256 signatures);
@@ -924,6 +1003,8 @@ event ValidatorAdded(address indexed validator);
 event ValidatorRemoved(address indexed validator);
 event ThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
 ```
+
+CLAUDE: We should explain TEE bootstrapping in this section.
 
 ### 6.8 Access Control
 
@@ -958,6 +1039,9 @@ This is the fundamental security invariant. Even if an application is fully comp
 - It cannot modify Bridge configuration
 
 The Bridge rules are the trust anchor.
+
+CLAUDE: Rewrite this to differentiate between the validator that connects to
+the application vs the validators that connect to the storage layers.
 
 ### 7.2 Single Validator Mode
 
@@ -1040,6 +1124,10 @@ Different applications require different security postures:
 | High ($100K-$1M)   | 2-of-3 validators in TEE  | Amount thresholds, allowlists            |
 | Critical (>$1M)    | 3-of-5+ validators in TEE | Timelocks, monitoring, incident response |
 
+CLAUDE: A lot of these levels should be included in validator metadata. Rewrite
+this to focus on validator metadata best practices (i.e. more metadata from the
+application gives the validators more information to work with)
+
 ### 7.6 Application Security Upgrades
 
 Applications can progressively upgrade their security without protocol changes:
@@ -1072,6 +1160,10 @@ Applications can progressively upgrade their security without protocol changes:
 The protocol supports all levels; applications choose based on value at risk.
 
 ---
+
+CLAUDE: Explain how TEEs help here. Especially why even though an application
+running in a TEE is optional, it is strongly recommended for financial use
+cases.
 
 ## 8. Security Analysis
 
@@ -1178,6 +1270,9 @@ Mitigation:
 
 ### 8.5 Security Recommendations
 
+CLAUDE: The application will also manage their own bridge. But we would
+recommend a security council to avoid unilateral control, in addition to the
+good steps you've outlined here.
 **For Bridge Operators**:
 
 1. Use multisig for admin operations
@@ -1186,6 +1281,7 @@ Mitigation:
 4. Monitoring and alerting for anomalies
 5. Incident response procedures
 
+CLAUDE: Extend with custom validation logic based on available metadata?
 **For Validator Operators**:
 
 1. Run validators in TEE
@@ -1259,6 +1355,11 @@ interface DARecord {
 }
 ```
 
+CLAUDE: We should always publish before execution, publishing after execution
+doesn't make sense since validators read from it. We should recommend batching
+for most use cases, and only recommend immediate publication if the use case is
+very latency sensitive.
+
 ### 9.3 Publication Modes
 
 **Immediate Publication** (Default)
@@ -1290,6 +1391,10 @@ Application → Validator → [Sign] → [Buffer] → [Batch Publish to DA] → 
 ```
 Application → Validator → [Sign] → [Submit to Bridge] → [Wait for confirmation] → [Publish to DA]
 ```
+
+CLAUDE: We should differentiate between storage and DA options here. Also add
+Celestia and EigenDA for DA. Prioritize recommending storage layers over DA
+layers for archival purposes.
 
 ### 9.4 DA Layer Options
 
@@ -1517,6 +1622,10 @@ Both systems can run in parallel:
 - New: synddb-validator (message-passing mode) only
 
 Bridge accepts messages from both sources during migration.
+
+CLAUDE: NO MIGRATION IS NEEDED! WE DO NOT NEED TO MAINTAIN ANY BACKWARD
+COMPATIBILITY WITH SYNDDB. SYNDDB IS NOT DEPLOYED TO PRODUCTION SO BACKWARD
+COMPATIBILITY IS NOT A CONCERN.
 
 ### 11.2 Migration Steps
 
