@@ -141,81 +141,103 @@ guarantees.
 
 ## 3. Message Format
 
-### 3.1 Message Structure
+### 3.1 Key Distinction: Calldata vs Metadata
 
-Messages consist of a type signature and metadata payload:
+This specification distinguishes between two types of data in a message:
+
+**Calldata**: The actual function parameters that will be executed on-chain. Uses standard Ethereum ABI encoding. For `mint(address,uint256)`, this is the recipient address and amount. Calldata is self-describing via the function signature.
+
+**Metadata**: Additional "evidence" the application provides to convince validators that the requested operation is legitimate. This includes context like `reason`, `sourceChain`, `sourceTxHash`, invariant proofs, and any other information validators need to verify the request. Metadata is NOT executed on-chain - it's purely for validator decision-making.
+
+Think of validators as independent entities that the application must convince. The metadata is the application's argument for why validators should sign.
+
+### 3.2 Message Structure
 
 ```typescript
 interface Message {
-  // Unique identifier (keccak256 hash of content, prevents replay)
+  // Unique identifier (hash of content, prevents replay)
   id: bytes32;
 
-  // Human-readable ABI function signature
-  // Examples: "mint(address,uint256)", "transfer(address,address,uint256)"
+  // ABI function signature (e.g., "mint(address,uint256)")
   messageType: string;
 
-  // CLAUDE: How do I find the schema for the metadata? This would be the minimum required metadata fields for bridging
-  // JSON metadata payload - validated against schema
+  // Standard Ethereum ABI-encoded function parameters
+  // This is what gets executed on the target contract
+  calldata: bytes;
+
+  // Evidence for validators - NOT executed on-chain
+  // Schema retrieved from Bridge via getMessageTypeConfig(messageType).schemaUri
   metadata: object;
 
-  // Monotonically increasing nonce per application (prevents replay/reorder)
+  // Monotonically increasing per-application nonce
   nonce: uint64;
 
   // Unix timestamp in seconds
   timestamp: uint64;
 
-  // CLAUDE: What do you mean by multi-tenant validators here?
-  // Application identifier (for multi-tenant validators)
+  // Application identifier - each application registers with validators
+  // and receives a unique appId for message attribution and rate limiting
   appId: bytes32;
 
-  // Optional: Native token amount to send with execution
+  // Native token amount to send with execution (optional)
   value?: uint256;
 }
 ```
 
-### 3.2 Message Type Format
+**Finding the Metadata Schema**: Applications query the Bridge contract's `getMessageTypeConfig(messageType)` function, which returns the `schemaUri` (IPFS/Arweave link) or `schemaHash` for on-chain lookup. Validators cache these schemas and validate incoming metadata against them.
 
-Message types use Solidity function signature format:
+### 3.3 Message Type Format
+
+Message types use standard Solidity function signature format:
 
 ```
 messageType = "functionName(type1,type2,...)"
 ```
 
 Examples:
-
 - `mint(address,uint256)` - Mint tokens to address
 - `transfer(address,address,uint256)` - Transfer between addresses
 - `safeMint(address,uint256,string)` - Mint NFT with URI
 - `batchTransfer(address[],uint256[])` - Batch transfer
-- `execute(address,bytes)` - Generic execution
 
-The 4-byte function selector is derived as: `bytes4(keccak256(messageType))`
+The 4-byte function selector is: `bytes4(keccak256(messageType))`
 
-### 3.3 Metadata Payload
+Function signatures are stable and standardized (e.g., ERC-20 `transfer` is always `transfer(address,uint256)`). What evolves over time is the metadata schema - as applications add more invariants or context for validators.
 
-CLAUDE: How do I find the JSON Schema for that message type? This would be the
-minimum required metadata fields for bridging. Give an example of the JSON
-schema for an ERC20 mint message type (e.g. user- and contract-level counts, to
-specify invariants that should not be violated). In addition, how do we specify
-e.g. that no user should receive more than 3 NFTs, and that the total supply
-should not exceed 10,000? Should that be in the JSON Schema or somewhere else?
-Validators can always add their own additional invariants, but we do want to
-make sure that the minimum invariants are clearly specified and easy to read.
+### 3.4 Calldata (Function Parameters)
 
-Metadata is a JSON object containing the parameters for the message type. The fields must match the registered JSON Schema for that message type.
+Calldata contains the actual function arguments, ABI-encoded:
 
-**Example: ERC20 Mint**
+```solidity
+// For mint(address,uint256)
+bytes memory calldata = abi.encodeWithSelector(
+    bytes4(keccak256("mint(address,uint256)")),
+    recipientAddress,  // address parameter
+    amount             // uint256 parameter
+);
+```
+
+This is standard Ethereum encoding - validators and the Bridge don't need special logic to interpret it.
+
+### 3.5 Metadata (Validator Evidence)
+
+Metadata is the application's evidence to convince validators. It's validated against a JSON Schema but NOT executed on-chain.
+
+**Example: ERC20 Mint Message**
 
 ```json
 {
   "id": "0x1234567890abcdef...",
   "messageType": "mint(address,uint256)",
+  "calldata": "0x40c10f19000000000000000000000000742d35cc6634c0532925a3b844bc454e4438f44e0000000000000000000000000000000000000000000000000de0b6b3a7640000",
   "metadata": {
-    "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-    "amount": "1000000000000000000",
     "reason": "user_deposit",
     "sourceChain": "ethereum",
-    "sourceTxHash": "0xabcdef..."
+    "sourceTxHash": "0xabcdef1234567890...",
+    "depositAmount": "1000000000000000000",
+    "userTotalMinted": "5000000000000000000",
+    "contractTotalSupply": "1000000000000000000000000",
+    "maxSupply": "10000000000000000000000000"
   },
   "nonce": 42,
   "timestamp": 1735084800,
@@ -223,73 +245,68 @@ Metadata is a JSON object containing the parameters for the message type. The fi
 }
 ```
 
-**Example: NFT Mint**
+Note: The calldata contains the ABI-encoded `mint(0x742d..., 1000000000000000000)`. The metadata provides context validators use to decide whether to sign.
+
+### 3.6 Invariant Specification
+
+Invariants are constraints that must hold true. They can be specified at two levels:
+
+**Schema-Level Invariants** (in JSON Schema):
+- Required fields and their types
+- Value ranges and patterns
+- Field relationships
+
+**Application-Reported Invariants** (in metadata):
+- Current state values (e.g., `userTotalMinted`, `contractTotalSupply`)
+- Limits (e.g., `maxSupply`, `maxPerUser`)
+- Pre-computed checks the validator can verify
+
+**Example: NFT with Per-User and Global Limits**
 
 ```json
 {
-  "id": "0xfedcba0987654321...",
   "messageType": "safeMint(address,uint256,string)",
+  "calldata": "0x...",
   "metadata": {
-    "to": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+    "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
     "tokenId": "12345",
-    "tokenURI": "ipfs://QmXyz..."
-  },
-  "nonce": 43,
-  "timestamp": 1735084801,
-  "appId": "0x0000000000000000000000000000000000000001"
+
+    "userCurrentBalance": 2,
+    "maxPerUser": 3,
+
+    "currentTotalSupply": 9500,
+    "maxTotalSupply": 10000,
+
+    "reason": "game_reward",
+    "gameSessionId": "session_abc123",
+    "achievementId": "first_win"
+  }
 }
 ```
 
-CLAUDE: Is this idiomatic to the way other cryptocurrency use cases do ID generation?
+Validators verify:
+1. `userCurrentBalance + 1 <= maxPerUser` (user can receive this NFT)
+2. `currentTotalSupply + 1 <= maxTotalSupply` (supply cap not exceeded)
+3. Additional custom rules (e.g., verify game session via external API)
 
-### 3.4 Message ID Generation
+The schema defines which invariant fields are required; validators enforce the logic.
 
-The message ID is computed as:
+### 3.7 Message ID Generation
+
+Message IDs follow standard Ethereum hashing patterns:
 
 ```solidity
 bytes32 messageId = keccak256(abi.encode(
     messageType,
-    keccak256(abi.encode(metadata)),
+    keccak256(calldata),
+    keccak256(abi.encode(metadata)),  // Metadata included in ID
     nonce,
     timestamp,
     appId
 ));
 ```
 
-This ensures:
-
-- Unique ID for each distinct message
-- Replay protection via nonce
-- Tamper detection (any change invalidates signatures)
-
-CLAUDE: Ohh, now I see the confusion. Metadata refers to the additional
-information provided by the application so that a validator can confidently
-sign. It's essentially the "evidence" that the application provides to the
-validator to prove that the action being requested is valid. The metadata is
-validated against the JSON Schema registered for that message type, and it
-includes details like invariants, additional context, etc. The actual function
-content should not be treated as metadata, but is instead function calldata. As
-a side note, make sure that we are using Ethereum-standard terms for functions
-and calldata. The metadata is our own addition for proving that a message
-should be signed by a validator. Think of the validators as independent
-entities and the application needs to convince them.
-
-### 3.5 Payload Encoding for Execution
-
-When the Bridge executes a message, metadata is ABI-encoded:
-
-```solidity
-// For messageType = "mint(address,uint256)"
-// metadata = { "recipient": "0x123...", "amount": "1000" }
-bytes memory calldata = abi.encodeWithSelector(
-    bytes4(keccak256("mint(address,uint256)")),
-    metadata.recipient,
-    metadata.amount
-);
-
-// Execute on target
-target.call{value: msg.value}(calldata);
-```
+This is consistent with how Ethereum transactions derive IDs - hashing the full content ensures uniqueness and tamper detection.
 
 ---
 
