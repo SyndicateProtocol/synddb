@@ -3237,9 +3237,13 @@ dependencies = [
 name = "prediction-market"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
+ "async-trait",
  "clap",
+ "crossbeam-channel",
  "rusqlite",
+ "synddb-chain-monitor",
  "synddb-client",
  "tokio",
  "tracing",

@@ -99,14 +99,21 @@ enum Commands {
     Status,
 
     /// Simulate a deposit from L1 (for testing)
+    ///
+    /// In production, the chain monitor would insert deposit records when it
+    /// sees `Deposit` events from the bridge contract.
     SimulateDeposit {
         /// Transaction hash
         #[arg(long)]
         tx_hash: String,
 
-        /// Account name to credit
+        /// L1 sender address
         #[arg(long)]
-        account_name: String,
+        from: String,
+
+        /// L2 destination address (becomes the account name)
+        #[arg(long)]
+        to: String,
 
         /// Amount in cents
         #[arg(long)]
@@ -254,17 +261,19 @@ fn main() -> Result<()> {
 
         Commands::SimulateDeposit {
             tx_hash,
-            account_name,
+            from,
+            to,
             amount,
             block,
         } => {
-            let id = app.simulate_deposit(&tx_hash, &account_name, amount, block)?;
+            let id = app.simulate_deposit(&tx_hash, &from, &to, amount, block)?;
             app.publish()?;
             println!(
-                "Simulated deposit {} for ${:.2} to '{}'",
+                "Simulated deposit {} for ${:.2} from {} to {}",
                 id,
                 amount as f64 / 100.0,
-                account_name
+                from,
+                to
             );
         }
 

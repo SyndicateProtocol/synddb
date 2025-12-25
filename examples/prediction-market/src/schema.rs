@@ -76,21 +76,28 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
         [],
     )?;
 
-    // Inbound deposits from L1 (chain monitor)
+    // Inbound deposits from L1 (populated by chain monitor)
+    // The chain monitor watches for Deposit events and inserts records here.
+    // The application then processes these to credit user accounts.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS inbound_deposits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tx_hash TEXT UNIQUE NOT NULL,
-            account_name TEXT NOT NULL,
+            from_address TEXT NOT NULL,
+            to_address TEXT NOT NULL,
             amount INTEGER NOT NULL,
             block_number INTEGER NOT NULL,
+            log_index INTEGER,
             processed INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL DEFAULT (unixepoch())
         )",
         [],
     )?;
 
-    // Outbound withdrawals to L1
+    // Outbound withdrawals to L1 (requests created by users, confirmed by chain monitor)
+    // Users request withdrawals which creates a 'pending' record.
+    // The sequencer submits to L1 (status -> 'submitted').
+    // The chain monitor sees the Withdrawal event and confirms (status -> 'confirmed').
     conn.execute(
         "CREATE TABLE IF NOT EXISTS outbound_withdrawals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +105,8 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
             amount INTEGER NOT NULL,
             destination_address TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'submitted', 'confirmed')),
+            l1_tx_hash TEXT,
+            confirmed_at INTEGER,
             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
             FOREIGN KEY (account_id) REFERENCES accounts(id)
         )",

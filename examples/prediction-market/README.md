@@ -43,7 +43,7 @@ cargo run -p prediction-market -- status
 
 ```bash
 # Start sequencer first (in another terminal)
-cargo run -p synddb-sequencer
+cargo run -p synddb-sequencer -- --signing-key 0000000000000000000000000000000000000000000000000000000000000001
 
 # Run with sequencer URL
 cargo run -p prediction-market -- --sequencer http://localhost:8433 create-account alice
@@ -59,78 +59,111 @@ cargo run -p prediction-market -- create-account alice
 ### Bridge operations (deposits/withdrawals)
 
 ```bash
-# Simulate a deposit from L1
+# Simulate a deposit from L1 (in production, chain monitor does this)
 cargo run -p prediction-market -- simulate-deposit \
     --tx-hash 0xabc123 \
-    --account-name charlie \
+    --from 0x1111111111111111111111111111111111111111 \
+    --to 0x2222222222222222222222222222222222222222 \
     --amount 100000
 
-# Process pending deposits
+# Process pending deposits (credits accounts)
 cargo run -p prediction-market -- process-deposits
 
-# Request a withdrawal
+# Request a withdrawal to L1
 cargo run -p prediction-market -- withdraw --account 1 --amount 50000 --destination 0x1234567890abcdef
 ```
 
+## Chain Monitor Integration
+
+This example includes optional chain monitor integration for watching L1 bridge events.
+
+### Building with chain monitor
+
+```bash
+cargo build -p prediction-market --features chain-monitor
+```
+
+### Architecture
+
+```
+L1 Bridge Contract
+       │
+       ▼
+┌─────────────────┐
+│  Chain Monitor  │  (watches for Deposit/Withdrawal events)
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│    Handlers     │  (DepositHandler, WithdrawalHandler)
+└────────┬────────┘
+         │ channel
+         ▼
+┌─────────────────┐
+│   Main Thread   │  (receives from channel, inserts into DB)
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  SQLite Tables  │  (inbound_deposits, outbound_withdrawals)
+└─────────────────┘
+```
+
+### Event Flow
+
+**Deposits (L1 → L2):**
+1. User deposits USDC to bridge contract on L1
+2. Bridge emits `Deposit(from, to, amount, data)` event
+3. Chain monitor's `DepositHandler` captures event
+4. Handler sends deposit data via channel to main thread
+5. Main thread inserts into `inbound_deposits` table
+6. Application calls `process_deposits()` to credit accounts
+
+**Withdrawals (L2 → L1):**
+1. User requests withdrawal via `request_withdrawal()`
+2. Record created in `outbound_withdrawals` with status 'pending'
+3. Sequencer batches and submits to L1 (status → 'submitted')
+4. Bridge processes withdrawal and emits `Withdrawal` event
+5. Chain monitor's `WithdrawalHandler` captures event
+6. Handler sends confirmation via channel to main thread
+7. Main thread updates status to 'confirmed'
+
 ## Developer Experience Notes
 
-### The Good
+### SyndDB Integration Patterns
 
-1. **Transparent integration**: Once `SyndDB::attach()` is called, all SQLite operations are automatically captured. No changes to business logic needed.
+The codebase demonstrates several SyndDB integration patterns:
 
-2. **Optional replication**: The app works identically with or without a sequencer URL. Easy to develop/test locally.
-
-3. **Familiar SQLite patterns**: Use standard rusqlite APIs, transactions work as expected.
-
-### Friction Points
-
-1. **`Box::leak` for connection lifetime**: SyndDB requires a `'static` connection lifetime. This is achieved via `Box::leak(Box::new(conn))` which is unusual. Developers may wonder:
-   - Is this a memory leak? (Technically yes, but intentional - connection lives for process lifetime)
-   - Can I close the connection? (No, and you shouldn't need to)
-
-2. **`unchecked_transaction()` requirement**: Must use `conn.unchecked_transaction()` instead of `conn.transaction()` because SyndDB holds an immutable borrow. This is non-obvious and will cause compile errors that don't clearly explain why.
-
-3. **Publish timing ambiguity**: When should `publish()` be called?
-   - After every operation? (High latency, maximum consistency)
-   - Periodically? (Batching, but potential data loss on crash)
-   - Never? (Rely on 1-second auto-flush)
-
-   Current implementation: caller decides. Maybe SyndDB should offer guidance or helper patterns.
-
-4. **Error handling on sequencer failure**: What happens if the sequencer is unavailable?
-   - Operations still succeed locally
-   - Changesets are buffered and retried
-   - But how does the app know if replication is working?
-
-### Potential Improvements
-
-1. **Connection wrapper**: Could SyndDB provide a wrapper type that hides the `'static` requirement?
+1. **`SyndDB::open()` hides complexity**: No need for `Box::leak` pattern:
    ```rust
-   // Instead of Box::leak pattern
-   let conn = SyndDBConnection::open("app.db")?;
+   // Clean one-liner
+   let synddb = SyndDB::open("market.db", "http://sequencer:8433")?;
+   let conn = synddb.connection();
    ```
 
-2. **Transaction helper**: Provide a transaction wrapper that handles `unchecked_transaction`:
+2. **Transaction helper**: Wraps `unchecked_transaction` automatically:
    ```rust
    synddb.transaction(|tx| {
-       tx.execute(...)?;
+       tx.execute("INSERT INTO ...", [])?;
        Ok(())
    })?;
    ```
 
-3. **Publish strategies**: Built-in publish strategies:
-   ```rust
-   SyndDB::attach_with_config(conn, Config {
-       publish_strategy: PublishStrategy::AfterCommit, // or ::Manual, ::Timer(Duration)
-       ...
-   })?;
-   ```
-
-4. **Health/status API**: Expose replication status:
+3. **Health/stats API**: Monitor replication status:
    ```rust
    if synddb.is_healthy() { ... }
-   let stats = synddb.stats(); // pending changesets, last publish time, etc.
+   let stats = synddb.stats(); // pending, published, failed counts
    ```
+
+4. **Publish strategies**: Control when changesets are sent:
+   - `PublishStrategy::Timer` (default): Auto-publish every 1 second
+   - `PublishStrategy::Manual`: Only on explicit `publish()` call
+
+### Remaining Friction Points
+
+1. **Schema evolution**: No built-in migration support. Applications must manage schema changes carefully since they're replicated.
+
+2. **Chain monitor setup**: Requires WebSocket RPC URL and bridge contract address. Configuration can be complex for multi-chain setups.
 
 ## Schema
 
@@ -140,6 +173,7 @@ CREATE TABLE markets (
     id INTEGER PRIMARY KEY,
     question TEXT NOT NULL,
     outcome TEXT DEFAULT 'unresolved',  -- 'yes', 'no', or 'unresolved'
+    resolution_time INTEGER,
     ...
 );
 
@@ -163,9 +197,30 @@ CREATE TABLE positions (
 -- Trade history
 CREATE TABLE trades (...);
 
--- Chain monitor tables
-CREATE TABLE inbound_deposits (...);
-CREATE TABLE outbound_withdrawals (...);
+-- Chain monitor: Inbound deposits from L1
+CREATE TABLE inbound_deposits (
+    id INTEGER PRIMARY KEY,
+    tx_hash TEXT UNIQUE NOT NULL,
+    from_address TEXT NOT NULL,
+    to_address TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    block_number INTEGER NOT NULL,
+    log_index INTEGER,
+    processed INTEGER DEFAULT 0,
+    ...
+);
+
+-- Chain monitor: Outbound withdrawals to L1
+CREATE TABLE outbound_withdrawals (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL,
+    destination_address TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',  -- 'pending', 'submitted', 'confirmed'
+    l1_tx_hash TEXT,
+    confirmed_at INTEGER,
+    ...
+);
 ```
 
 ## Testing
@@ -173,6 +228,9 @@ CREATE TABLE outbound_withdrawals (...);
 ```bash
 # Run unit tests
 cargo test -p prediction-market
+
+# Run with chain monitor feature
+cargo test -p prediction-market --features chain-monitor
 
 # Run with verbose output
 cargo test -p prediction-market -- --nocapture

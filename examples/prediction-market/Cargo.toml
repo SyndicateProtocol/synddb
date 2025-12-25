@@ -17,6 +17,10 @@ path = "src/lib.rs"
 name = "prediction-market"
 path = "src/main.rs"
 
+[features]
+default = []
+chain-monitor = ["synddb-chain-monitor", "alloy", "async-trait", "crossbeam-channel"]
+
 [dependencies]
 tokio = { workspace = true }
 rusqlite = { workspace = true }
@@ -25,3 +29,9 @@ clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 synddb-client = { path = "../../crates/synddb-client" }
+
+# Optional chain monitor dependencies
+synddb-chain-monitor = { path = "../../crates/synddb-chain-monitor", optional = true }
+alloy = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+crossbeam-channel = { workspace = true, optional = true }

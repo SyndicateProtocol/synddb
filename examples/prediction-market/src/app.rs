@@ -271,14 +271,25 @@ impl PredictionMarket {
     }
 
     /// Simulate a deposit (for testing/demo)
+    ///
+    /// In production, the chain monitor would insert these records when it
+    /// sees `Deposit` events from the bridge contract.
     pub fn simulate_deposit(
         &self,
         tx_hash: &str,
-        account_name: &str,
+        from_address: &str,
+        to_address: &str,
         amount: i64,
         block_number: i64,
     ) -> Result<i64> {
-        bridge::simulate_deposit(self.conn(), tx_hash, account_name, amount, block_number)
+        bridge::simulate_deposit(
+            self.conn(),
+            tx_hash,
+            from_address,
+            to_address,
+            amount,
+            block_number,
+        )
     }
 }
 
@@ -337,13 +348,14 @@ mod tests {
     fn test_deposit_and_withdraw() {
         let app = PredictionMarket::in_memory(None).unwrap();
 
-        // Simulate deposit for new account
-        app.simulate_deposit("0xabc", "bob", 50000, 1000).unwrap();
+        // Simulate deposit for new account (to_address becomes account name)
+        app.simulate_deposit("0xabc", "0xsender", "0xbob", 50000, 1000)
+            .unwrap();
         let count = app.process_deposits().unwrap();
         assert_eq!(count, 1);
 
-        // Check account was created
-        let bob = app.get_account_by_name("bob").unwrap();
+        // Check account was created using to_address as name
+        let bob = app.get_account_by_name("0xbob").unwrap();
         assert_eq!(bob.balance, 50000);
 
         // Request withdrawal

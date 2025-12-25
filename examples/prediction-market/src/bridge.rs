@@ -5,16 +5,19 @@ use rusqlite::{params, Connection};
 ///
 /// This function processes deposits that have been inserted into the `inbound_deposits`
 /// table by the chain monitor. For each unprocessed deposit:
-/// 1. Creates the account if it doesn't exist
+/// 1. Creates the account using `to_address` as the identifier (if it doesn't exist)
 /// 2. Credits the account balance
 /// 3. Marks the deposit as processed
+///
+/// In production, you might want a more sophisticated mapping from L1 addresses
+/// to user accounts (e.g., through a registration process).
 pub fn process_deposits(conn: &Connection) -> Result<usize> {
     let tx = conn.unchecked_transaction()?;
 
-    // Get unprocessed deposits
+    // Get unprocessed deposits (to_address serves as account identifier)
     let deposits: Vec<(i64, String, i64)> = {
-        let mut stmt = tx
-            .prepare("SELECT id, account_name, amount FROM inbound_deposits WHERE processed = 0")?;
+        let mut stmt =
+            tx.prepare("SELECT id, to_address, amount FROM inbound_deposits WHERE processed = 0")?;
         let result: Vec<_> = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -23,12 +26,13 @@ pub fn process_deposits(conn: &Connection) -> Result<usize> {
 
     let count = deposits.len();
 
-    for (deposit_id, account_name, amount) in deposits {
-        // Create account if it doesn't exist, otherwise credit existing
+    for (deposit_id, to_address, amount) in deposits {
+        // Create account using to_address as name if it doesn't exist
+        // In production, you'd map addresses to registered accounts
         tx.execute(
             "INSERT INTO accounts (name, balance) VALUES (?1, ?2)
              ON CONFLICT(name) DO UPDATE SET balance = balance + excluded.balance",
-            params![account_name, amount],
+            params![to_address, amount],
         )?;
 
         // Mark deposit as processed
@@ -117,17 +121,21 @@ pub fn list_pending_withdrawals(conn: &Connection) -> Result<Vec<Withdrawal>> {
 }
 
 /// Simulate a deposit from L1 (for testing/demo purposes)
+///
+/// In production, the chain monitor would insert these records when it
+/// sees `Deposit` events from the bridge contract.
 pub fn simulate_deposit(
     conn: &Connection,
     tx_hash: &str,
-    account_name: &str,
+    from_address: &str,
+    to_address: &str,
     amount: i64,
     block_number: i64,
 ) -> Result<i64> {
     conn.execute(
-        "INSERT INTO inbound_deposits (tx_hash, account_name, amount, block_number)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![tx_hash, account_name, amount, block_number],
+        "INSERT INTO inbound_deposits (tx_hash, from_address, to_address, amount, block_number)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![tx_hash, from_address, to_address, amount, block_number],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -158,17 +166,17 @@ mod tests {
     fn test_process_deposits_new_account() {
         let conn = setup();
 
-        // Simulate a deposit for a new account
-        simulate_deposit(&conn, "0xabc123", "bob", 50000, 1000).unwrap();
+        // Simulate a deposit for a new account (to_address becomes the account name)
+        simulate_deposit(&conn, "0xabc123", "0xsender", "0xbob", 50000, 1000).unwrap();
 
         // Process deposits
         let count = process_deposits(&conn).unwrap();
         assert_eq!(count, 1);
 
-        // Check account was created with deposit amount
+        // Check account was created with deposit amount (using to_address as name)
         let balance: i64 = conn
             .query_row(
-                "SELECT balance FROM accounts WHERE name = 'bob'",
+                "SELECT balance FROM accounts WHERE name = '0xbob'",
                 [],
                 |row| row.get(0),
             )
@@ -190,22 +198,22 @@ mod tests {
     fn test_process_deposits_existing_account() {
         let conn = setup();
 
-        // Create existing account
+        // Create existing account with address as name
         conn.execute(
-            "INSERT INTO accounts (name, balance) VALUES ('alice', 100000)",
+            "INSERT INTO accounts (name, balance) VALUES ('0xalice', 100000)",
             [],
         )
         .unwrap();
 
-        // Simulate a deposit
-        simulate_deposit(&conn, "0xdef456", "alice", 25000, 1001).unwrap();
+        // Simulate a deposit to that address
+        simulate_deposit(&conn, "0xdef456", "0xsender", "0xalice", 25000, 1001).unwrap();
 
         process_deposits(&conn).unwrap();
 
         // Check balance was credited
         let balance: i64 = conn
             .query_row(
-                "SELECT balance FROM accounts WHERE name = 'alice'",
+                "SELECT balance FROM accounts WHERE name = '0xalice'",
                 [],
                 |row| row.get(0),
             )
