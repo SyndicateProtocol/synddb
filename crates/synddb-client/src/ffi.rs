@@ -343,6 +343,210 @@ pub extern "C" fn synddb_version() -> *const c_char {
     VERSION.as_ptr() as *const c_char
 }
 
+/// Execute a single SQL statement on the monitored connection
+///
+/// This is the correct way to write data when using `SyndDB` from FFI.
+/// Changes made through this function are captured and published to the sequencer.
+///
+/// # Arguments
+/// * `handle` - `SyndDB` handle from `synddb_attach()`
+/// * `sql` - SQL statement to execute (UTF-8 C string)
+///
+/// # Returns
+/// Number of rows affected on success, or -1 on error.
+/// Call `synddb_last_error()` to get the error message.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+/// - `sql` must be a valid null-terminated UTF-8 string
+///
+/// # Example (Python)
+/// ```python
+/// rows = synddb_execute(handle, b"INSERT INTO prices VALUES (1, 'BTC', 50000)\0")
+/// if rows < 0:
+///     print(synddb_last_error())
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn synddb_execute(handle: *mut SyndDBHandle, sql: *const c_char) -> i64 {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return -1;
+    }
+
+    if sql.is_null() {
+        set_last_error("Null SQL string provided");
+        return -1;
+    }
+
+    let sql_str = match CStr::from_ptr(sql).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in SQL: {}", e));
+            return -1;
+        }
+    };
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    match conn.execute(sql_str, []) {
+        Ok(rows) => rows as i64,
+        Err(e) => {
+            set_last_error(format!("SQL execution failed: {}", e));
+            -1
+        }
+    }
+}
+
+/// Execute multiple SQL statements (batch) on the monitored connection
+///
+/// This is useful for executing schema creation or multiple statements at once.
+/// Changes made through this function are captured and published to the sequencer.
+///
+/// # Arguments
+/// * `handle` - `SyndDB` handle from `synddb_attach()`
+/// * `sql` - SQL statements to execute (UTF-8 C string, semicolon-separated)
+///
+/// # Returns
+/// 0 on success, error code otherwise.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+/// - `sql` must be a valid null-terminated UTF-8 string
+///
+/// # Example (Python)
+/// ```python
+/// result = synddb_execute_batch(handle, b'''
+///     CREATE TABLE IF NOT EXISTS prices (id INTEGER PRIMARY KEY, asset TEXT, price REAL);
+///     CREATE INDEX IF NOT EXISTS idx_asset ON prices(asset);
+/// \0''')
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn synddb_execute_batch(
+    handle: *mut SyndDBHandle,
+    sql: *const c_char,
+) -> SyndDBError {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    if sql.is_null() {
+        set_last_error("Null SQL string provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    let sql_str = match CStr::from_ptr(sql).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in SQL: {}", e));
+            return SyndDBError::InvalidUtf8;
+        }
+    };
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    match conn.execute_batch(sql_str) {
+        Ok(()) => SyndDBError::Success,
+        Err(e) => {
+            set_last_error(format!("SQL batch execution failed: {}", e));
+            SyndDBError::DatabaseError
+        }
+    }
+}
+
+/// Begin a transaction on the monitored connection
+///
+/// Call this before executing multiple statements that should be atomic.
+/// Must be followed by `synddb_commit()` or `synddb_rollback()`.
+///
+/// # Returns
+/// 0 on success, error code otherwise.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+#[no_mangle]
+pub unsafe extern "C" fn synddb_begin(handle: *mut SyndDBHandle) -> SyndDBError {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    match conn.execute("BEGIN", []) {
+        Ok(_) => SyndDBError::Success,
+        Err(e) => {
+            set_last_error(format!("Failed to begin transaction: {}", e));
+            SyndDBError::DatabaseError
+        }
+    }
+}
+
+/// Commit the current transaction
+///
+/// # Returns
+/// 0 on success, error code otherwise.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+#[no_mangle]
+pub unsafe extern "C" fn synddb_commit(handle: *mut SyndDBHandle) -> SyndDBError {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    match conn.execute("COMMIT", []) {
+        Ok(_) => SyndDBError::Success,
+        Err(e) => {
+            set_last_error(format!("Failed to commit transaction: {}", e));
+            SyndDBError::DatabaseError
+        }
+    }
+}
+
+/// Rollback the current transaction
+///
+/// # Returns
+/// 0 on success, error code otherwise.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+#[no_mangle]
+pub unsafe extern "C" fn synddb_rollback(handle: *mut SyndDBHandle) -> SyndDBError {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    match conn.execute("ROLLBACK", []) {
+        Ok(_) => SyndDBError::Success,
+        Err(e) => {
+            set_last_error(format!("Failed to rollback transaction: {}", e));
+            SyndDBError::DatabaseError
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

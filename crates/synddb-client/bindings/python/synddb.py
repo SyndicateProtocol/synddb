@@ -118,6 +118,21 @@ _lib.synddb_last_error.restype = ctypes.c_char_p
 _lib.synddb_version.argtypes = []
 _lib.synddb_version.restype = ctypes.c_char_p
 
+_lib.synddb_execute.argtypes = [ctypes.POINTER(_SyndDBHandle), ctypes.c_char_p]
+_lib.synddb_execute.restype = ctypes.c_int64
+
+_lib.synddb_execute_batch.argtypes = [ctypes.POINTER(_SyndDBHandle), ctypes.c_char_p]
+_lib.synddb_execute_batch.restype = ctypes.c_int
+
+_lib.synddb_begin.argtypes = [ctypes.POINTER(_SyndDBHandle)]
+_lib.synddb_begin.restype = ctypes.c_int
+
+_lib.synddb_commit.argtypes = [ctypes.POINTER(_SyndDBHandle)]
+_lib.synddb_commit.restype = ctypes.c_int
+
+_lib.synddb_rollback.argtypes = [ctypes.POINTER(_SyndDBHandle)]
+_lib.synddb_rollback.restype = ctypes.c_int
+
 
 class SyndDB:
     """SyndDB client handle - automatically captures and publishes SQLite changesets"""
@@ -255,6 +270,126 @@ class SyndDB:
             raise RuntimeError(f"Failed to create snapshot (error {result}): {error_str}")
 
         return size.value
+
+    def execute(self, sql: str) -> int:
+        """
+        Execute a SQL statement on the monitored connection.
+
+        This is the correct way to write data when using SyndDB. Changes made
+        through this method are captured and published to the sequencer.
+
+        Args:
+            sql: SQL statement to execute
+
+        Returns:
+            Number of rows affected
+
+        Raises:
+            RuntimeError: If execution fails
+
+        Example:
+            >>> rows = synddb.execute("INSERT INTO prices VALUES (1, 'BTC', 50000)")
+            >>> print(f"Inserted {rows} row(s)")
+        """
+        if not self._handle:
+            raise RuntimeError("SyndDB handle already detached")
+
+        result = _lib.synddb_execute(self._handle, sql.encode('utf-8'))
+
+        if result < 0:
+            error_msg = _lib.synddb_last_error()
+            error_str = error_msg.decode('utf-8') if error_msg else "Unknown error"
+            raise RuntimeError(f"SQL execution failed: {error_str}")
+
+        return result
+
+    def execute_batch(self, sql: str) -> None:
+        """
+        Execute multiple SQL statements (batch) on the monitored connection.
+
+        Useful for schema creation or multiple statements at once.
+
+        Args:
+            sql: SQL statements to execute (semicolon-separated)
+
+        Raises:
+            RuntimeError: If execution fails
+
+        Example:
+            >>> synddb.execute_batch('''
+            ...     CREATE TABLE IF NOT EXISTS prices (id INTEGER PRIMARY KEY);
+            ...     CREATE INDEX IF NOT EXISTS idx ON prices(id);
+            ... ''')
+        """
+        if not self._handle:
+            raise RuntimeError("SyndDB handle already detached")
+
+        result = _lib.synddb_execute_batch(self._handle, sql.encode('utf-8'))
+
+        if result != SyndDBError.SUCCESS:
+            error_msg = _lib.synddb_last_error()
+            error_str = error_msg.decode('utf-8') if error_msg else "Unknown error"
+            raise RuntimeError(f"SQL batch execution failed: {error_str}")
+
+    def begin(self) -> None:
+        """
+        Begin a transaction.
+
+        Must be followed by commit() or rollback().
+
+        Example:
+            >>> synddb.begin()
+            >>> synddb.execute("INSERT INTO prices VALUES (1, 'BTC', 50000)")
+            >>> synddb.execute("INSERT INTO prices VALUES (2, 'ETH', 3000)")
+            >>> synddb.commit()
+        """
+        if not self._handle:
+            raise RuntimeError("SyndDB handle already detached")
+
+        result = _lib.synddb_begin(self._handle)
+
+        if result != SyndDBError.SUCCESS:
+            error_msg = _lib.synddb_last_error()
+            error_str = error_msg.decode('utf-8') if error_msg else "Unknown error"
+            raise RuntimeError(f"Failed to begin transaction: {error_str}")
+
+    def commit(self) -> None:
+        """
+        Commit the current transaction.
+
+        Example:
+            >>> synddb.begin()
+            >>> synddb.execute("INSERT INTO prices VALUES (1, 'BTC', 50000)")
+            >>> synddb.commit()
+        """
+        if not self._handle:
+            raise RuntimeError("SyndDB handle already detached")
+
+        result = _lib.synddb_commit(self._handle)
+
+        if result != SyndDBError.SUCCESS:
+            error_msg = _lib.synddb_last_error()
+            error_str = error_msg.decode('utf-8') if error_msg else "Unknown error"
+            raise RuntimeError(f"Failed to commit transaction: {error_str}")
+
+    def rollback(self) -> None:
+        """
+        Rollback the current transaction.
+
+        Example:
+            >>> synddb.begin()
+            >>> synddb.execute("INSERT INTO prices VALUES (1, 'BTC', 50000)")
+            >>> synddb.rollback()  # Changes are discarded
+        """
+        if not self._handle:
+            raise RuntimeError("SyndDB handle already detached")
+
+        result = _lib.synddb_rollback(self._handle)
+
+        if result != SyndDBError.SUCCESS:
+            error_msg = _lib.synddb_last_error()
+            error_str = error_msg.decode('utf-8') if error_msg else "Unknown error"
+            raise RuntimeError(f"Failed to rollback transaction: {error_str}")
 
     def detach(self):
         """
