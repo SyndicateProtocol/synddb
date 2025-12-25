@@ -45,6 +45,15 @@ interface IMessageBridge {
         bytes32 indexed messageId, bytes32 indexed domain, uint64 nonce, address indexed validator, bytes32 reasonHash
     );
 
+    /// @notice Emitted when a message is force-expired by admin
+    event MessageForceExpired(bytes32 indexed messageId, address indexed admin);
+
+    /// @notice Emitted when native tokens are wrapped to WETH
+    event NativeTokenWrapped(address indexed sender, uint256 amount);
+
+    /// @notice Emitted when WETH is unwrapped to native tokens for execution
+    event NativeTokenUnwrapped(uint256 amount, address indexed target);
+
     // ============================================================
     // MESSAGE LIFECYCLE
     // ============================================================
@@ -158,6 +167,17 @@ interface IMessageBridge {
     function batchExecuteMessages(bytes32[] calldata messageIds) external;
 
     // ============================================================
+    // ADMIN FUNCTIONS
+    // ============================================================
+
+    /**
+     * @notice Force expire a message regardless of timestamp
+     * @dev Only callable by admin. Use for stuck messages or emergencies.
+     * @param messageId The message to force expire
+     */
+    function forceExpire(bytes32 messageId) external;
+
+    // ============================================================
     // QUERY FUNCTIONS
     // ============================================================
 
@@ -211,6 +231,23 @@ interface IMessageBridge {
      * @return rejected True if the validator has rejected
      */
     function hasValidatorRejected(bytes32 messageId, address validator) external view returns (bool rejected);
+
+    /**
+     * @notice Get all rejection records for a message
+     * @param messageId The message to query
+     * @return rejections Array of Rejection structs
+     */
+    function getRejections(bytes32 messageId) external view returns (Rejection[] memory rejections);
+
+    /**
+     * @notice Get the states of multiple messages
+     * @param messageIds Array of message IDs to query
+     * @return states Array of MessageStateV2 structs
+     */
+    function batchGetMessageStates(bytes32[] calldata messageIds)
+        external
+        view
+        returns (MessageStateV2[] memory states);
 
     /**
      * @notice Compute the message ID from message parameters

@@ -202,6 +202,7 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
     receive() external payable {
         if (msg.sender != address(weth)) {
             weth.deposit{value: msg.value}();
+            emit NativeTokenWrapped(msg.sender, msg.value);
         }
     }
 
@@ -292,6 +293,7 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
         uint256 value = msg.value;
         if (value > 0) {
             weth.deposit{value: value}();
+            emit NativeTokenWrapped(msg.sender, value);
         }
 
         // 10. Store message state
@@ -398,6 +400,7 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
                 revert InsufficientWETHBalance(state.value, wethBalance);
             }
             weth.withdraw(state.value);
+            emit NativeTokenUnwrapped(state.value, target);
         }
 
         // 8. Execute the call
@@ -579,12 +582,20 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
 
         if (state.value > 0) {
             weth.withdraw(state.value);
+            emit NativeTokenUnwrapped(state.value, target);
         }
 
-        (bool success,) = target.call{value: state.value}(state.calldata_);
+        (bool success, bytes memory returnData) = target.call{value: state.value}(state.calldata_);
 
         state.stage = MessageStage.PostExecution;
-        state.stage = success ? MessageStage.Completed : MessageStage.Failed;
+
+        if (success) {
+            state.stage = MessageStage.Completed;
+            emit MessageExecuted(messageId, target, true);
+        } else {
+            state.stage = MessageStage.Failed;
+            emit MessageFailed(messageId, returnData);
+        }
     }
 
     // ============================================================
@@ -619,6 +630,20 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
     /// @inheritdoc IMessageBridge
     function hasValidatorRejected(bytes32 messageId, address validator) external view returns (bool) {
         return _hasValidatorRejected[messageId][validator];
+    }
+
+    /// @inheritdoc IMessageBridge
+    function getRejections(bytes32 messageId) external view returns (Rejection[] memory) {
+        return _messageRejections[messageId];
+    }
+
+    /// @inheritdoc IMessageBridge
+    function batchGetMessageStates(bytes32[] calldata messageIds) external view returns (MessageStateV2[] memory) {
+        MessageStateV2[] memory states = new MessageStateV2[](messageIds.length);
+        for (uint256 i = 0; i < messageIds.length; i++) {
+            states[i] = _messageStates[messageIds[i]];
+        }
+        return states;
     }
 
     /// @inheritdoc IMessageBridge
@@ -959,5 +984,23 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
         if (recipient == address(0)) revert InvalidAddress("recipient");
 
         weth.transfer(recipient, amount);
+    }
+
+    /// @inheritdoc IMessageBridge
+    function forceExpire(bytes32 messageId) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        MessageStateV2 storage state = _messageStates[messageId];
+
+        // Message must exist
+        if (state.stage == MessageStage.NotInitialized) {
+            revert MessageNotInitialized(messageId);
+        }
+
+        // Cannot force-expire terminal states
+        if (state.stage >= MessageStage.Completed) {
+            revert MessageAlreadyTerminal(messageId, state.stage);
+        }
+
+        state.stage = MessageStage.Expired;
+        emit MessageForceExpired(messageId, msg.sender);
     }
 }
