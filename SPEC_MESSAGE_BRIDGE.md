@@ -1279,68 +1279,69 @@ This is the fundamental security invariant. Even if an application is fully comp
 
 The Bridge rules are the trust anchor.
 
-CLAUDE: Rewrite this to differentiate between the validator that connects to
-the application vs the validators that connect to the storage layers.
-
 ### 7.2 Single Validator Mode
 
 **Use Case**: Non-financial applications, low-value operations, development/testing
 
 ```
-Application ───▶ Single Validator ───▶ Bridge
-                       │
-                       └───▶ DA Layer (audit)
+Application ───▶ Primary Validator ───▶ Storage ───▶ Bridge
+                                           │
+                                    (no witnesses)
 ```
+
+In single validator mode, the Primary Validator is the only validator. It receives messages from the application, validates, signs, publishes to storage for audit, and submits to the Bridge.
 
 **Configuration**:
 
 ```solidity
 signatureThreshold = 1;
-validators = [validatorAddress];
+validators = [primaryValidatorAddress];
 ```
 
 **Characteristics**:
 
 - Fastest path to execution (single signature)
-- Single point of trust (the validator)
+- Single point of trust (the Primary Validator)
 - Bridge still enforces all rules
 - Suitable for: gaming state, social feeds, metadata updates, internal tools
 
-**Trust assumption**: You trust the validator operator not to sign malicious messages.
+**Trust assumption**: You trust the Primary Validator operator not to sign malicious messages.
 
 ### 7.3 Multi-Validator Mode
 
 **Use Case**: Financial applications, high-value operations, production systems
 
 ```
-                   ┌───▶ Validator 1 ───┐
-                   │                    │
-Application ───────┼───▶ Validator 2 ───┼───▶ Bridge (M-of-N)
-                   │                    │
-                   └───▶ Validator N ───┘
-                              │
-                              └───▶ DA Layer (audit)
+                                            ┌───▶ Witness 1 ───┐
+                                            │                  │
+Application ───▶ Primary Validator ───▶ Storage ───▶ Witness 2 ───┼───▶ Bridge (M-of-N)
+                                            │                  │
+                                            └───▶ Witness N ───┘
 ```
+
+In multi-validator mode:
+1. **Primary Validator**: Receives messages from application, publishes to storage
+2. **Witness Validators**: Read from storage, independently verify, submit signatures
 
 **Configuration**:
 
 ```solidity
 signatureThreshold = 2;  // 2-of-3
-validators = [validator1, validator2, validator3];
+validators = [primaryValidator, witnessValidator1, witnessValidator2];
 ```
 
 **Characteristics**:
 
 - Byzantine fault tolerant (tolerates (N-M) malicious validators)
-- Distributed trust (no single point of failure)
-- Higher latency (multiple signatures needed)
+- Distributed trust (Witnesses don't trust Primary's HTTP connection)
+- Higher latency (multiple independent validations)
 - Suitable for: token bridges, DeFi, high-value transfers
 
 **Common configurations**:
 
-- 2-of-3: Tolerates 1 malicious/offline validator
-- 3-of-5: Tolerates 2 malicious/offline validators
-- 5-of-9: High security for critical operations
+- 1 Primary + 1 Witness (2-of-2): Requires agreement
+- 1 Primary + 2 Witnesses (2-of-3): Tolerates 1 malicious/offline
+- 1 Primary + 4 Witnesses (3-of-5): Tolerates 2 malicious/offline
 
 ### 7.4 Trust Boundaries
 
@@ -1363,48 +1364,101 @@ Different applications require different security postures:
 | High ($100K-$1M)   | 2-of-3 validators in TEE  | Amount thresholds, allowlists            |
 | Critical (>$1M)    | 3-of-5+ validators in TEE | Timelocks, monitoring, incident response |
 
-CLAUDE: A lot of these levels should be included in validator metadata. Rewrite
-this to focus on validator metadata best practices (i.e. more metadata from the
-application gives the validators more information to work with)
+### 7.6 Metadata Best Practices
 
-### 7.6 Application Security Upgrades
+**More metadata = more validator confidence.** Applications that provide rich metadata make it easier for validators to approve messages.
 
-Applications can progressively upgrade their security without protocol changes:
+**Minimum Metadata** (always required):
+- `reason`: Why this action is being requested
+- `timestamp`: When the triggering event occurred
 
-**Level 1: Basic**
+**Recommended Metadata** (for most applications):
+- Source chain transaction hash (verifiable by Witness Validators)
+- Current state values (balances, supplies)
+- Invariant limits (max supply, per-user caps)
 
-- HTTP application, no special security
-- Trust application operator for business logic
+**High-Value Metadata** (for financial applications):
+- Price at time of action (from oracle or public API)
+- User's transaction history summary
+- KYC/compliance status
+- Application TEE attestation
 
-**Level 2: Logging**
+**Example: Rich Metadata for Cross-Chain Deposit**:
 
-- Comprehensive audit logs
-- Validators can verify claims against logs
+```json
+{
+  "reason": "user_deposit",
+  "sourceChain": "ethereum",
+  "sourceTxHash": "0xabc...",
+  "sourceBlockNumber": 12345678,
+  "sourceTimestamp": 1735084800,
+  "depositAmount": "1000000000000000000",
+  "exchangeRate": "1.0",
+  "priceSource": "chainlink",
 
-**Level 3: TEE**
+  "userDepositCount": 5,
+  "userTotalDeposited": "5000000000000000000",
+  "userLastDepositTimestamp": 1735000000,
 
-- Application runs in Trusted Execution Environment
-- TEE attestation proves application integrity
+  "contractTotalDeposits": "1000000000000000000000",
+  "maxTotalDeposits": "10000000000000000000000",
 
-**Level 4: Checkpointing**
+  "applicationVersion": "1.2.3",
+  "applicationTeeAttestation": "eyJ..."
+}
+```
 
-- Periodic database/state snapshots
-- Validators can re-derive application state
+Witness Validators can independently verify:
+- `sourceTxHash` exists on source chain
+- `depositAmount` matches event logs
+- `exchangeRate` matches public price feeds
+- `contractTotalDeposits` matches on-chain query
 
-**Level 5: Full Verification**
+### 7.7 Application Security Upgrades
 
-- Application code is open and deterministic
-- Validators re-execute all logic
+Applications can progressively upgrade their security posture:
+
+| Level | Security | Validator Confidence | Use Case |
+|-------|----------|---------------------|----------|
+| **Basic** | HTTP app, minimal metadata | Low | Internal tools, testing |
+| **Logging** | Audit logs, verifiable claims | Medium | Non-financial apps |
+| **TEE** | App runs in TEE, attestation in metadata | High | Financial apps |
+| **Checkpointing** | Periodic state snapshots | Very High | High-value operations |
+| **Full Verification** | Open, deterministic code | Maximum | Critical infrastructure |
 
 The protocol supports all levels; applications choose based on value at risk.
 
 ---
 
-CLAUDE: Explain how TEEs help here. Especially why even though an application
-running in a TEE is optional, it is strongly recommended for financial use
-cases.
-
 ## 8. Security Analysis
+
+### 8.0 Role of TEEs
+
+Trusted Execution Environments (TEEs) provide hardware-enforced security guarantees:
+
+**For Validators (Strongly Recommended)**:
+- Signing keys generated and stored inside enclave
+- Keys cannot be extracted even by the validator operator
+- Attestation proves validator runs expected code
+- Required for TEE bootstrapping (Section 6.9)
+
+**For Applications (Optional but Recommended for Financial)**:
+- Application code runs in protected enclave
+- Attestation proves application hasn't been tampered with
+- Can include attestation in metadata for validator verification
+- Validators can require TEE attestation for high-value operations
+
+**Why TEE for Financial Applications**:
+
+Without TEE, a compromised application operator could:
+- Submit fraudulent messages claiming fake deposits
+- Manipulate metadata to circumvent invariant checks
+- Collude with a malicious Primary Validator
+
+With TEE:
+- Application code is attested and cannot be modified
+- Validators can verify application integrity via attestation
+- Even if operator is malicious, they cannot change the code behavior
 
 ### 8.1 Threat Model
 
@@ -1509,25 +1563,27 @@ Mitigation:
 
 ### 8.5 Security Recommendations
 
-CLAUDE: The application will also manage their own bridge. But we would
-recommend a security council to avoid unilateral control, in addition to the
-good steps you've outlined here.
-**For Bridge Operators**:
+**For Bridge Operators** (typically the application developer):
 
-1. Use multisig for admin operations
-2. Implement timelocks for sensitive changes
+1. Use multisig for admin operations (avoid unilateral control)
+2. Implement timelocks for sensitive changes (threshold, validator removal)
 3. Regular security audits of contracts
 4. Monitoring and alerting for anomalies
 5. Incident response procedures
+6. **Consider a Security Council**: For high-value bridges, delegate admin to a diverse council to prevent single points of failure
 
-CLAUDE: Extend with custom validation logic based on available metadata?
 **For Validator Operators**:
 
-1. Run validators in TEE
-2. Implement key rotation
-3. Monitor signing patterns
+1. Run validators in TEE (mandatory for multi-validator mode)
+2. Implement key rotation procedures
+3. Monitor signing patterns for anomalies
 4. Rate limit per application
-5. Geographic distribution
+5. Geographic distribution for resilience
+6. **Implement custom validation logic** based on available metadata:
+   - Verify `sourceTxHash` on source chain
+   - Check prices against public oracles
+   - Query on-chain state for invariant values
+   - Flag messages with unusual patterns
 
 **For Application Developers**:
 
@@ -1536,129 +1592,123 @@ CLAUDE: Extend with custom validation logic based on available metadata?
 3. Add application-level rate limits
 4. Log all message submissions
 5. Monitor for failed validations
+6. **Provide rich metadata** to increase validator confidence (Section 7.6)
 
 ---
 
-## 9. Data Availability Integration
+## 9. Storage and Data Availability
 
 ### 9.1 Purpose
 
-The DA layer serves audit and transparency purposes:
+Storage and DA layers serve different purposes:
 
-1. **Audit Trail**: Complete history of all validated messages
-2. **Dispute Resolution**: Evidence for challenging fraudulent operations
-3. **Compliance**: Regulatory transparency requirements
-4. **Recovery**: Reconstruct message history if needed
+**Storage Layer** (Required):
+- Long-term archival of all messages
+- Schema storage and distribution
+- Witness Validators read messages from here
+- Must have strong durability guarantees
 
-The DA layer is for auditability, not consensus. Validators do not need to wait for DA confirmation before submitting to Bridge.
+**DA Layer** (Optional):
+- Short-term data availability guarantees
+- Useful for high-throughput applications
+- Provides consensus-level availability (if using Celestia/EigenDA)
 
 ### 9.2 Publication Format
 
-Messages published to DA include:
+Messages published to storage include:
 
 ```typescript
-interface DARecord {
+interface StorageRecord {
   // The original message
   message: {
     id: bytes32;
     messageType: string;
-    metadata: object;
+    calldata: bytes;      // ABI-encoded function parameters
+    metadata: object;     // Validator evidence
     nonce: uint64;
     timestamp: uint64;
     appId: bytes32;
     value?: uint256;
   };
 
-  // Validator attestations
-  signatures: Array<{
+  // Primary Validator signature
+  primarySignature: {
     validator: address;
     signature: bytes;
     signedAt: uint64;
-    teeAttestation?: string; // Optional TEE proof
-  }>;
+  };
 
   // Publication metadata
   publication: {
-    publishedBy: address; // Validator that published
+    publishedBy: address;
     publishedAt: uint64;
-    daLayer: string; // "celestia", "arweave", "ipfs"
-    daReference: string; // Layer-specific reference
-  };
-
-  // Execution result (if known at publication time)
-  execution?: {
-    bridgeTxHash: bytes32;
-    blockNumber: uint64;
-    success: boolean;
+    storageLayer: string;
+    storageReference: string;
   };
 }
 ```
 
-CLAUDE: We should always publish before execution, publishing after execution
-doesn't make sense since validators read from it. We should recommend batching
-for most use cases, and only recommend immediate publication if the use case is
-very latency sensitive.
+### 9.3 Publication Timing
 
-### 9.3 Publication Modes
+**Always publish BEFORE Bridge submission.** Witness Validators must be able to read messages from storage before they sign.
 
-**Immediate Publication** (Default)
-
-- Validator publishes after signing, before Bridge submission
-- Provides pre-execution audit trail
-- Higher latency but maximum transparency
+**Batched Publication** (Recommended for most use cases):
+- Primary Validator buffers messages
+- Publishes batch every N seconds or M messages
+- Lower storage costs, slight delay
+- Suitable for: most applications
 
 ```
-Application → Validator → [Sign] → [Publish to DA] → [Submit to Bridge]
+Application → Primary → [Sign] → [Buffer] → [Batch Publish] → [Submit to Bridge]
+                                                  ↓
+                                          Witness reads from storage
 ```
 
-**Batched Publication**
-
-- Validators batch multiple messages for efficiency
-- Publish every N seconds or M messages
-- Lower DA costs, slight delay in audit availability
-
-```
-Application → Validator → [Sign] → [Buffer] → [Batch Publish to DA] → [Submit to Bridge]
-```
-
-**Post-Execution Publication**
-
-- Publish after Bridge confirms execution
-- Includes execution result in DA record
-- Complete end-to-end audit in single record
+**Immediate Publication** (For latency-sensitive applications):
+- Publish each message immediately after signing
+- Higher storage costs, lowest latency
+- Suitable for: time-critical operations
 
 ```
-Application → Validator → [Sign] → [Submit to Bridge] → [Wait for confirmation] → [Publish to DA]
+Application → Primary → [Sign] → [Publish] → [Submit to Bridge]
+                                     ↓
+                            Witness reads immediately
 ```
 
-CLAUDE: We should differentiate between storage and DA options here. Also add
-Celestia and EigenDA for DA. Prioritize recommending storage layers over DA
-layers for archival purposes.
+### 9.4 Storage and DA Options
 
-### 9.4 DA Layer Options
+**Storage Layers** (for archival - at least one required):
 
-| Layer        | Cost   | Latency | Durability        | Best For              |
-| ------------ | ------ | ------- | ----------------- | --------------------- |
-| **Celestia** | Low    | ~12s    | Network consensus | High-volume, low-cost |
-| **Arweave**  | Medium | ~5min   | Permanent         | Compliance, archival  |
-| **IPFS**     | Free\* | Instant | Best-effort       | Development, testing  |
-| **GCS/S3**   | Low    | Instant | Centralized       | Internal audit only   |
+| Layer | Durability | Cost | Latency | Recommendation |
+|-------|------------|------|---------|----------------|
+| **Arweave** | Permanent | Medium | ~5min | **Primary** - permanent archival |
+| **IPFS + Pinning** | Long-term | Low | Instant | Good alternative with pinning service |
+| **GCS/S3** | Centralized | Low | Instant | Internal/development only |
 
-\*IPFS requires pinning service for durability
+**DA Layers** (for short-term availability - optional):
 
-### 9.5 Validator DA Configuration
+| Layer | Availability | Cost | Latency | Use Case |
+|-------|--------------|------|---------|----------|
+| **Celestia** | ~2 weeks | Low | ~12s | High-volume, needs consensus availability |
+| **EigenDA** | ~2 weeks | Low | ~12s | Ethereum-aligned availability |
+
+**Recommended Configuration**:
+- **Storage** (required): Arweave for permanent archival, IPFS for schema distribution
+- **DA** (optional): Celestia if you need consensus-level availability guarantees
+
+### 9.5 Validator Storage Configuration
 
 ```yaml
-# Validator configuration
-da:
-  # Primary DA layer
-  primary: celestia
+# Primary Validator storage configuration
+storage:
+  # Primary storage layer (required)
+  primary: arweave
 
   # Fallback if primary fails
-  fallback: arweave
+  fallback: ipfs
 
   # Publication mode
-  mode: immediate # immediate | batched | post_execution
+  mode: batched  # batched (recommended) | immediate
 
   # Batching settings (if mode: batched)
   batch:
@@ -1666,11 +1716,6 @@ da:
     max_delay_seconds: 30
 
   # Layer-specific config
-  celestia:
-    rpc_url: "https://celestia-rpc.example.com"
-    namespace: "synd_bridge_01"
-    auth_token: "${CELESTIA_AUTH_TOKEN}"
-
   arweave:
     gateway: "https://arweave.net"
     wallet_path: "/path/to/wallet.json"
@@ -1851,55 +1896,25 @@ Response: {
 
 ---
 
-## 11. Migration from SQLite Replication
+## 11. Implementation Notes
 
-### 11.1 Coexistence Period
+### 11.1 Clean Slate Implementation
 
-Both systems can run in parallel:
+This specification describes a **new system**, not a migration from the SQLite replication architecture. SyndDB is not yet deployed to production, so there are no backward compatibility requirements.
 
-- Legacy: synddb-client + synddb-sequencer + synddb-validator (SQL replay mode)
-- New: synddb-validator (message-passing mode) only
+**What's new**:
+- Message passing replaces SQLite changeset capture
+- Validators replace the sequencer concept
+- Primary/Witness validator model for multi-validator security
+- Metadata-based validation instead of SQL replay
 
-Bridge accepts messages from both sources during migration.
-
-CLAUDE: NO MIGRATION IS NEEDED! WE DO NOT NEED TO MAINTAIN ANY BACKWARD
-COMPATIBILITY WITH SYNDDB. SYNDDB IS NOT DEPLOYED TO PRODUCTION SO BACKWARD
-COMPATIBILITY IS NOT A CONCERN.
-
-### 11.2 Migration Steps
-
-1. **Analyze Existing Messages**
-   - Review withdrawal/message tables in current system
-   - Map to message types
-
-2. **Define Schemas**
-   - Create JSON Schema for each message type
-   - Register on Bridge
-
-3. **Update Application**
-   - Replace SQLite writes with HTTP POST
-   - Remove synddb-client dependency
-   - Implement nonce management
-
-4. **Parallel Testing**
-   - Run both systems simultaneously
-   - Compare results
-   - Verify consistency
-
-5. **Switch Over**
-   - Disable legacy path
-   - Monitor for issues
-   - Decommission old components
-
-### 11.3 Component Changes
-
-| Component        | Change                                         |
-| ---------------- | ---------------------------------------------- |
-| synddb-client    | Deprecated (remove from application)           |
-| synddb-sequencer | Removed (functionality absorbed by validators) |
-| synddb-validator | New mode added (`--mode message-passing`)      |
-| synddb-shared    | New message types, remove changeset types      |
-| Bridge.sol       | Extended with message type registry            |
+**Crate changes**:
+| Crate | Status |
+|-------|--------|
+| `synddb-client` | Deprecated (no longer needed) |
+| `synddb-sequencer` | Deprecated (validators handle this) |
+| `synddb-validator` | Evolves to support message-passing mode |
+| `synddb-shared` | New message types for this spec |
 
 ---
 
@@ -1911,21 +1926,32 @@ COMPATIBILITY IS NOT A CONCERN.
 
 ```python
 import requests
-import hashlib
 import time
+from eth_abi import encode
 
 VALIDATOR_URL = "https://validator.example.com"
 APP_ID = "0x" + "00" * 31 + "01"
 
 nonce = 0
 
-def submit_message(message_type: str, metadata: dict, value: int = 0):
+def encode_calldata(function_sig: str, *args) -> str:
+    """Encode function call to hex calldata."""
+    from web3 import Web3
+    selector = Web3.keccak(text=function_sig)[:4].hex()
+    # Parse types from signature
+    types = function_sig.split("(")[1].rstrip(")").split(",")
+    encoded_args = encode(types, args).hex()
+    return "0x" + selector[2:] + encoded_args
+
+def submit_message(message_type: str, calldata: str, metadata: dict, value: int = 0):
+    """Submit a message to the Primary Validator."""
     global nonce
     nonce += 1
 
     message = {
         "messageType": message_type,
-        "metadata": metadata,
+        "calldata": calldata,           # ABI-encoded function parameters
+        "metadata": metadata,           # Evidence for validators
         "nonce": nonce,
         "timestamp": int(time.time()),
         "appId": APP_ID,
@@ -1944,8 +1970,12 @@ def submit_message(message_type: str, metadata: dict, value: int = 0):
         raise Exception(result["error"])
 
 # Example: Mint tokens
+recipient = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+amount = 1000000000000000000  # 1 token in wei
+
 message_id = submit_message(
     "mint(address,uint256)",
+    encode_calldata("mint(address,uint256)", recipient, amount),
     {
         "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         "amount": "1000000000000000000",
@@ -1957,78 +1987,92 @@ print(f"Submitted: {message_id}")
 
 ### B. JSON Schema Examples
 
-**ERC20 Transfer**:
+These schemas define **metadata** (validator evidence), NOT function parameters. Function parameters are in the calldata.
+
+**ERC20 Transfer Metadata Schema**:
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "transfer(address,address,uint256)",
+  "title": "ERC20 Transfer Metadata",
+  "description": "Evidence for validators to approve a transfer",
   "type": "object",
-  "required": ["from", "to", "amount"],
+  "required": ["reason"],
   "properties": {
-    "from": {
+    "reason": {
       "type": "string",
-      "pattern": "^0x[a-fA-F0-9]{40}$"
+      "enum": ["user_request", "automated_distribution", "migration"],
+      "description": "Why this transfer is being requested"
     },
-    "to": {
+    "sourceReference": {
       "type": "string",
-      "pattern": "^0x[a-fA-F0-9]{40}$"
+      "description": "Reference to source system (order ID, user ID, etc.)"
     },
-    "amount": {
+    "senderBalance": {
       "type": "string",
-      "pattern": "^[0-9]+$"
+      "pattern": "^[0-9]+$",
+      "description": "Sender's balance before transfer (invariant check)"
     }
-  }
+  },
+  "additionalProperties": true
 }
 ```
 
-**NFT Batch Mint**:
+**NFT Batch Mint Metadata Schema**:
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "batchMint(address[],uint256[],string[])",
+  "title": "NFT Batch Mint Metadata",
+  "description": "Evidence for validators to approve batch mint",
   "type": "object",
-  "required": ["recipients", "tokenIds", "tokenURIs"],
+  "required": ["reason", "currentTotalSupply", "maxTotalSupply"],
   "properties": {
-    "recipients": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "pattern": "^0x[a-fA-F0-9]{40}$"
-      },
-      "minItems": 1,
-      "maxItems": 100
+    "reason": {
+      "type": "string",
+      "enum": ["airdrop", "presale", "public_mint"],
+      "description": "Why this batch mint is being requested"
     },
-    "tokenIds": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "pattern": "^[0-9]+$"
-      }
+    "currentTotalSupply": {
+      "type": "integer",
+      "description": "Current total supply before mint"
     },
-    "tokenURIs": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "format": "uri"
-      }
+    "maxTotalSupply": {
+      "type": "integer",
+      "description": "Maximum allowed supply (invariant)"
+    },
+    "batchSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Number of tokens in this batch"
+    },
+    "campaignId": {
+      "type": "string",
+      "description": "Reference to mint campaign"
     }
-  }
+  },
+  "additionalProperties": true
 }
 ```
 
 ### C. Glossary
 
-| Term             | Definition                                                                       |
-| ---------------- | -------------------------------------------------------------------------------- |
-| **Message Type** | ABI function signature identifying the operation (e.g., `mint(address,uint256)`) |
-| **Metadata**     | JSON payload containing operation parameters                                     |
-| **Schema**       | JSON Schema defining required/optional metadata fields                           |
-| **Validator**    | Service that validates messages and signs them                                   |
-| **Bridge**       | Smart contract that aggregates signatures and executes messages                  |
-| **Module**       | Pluggable validation component for pre/post execution checks                     |
-| **DA Layer**     | Data Availability layer for audit trail storage                                  |
-| **Threshold**    | Minimum number of validator signatures required                                  |
-| **Nonce**        | Monotonically increasing counter for replay protection                           |
-| **TEE**          | Trusted Execution Environment (e.g., Intel SGX, AMD SEV)                         |
+| Term | Definition |
+|------|------------|
+| **Message Type** | ABI function signature (e.g., `mint(address,uint256)`) |
+| **Calldata** | ABI-encoded function parameters executed on-chain |
+| **Metadata** | Evidence/context provided to convince validators to sign |
+| **Schema** | JSON Schema defining required metadata fields |
+| **Primary Validator** | Validator connected to application via HTTP, publishes to storage |
+| **Witness Validator** | Validator that reads from storage, verifies independently |
+| **Bridge** | Smart contract that aggregates signatures and executes messages |
+| **Module** | Pluggable validation for pre/post execution checks |
+| **Storage Layer** | Long-term archival (Arweave, IPFS) |
+| **DA Layer** | Short-term data availability (Celestia, EigenDA) |
+| **Threshold** | Minimum validator signatures required |
+| **Nonce** | Monotonically increasing counter for replay protection |
+| **TEE** | Trusted Execution Environment (GCP Confidential Space, etc.) |
+| **Attestation** | Cryptographic proof of TEE integrity |
