@@ -2180,7 +2180,578 @@ lazy_static! {
 }
 ```
 
-## 16. Implementation Checklist
+## 16. Graceful Shutdown
+
+### 16.1 Shutdown Coordinator
+
+```rust
+use tokio::sync::{broadcast, watch};
+
+pub struct ShutdownCoordinator {
+    /// Signal to begin shutdown
+    shutdown_tx: broadcast::Sender<()>,
+    /// Current state
+    state: Arc<RwLock<ShutdownState>>,
+    /// Drain timeout
+    drain_timeout: Duration,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum ShutdownState {
+    Running,
+    Draining,      // Stop accepting new requests, complete in-flight
+    ShuttingDown,  // Force terminate remaining
+    Terminated,
+}
+
+impl ShutdownCoordinator {
+    pub fn new(drain_timeout: Duration) -> Self {
+        let (shutdown_tx, _) = broadcast::channel(1);
+        Self {
+            shutdown_tx,
+            state: Arc::new(RwLock::new(ShutdownState::Running)),
+            drain_timeout,
+        }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<()> {
+        self.shutdown_tx.subscribe()
+    }
+
+    pub async fn initiate_shutdown(&self) {
+        tracing::info!("Initiating graceful shutdown");
+
+        // Transition to draining
+        {
+            let mut state = self.state.write().await;
+            *state = ShutdownState::Draining;
+        }
+
+        // Notify all subscribers
+        let _ = self.shutdown_tx.send(());
+
+        // Wait for drain timeout
+        tracing::info!(timeout = ?self.drain_timeout, "Waiting for in-flight requests to complete");
+        tokio::time::sleep(self.drain_timeout).await;
+
+        // Force shutdown
+        {
+            let mut state = self.state.write().await;
+            *state = ShutdownState::ShuttingDown;
+        }
+
+        tracing::info!("Drain timeout reached, forcing shutdown");
+    }
+
+    pub async fn is_accepting_requests(&self) -> bool {
+        *self.state.read().await == ShutdownState::Running
+    }
+}
+```
+
+### 16.2 In-Flight Request Tracking
+
+```rust
+pub struct InFlightTracker {
+    /// Number of requests currently being processed
+    count: AtomicU64,
+    /// Notify when count reaches zero
+    zero_notify: Notify,
+}
+
+impl InFlightTracker {
+    pub fn new() -> Self {
+        Self {
+            count: AtomicU64::new(0),
+            zero_notify: Notify::new(),
+        }
+    }
+
+    pub fn start_request(&self) -> InFlightGuard {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        PENDING_MESSAGES.inc();
+        InFlightGuard { tracker: self }
+    }
+
+    pub async fn wait_for_zero(&self, timeout: Duration) -> bool {
+        if self.count.load(Ordering::SeqCst) == 0 {
+            return true;
+        }
+
+        tokio::select! {
+            _ = self.zero_notify.notified() => true,
+            _ = tokio::time::sleep(timeout) => false,
+        }
+    }
+
+    fn decrement(&self) {
+        let prev = self.count.fetch_sub(1, Ordering::SeqCst);
+        PENDING_MESSAGES.dec();
+        if prev == 1 {
+            self.zero_notify.notify_waiters();
+        }
+    }
+}
+
+pub struct InFlightGuard<'a> {
+    tracker: &'a InFlightTracker,
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.tracker.decrement();
+    }
+}
+```
+
+### 16.3 HTTP Server Graceful Shutdown
+
+```rust
+pub async fn run_server(
+    config: &Config,
+    shutdown: ShutdownCoordinator,
+    in_flight: Arc<InFlightTracker>,
+) -> Result<(), Error> {
+    let app = create_router(config)
+        .layer(Extension(shutdown.clone()))
+        .layer(Extension(in_flight.clone()));
+
+    let addr = config.http.bind.parse()?;
+    let listener = TcpListener::bind(addr).await?;
+
+    tracing::info!(%addr, "HTTP server starting");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let mut rx = shutdown.subscribe();
+            let _ = rx.recv().await;
+            tracing::info!("HTTP server received shutdown signal");
+
+            // Wait for in-flight requests
+            let drained = in_flight.wait_for_zero(shutdown.drain_timeout).await;
+            if drained {
+                tracing::info!("All in-flight requests completed");
+            } else {
+                tracing::warn!(
+                    remaining = in_flight.count.load(Ordering::SeqCst),
+                    "Drain timeout, some requests may be interrupted"
+                );
+            }
+        })
+        .await?;
+
+    Ok(())
+}
+
+// Middleware to reject new requests during shutdown
+pub async fn shutdown_guard<B>(
+    Extension(shutdown): Extension<ShutdownCoordinator>,
+    Extension(in_flight): Extension<Arc<InFlightTracker>>,
+    request: Request<B>,
+    next: Next<B>,
+) -> Result<Response, StatusCode> {
+    if !shutdown.is_accepting_requests().await {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let _guard = in_flight.start_request();
+    Ok(next.run(request).await)
+}
+```
+
+### 16.4 Background Task Shutdown
+
+```rust
+pub struct TaskManager {
+    tasks: Vec<JoinHandle<()>>,
+    shutdown: ShutdownCoordinator,
+}
+
+impl TaskManager {
+    pub fn spawn<F>(&mut self, name: &str, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let name = name.to_string();
+        let handle = tokio::spawn(async move {
+            future.await;
+            tracing::debug!(task = %name, "Background task completed");
+        });
+        self.tasks.push(handle);
+    }
+
+    pub async fn shutdown_all(&mut self, timeout: Duration) {
+        tracing::info!(count = self.tasks.len(), "Shutting down background tasks");
+
+        // Wait for all tasks with timeout
+        let shutdown_future = async {
+            for handle in &mut self.tasks {
+                let _ = handle.await;
+            }
+        };
+
+        match tokio::time::timeout(timeout, shutdown_future).await {
+            Ok(_) => tracing::info!("All background tasks completed"),
+            Err(_) => {
+                tracing::warn!("Task shutdown timeout, aborting remaining tasks");
+                for handle in &self.tasks {
+                    handle.abort();
+                }
+            }
+        }
+    }
+}
+```
+
+### 16.5 Main Shutdown Flow
+
+```rust
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    // Setup
+    let config = Config::load()?;
+    let shutdown = ShutdownCoordinator::new(Duration::from_secs(30));
+    let in_flight = Arc::new(InFlightTracker::new());
+
+    // Spawn background tasks
+    let mut tasks = TaskManager::new(shutdown.clone());
+    tasks.spawn("event_monitor", run_event_monitor(config.clone(), shutdown.subscribe()));
+    tasks.spawn("schema_sync", run_schema_sync(config.clone(), shutdown.subscribe()));
+    tasks.spawn("nonce_sync", run_nonce_sync(config.clone(), shutdown.subscribe()));
+
+    // Setup signal handlers
+    let shutdown_clone = shutdown.clone();
+    tokio::spawn(async move {
+        let mut sigterm = signal(SignalKind::terminate()).unwrap();
+        let mut sigint = signal(SignalKind::interrupt()).unwrap();
+
+        tokio::select! {
+            _ = sigterm.recv() => tracing::info!("Received SIGTERM"),
+            _ = sigint.recv() => tracing::info!("Received SIGINT"),
+        }
+
+        shutdown_clone.initiate_shutdown().await;
+    });
+
+    // Run HTTP server
+    let server_result = run_server(&config, shutdown.clone(), in_flight).await;
+
+    // Shutdown background tasks
+    tasks.shutdown_all(Duration::from_secs(10)).await;
+
+    // Flush metrics/logs
+    tracing::info!("Validator shutdown complete");
+
+    server_result
+}
+```
+
+## 17. Key Rotation
+
+### 17.1 Key Rotation Strategy
+
+```rust
+/// Key rotation without downtime requires:
+/// 1. Generate new key in TEE
+/// 2. Register new key on Bridge (addWitnessValidator or setPrimaryValidator)
+/// 3. Wait for Bridge confirmation
+/// 4. Switch to new key
+/// 5. Remove old key from Bridge
+pub struct KeyRotationManager {
+    current_key: Arc<RwLock<SigningKey>>,
+    pending_key: Arc<RwLock<Option<PendingKey>>>,
+    bridge: BridgeClient,
+    tee: TeeKeyManager,
+}
+
+struct PendingKey {
+    key: SigningKey,
+    registered_at: Option<u64>,  // Block number when registered
+    confirmation_blocks: u64,
+}
+
+struct SigningKey {
+    key_id: String,
+    address: Address,
+    created_at: u64,
+}
+```
+
+### 17.2 Rotation Flow
+
+```rust
+impl KeyRotationManager {
+    /// Initiate key rotation (Step 1-2)
+    pub async fn initiate_rotation(&self) -> Result<Address, Error> {
+        // Check no pending rotation
+        if self.pending_key.read().await.is_some() {
+            return Err(Error::RotationAlreadyPending);
+        }
+
+        tracing::info!("Initiating key rotation");
+
+        // Generate new key in TEE
+        let tee_key = self.tee.generate_signing_key().await?;
+
+        tracing::info!(
+            new_address = %tee_key.address,
+            "Generated new signing key in TEE"
+        );
+
+        // Register on Bridge
+        let tx_hash = self.bridge.add_witness_validator(
+            tee_key.address,
+            &tee_key.attestation,
+        ).await?;
+
+        tracing::info!(
+            tx = %tx_hash,
+            "Submitted new validator registration to Bridge"
+        );
+
+        // Wait for confirmation
+        let receipt = self.bridge.wait_for_receipt(tx_hash).await?;
+
+        // Store pending key
+        {
+            let mut pending = self.pending_key.write().await;
+            *pending = Some(PendingKey {
+                key: SigningKey {
+                    key_id: tee_key.key_id,
+                    address: tee_key.address,
+                    created_at: receipt.block_number,
+                },
+                registered_at: Some(receipt.block_number),
+                confirmation_blocks: 12,  // Wait 12 blocks
+            });
+        }
+
+        Ok(tee_key.address)
+    }
+
+    /// Complete rotation after confirmation (Step 3-4)
+    pub async fn complete_rotation(&self) -> Result<(), Error> {
+        let pending = self.pending_key.read().await.clone()
+            .ok_or(Error::NoPendingRotation)?;
+
+        // Check confirmation
+        let current_block = self.bridge.get_block_number().await?;
+        let registered_at = pending.registered_at.ok_or(Error::NotRegistered)?;
+
+        if current_block < registered_at + pending.confirmation_blocks {
+            return Err(Error::InsufficientConfirmations {
+                current: current_block,
+                required: registered_at + pending.confirmation_blocks,
+            });
+        }
+
+        tracing::info!(
+            old_address = %self.current_key.read().await.address,
+            new_address = %pending.key.address,
+            "Switching to new signing key"
+        );
+
+        // Swap keys
+        let old_key = {
+            let mut current = self.current_key.write().await;
+            let old = current.clone();
+            *current = pending.key.clone();
+            old
+        };
+
+        // Clear pending
+        {
+            let mut pending_lock = self.pending_key.write().await;
+            *pending_lock = None;
+        }
+
+        // Remove old key from Bridge (non-blocking)
+        let bridge = self.bridge.clone();
+        let old_address = old_key.address;
+        tokio::spawn(async move {
+            if let Err(e) = bridge.remove_validator(old_address).await {
+                tracing::error!(error = %e, "Failed to remove old validator from Bridge");
+            } else {
+                tracing::info!(address = %old_address, "Removed old validator from Bridge");
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Cancel pending rotation
+    pub async fn cancel_rotation(&self) -> Result<(), Error> {
+        let pending = self.pending_key.write().await.take()
+            .ok_or(Error::NoPendingRotation)?;
+
+        tracing::info!(address = %pending.key.address, "Cancelling key rotation");
+
+        // Remove pending key from Bridge if registered
+        if pending.registered_at.is_some() {
+            self.bridge.remove_validator(pending.key.address).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Get signing key (for EIP-712 signing)
+    pub async fn get_current_key(&self) -> SigningKey {
+        self.current_key.read().await.clone()
+    }
+}
+```
+
+### 17.3 Automated Rotation Schedule
+
+```rust
+pub struct AutoRotationConfig {
+    /// Rotate keys every N days
+    pub rotation_interval_days: u32,
+    /// Alert N days before rotation
+    pub alert_before_days: u32,
+    /// Perform rotation automatically (vs manual approval)
+    pub auto_approve: bool,
+}
+
+pub async fn run_auto_rotation(
+    config: AutoRotationConfig,
+    rotation_manager: Arc<KeyRotationManager>,
+    mut shutdown: broadcast::Receiver<()>,
+) {
+    let rotation_interval = Duration::from_secs(config.rotation_interval_days as u64 * 86400);
+    let check_interval = Duration::from_secs(3600);  // Check hourly
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(check_interval) => {
+                let current_key = rotation_manager.get_current_key().await;
+                let age = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() - current_key.created_at;
+
+                let age_duration = Duration::from_secs(age);
+                let alert_threshold = rotation_interval - Duration::from_secs(config.alert_before_days as u64 * 86400);
+
+                if age_duration > rotation_interval {
+                    tracing::warn!(
+                        key_age_days = age / 86400,
+                        "Key rotation overdue!"
+                    );
+
+                    if config.auto_approve {
+                        match rotation_manager.initiate_rotation().await {
+                            Ok(addr) => {
+                                tracing::info!(new_address = %addr, "Auto-rotation initiated");
+                                // Wait and complete
+                                tokio::time::sleep(Duration::from_secs(180)).await;
+                                if let Err(e) = rotation_manager.complete_rotation().await {
+                                    tracing::error!(error = %e, "Auto-rotation completion failed");
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "Auto-rotation failed");
+                            }
+                        }
+                    }
+                } else if age_duration > alert_threshold {
+                    tracing::info!(
+                        key_age_days = age / 86400,
+                        rotation_due_days = (rotation_interval.as_secs() - age) / 86400,
+                        "Key rotation approaching"
+                    );
+                }
+            }
+            _ = shutdown.recv() => {
+                tracing::info!("Auto-rotation task shutting down");
+                break;
+            }
+        }
+    }
+}
+```
+
+### 17.4 Rotation HTTP Endpoints
+
+```rust
+// POST /admin/keys/rotate/initiate
+async fn initiate_key_rotation(
+    State(state): State<AppState>,
+) -> Result<Json<RotationResponse>, StatusCode> {
+    let new_address = state.rotation_manager.initiate_rotation().await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Key rotation initiation failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(RotationResponse {
+        status: "pending",
+        new_address: new_address.to_string(),
+        message: "Rotation initiated. Call /complete after 12 block confirmations.",
+    }))
+}
+
+// POST /admin/keys/rotate/complete
+async fn complete_key_rotation(
+    State(state): State<AppState>,
+) -> Result<Json<RotationResponse>, StatusCode> {
+    state.rotation_manager.complete_rotation().await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Key rotation completion failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let current = state.rotation_manager.get_current_key().await;
+
+    Ok(Json(RotationResponse {
+        status: "completed",
+        new_address: current.address.to_string(),
+        message: "Key rotation completed. Old key removed from Bridge.",
+    }))
+}
+
+// DELETE /admin/keys/rotate
+async fn cancel_key_rotation(
+    State(state): State<AppState>,
+) -> Result<Json<RotationResponse>, StatusCode> {
+    state.rotation_manager.cancel_rotation().await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Key rotation cancellation failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(RotationResponse {
+        status: "cancelled",
+        new_address: String::new(),
+        message: "Pending key rotation cancelled.",
+    }))
+}
+
+// GET /admin/keys/status
+async fn get_key_status(
+    State(state): State<AppState>,
+) -> Json<KeyStatusResponse> {
+    let current = state.rotation_manager.get_current_key().await;
+    let pending = state.rotation_manager.pending_key.read().await.clone();
+
+    let age = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() - current.created_at;
+
+    Json(KeyStatusResponse {
+        current_address: current.address.to_string(),
+        key_age_seconds: age,
+        pending_rotation: pending.map(|p| PendingRotationInfo {
+            new_address: p.key.address.to_string(),
+            registered_at_block: p.registered_at,
+            confirmations_required: p.confirmation_blocks,
+        }),
+    })
+}
+```
+
+## 18. Implementation Checklist
 
 ### Primary Validator
 - [ ] HTTP server with mTLS/API key auth
@@ -2241,6 +2812,23 @@ lazy_static! {
 - [ ] Record/confirm operations
 - [ ] Time-range queries
 - [ ] API endpoint (/messages/{id}/da)
+
+### Graceful Shutdown (Section 16)
+- [ ] ShutdownCoordinator with state machine
+- [ ] InFlightTracker with guard pattern
+- [ ] HTTP server graceful shutdown
+- [ ] Background task shutdown with timeout
+- [ ] Signal handlers (SIGTERM, SIGINT)
+- [ ] Drain timeout configuration
+
+### Key Rotation (Section 17)
+- [ ] KeyRotationManager with pending state
+- [ ] initiate_rotation() with TEE and Bridge
+- [ ] complete_rotation() with confirmation check
+- [ ] cancel_rotation()
+- [ ] Auto-rotation scheduler
+- [ ] HTTP endpoints (/admin/keys/*)
+- [ ] Key age metrics
 
 ### Testing
 - [ ] Unit tests for validation pipeline

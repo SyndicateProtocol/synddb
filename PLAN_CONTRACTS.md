@@ -1114,7 +1114,329 @@ contract MessageBridge is UUPSUpgradeable, AccessControlUpgradeable {
 }
 ```
 
-## 13. Events
+### 12.1 Storage Layout for Upgrades
+
+UUPS upgrades require careful storage layout management. New storage variables must be appended, never inserted.
+
+```solidity
+/**
+ * @title MessageBridgeStorage
+ * @notice Storage layout for upgradeable MessageBridge
+ * @dev CRITICAL: Only append new variables. Never insert or reorder.
+ *      Use storage gaps to reserve space for future additions.
+ */
+abstract contract MessageBridgeStorageV1 {
+    // ============ Slot 0-2: Inherited from OpenZeppelin ============
+    // AccessControlUpgradeable uses slots 0-1
+    // UUPSUpgradeable uses slot 2
+
+    // ============ Slot 3+: Core State ============
+
+    /// @dev Domain separator for EIP-712 (computed once, immutable after init)
+    bytes32 internal _domainSeparator;                    // Slot 3
+
+    /// @dev WETH contract address
+    address public weth;                                   // Slot 4
+
+    /// @dev Signature threshold (M-of-N)
+    uint256 public signatureThreshold;                     // Slot 5
+
+    /// @dev Minimum TEE version string
+    string public minimumTeeVersion;                       // Slot 6 (dynamic)
+
+    /// @dev Pause state
+    bool public paused;                                    // Slot 7 (packed)
+
+    // ============ Slot 8+: Mappings (don't consume sequential slots) ============
+
+    /// @dev Message states: messageId => MessageState
+    mapping(bytes32 => MessageState) internal _messageStates;
+
+    /// @dev Application configs: domain => ApplicationConfig
+    mapping(bytes32 => ApplicationConfig) internal _applicationConfigs;
+
+    /// @dev Last nonce per domain: domain => nonce
+    mapping(bytes32 => uint64) internal _lastNonce;
+
+    /// @dev Validator info: address => ValidatorInfo
+    mapping(address => ValidatorInfo) internal _validatorInfo;
+
+    /// @dev Message type configs: messageType => MessageTypeConfig
+    mapping(string => MessageTypeConfig) internal _messageTypes;
+
+    /// @dev Selector to message type: selector => messageType
+    mapping(bytes4 => string) internal _selectorToMessageType;
+
+    /// @dev Signature tracking: messageId => validator => signed
+    mapping(bytes32 => mapping(address => bool)) internal _hasValidatorSigned;
+
+    /// @dev Rejection tracking: messageId => validator => rejected
+    mapping(bytes32 => mapping(address => bool)) internal _hasValidatorRejected;
+
+    /// @dev Rejections: messageId => Rejection[]
+    mapping(bytes32 => Rejection[]) internal _messageRejections;
+
+    /// @dev Proposal rejections: messageId => rejected
+    mapping(bytes32 => bool) internal _proposalRejected;
+
+    /// @dev Global pre-execution modules
+    address[] internal _globalPreModules;
+
+    /// @dev Global post-execution modules
+    address[] internal _globalPostModules;
+
+    /// @dev Module configs: module => ModuleConfig
+    mapping(address => ModuleConfig) internal _modules;
+
+    /// @dev Message type modules: messageType => modules[]
+    mapping(string => address[]) internal _messageTypeModules;
+
+    // ============ Upgrade Management ============
+
+    /// @dev Proposed implementation for upgrade
+    address public proposedImplementation;                 // Slot N
+
+    /// @dev Timestamp when upgrade was proposed
+    uint256 public upgradeProposedAt;                      // Slot N+1
+
+    // ============ Storage Gap ============
+    /// @dev Reserved storage space for future versions
+    /// @dev Reduce this gap when adding new storage variables
+    uint256[50] private __gap;
+}
+
+/**
+ * @title MessageBridgeStorageV2
+ * @notice Example of how to add storage in V2
+ */
+abstract contract MessageBridgeStorageV2 is MessageBridgeStorageV1 {
+    // New V2 storage variables go here
+    // mapping(bytes32 => uint256) internal _newFeatureData;
+
+    // Reduce gap by number of slots used
+    uint256[49] private __gap_v2;  // 50 - 1 = 49
+}
+```
+
+**Storage Layout Rules:**
+
+| Rule | Description |
+|------|-------------|
+| **Append only** | Never insert variables between existing ones |
+| **Use gaps** | Reserve 50 slots for future additions |
+| **Document slots** | Comment which slot each variable uses |
+| **Avoid inheritance changes** | Don't add new base contracts |
+| **Test migrations** | Use Foundry's storage layout checker |
+
+**Foundry Storage Check:**
+
+```bash
+# Generate storage layout
+forge inspect MessageBridge storage-layout --pretty
+
+# Compare layouts between versions
+forge inspect MessageBridgeV1 storage-layout > v1.json
+forge inspect MessageBridgeV2 storage-layout > v2.json
+diff v1.json v2.json
+```
+
+## 13. Attestation Verification
+
+### 13.1 On-Chain Attestation Verifier
+
+For production, attestation verification can be delegated to a specialized verifier contract or oracle.
+
+```solidity
+interface IAttestationVerifier {
+    struct AttestationData {
+        address validator;
+        bytes32 codeHash;
+        string version;
+        uint64 timestamp;
+        bytes32 platformId;  // keccak256("gcp-confidential-space"), etc.
+    }
+
+    function verify(
+        bytes calldata attestation,
+        address expectedValidator
+    ) external view returns (AttestationData memory);
+
+    function isTrustedPlatform(bytes32 platformId) external view returns (bool);
+}
+
+contract MessageBridge {
+    IAttestationVerifier public attestationVerifier;
+
+    function _verifyAttestation(
+        address validator,
+        bytes calldata attestation
+    ) internal view returns (bool) {
+        if (address(attestationVerifier) == address(0)) {
+            // No verifier configured - attestation trusted by admin
+            return true;
+        }
+
+        AttestationData memory data = attestationVerifier.verify(attestation, validator);
+
+        // Verify platform is trusted
+        require(attestationVerifier.isTrustedPlatform(data.platformId), "Untrusted platform");
+
+        // Verify version meets minimum
+        require(_isVersionValid(data.version), "Version below minimum");
+
+        // Verify attestation is recent (within 24 hours)
+        require(block.timestamp - data.timestamp < 86400, "Attestation expired");
+
+        return true;
+    }
+
+    function _extractCodeHash(bytes calldata attestation) internal view returns (bytes32) {
+        if (address(attestationVerifier) == address(0)) {
+            return bytes32(0);
+        }
+        return attestationVerifier.verify(attestation, address(0)).codeHash;
+    }
+
+    function _extractVersion(bytes calldata attestation) internal view returns (string memory) {
+        if (address(attestationVerifier) == address(0)) {
+            return "";
+        }
+        return attestationVerifier.verify(attestation, address(0)).version;
+    }
+
+    function setAttestationVerifier(address verifier) external onlyRole(ADMIN_ROLE) {
+        attestationVerifier = IAttestationVerifier(verifier);
+        emit AttestationVerifierUpdated(verifier);
+    }
+}
+```
+
+### 13.2 GCP Confidential Space Verifier
+
+```solidity
+/**
+ * @title GCPAttestationVerifier
+ * @notice Verifies GCP Confidential Space attestation tokens
+ * @dev Uses OIDC token verification with Google's public keys
+ */
+contract GCPAttestationVerifier is IAttestationVerifier {
+    bytes32 public constant GCP_PLATFORM_ID = keccak256("gcp-confidential-space");
+
+    // Google's OIDC public keys (rotated periodically)
+    mapping(bytes32 => bytes) public googlePublicKeys;
+
+    // Trusted workload image digests
+    mapping(bytes32 => bool) public trustedImageDigests;
+
+    function verify(
+        bytes calldata attestation,
+        address expectedValidator
+    ) external view override returns (AttestationData memory) {
+        // 1. Decode JWT token
+        (bytes memory header, bytes memory payload, bytes memory signature) =
+            _decodeJWT(attestation);
+
+        // 2. Verify signature with Google's public key
+        bytes32 keyId = _extractKeyId(header);
+        require(googlePublicKeys[keyId].length > 0, "Unknown signing key");
+        require(_verifySignature(header, payload, signature, googlePublicKeys[keyId]), "Invalid signature");
+
+        // 3. Extract claims
+        JWTClaims memory claims = _decodeClaims(payload);
+
+        // 4. Verify issuer
+        require(
+            keccak256(bytes(claims.iss)) == keccak256("https://confidentialcomputing.googleapis.com"),
+            "Invalid issuer"
+        );
+
+        // 5. Verify audience (should be Bridge address)
+        require(claims.aud == address(this), "Invalid audience");
+
+        // 6. Verify image digest is trusted
+        require(trustedImageDigests[claims.imageDigest], "Untrusted image");
+
+        // 7. Extract validator address from claims
+        address validatorFromClaims = _extractValidatorAddress(claims);
+        if (expectedValidator != address(0)) {
+            require(validatorFromClaims == expectedValidator, "Validator mismatch");
+        }
+
+        return AttestationData({
+            validator: validatorFromClaims,
+            codeHash: claims.imageDigest,
+            version: claims.version,
+            timestamp: claims.iat,
+            platformId: GCP_PLATFORM_ID
+        });
+    }
+
+    function isTrustedPlatform(bytes32 platformId) external pure override returns (bool) {
+        return platformId == GCP_PLATFORM_ID;
+    }
+
+    // Admin functions
+    function addTrustedImageDigest(bytes32 digest) external onlyOwner {
+        trustedImageDigests[digest] = true;
+    }
+
+    function updateGooglePublicKey(bytes32 keyId, bytes calldata publicKey) external onlyOwner {
+        googlePublicKeys[keyId] = publicKey;
+    }
+}
+```
+
+### 13.3 Simplified Attestation (Development/Testing)
+
+```solidity
+/**
+ * @title SimpleAttestationVerifier
+ * @notice Simplified verifier for development - trusts admin-signed attestations
+ * @dev NOT FOR PRODUCTION - use platform-specific verifiers
+ */
+contract SimpleAttestationVerifier is IAttestationVerifier {
+    bytes32 public constant SIMPLE_PLATFORM_ID = keccak256("simple-attestation");
+
+    address public trustedSigner;
+
+    function verify(
+        bytes calldata attestation,
+        address expectedValidator
+    ) external view override returns (AttestationData memory) {
+        // Attestation format: abi.encode(validator, codeHash, version, timestamp, signature)
+        (
+            address validator,
+            bytes32 codeHash,
+            string memory version,
+            uint64 timestamp,
+            bytes memory signature
+        ) = abi.decode(attestation, (address, bytes32, string, uint64, bytes));
+
+        // Verify signature from trusted signer
+        bytes32 digest = keccak256(abi.encode(validator, codeHash, version, timestamp));
+        address signer = ECDSA.recover(digest, signature);
+        require(signer == trustedSigner, "Invalid attestation signature");
+
+        if (expectedValidator != address(0)) {
+            require(validator == expectedValidator, "Validator mismatch");
+        }
+
+        return AttestationData({
+            validator: validator,
+            codeHash: codeHash,
+            version: version,
+            timestamp: timestamp,
+            platformId: SIMPLE_PLATFORM_ID
+        });
+    }
+
+    function isTrustedPlatform(bytes32 platformId) external pure override returns (bool) {
+        return platformId == SIMPLE_PLATFORM_ID;
+    }
+}
+```
+
+## 14. Events
 
 ```solidity
 // Message lifecycle
@@ -1175,9 +1497,9 @@ event EmergencyWithdrawal(address indexed recipient, uint256 amount);
 event MessageForceExpired(bytes32 indexed messageId, address indexed by);
 ```
 
-## 14. Full Interfaces
+## 15. Full Interfaces
 
-### 14.1 IMessageBridge
+### 15.1 IMessageBridge
 
 ```solidity
 interface IMessageBridge {
@@ -1244,7 +1566,7 @@ interface IMessageBridge {
 }
 ```
 
-### 14.2 IMessageTypeRegistry
+### 15.2 IMessageTypeRegistry
 
 ```solidity
 interface IMessageTypeRegistry {
@@ -1270,7 +1592,7 @@ interface IMessageTypeRegistry {
 }
 ```
 
-## 15. Implementation Checklist
+## 16. Implementation Checklist
 
 ### Core Contract
 - [ ] MessageBridge.sol with UUPS upgradeable
@@ -1345,8 +1667,22 @@ interface IMessageTypeRegistry {
 - [ ] emergencyWithdrawWETH()
 - [ ] forceExpire()
 
+### Storage Layout (Section 12.1)
+- [ ] MessageBridgeStorageV1 abstract contract
+- [ ] Documented slot assignments
+- [ ] 50-slot storage gap
+- [ ] Foundry storage-layout verification script
+
+### Attestation Verification (Section 13)
+- [ ] IAttestationVerifier interface
+- [ ] GCPAttestationVerifier for production
+- [ ] SimpleAttestationVerifier for development
+- [ ] Trusted image digest management
+- [ ] setAttestationVerifier() admin function
+
 ### Events
 - [ ] All 25+ events with indexed parameters
+- [ ] AttestationVerifierUpdated event
 
 ### Testing
 - [ ] Unit tests for each function
