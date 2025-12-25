@@ -254,8 +254,9 @@ Nonces prevent replay and ensure ordering. The Primary Validator is the sole aut
    - `Completed` (execution succeeded)
    - `Failed` (execution reverted)
    - `Expired` (threshold not reached in time)
-3. Validator rejections do NOT consume nonces (message never initialized)
-4. Once initialized on Bridge, the nonce is consumed regardless of outcome
+   - `Rejected` (Primary rejected via `rejectProposal()`)
+3. All rejections are explicit and on-chain (nonce consumed)
+4. Once a nonce is used (initialized OR rejected), it cannot be reused
 
 **No Gap Tolerance**:
 
@@ -271,15 +272,23 @@ If a message fails or expires, the application must continue with the next nonce
 ```python
 class NonceTracker:
     def __init__(self):
-        self.last_nonce = {}  # appId -> last accepted nonce
+        self.last_nonce = {}  # appId -> last consumed nonce
 
     def validate_nonce(self, app_id: str, nonce: int) -> bool:
         expected = self.last_nonce.get(app_id, 0) + 1
         return nonce == expected
 
     def consume_nonce(self, app_id: str, nonce: int):
-        """Called when message is initialized on Bridge"""
+        """Called when message is initialized OR rejected on Bridge"""
         self.last_nonce[app_id] = nonce
+
+    def on_initialize(self, app_id: str, nonce: int):
+        """Message accepted and initialized"""
+        self.consume_nonce(app_id, nonce)
+
+    def on_reject(self, app_id: str, nonce: int):
+        """Message rejected via rejectProposal()"""
+        self.consume_nonce(app_id, nonce)
 ```
 
 ### 2.7 Message Expiration
@@ -629,7 +638,7 @@ The Primary Validator verifies application identity (see Section 2.4).
 
 **Primary Rejection Path**:
 
-If any validation check fails, the Primary Validator rejects the message. This is an **implicit rejection** - the message is never initialized on-chain.
+If any validation check fails, the Primary Validator **explicitly rejects on-chain**. All rejections must be logged on-chain for auditability.
 
 ```
 Validation Failed
@@ -639,31 +648,69 @@ Validation Failed
 │                     PRIMARY REJECTION                            │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  1. Return error response to application (HTTP 400/422)          │
+│  1. Compute messageId from proposed message content              │
 │                                                                  │
-│  2. Log rejection locally (for audit)                            │
-│     - Message content                                            │
-│     - Rejection reason                                           │
-│     - Timestamp                                                  │
+│  2. Call Bridge.rejectProposal() with:                           │
+│     - messageId                                                  │
+│     - messageType                                                │
+│     - appId                                                      │
+│     - nonce                                                      │
+│     - reasonHash (hash of rejection reason)                      │
+│     - reasonRef (storage reference to full reason)               │
 │                                                                  │
-│  3. Optionally publish rejection to storage layer                │
-│     - For audit trail                                            │
-│     - Not required for protocol                                  │
+│  3. Bridge logs rejection event on-chain                         │
 │                                                                  │
-│  4. Do NOT:                                                      │
-│     - Call initializeMessage() on Bridge                         │
-│     - Call rejectMessage() on Bridge (message doesn't exist)     │
-│     - Consume the nonce                                          │
+│  4. Return error response to application (HTTP 400/422)          │
+│                                                                  │
+│  5. Nonce is consumed (prevents replay of rejected message)      │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Key distinction**: Primary rejection is implicit (no on-chain state), while Witness rejection is explicit (calls `rejectMessage()` on-chain to log dissent for an already-initialized message).
+**On-Chain Rejection Function**:
+
+```solidity
+/**
+ * Reject a proposed message before initialization
+ * @dev Only callable by registered Primary Validator for the appId
+ * @param messageId Hash of the proposed message
+ * @param messageType The message type that was proposed
+ * @param appId Application that proposed the message
+ * @param nonce The nonce of the rejected message
+ * @param reasonHash Hash of rejection reason JSON
+ * @param reasonRef Storage reference to full rejection reason
+ */
+function rejectProposal(
+    bytes32 messageId,
+    string calldata messageType,
+    bytes32 appId,
+    uint64 nonce,
+    bytes32 reasonHash,
+    string calldata reasonRef
+) external {
+    require(applicationConfigs[appId].primaryValidator == msg.sender, "Not primary");
+    require(!proposalRejected[messageId], "Already rejected");
+    require(nonce == lastNonce[appId] + 1, "Invalid nonce");
+
+    // Mark as rejected and consume nonce
+    proposalRejected[messageId] = true;
+    lastNonce[appId] = nonce;
+
+    emit ProposalRejected(messageId, appId, msg.sender, nonce, reasonHash, reasonRef);
+}
+```
+
+**Key Points**:
+- All rejections are explicit and on-chain (both Primary and Witness)
+- Primary uses `rejectProposal()` for messages never initialized
+- Witness uses `rejectMessage()` for already-initialized messages
+- Nonce IS consumed on rejection (prevents replay)
+- Application must use next nonce for retry
 
 **Nonce behavior on Primary rejection**:
-- Nonce is NOT consumed
-- Application can retry with the same nonce after fixing the issue
-- This differs from on-chain failures where nonce is consumed
+- Nonce IS consumed (on-chain rejection marks nonce as used)
+- Application must increment nonce for retry
+- This provides replay protection for rejected messages
 
 **Stage 3: Sign**
 
@@ -1233,14 +1280,34 @@ interface IMessageBridge {
     function signMessage(bytes32 messageId, bytes calldata signature) external;
 
     /**
-     * Reject a message with reason (for audit trail)
-     * @param messageId Message being rejected
+     * Reject an initialized message with reason (for Witness Validators)
+     * @param messageId Message being rejected (must be initialized)
      * @param reasonHash Hash of rejection reason JSON
      * @param reasonRef Storage reference to full rejection reason
-     * @dev Validators call this to publicly log why they refused to sign
+     * @dev Witness Validators call this to publicly log why they refused to sign
      */
     function rejectMessage(
         bytes32 messageId,
+        bytes32 reasonHash,
+        string calldata reasonRef
+    ) external;
+
+    /**
+     * Reject a proposed message before initialization (for Primary Validator)
+     * @param messageId Hash of the proposed message
+     * @param messageType The message type that was proposed
+     * @param appId Application that proposed the message
+     * @param nonce The nonce of the rejected message (will be consumed)
+     * @param reasonHash Hash of rejection reason JSON
+     * @param reasonRef Storage reference to full rejection reason
+     * @dev Only callable by registered Primary Validator for the appId
+     * @dev Consumes the nonce to prevent replay of rejected messages
+     */
+    function rejectProposal(
+        bytes32 messageId,
+        string calldata messageType,
+        bytes32 appId,
+        uint64 nonce,
         bytes32 reasonHash,
         string calldata reasonRef
     ) external;
@@ -1618,6 +1685,14 @@ event SignatureSubmitted(bytes32 indexed messageId, address indexed validator, u
 event MessageRejected(
     bytes32 indexed messageId,
     address indexed validator,
+    bytes32 reasonHash,
+    string reasonRef
+);
+event ProposalRejected(
+    bytes32 indexed messageId,
+    bytes32 indexed appId,
+    address indexed primaryValidator,
+    uint64 nonce,
     bytes32 reasonHash,
     string reasonRef
 );
