@@ -376,17 +376,6 @@ impl SessionMonitor {
         })
     }
 
-    /// Check if there are pending schema changes that need to be published.
-    ///
-    /// Note: This method always returns false because `SQLite`'s update hook
-    /// doesn't fire for DDL operations, so we cannot detect schema changes.
-    /// Use `execute_ddl()` for DDL statements which handles snapshots automatically.
-    #[deprecated(note = "Cannot detect schema changes; use execute_ddl() for DDL")]
-    #[allow(clippy::missing_const_for_fn)]
-    pub(crate) fn has_pending_schema_changes(&self) -> bool {
-        false
-    }
-
     /// Create a complete snapshot of the database.
     /// Must be called from the same thread that created the `SessionMonitor`.
     pub(crate) fn snapshot(&self) -> Result<Snapshot> {

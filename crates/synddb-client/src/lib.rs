@@ -1037,22 +1037,6 @@ impl SyndDB {
         self.stats.is_healthy()
     }
 
-    /// Check if there are pending schema changes that need to be published.
-    ///
-    /// **Note:** This method always returns `false` because `SQLite`'s update hook
-    /// doesn't fire for DDL operations, making schema changes undetectable.
-    ///
-    /// Use [`execute_ddl()`](Self::execute_ddl) for all DDL statements, which
-    /// automatically handles snapshot creation for schema changes.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Cannot detect schema changes via update hook. Use execute_ddl() for DDL."
-    )]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn has_pending_schema_changes(&self) -> bool {
-        false
-    }
-
     /// Get the number of changesets waiting to be published
     ///
     /// # Example
