@@ -124,6 +124,7 @@ jobs:
         run: pip install -r app/requirements.txt
 
       - name: Run pytest
-        run: |
-          cd app
-          python -m pytest tests/ -v --tb=short
+        run: python -m pytest app/tests/ -v --tb=short
+        env:
+          # Run from price-oracle dir to avoid app/http.py shadowing stdlib http
+          PYTHONPATH: ${{ github.workspace }}/examples/price-oracle
