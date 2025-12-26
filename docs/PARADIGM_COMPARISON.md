@@ -484,14 +484,4 @@ Only use message-passing when you have a **hard requirement** for:
 - Immutable audit trail on a public ledger
 - Cross-chain message passing
 
-If you're unsure whether you need these, you don't. Start with SQLite.
-
-### The Hybrid Trap
-
-The hybrid approach (writes via Bridge, reads from local cache) combines the worst of both worlds:
-- All the complexity of message-passing for writes
-- Event sync infrastructure for reads
-- Eventual consistency bugs between chain and cache
-- Chain reorganization handling
-
-Only use hybrid if you've already committed to message-passing and need complex read queries. Even then, consider whether on-chain view functions could suffice.
+If you're unsure whether you need these, you don't. Use SQLite.
