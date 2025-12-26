@@ -14,11 +14,8 @@
 //! // Open database with replication enabled
 //! let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
 //!
-//! // Use the connection for normal `SQLite` operations
-//! synddb.connection().execute(
-//!     "CREATE TABLE IF NOT EXISTS trades (id INTEGER, amount INTEGER)",
-//!     [],
-//! )?;
+//! // Use execute_ddl() for schema changes (CREATE, ALTER, DROP)
+//! synddb.execute_ddl("CREATE TABLE IF NOT EXISTS trades (id INTEGER, amount INTEGER)")?;
 //!
 //! // Use the transaction helper for multi-statement transactions
 //! synddb.transaction(|tx| {
@@ -131,6 +128,27 @@
 //! **Important**: Always use [`SyndDB::execute_ddl()`] for schema changes (CREATE, ALTER,
 //! DROP). Direct DDL via [`SyndDB::connection()`] bypasses snapshot creation and cannot
 //! be detected by `SyndDB`.
+//!
+//! ## Recovery from Direct DDL
+//!
+//! If you accidentally execute DDL directly (without `execute_ddl()`), validators will
+//! fail with errors like "no such table" or "no such column". To recover:
+//!
+//! ```rust,no_run
+//! # use synddb_client::SyndDB;
+//! # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+//! // Oops! Used direct DDL instead of execute_ddl()
+//! synddb.connection().execute("CREATE TABLE oops (id INTEGER)", [])?;
+//!
+//! // RECOVERY: Immediately publish a snapshot to capture the schema
+//! synddb.publish_snapshot()?;
+//!
+//! // Validators now have the schema and can apply subsequent changesets
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! The snapshot captures the complete current database state (schema + data), allowing
+//! validators to synchronize from that point forward.
 //!
 //! # Thread Safety
 //!
@@ -2190,5 +2208,437 @@ mod tests {
         conn.execute("CREATE TABLE test (id INTEGER)", []).unwrap();
 
         // No crash - test passes if no panic (markers are skipped for in-memory)
+    }
+
+    // =========================================================================
+    // Direct DDL Failure and Recovery Tests
+    // =========================================================================
+    //
+    // These tests document what happens when a developer accidentally uses
+    // connection().execute() for DDL instead of execute_ddl(), and how to recover.
+    //
+    // IMPORTANT: SQLite's update hook does NOT fire for DDL statements.
+    // This means SyndDB cannot automatically detect schema changes made via
+    // direct connection access. The recovery requires manual snapshot publishing.
+
+    #[test]
+    fn test_direct_ddl_then_dml_local_state_ok() {
+        // When DDL is done directly, local application continues to work fine.
+        // The problem only manifests when validators try to apply changesets.
+        //
+        // This test documents that the app developer sees no errors locally.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // MISTAKE: Using connection().execute() instead of execute_ddl()
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+
+        // Local operations work perfectly - no indication of a problem
+        conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+        conn.execute("INSERT INTO users VALUES (2, 'Bob')", [])
+            .unwrap();
+        conn.execute("UPDATE users SET name = 'Alice Updated' WHERE id = 1", [])
+            .unwrap();
+
+        // Publish captures the DML, but validator will fail because it
+        // doesn't have the 'users' table schema (no snapshot was published)
+        synddb.publish_changeset().unwrap();
+
+        // Local state is correct - developer doesn't know there's a problem
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // The problem: Validators receiving these changesets will fail with
+        // "no such table: users" because they never received a snapshot
+        // containing the CREATE TABLE.
+    }
+
+    #[test]
+    fn test_direct_ddl_changeset_contains_dml_not_ddl() {
+        // Demonstrates that changesets ONLY contain DML operations.
+        // DDL (CREATE/ALTER/DROP) is never captured in changesets.
+        // This is a fundamental SQLite Session Extension limitation.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // DDL via direct connection (WRONG way, but common mistake)
+        conn.execute(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, amount INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        // Create snapshot locally to verify it contains the schema
+        let snapshot = synddb.create_snapshot().unwrap();
+        assert!(
+            !snapshot.data.is_empty(),
+            "Snapshot should contain the schema"
+        );
+
+        // The snapshot data is a valid SQLite database with the schema
+        // This is how validators learn about the schema - via snapshots, not changesets
+    }
+
+    #[test]
+    fn test_recovery_via_manual_snapshot_publish() {
+        // Documents the recovery process when direct DDL was used:
+        // 1. Developer notices validator errors ("no such table")
+        // 2. Developer calls publish_snapshot() to capture current schema
+        // 3. Validators receive snapshot and can now apply subsequent changesets
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // MISTAKE: Direct DDL without execute_ddl()
+        conn.execute(
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        // Insert some data (will fail on validators until snapshot is published)
+        conn.execute("INSERT INTO accounts VALUES (1, 1000)", [])
+            .unwrap();
+        synddb.publish_changeset().unwrap();
+
+        // --- RECOVERY POINT ---
+        // Developer notices validator errors and calls:
+        let snapshot = synddb.publish_snapshot().unwrap();
+
+        // Snapshot contains the schema and data
+        assert!(!snapshot.data.is_empty());
+
+        // After this point, validators have the schema and can apply changesets
+        conn.execute("INSERT INTO accounts VALUES (2, 2000)", [])
+            .unwrap();
+        synddb.publish_changeset().unwrap();
+
+        // Local verification
+        let total: i64 = conn
+            .query_row("SELECT SUM(balance) FROM accounts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(total, 3000);
+    }
+
+    #[test]
+    fn test_recovery_with_multiple_missing_tables() {
+        // Recovery still works even if multiple tables were created via direct DDL.
+        // One snapshot captures all schema and data.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Multiple direct DDL operations (all wrong, but recoverable)
+        conn.execute("CREATE TABLE t1 (id INTEGER PRIMARY KEY, val1 TEXT)", [])
+            .unwrap();
+        conn.execute("CREATE TABLE t2 (id INTEGER PRIMARY KEY, val2 INTEGER)", [])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE t3 (id INTEGER PRIMARY KEY, ref_id INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        // Insert data into all tables
+        conn.execute("INSERT INTO t1 VALUES (1, 'hello')", [])
+            .unwrap();
+        conn.execute("INSERT INTO t2 VALUES (1, 42)", []).unwrap();
+        conn.execute("INSERT INTO t3 VALUES (1, 1)", []).unwrap();
+
+        // RECOVERY: Single snapshot captures all tables and data
+        let snapshot = synddb.publish_snapshot().unwrap();
+        assert!(!snapshot.data.is_empty());
+
+        // All tables are now available to validators
+    }
+
+    #[test]
+    fn test_recovery_captures_current_state() {
+        // Verifies that recovery snapshot captures the CURRENT state,
+        // including all data inserted after the schema change.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Direct DDL
+        conn.execute(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, count INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        // Insert many rows over time (pretend these are from various transactions)
+        for i in 1..=50 {
+            conn.execute(
+                "INSERT INTO items VALUES (?1, ?2, ?3)",
+                rusqlite::params![i, format!("Item {}", i), i * 10],
+            )
+            .unwrap();
+        }
+
+        // Several publish cycles (changesets would fail on validators)
+        synddb.publish_changeset().unwrap();
+        thread::sleep(std::time::Duration::from_millis(100));
+
+        // More data changes
+        conn.execute("UPDATE items SET count = count + 1 WHERE id <= 10", [])
+            .unwrap();
+        conn.execute("DELETE FROM items WHERE id > 45", []).unwrap();
+        synddb.publish_changeset().unwrap();
+
+        // Recovery snapshot captures CURRENT state (all modifications included)
+        let snapshot = synddb.publish_snapshot().unwrap();
+        assert!(!snapshot.data.is_empty());
+
+        // After recovery, validators start fresh from this snapshot.
+        // They won't replay the old changesets - they have the current state.
+
+        // Local verification
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 45); // 50 - 5 deleted
+    }
+
+    #[test]
+    fn test_compare_correct_vs_incorrect_ddl_flow() {
+        // Side-by-side comparison of correct vs incorrect DDL handling.
+        // Both achieve the same local result, but only the correct path
+        // results in validators being able to reconstruct state.
+
+        // === CORRECT: Using execute_ddl() ===
+        let conn1 = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb1 = SyndDB::attach(conn1, "http://localhost:8433").unwrap();
+
+        synddb1
+            .execute_ddl("CREATE TABLE correct_table (id INTEGER PRIMARY KEY)")
+            .unwrap();
+        // ^ Automatically publishes snapshot containing the schema
+
+        conn1
+            .execute("INSERT INTO correct_table VALUES (1)", [])
+            .unwrap();
+        synddb1.publish_changeset().unwrap();
+        // ^ Validator can apply this because it received the schema snapshot
+
+        // === INCORRECT: Using connection().execute() ===
+        let conn2 = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb2 = SyndDB::attach(conn2, "http://localhost:8433").unwrap();
+
+        conn2
+            .execute("CREATE TABLE incorrect_table (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        // ^ No snapshot published - validator doesn't know about this table
+
+        conn2
+            .execute("INSERT INTO incorrect_table VALUES (1)", [])
+            .unwrap();
+        synddb2.publish_changeset().unwrap();
+        // ^ Validator fails: "no such table: incorrect_table"
+
+        // Manual recovery required:
+        synddb2.publish_snapshot().unwrap();
+        // Now validator can catch up
+    }
+
+    #[test]
+    fn test_alter_table_without_execute_ddl() {
+        // ALTER TABLE is also DDL and requires a snapshot.
+        // This test documents the ALTER TABLE recovery scenario.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Correct initial setup
+        synddb
+            .execute_ddl("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            .unwrap();
+
+        // Insert initial data (validators have schema)
+        conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+        synddb.publish_changeset().unwrap();
+
+        // MISTAKE: ALTER TABLE via direct connection
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT", [])
+            .unwrap();
+
+        // Using new column (changesets will reference column validators don't have)
+        conn.execute(
+            "UPDATE users SET email = 'alice@example.com' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        synddb.publish_changeset().unwrap();
+
+        // RECOVERY: Publish snapshot with updated schema
+        synddb.publish_snapshot().unwrap();
+
+        // After recovery, validators have the new column
+        let email: String = conn
+            .query_row("SELECT email FROM users WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(email, "alice@example.com");
+    }
+
+    #[test]
+    fn test_drop_table_without_execute_ddl() {
+        // DROP TABLE is also DDL. This documents what happens.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Setup tables correctly
+        synddb
+            .execute_ddl("CREATE TABLE t1 (id INTEGER PRIMARY KEY)")
+            .unwrap();
+        synddb
+            .execute_ddl("CREATE TABLE t2 (id INTEGER PRIMARY KEY)")
+            .unwrap();
+
+        // MISTAKE: DROP via direct connection
+        conn.execute("DROP TABLE t1", []).unwrap();
+
+        // After recovery snapshot, validators know t1 no longer exists
+        synddb.publish_snapshot().unwrap();
+
+        // Verify t1 is gone, t2 remains
+        let tables: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(tables, vec!["t2"]);
+    }
+
+    #[test]
+    fn test_recovery_recommended_after_any_direct_ddl() {
+        // Best practice: If you accidentally used direct DDL, call publish_snapshot()
+        // immediately. Don't wait for validator errors.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Oops, used direct DDL
+        conn.execute("CREATE TABLE oops (id INTEGER)", []).unwrap();
+
+        // Best practice: Immediately publish snapshot if you realize the mistake
+        synddb.publish_snapshot().unwrap();
+
+        // Now it's safe to proceed - validators will have the schema
+        conn.execute("INSERT INTO oops VALUES (1)", []).unwrap();
+        synddb.publish_changeset().unwrap();
+    }
+
+    #[test]
+    fn test_snapshot_is_idempotent_for_recovery() {
+        // Multiple snapshots are fine - each one is a complete database state.
+        // Validators just use the most recent one.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        conn.execute("CREATE TABLE t (id INTEGER, val TEXT)", [])
+            .unwrap();
+        conn.execute("INSERT INTO t VALUES (1, 'a')", []).unwrap();
+
+        // Multiple recovery snapshots are safe
+        synddb.publish_snapshot().unwrap();
+        synddb.publish_snapshot().unwrap();
+        synddb.publish_snapshot().unwrap();
+
+        // Each snapshot is a complete, self-contained database state
+    }
+
+    // =========================================================================
+    // Integration-style tests for full DDL/DML workflows
+    // =========================================================================
+
+    #[test]
+    fn test_typical_migration_workflow_wrong_way() {
+        // Documents the common mistake in migration workflows
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Initial setup (correct)
+        synddb
+            .execute_ddl("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            .unwrap();
+
+        conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+        synddb.publish_changeset().unwrap();
+
+        // === MIGRATION (WRONG WAY) ===
+        // Developer runs migration script directly
+        conn.execute_batch(
+            r#"
+            ALTER TABLE users ADD COLUMN email TEXT;
+            ALTER TABLE users ADD COLUMN created_at INTEGER;
+            CREATE TABLE user_settings (user_id INTEGER PRIMARY KEY, theme TEXT);
+            CREATE INDEX idx_users_email ON users(email);
+            "#,
+        )
+        .unwrap();
+        // All this DDL goes untracked!
+
+        // Data modifications using new schema
+        conn.execute(
+            "UPDATE users SET email = 'alice@test.com', created_at = 12345 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO user_settings VALUES (1, 'dark')", [])
+            .unwrap();
+
+        // RECOVERY POINT
+        synddb.publish_snapshot().unwrap();
+
+        // Now validators can continue
+    }
+
+    #[test]
+    fn test_typical_migration_workflow_right_way() {
+        // Documents the correct migration workflow
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Initial setup
+        synddb
+            .execute_ddl("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            .unwrap();
+
+        conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+        synddb.publish_changeset().unwrap();
+
+        // === MIGRATION (RIGHT WAY) ===
+        // Each DDL goes through execute_ddl()
+        synddb
+            .execute_ddl("ALTER TABLE users ADD COLUMN email TEXT")
+            .unwrap();
+        synddb
+            .execute_ddl("ALTER TABLE users ADD COLUMN created_at INTEGER")
+            .unwrap();
+        synddb
+            .execute_ddl("CREATE TABLE user_settings (user_id INTEGER PRIMARY KEY, theme TEXT)")
+            .unwrap();
+        synddb
+            .execute_ddl("CREATE INDEX idx_users_email ON users(email)")
+            .unwrap();
+        // Each execute_ddl() automatically publishes a snapshot
+
+        // Data modifications
+        conn.execute(
+            "UPDATE users SET email = 'alice@test.com', created_at = 12345 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO user_settings VALUES (1, 'dark')", [])
+            .unwrap();
+        synddb.publish_changeset().unwrap();
+
+        // No recovery needed - validators received snapshots for each DDL
     }
 }
