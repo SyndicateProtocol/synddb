@@ -131,21 +131,7 @@
 //!
 //! # Known Limitations
 //!
-//! ## 1. Chain Verification
-//!
-//! The current `verify_changeset_chain` implementation verifies each changeset
-//! independently against the current state. This means:
-//!
-//! - Only the most recent changeset (whose post-state matches the snapshot) will verify
-//! - Earlier changesets in the chain may fail verification
-//! - For complete chain verification, a more sophisticated approach would be needed
-//!   that maintains state across verifications
-//!
-//! **Impact**: When multiple changesets are stored as pending (e.g., sequences 5, 6, 7),
-//! only the most recent one (7) will verify successfully. This is acceptable for
-//! detecting tampering but doesn't provide full chain proof.
-//!
-//! ## 2. Column Type Changes Not Detected
+//! ## 1. Column Type Changes Not Detected
 //!
 //! Schema mismatch detection only checks:
 //! - Missing tables (detected)
@@ -160,7 +146,7 @@
 //! may still fail at apply time with a conflict, but we won't detect it early.
 //! The audit trail still captures the attempt for later analysis.
 //!
-//! ## 3. No Snapshot After DDL Scenario
+//! ## 2. No Snapshot After DDL Scenario
 //!
 //! If schema changes are made but no snapshot is sent:
 //! - Changesets continue to be stored as pending
@@ -170,7 +156,7 @@
 //! **Mitigation**: The sequencer should use `auto_snapshot_after_ddl` (enabled by default)
 //! to automatically send snapshots after schema changes.
 //!
-//! ## 4. `SQLite`'s Silent Column Ignoring
+//! ## 3. `SQLite`'s Silent Column Ignoring
 //!
 //! `SQLite`'s session extension silently ignores extra columns in changesets when
 //! the target table has fewer columns. This is handled by validating column counts
@@ -462,15 +448,32 @@ impl std::fmt::Debug for PendingChangesetStore {
 /// Verify a chain of pending changesets against the current database state.
 ///
 /// This function verifies that the pending changesets are consistent with the
-/// database state after a snapshot has been applied. It does this by:
+/// database state after a snapshot has been applied. It walks backward through
+/// the changeset chain by applying inverted changesets in reverse order.
 ///
-/// 1. For each changeset (in reverse sequence order):
-///    a. Invert the changeset
-///    b. Attempt to apply the inverted changeset
-///    c. If successful, the changeset is verified
-///    d. Re-apply the original to restore state
+/// # Algorithm
 ///
-/// Note: This modifies the database temporarily during verification.
+/// ```text
+/// Given: Snapshot at state S_N, pending changesets C1, C2, C3 (sequences 1, 2, 3)
+///
+/// 1. Sort by sequence descending: [C3, C2, C1]
+/// 2. Apply invert(C3) to S_N → get S_2 (state before C3)
+/// 3. Apply invert(C2) to S_2 → get S_1 (state before C2)
+/// 4. Apply invert(C1) to S_1 → get S_0 (state before C1)
+/// 5. All inversions succeeded = full chain verified
+/// 6. Restore to S_N by replaying [C1, C2, C3] in forward order
+/// ```
+///
+/// # Failure Handling
+///
+/// If any inversion fails to apply, the chain is broken at that point:
+/// - All changesets processed successfully before the failure are marked verified
+/// - The failing changeset and all earlier ones are marked as failed
+/// - State is restored to snapshot by replaying successful changesets
+///
+/// # Note
+///
+/// This modifies the database temporarily during verification.
 /// For production use, consider using a separate verification database.
 pub fn verify_changeset_chain(
     conn: &Connection,
@@ -479,67 +482,106 @@ pub fn verify_changeset_chain(
     use rusqlite::session::ConflictAction;
     use std::io::Cursor;
 
+    if pending.is_empty() {
+        return Ok(AuditResult {
+            verified: Vec::new(),
+            failed: Vec::new(),
+        });
+    }
+
     let mut verified = Vec::new();
     let mut failed = Vec::new();
+    let mut applied_inversions: Vec<&PendingChangeset> = Vec::new();
 
-    // Process in reverse order (most recent first)
+    // Process in reverse sequence order (most recent first)
+    // This walks backward through state: S_N → S_{N-1} → S_{N-2} → ...
     let mut sorted: Vec<_> = pending.iter().collect();
     sorted.sort_by(|a, b| b.sequence.cmp(&a.sequence));
 
-    for changeset in sorted {
+    for changeset in &sorted {
         let seq = changeset.sequence;
-        debug!(sequence = seq, "Verifying changeset");
+        debug!(sequence = seq, "Verifying changeset in chain");
 
         // Invert the changeset
         let inverted = match invert_changeset(&changeset.data) {
             Ok(inv) => inv,
             Err(e) => {
+                // Inversion failed - can't continue chain verification
                 failed.push(AuditFailure {
                     sequence: seq,
                     reason: format!("Failed to invert: {e}"),
                 });
-                continue;
+                // Mark all remaining (earlier) changesets as failed too
+                for remaining in sorted.iter().skip(applied_inversions.len() + 1) {
+                    failed.push(AuditFailure {
+                        sequence: remaining.sequence,
+                        reason: "Chain broken by earlier failure".to_string(),
+                    });
+                }
+                break;
             }
         };
 
-        // Try to apply the inverted changeset
+        // Apply the inverted changeset (transforms state backward)
         let mut cursor = Cursor::new(&inverted);
         let apply_result = conn.apply_strm(
             &mut cursor,
             None::<fn(&str) -> bool>,
             move |conflict, _item| {
-                warn!(sequence = seq, ?conflict, "Conflict during verification");
+                warn!(
+                    sequence = seq,
+                    ?conflict,
+                    "Conflict during chain verification"
+                );
                 ConflictAction::SQLITE_CHANGESET_ABORT
             },
         );
 
         match apply_result {
             Ok(()) => {
-                // Successfully applied inverted changeset - now restore by applying original
-                let mut cursor = Cursor::new(&changeset.data);
-                if let Err(e) = conn.apply_strm(&mut cursor, None::<fn(&str) -> bool>, |_, _| {
-                    ConflictAction::SQLITE_CHANGESET_ABORT
-                }) {
-                    warn!(
-                        sequence = seq,
-                        error = %e,
-                        "Failed to restore after verification"
-                    );
-                }
+                // Successfully applied inverted changeset
+                // State is now at the pre-changeset position
+                // DO NOT restore - continue walking backward
                 verified.push(seq);
+                applied_inversions.push(changeset);
             }
             Err(e) => {
+                // Apply failed - can't continue chain verification
                 failed.push(AuditFailure {
                     sequence: seq,
                     reason: format!("Inverted changeset failed to apply: {e}"),
                 });
+                // Mark all remaining (earlier) changesets as failed too
+                for remaining in sorted.iter().skip(applied_inversions.len() + 1) {
+                    failed.push(AuditFailure {
+                        sequence: remaining.sequence,
+                        reason: "Chain broken by earlier failure".to_string(),
+                    });
+                }
+                break;
             }
+        }
+    }
+
+    // Restore to original (snapshot) state by re-applying all changesets in forward order
+    // (ascending sequence = oldest first, which means reverse of applied_inversions)
+    for changeset in applied_inversions.iter().rev() {
+        let mut cursor = Cursor::new(&changeset.data);
+        if let Err(e) = conn.apply_strm(&mut cursor, None::<fn(&str) -> bool>, |_, _| {
+            ConflictAction::SQLITE_CHANGESET_ABORT
+        }) {
+            warn!(
+                sequence = changeset.sequence,
+                error = %e,
+                "Failed to restore state after chain verification"
+            );
         }
     }
 
     info!(
         verified_count = verified.len(),
         failed_count = failed.len(),
+        total_pending = pending.len(),
         "Changeset chain verification complete"
     );
 
@@ -772,15 +814,17 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_changeset_chain_limitation() {
-        // This test documents the limitation of the current verification approach:
-        // Each changeset is verified independently, so only the most recent
-        // changeset (the one whose post-state matches the snapshot) will verify.
+    fn test_verify_changeset_chain_full() {
+        // This test verifies that the FULL chain of changesets is verified.
+        // The algorithm walks backward through state by applying inverted changesets:
         //
-        // For proper chain verification, a more sophisticated approach would be
-        // needed that doesn't restore state between each verification.
+        // Snapshot: val = 100
+        // Apply invert(cs2: 50->100) → val = 50
+        // Apply invert(cs1: 0->50) → val = 0
+        // Both inversions succeeded = full chain verified
+        // Restore by replaying cs1, cs2 → val = 100
 
-        // Create final state (val = 100)
+        // Create final state (val = 100) - this is the "snapshot"
         let conn = Connection::open_in_memory().unwrap();
         conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)", [])
             .unwrap();
@@ -821,23 +865,20 @@ mod tests {
             },
         ];
 
-        // Current behavior: Only the most recent changeset (cs2: 50->100) can verify
-        // because its post-state (100) matches the snapshot state.
-        // cs1 (0->50) cannot verify because after cs2 verification, state is 100,
-        // but cs1's inverted form expects state 50.
+        // Full chain verification: Both changesets should verify
         let result = verify_changeset_chain(&conn, &pending).unwrap();
 
-        // cs2 verifies (its post-state matches snapshot)
+        // Both cs1 and cs2 verify
+        assert_eq!(result.verified.len(), 2, "Both changesets should verify");
+        assert!(result.verified.contains(&1), "cs1 should verify");
         assert!(result.verified.contains(&2), "cs2 should verify");
+        assert!(result.failed.is_empty(), "No failures expected");
 
-        // cs1 fails (its post-state 50 doesn't match current state 100)
-        assert_eq!(result.failed.len(), 1, "cs1 should fail in current impl");
-
-        // State should be unchanged
+        // State should be restored to snapshot value
         let val: i32 = conn
             .query_row("SELECT val FROM t WHERE id = 1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(val, 100);
+        assert_eq!(val, 100, "State should be restored after verification");
     }
 
     // ========== E2E TESTS FOR AUDIT TRAIL ==========
@@ -933,10 +974,15 @@ mod tests {
         assert_eq!(email, "bob@test.com");
     }
 
-    /// E2E test: Multiple changesets pending then verified
+    /// E2E test: Multiple changesets pending then ALL verified
     ///
-    /// Tests that multiple changesets stored as pending can be partially verified
-    /// (documents current limitation where only most recent verifies).
+    /// Tests that the full chain of changesets is verified by walking backward:
+    /// - Snapshot at value=30
+    /// - Apply invert(cs3: 20->30) → value=20
+    /// - Apply invert(cs2: 10->20) → value=10
+    /// - Apply invert(cs1: 0->10) → value=0
+    /// - All succeeded = full chain verified
+    /// - Restore by replaying cs1, cs2, cs3 → value=30
     #[test]
     fn test_e2e_multiple_pending_changesets() {
         // === Source with initial state ===
@@ -1006,27 +1052,22 @@ mod tests {
             .execute("INSERT INTO counter VALUES (1, 30)", [])
             .unwrap();
 
-        // === Verify ===
+        // === Verify full chain ===
         let pending = store.get_all().unwrap();
         let result = verify_changeset_chain(&snapshot_db, &pending).unwrap();
 
-        // Current limitation: Only cs3 (20->30) verifies because its post-state matches snapshot
-        assert!(
-            result.verified.contains(&3),
-            "Most recent changeset should verify"
-        );
+        // ALL changesets should verify with full chain verification
+        assert_eq!(result.verified.len(), 3, "All 3 changesets should verify");
+        assert!(result.verified.contains(&1), "cs1 should verify");
+        assert!(result.verified.contains(&2), "cs2 should verify");
+        assert!(result.verified.contains(&3), "cs3 should verify");
+        assert!(result.failed.is_empty(), "No failures expected");
 
-        // cs1 and cs2 fail in current implementation
-        assert!(
-            !result.failed.is_empty(),
-            "Earlier changesets fail in current impl (documented limitation)"
-        );
-
-        // State unchanged
+        // State should be restored to snapshot value
         let value: i32 = snapshot_db
             .query_row("SELECT value FROM counter WHERE id = 1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(value, 30);
+        assert_eq!(value, 30, "State should be restored after verification");
     }
 
     /// E2E test: INSERT changeset verified after snapshot
