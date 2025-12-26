@@ -64,7 +64,14 @@ import {NonceManager} from "src/libraries/NonceManager.sol";
  * @notice Multi-validator Message Passing Bridge for cross-chain message validation and execution
  * @dev Implements Primary/Witness validator model with M-of-N threshold signing
  */
-contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegistry, AccessControl, ReentrancyGuard, Pausable {
+contract MessageBridge is
+    IMessageBridge,
+    IMessageTypeRegistry,
+    IApplicationRegistry,
+    AccessControl,
+    ReentrancyGuard,
+    Pausable
+{
     using EnumerableSet for EnumerableSet.AddressSet;
     using NonceManager for mapping(bytes32 => uint64);
 
@@ -274,9 +281,7 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
 
         // 6. Validate timestamp freshness (avoiding underflow)
         // Message timestamp should be within MAX_CLOCK_DRIFT of current time
-        if (
-            block.timestamp + MAX_CLOCK_DRIFT < timestamp || block.timestamp > timestamp + MAX_CLOCK_DRIFT
-        ) {
+        if (block.timestamp + MAX_CLOCK_DRIFT < timestamp || block.timestamp > timestamp + MAX_CLOCK_DRIFT) {
             revert TimestampOutOfRange(timestamp, block.timestamp, MAX_CLOCK_DRIFT);
         }
 
@@ -482,7 +487,9 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
         state.rejectionsCollected++;
 
         _messageRejections[messageId].push(
-            Rejection({validator: msg.sender, reasonHash: reasonHash, reasonRef: reasonRef, timestamp: uint64(block.timestamp)})
+            Rejection({
+                validator: msg.sender, reasonHash: reasonHash, reasonRef: reasonRef, timestamp: uint64(block.timestamp)
+            })
         );
 
         emit MessageRejected(messageId, msg.sender, reasonHash);
@@ -779,7 +786,9 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
         _applicationConfigs[domain] = config;
         _lastNonces[domain] = 0;
 
-        emit ApplicationRegistered(domain, config.primaryValidator, config.expirationSeconds, config.requireWitnessSignatures);
+        emit ApplicationRegistered(
+            domain, config.primaryValidator, config.expirationSeconds, config.requireWitnessSignatures
+        );
     }
 
     /// @inheritdoc IApplicationRegistry
@@ -809,7 +818,10 @@ contract MessageBridge is IMessageBridge, IMessageTypeRegistry, IApplicationRegi
     }
 
     /// @inheritdoc IApplicationRegistry
-    function setPrimaryValidator(bytes32 domain, address validator, bytes calldata) external onlyRole(VALIDATOR_MANAGER_ROLE) {
+    function setPrimaryValidator(bytes32 domain, address validator, bytes calldata)
+        external
+        onlyRole(VALIDATOR_MANAGER_ROLE)
+    {
         if (_applicationConfigs[domain].primaryValidator == address(0)) {
             revert ApplicationNotRegistered(domain);
         }

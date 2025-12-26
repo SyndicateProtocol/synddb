@@ -16,7 +16,7 @@ const API_KEY_HEADER: &str = "X-API-Key";
 ///
 /// If no API key is configured on the server, all requests are allowed.
 /// If an API key is configured, requests must include a matching X-API-Key header.
-pub async fn require_api_key(
+pub(crate) async fn require_api_key(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,

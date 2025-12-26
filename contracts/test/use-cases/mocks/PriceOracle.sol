@@ -8,8 +8,8 @@ pragma solidity 0.8.30;
  */
 contract PriceOracle {
     struct Price {
-        uint256 price;      // Price scaled by 1e18
-        uint256 timestamp;  // Unix timestamp of the price update
+        uint256 price; // Price scaled by 1e18
+        uint256 timestamp; // Unix timestamp of the price update
         uint256 blockNumber; // Block when price was updated
     }
 
@@ -26,11 +26,7 @@ contract PriceOracle {
 
     // Events
     event PriceUpdated(
-        string indexed asset,
-        bytes32 indexed assetHash,
-        uint256 price,
-        uint256 timestamp,
-        uint256 blockNumber
+        string indexed asset, bytes32 indexed assetHash, uint256 price, uint256 timestamp, uint256 blockNumber
     );
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
@@ -62,11 +58,7 @@ contract PriceOracle {
      * @param priceScaled The price scaled by 10^18
      * @param timestamp The timestamp of the price observation
      */
-    function updatePrice(
-        string calldata asset,
-        uint256 priceScaled,
-        uint256 timestamp
-    ) external onlyBridge {
+    function updatePrice(string calldata asset, uint256 priceScaled, uint256 timestamp) external onlyBridge {
         if (priceScaled == 0) revert InvalidPrice();
         if (timestamp == 0 || timestamp > block.timestamp + 300) revert InvalidTimestamp();
 
@@ -99,11 +91,11 @@ contract PriceOracle {
      * @return timestamp The timestamp of the price
      * @return blockNumber The block when price was updated
      */
-    function getPrice(string calldata asset) external view returns (
-        uint256 price,
-        uint256 timestamp,
-        uint256 blockNumber
-    ) {
+    function getPrice(string calldata asset)
+        external
+        view
+        returns (uint256 price, uint256 timestamp, uint256 blockNumber)
+    {
         bytes32 assetHash = keccak256(bytes(asset));
         Price storage p = prices[assetHash];
         return (p.price, p.timestamp, p.blockNumber);
@@ -116,11 +108,11 @@ contract PriceOracle {
      * @return timestamp The timestamp of the price
      * @return blockNumber The block when price was updated
      */
-    function getPriceByHash(bytes32 assetHash) external view returns (
-        uint256 price,
-        uint256 timestamp,
-        uint256 blockNumber
-    ) {
+    function getPriceByHash(bytes32 assetHash)
+        external
+        view
+        returns (uint256 price, uint256 timestamp, uint256 blockNumber)
+    {
         Price storage p = prices[assetHash];
         return (p.price, p.timestamp, p.blockNumber);
     }

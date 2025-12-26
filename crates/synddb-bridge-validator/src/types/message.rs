@@ -156,6 +156,7 @@ pub enum MessageStatus {
     Rejected,
 }
 
+#[allow(unreachable_pub)]
 mod hex_bytes {
     use serde::{Deserialize, Deserializer, Serializer};
 
@@ -199,6 +200,7 @@ pub mod hex_bytes_32 {
     }
 }
 
+#[allow(unreachable_pub)]
 mod hex_bytes_opt {
     use serde::{Deserialize, Deserializer, Serializer};
 

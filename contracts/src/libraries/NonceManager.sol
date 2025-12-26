@@ -16,9 +16,7 @@ library NonceManager {
      * @param domain The application domain
      * @param nonce The nonce to validate and consume
      */
-    function validateAndConsume(mapping(bytes32 => uint64) storage lastNonces, bytes32 domain, uint64 nonce)
-        internal
-    {
+    function validateAndConsume(mapping(bytes32 => uint64) storage lastNonces, bytes32 domain, uint64 nonce) internal {
         uint64 expected = lastNonces[domain] + 1;
         if (nonce != expected) {
             revert InvalidNonce(domain, expected, nonce);

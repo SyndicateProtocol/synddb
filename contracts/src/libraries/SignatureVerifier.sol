@@ -13,8 +13,9 @@ import {InvalidSignature} from "src/types/Errors.sol";
 library SignatureVerifier {
     /// @notice EIP-712 typehash for the Message struct
     /// @dev keccak256("Message(bytes32 messageId,string messageType,bytes calldata_,bytes32 metadataHash,uint64 nonce,uint64 timestamp,bytes32 domain)")
-    bytes32 public constant MESSAGE_TYPEHASH =
-        keccak256("Message(bytes32 messageId,string messageType,bytes calldata_,bytes32 metadataHash,uint64 nonce,uint64 timestamp,bytes32 domain)");
+    bytes32 public constant MESSAGE_TYPEHASH = keccak256(
+        "Message(bytes32 messageId,string messageType,bytes calldata_,bytes32 metadataHash,uint64 nonce,uint64 timestamp,bytes32 domain)"
+    );
 
     /// @notice EIP-712 domain typehash
     bytes32 public constant DOMAIN_TYPEHASH =
@@ -133,8 +134,9 @@ library SignatureVerifier {
         bytes32 domain,
         bytes calldata signature
     ) internal pure returns (address signer) {
-        bytes32 structHash =
-            computeStructHashFromParams(messageId, messageType, calldata_, metadataHash, nonce, timestamp, domain);
+        bytes32 structHash = computeStructHashFromParams(
+            messageId, messageType, calldata_, metadataHash, nonce, timestamp, domain
+        );
         bytes32 digest = computeDigest(domainSeparator, structHash);
 
         signer = ECDSA.recover(digest, signature);

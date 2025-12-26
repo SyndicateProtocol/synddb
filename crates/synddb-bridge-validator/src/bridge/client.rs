@@ -15,6 +15,16 @@ pub struct BridgeClient {
     signer: PrivateKeySigner,
 }
 
+impl std::fmt::Debug for BridgeClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BridgeClient")
+            .field("bridge_address", &self.bridge_address)
+            .field("rpc_url", &self.rpc_url)
+            .field("signer", &"<redacted>")
+            .finish()
+    }
+}
+
 impl BridgeClient {
     pub fn new(rpc_url: &str, bridge_address: Address, private_key: &str) -> Result<Self> {
         let key_bytes = private_key.strip_prefix("0x").unwrap_or(private_key);

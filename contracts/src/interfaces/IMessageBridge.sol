@@ -244,10 +244,7 @@ interface IMessageBridge {
      * @param messageIds Array of message IDs to query
      * @return states Array of MessageStateV2 structs
      */
-    function batchGetMessageStates(bytes32[] calldata messageIds)
-        external
-        view
-        returns (MessageStateV2[] memory states);
+    function batchGetMessageStates(bytes32[] calldata messageIds) external view returns (MessageStateV2[] memory states);
 
     /**
      * @notice Compute the message ID from message parameters

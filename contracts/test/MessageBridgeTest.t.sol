@@ -158,7 +158,8 @@ contract MessageBridgeTest is Test {
         bridge.initializeMessage(messageId, MESSAGE_TYPE, calldata_, metadataHash, "", nonce, timestamp, DOMAIN);
 
         // Sign message with primary validator
-        bytes32 structHash = _computeStructHash(messageId, MESSAGE_TYPE, calldata_, metadataHash, nonce, timestamp, DOMAIN);
+        bytes32 structHash =
+            _computeStructHash(messageId, MESSAGE_TYPE, calldata_, metadataHash, nonce, timestamp, DOMAIN);
         bytes32 digest = _computeDigest(structHash);
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(primaryValidatorPk, digest);
@@ -183,7 +184,8 @@ contract MessageBridgeTest is Test {
         vm.prank(primaryValidator);
         bridge.initializeMessage(messageId, MESSAGE_TYPE, calldata_, metadataHash, "", nonce, timestamp, DOMAIN);
 
-        bytes32 structHash = _computeStructHash(messageId, MESSAGE_TYPE, calldata_, metadataHash, nonce, timestamp, DOMAIN);
+        bytes32 structHash =
+            _computeStructHash(messageId, MESSAGE_TYPE, calldata_, metadataHash, nonce, timestamp, DOMAIN);
         bytes32 digest = _computeDigest(structHash);
 
         // Sign with validator 1
@@ -215,7 +217,8 @@ contract MessageBridgeTest is Test {
         vm.prank(primaryValidator);
         bridge.initializeMessage(messageId, MESSAGE_TYPE, calldata_, metadataHash, "", nonce, timestamp, DOMAIN);
 
-        bytes32 structHash = _computeStructHash(messageId, MESSAGE_TYPE, calldata_, metadataHash, nonce, timestamp, DOMAIN);
+        bytes32 structHash =
+            _computeStructHash(messageId, MESSAGE_TYPE, calldata_, metadataHash, nonce, timestamp, DOMAIN);
         bytes32 digest = _computeDigest(structHash);
 
         // Sign with 2 validators to meet threshold

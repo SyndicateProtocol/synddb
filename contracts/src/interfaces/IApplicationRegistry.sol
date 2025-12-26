@@ -15,7 +15,10 @@ interface IApplicationRegistry {
 
     /// @notice Emitted when a new application is registered
     event ApplicationRegistered(
-        bytes32 indexed domain, address indexed primaryValidator, uint64 expirationSeconds, bool requireWitnessSignatures
+        bytes32 indexed domain,
+        address indexed primaryValidator,
+        uint64 expirationSeconds,
+        bool requireWitnessSignatures
     );
 
     /// @notice Emitted when an application's configuration is updated
@@ -109,8 +112,7 @@ interface IApplicationRegistry {
      * @param attestation New TEE attestation data
      * @param version New TEE version string
      */
-    function updateValidatorAttestation(address validator, bytes calldata attestation, string calldata version)
-        external;
+    function updateValidatorAttestation(address validator, bytes calldata attestation, string calldata version) external;
 
     /**
      * @notice Set the signature threshold for message execution

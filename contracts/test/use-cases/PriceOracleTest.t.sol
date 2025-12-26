@@ -27,7 +27,7 @@ contract PriceOracleTest is Test {
 
     // Price constants (scaled by 1e18)
     uint256 constant BTC_PRICE = 67196_645000000000000000; // ~$67,196.645
-    uint256 constant ETH_PRICE = 3514_490000000000000000;  // ~$3,514.49
+    uint256 constant ETH_PRICE = 3514_490000000000000000; // ~$3,514.49
 
     function setUp() public {
         admin = address(this);
@@ -83,17 +83,9 @@ contract PriceOracleTest is Test {
         uint256 timestamp = block.timestamp;
 
         // Encode the updatePrice call
-        bytes memory payload = abi.encodeWithSelector(
-            oracle.updatePrice.selector,
-            "bitcoin",
-            BTC_PRICE,
-            timestamp
-        );
+        bytes memory payload = abi.encodeWithSelector(oracle.updatePrice.selector, "bitcoin", BTC_PRICE, timestamp);
 
-        SequencerSignature memory sig = SequencerSignature({
-            signature: new bytes(65),
-            submittedAt: block.timestamp
-        });
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         // Initialize message
         vm.prank(sequencer);
@@ -114,19 +106,11 @@ contract PriceOracleTest is Test {
 
     function test_UpdateMultiplePrices() public {
         uint256 timestamp = block.timestamp;
-        SequencerSignature memory sig = SequencerSignature({
-            signature: new bytes(65),
-            submittedAt: block.timestamp
-        });
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         // Update Bitcoin price
         bytes32 btcMessageId = keccak256("price-update-btc-2");
-        bytes memory btcPayload = abi.encodeWithSelector(
-            oracle.updatePrice.selector,
-            "bitcoin",
-            BTC_PRICE,
-            timestamp
-        );
+        bytes memory btcPayload = abi.encodeWithSelector(oracle.updatePrice.selector, "bitcoin", BTC_PRICE, timestamp);
 
         vm.prank(sequencer);
         bridge.initializeMessage(btcMessageId, address(oracle), btcPayload, sig, 0);
@@ -135,12 +119,7 @@ contract PriceOracleTest is Test {
 
         // Update Ethereum price
         bytes32 ethMessageId = keccak256("price-update-eth-1");
-        bytes memory ethPayload = abi.encodeWithSelector(
-            oracle.updatePrice.selector,
-            "ethereum",
-            ETH_PRICE,
-            timestamp
-        );
+        bytes memory ethPayload = abi.encodeWithSelector(oracle.updatePrice.selector, "ethereum", ETH_PRICE, timestamp);
 
         vm.prank(sequencer);
         bridge.initializeMessage(ethMessageId, address(oracle), ethPayload, sig, 0);
@@ -162,19 +141,11 @@ contract PriceOracleTest is Test {
 
     function test_RejectStalePrice() public {
         uint256 timestamp = block.timestamp;
-        SequencerSignature memory sig = SequencerSignature({
-            signature: new bytes(65),
-            submittedAt: block.timestamp
-        });
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         // First update
         bytes32 messageId1 = keccak256("price-update-stale-1");
-        bytes memory payload1 = abi.encodeWithSelector(
-            oracle.updatePrice.selector,
-            "bitcoin",
-            BTC_PRICE,
-            timestamp
-        );
+        bytes memory payload1 = abi.encodeWithSelector(oracle.updatePrice.selector, "bitcoin", BTC_PRICE, timestamp);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId1, address(oracle), payload1, sig, 0);
@@ -217,17 +188,9 @@ contract PriceOracleTest is Test {
         bytes32 messageId = keccak256("price-update-insig");
         uint256 timestamp = block.timestamp;
 
-        bytes memory payload = abi.encodeWithSelector(
-            oracle.updatePrice.selector,
-            "bitcoin",
-            BTC_PRICE,
-            timestamp
-        );
+        bytes memory payload = abi.encodeWithSelector(oracle.updatePrice.selector, "bitcoin", BTC_PRICE, timestamp);
 
-        SequencerSignature memory sig = SequencerSignature({
-            signature: new bytes(65),
-            submittedAt: block.timestamp
-        });
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(oracle), payload, sig, 0);
@@ -254,10 +217,7 @@ contract PriceOracleTest is Test {
             block.timestamp
         );
 
-        SequencerSignature memory sig = SequencerSignature({
-            signature: new bytes(65),
-            submittedAt: block.timestamp
-        });
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(oracle), payload, sig, 0);
@@ -278,10 +238,7 @@ contract PriceOracleTest is Test {
             block.timestamp + 600 // 10 minutes in future (> 5 min tolerance)
         );
 
-        SequencerSignature memory sig = SequencerSignature({
-            signature: new bytes(65),
-            submittedAt: block.timestamp
-        });
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(oracle), payload, sig, 0);
@@ -298,10 +255,7 @@ contract PriceOracleTest is Test {
 
     function test_BatchPriceUpdates() public {
         uint256 timestamp = block.timestamp;
-        SequencerSignature memory sig = SequencerSignature({
-            signature: new bytes(65),
-            submittedAt: block.timestamp
-        });
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         string[5] memory assets;
         assets[0] = "bitcoin";
@@ -311,20 +265,16 @@ contract PriceOracleTest is Test {
         assets[4] = "polkadot";
 
         uint256[5] memory assetPrices;
-        assetPrices[0] = 67196_645000000000000000;  // BTC
-        assetPrices[1] = 3514_490000000000000000;   // ETH
-        assetPrices[2] = 145_230000000000000000;    // SOL
-        assetPrices[3] = 890000000000000000;        // ADA ($0.89)
-        assetPrices[4] = 7_520000000000000000;      // DOT
+        assetPrices[0] = 67196_645000000000000000; // BTC
+        assetPrices[1] = 3514_490000000000000000; // ETH
+        assetPrices[2] = 145_230000000000000000; // SOL
+        assetPrices[3] = 890000000000000000; // ADA ($0.89)
+        assetPrices[4] = 7_520000000000000000; // DOT
 
         for (uint256 i = 0; i < 5; i++) {
             bytes32 messageId = keccak256(abi.encodePacked("batch-price-", i));
-            bytes memory payload = abi.encodeWithSelector(
-                oracle.updatePrice.selector,
-                assets[i],
-                assetPrices[i],
-                timestamp
-            );
+            bytes memory payload =
+                abi.encodeWithSelector(oracle.updatePrice.selector, assets[i], assetPrices[i], timestamp);
 
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, address(oracle), payload, sig, 0);
@@ -361,17 +311,9 @@ contract PriceOracleTest is Test {
         uint256 avgPriceScaled = 67196_645000000000000000;
 
         bytes32 messageId = keccak256(abi.encodePacked("validated-price-", timestamp));
-        bytes memory payload = abi.encodeWithSelector(
-            oracle.updatePrice.selector,
-            "bitcoin",
-            avgPriceScaled,
-            timestamp
-        );
+        bytes memory payload = abi.encodeWithSelector(oracle.updatePrice.selector, "bitcoin", avgPriceScaled, timestamp);
 
-        SequencerSignature memory sig = SequencerSignature({
-            signature: new bytes(65),
-            submittedAt: block.timestamp
-        });
+        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
 
         // Sequencer initializes the message
         vm.prank(sequencer);

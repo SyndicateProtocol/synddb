@@ -34,6 +34,15 @@ pub struct AppState {
     pub api_key: Option<String>,
 }
 
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppState")
+            .field("mode", &self.mode)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
     pub healthy: bool,
@@ -432,8 +441,8 @@ pub async fn reject_proposal(
 ) -> Result<Json<RejectionResponse>, (StatusCode, Json<RejectionResponse>)> {
     // Compute message ID from the proposal details
     let metadata_hash = [0u8; 32]; // Rejection doesn't require metadata
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
 

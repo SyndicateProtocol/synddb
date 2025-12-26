@@ -40,4 +40,4 @@ target
 .claude/settings.local.json
 
 # GCS test credentials
-tests/e2e-gcs/.credentials/
+tests/e2e-gcs/.credentials/.e2e-test-env
