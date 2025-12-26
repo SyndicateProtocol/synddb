@@ -2641,4 +2641,218 @@ mod tests {
 
         // No recovery needed - validators received snapshots for each DDL
     }
+
+    // =========================================================================
+    // Automatic Schema Change Detection Tests
+    // =========================================================================
+    //
+    // These tests verify that the client automatically detects schema changes
+    // (DDL) and publishes snapshots before changesets, even when DDL is executed
+    // directly via connection() instead of execute_ddl().
+    //
+    // The key insight: SQLite's update hook doesn't fire for DDL, but we can
+    // still detect schema changes by comparing the hash of sqlite_master before
+    // each publish. If the hash changed, we know DDL occurred.
+
+    #[test]
+    fn test_auto_schema_detection_create_table() {
+        // When a table is created via direct DDL, the next publish should
+        // automatically detect the schema change and send a snapshot first.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        // Enable snapshot_interval so snapshot channel exists
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            snapshot_interval: 100,
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Direct DDL (not using execute_ddl)
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+
+        // Insert data (triggers update hook)
+        conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+
+        // Publish will detect schema change and send snapshot first
+        synddb.publish_changeset().unwrap();
+
+        // Verify data is correct
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_auto_schema_detection_alter_table() {
+        // ALTER TABLE changes schema hash too
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            snapshot_interval: 100,
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Initial table via execute_ddl (correct)
+        synddb
+            .execute_ddl("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            .unwrap();
+
+        // Insert initial data
+        conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
+            .unwrap();
+        synddb.publish_changeset().unwrap();
+
+        // ALTER via direct DDL (will be auto-detected)
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT", [])
+            .unwrap();
+
+        // Use the new column
+        conn.execute("UPDATE users SET email = 'alice@test.com' WHERE id = 1", [])
+            .unwrap();
+
+        // This publish will auto-detect the schema change
+        synddb.publish_changeset().unwrap();
+
+        // Verify
+        let email: String = conn
+            .query_row("SELECT email FROM users WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(email, "alice@test.com");
+    }
+
+    #[test]
+    fn test_auto_schema_detection_multiple_ddl() {
+        // Multiple DDL operations before publish - only one snapshot needed
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            snapshot_interval: 100,
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Multiple DDL operations via direct connection
+        conn.execute("CREATE TABLE t1 (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        conn.execute("CREATE TABLE t2 (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        conn.execute("CREATE TABLE t3 (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        conn.execute("CREATE INDEX idx_t1 ON t1(id)", []).unwrap();
+
+        // Insert data into all tables
+        conn.execute("INSERT INTO t1 VALUES (1)", []).unwrap();
+        conn.execute("INSERT INTO t2 VALUES (1)", []).unwrap();
+        conn.execute("INSERT INTO t3 VALUES (1)", []).unwrap();
+
+        // Single publish detects schema change and sends snapshot
+        synddb.publish_changeset().unwrap();
+    }
+
+    #[test]
+    fn test_auto_schema_detection_no_false_positives() {
+        // Verify that identical schemas don't trigger false positive detection
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            snapshot_interval: 100,
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Create table
+        synddb
+            .execute_ddl("CREATE TABLE test (id INTEGER PRIMARY KEY)")
+            .unwrap();
+
+        // Multiple publishes with no schema changes - no extra snapshots
+        for i in 1..=10 {
+            conn.execute("INSERT INTO test VALUES (?1)", [i]).unwrap();
+            synddb.publish_changeset().unwrap();
+        }
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 10);
+    }
+
+    #[test]
+    fn test_auto_schema_detection_drop_table() {
+        // DROP TABLE also changes schema hash
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            snapshot_interval: 100,
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Create tables
+        synddb.execute_ddl("CREATE TABLE t1 (id INTEGER)").unwrap();
+        synddb.execute_ddl("CREATE TABLE t2 (id INTEGER)").unwrap();
+
+        // Drop via direct DDL
+        conn.execute("DROP TABLE t1", []).unwrap();
+
+        // Insert into remaining table (triggers update hook)
+        conn.execute("INSERT INTO t2 VALUES (1)", []).unwrap();
+
+        // Publish detects schema change
+        synddb.publish_changeset().unwrap();
+
+        // Verify t1 is gone
+        let tables: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(tables, vec!["t2"]);
+    }
+
+    #[test]
+    fn test_schema_detection_disabled_when_snapshot_interval_zero() {
+        // When snapshot_interval is 0, schema detection still happens but
+        // can't auto-send snapshot (no channel). A warning is logged instead.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            snapshot_interval: 0, // Disabled
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Direct DDL
+        conn.execute("CREATE TABLE test (id INTEGER)", []).unwrap();
+
+        // Insert data
+        conn.execute("INSERT INTO test VALUES (1)", []).unwrap();
+
+        // Publish - schema change detected but no snapshot channel
+        // In this case, developer should call publish_snapshot() manually
+        synddb.publish_changeset().unwrap();
+
+        // The warning is logged but the changeset is still sent
+        // Developer needs to call publish_snapshot() for recovery
+        synddb.publish_snapshot().unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
 }

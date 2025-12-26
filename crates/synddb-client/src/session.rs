@@ -64,6 +64,9 @@ struct SessionState {
     snapshot_tx: Option<Sender<Snapshot>>,
     /// Flag to indicate changes have occurred since last publish
     has_changes: bool,
+    /// Hash of `sqlite_master` to detect schema changes between publishes.
+    /// If the schema changes (DDL executed), we automatically trigger a snapshot.
+    last_schema_hash: u64,
 }
 
 impl SessionState {
@@ -86,6 +89,55 @@ impl SessionState {
         self.session = new_session;
         debug!("Session recreated to clear accumulated changes");
         Ok(())
+    }
+
+    /// Compute a hash of the current schema (`sqlite_master` contents).
+    ///
+    /// This is used to detect schema changes (DDL) that happen outside of `execute_ddl()`.
+    /// When the schema hash changes, we automatically trigger a snapshot to ensure
+    /// validators have the updated schema.
+    fn compute_schema_hash(conn: &Connection) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+
+        // Query all schema objects (tables, indexes, triggers, views)
+        // Order by type and name for deterministic hashing
+        let result: Result<Vec<(String, String, String)>, _> = conn
+            .prepare(
+                "SELECT type, name, sql FROM sqlite_master \
+                 WHERE name NOT LIKE 'sqlite_%' \
+                 ORDER BY type, name",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    ))
+                })
+                .and_then(|rows| rows.collect())
+            });
+
+        match result {
+            Ok(schema_items) => {
+                for (type_, name, sql) in schema_items {
+                    type_.hash(&mut hasher);
+                    name.hash(&mut hasher);
+                    sql.hash(&mut hasher);
+                }
+            }
+            Err(e) => {
+                // If we can't read the schema, use a sentinel value
+                // This shouldn't happen in practice
+                debug!("Failed to read schema for hashing: {}", e);
+                0u64.hash(&mut hasher);
+            }
+        }
+
+        hasher.finish()
     }
 }
 
@@ -150,6 +202,10 @@ impl SessionMonitor {
 
         debug!("Session attached to all tables");
 
+        // Compute initial schema hash for change detection
+        let initial_schema_hash = SessionState::compute_schema_hash(conn);
+        debug!("Initial schema hash: {:016x}", initial_schema_hash);
+
         // Store session state in thread-local storage
         SESSION_STATE.with(|state| {
             *state.borrow_mut() = Some(SessionState {
@@ -161,6 +217,7 @@ impl SessionMonitor {
                 changesets_since_snapshot: 0,
                 snapshot_tx,
                 has_changes: false,
+                last_schema_hash: initial_schema_hash,
             });
         });
 
@@ -224,9 +281,6 @@ impl SessionMonitor {
     /// Extract changeset from session and send to background thread.
     /// This must be called from the main thread.
     fn extract_and_send_changeset(state: &mut SessionState) -> Result<()> {
-        // Note: SQLite's update hook doesn't fire for DDL operations.
-        // DDL snapshots are handled in execute_ddl() which always publishes a snapshot.
-
         // Only extract if there might be changes and we're not in a transaction
         if !state.has_changes {
             return Ok(());
@@ -237,6 +291,54 @@ impl SessionMonitor {
         if !state.conn.is_autocommit() {
             trace!("Skipping changeset extraction - transaction active");
             return Ok(());
+        }
+
+        // SCHEMA CHANGE DETECTION: Check if schema changed since last publish.
+        // SQLite's update hook doesn't fire for DDL, so we detect schema changes
+        // by comparing the hash of sqlite_master. If the schema changed (DDL was
+        // executed), we MUST publish a snapshot first so validators have the
+        // updated schema before receiving changesets that reference it.
+        let current_schema_hash = SessionState::compute_schema_hash(state.conn);
+        if current_schema_hash != state.last_schema_hash {
+            info!(
+                "Schema change detected (hash {:016x} -> {:016x}), publishing snapshot",
+                state.last_schema_hash, current_schema_hash
+            );
+
+            // Create and send snapshot before processing changesets
+            match Self::create_snapshot_internal(state) {
+                Ok(snapshot) => {
+                    if let Some(ref snapshot_tx) = state.snapshot_tx {
+                        if let Err(e) = snapshot_tx.try_send(snapshot.clone()) {
+                            error!("Failed to send schema-change snapshot: {}", e);
+                        } else {
+                            info!(
+                                "Schema-change snapshot sent: {} bytes at sequence {}",
+                                snapshot.data.len(),
+                                snapshot.sequence
+                            );
+                            // Increment sequence so subsequent changesets have a later sequence
+                            // This ensures validators apply snapshot before changesets
+                            state.sequence += 1;
+                            state.changesets_since_snapshot = 0;
+                        }
+                    } else {
+                        // No snapshot channel configured - log warning
+                        // This happens when snapshot_interval is 0 (disabled)
+                        // The snapshot is still important for schema changes
+                        info!(
+                            "Schema changed but no snapshot channel configured. \
+                             Consider enabling snapshot_interval or calling publish_snapshot() manually."
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to create schema-change snapshot: {}", e);
+                }
+            }
+
+            // Update the stored schema hash
+            state.last_schema_hash = current_schema_hash;
         }
 
         // Extract changeset bytes from session
