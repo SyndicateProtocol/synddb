@@ -1,0 +1,63 @@
+[package]
+name = "synddb-bridge-validator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["humantime-serde"] # used in serde annotations
+
+[lints]
+workspace = true
+
+[dependencies]
+# Core async and CLI
+tokio = { workspace = true, features = ["full"] }
+clap = { workspace = true, features = ["derive", "env"] }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Configuration
+humantime-serde = { workspace = true }
+humantime = { workspace = true }
+
+# Logging and tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json"] }
+
+# HTTP server
+axum = { workspace = true }
+tower = { workspace = true }
+
+# Cryptography and blockchain
+alloy = { workspace = true, features = ["signers", "signer-local"] }
+hex = { workspace = true }
+sha3 = { workspace = true }
+
+# Database
+rusqlite = { workspace = true, features = ["bundled"] }
+
+# Utilities
+async-trait = { workspace = true }
+
+# JSON Schema validation
+jsonschema = "0.27"
+
+# HTTP client (for schema fetching)
+reqwest = { workspace = true }
+
+# Google Cloud Storage (optional)
+google-cloud-storage = { workspace = true, optional = true }
+
+[features]
+default = ["gcs"]
+gcs = ["google-cloud-storage"]
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
