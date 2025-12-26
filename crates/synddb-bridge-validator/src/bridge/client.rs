@@ -90,10 +90,12 @@ impl BridgeClient {
 
         Ok(MessageTypeConfig {
             message_type: message_type.to_string(),
+            selector: config.selector.into(),
             target: config.target,
             schema_hash: config.schemaHash.into(),
             schema_uri: config.schemaUri,
-            active: config.active,
+            enabled: config.enabled,
+            updated_at: config.updatedAt,
         })
     }
 
@@ -161,17 +163,18 @@ impl BridgeClient {
         Ok(())
     }
 
-    pub async fn reject_proposal(
+    pub async fn initialize_and_sign(
         &self,
         message: &Message,
         storage_ref: &str,
-        reason: &str,
+        signature: &[u8],
+        value: Option<u128>,
     ) -> Result<()> {
         let provider = self.write_provider().await?;
         let contract = IMessageBridge::new(self.bridge_address, provider);
 
-        contract
-            .rejectProposal(
+        let tx = contract
+            .initializeAndSign(
                 FixedBytes::from(message.id),
                 message.message_type.clone(),
                 Bytes::from(message.calldata.clone()),
@@ -180,7 +183,37 @@ impl BridgeClient {
                 message.nonce,
                 message.timestamp,
                 FixedBytes::from(message.domain),
-                reason.to_string(),
+                Bytes::from(signature.to_vec()),
+            )
+            .value(U256::from(value.unwrap_or(0)));
+
+        tx.send()
+            .await
+            .context("Failed to send tx")?
+            .watch()
+            .await
+            .context("Failed to watch tx")?;
+
+        Ok(())
+    }
+
+    pub async fn reject_proposal(
+        &self,
+        message: &Message,
+        reason_hash: [u8; 32],
+        reason_ref: &str,
+    ) -> Result<()> {
+        let provider = self.write_provider().await?;
+        let contract = IMessageBridge::new(self.bridge_address, provider);
+
+        contract
+            .rejectProposal(
+                FixedBytes::from(message.id),
+                message.message_type.clone(),
+                FixedBytes::from(message.domain),
+                message.nonce,
+                FixedBytes::from(reason_hash),
+                reason_ref.to_string(),
             )
             .send()
             .await
@@ -192,12 +225,21 @@ impl BridgeClient {
         Ok(())
     }
 
-    pub async fn reject_message(&self, message_id: [u8; 32], reason: &str) -> Result<()> {
+    pub async fn reject_message(
+        &self,
+        message_id: [u8; 32],
+        reason_hash: [u8; 32],
+        reason_ref: &str,
+    ) -> Result<()> {
         let provider = self.write_provider().await?;
         let contract = IMessageBridge::new(self.bridge_address, provider);
 
         contract
-            .rejectMessage(FixedBytes::from(message_id), reason.to_string())
+            .rejectMessage(
+                FixedBytes::from(message_id),
+                FixedBytes::from(reason_hash),
+                reason_ref.to_string(),
+            )
             .send()
             .await
             .context("Failed to send tx")?
@@ -206,5 +248,57 @@ impl BridgeClient {
             .context("Failed to watch tx")?;
 
         Ok(())
+    }
+
+    pub async fn get_message_stage(&self, message_id: [u8; 32]) -> Result<u8> {
+        let provider = self.read_provider().await?;
+        let contract = IMessageBridge::new(self.bridge_address, provider);
+
+        let stage = contract
+            .getMessageStage(FixedBytes::from(message_id))
+            .call()
+            .await
+            .context("Failed to get message stage")?;
+
+        Ok(stage)
+    }
+
+    pub async fn get_signature_count(&self, message_id: [u8; 32]) -> Result<u64> {
+        let provider = self.read_provider().await?;
+        let contract = IMessageBridge::new(self.bridge_address, provider);
+
+        let count = contract
+            .getSignatureCount(FixedBytes::from(message_id))
+            .call()
+            .await
+            .context("Failed to get signature count")?;
+
+        Ok(count.try_into().unwrap_or(u64::MAX))
+    }
+
+    pub async fn has_validator_signed(&self, message_id: [u8; 32], validator: Address) -> Result<bool> {
+        let provider = self.read_provider().await?;
+        let contract = IMessageBridge::new(self.bridge_address, provider);
+
+        let signed = contract
+            .hasValidatorSigned(FixedBytes::from(message_id), validator)
+            .call()
+            .await
+            .context("Failed to check validator signature")?;
+
+        Ok(signed)
+    }
+
+    pub async fn get_signature_threshold(&self) -> Result<u64> {
+        let provider = self.read_provider().await?;
+        let contract = IMessageBridge::new(self.bridge_address, provider);
+
+        let threshold = contract
+            .signatureThreshold()
+            .call()
+            .await
+            .context("Failed to get signature threshold")?;
+
+        Ok(threshold.try_into().unwrap_or(u64::MAX))
     }
 }

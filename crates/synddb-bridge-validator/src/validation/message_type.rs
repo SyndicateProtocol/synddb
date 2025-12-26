@@ -20,8 +20,8 @@ impl MessageTypeValidator {
             ));
         }
 
-        // Check if message type is active
-        if !config.active {
+        // Check if message type is enabled
+        if !config.enabled {
             return Err(ValidationError::MessageTypeInactive(
                 message.message_type.clone(),
             ));

@@ -19,15 +19,17 @@ impl ApplicationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageTypeConfig {
     pub message_type: String,
+    pub selector: [u8; 4],
     pub target: Address,
     pub schema_hash: [u8; 32],
     pub schema_uri: String,
-    pub active: bool,
+    pub enabled: bool,
+    pub updated_at: u64,
 }
 
 impl MessageTypeConfig {
     pub fn is_valid(&self) -> bool {
-        self.active && self.target != Address::ZERO
+        self.enabled && self.target != Address::ZERO
     }
 
     pub fn has_schema(&self) -> bool {

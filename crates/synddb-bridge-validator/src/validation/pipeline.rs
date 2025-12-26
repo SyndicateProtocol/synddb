@@ -174,10 +174,12 @@ mod tests {
             },
             message_type_config: MessageTypeConfig {
                 message_type: "setValue(uint256)".to_string(),
+                selector: [0x55, 0x24, 0x10, 0x77],
                 target: Address::ZERO,
                 schema_hash: [0u8; 32],
                 schema_uri: String::new(),
-                active: true,
+                enabled: true,
+                updated_at: 0,
             },
             schema: None,
         }
