@@ -12,13 +12,10 @@ COPY crates ./crates
 COPY examples ./examples
 COPY tests ./tests
 
-# Build the sequencer and FFI library
+# Build the sequencer, FFI library, and validator
 RUN cargo build --release -p synddb-sequencer && \
-    cargo build --release -p synddb-client --features ffi
-
-# Build the validator - it's standalone but references main crates
-WORKDIR /app/examples/price-oracle/validator
-RUN cargo build --release
+    cargo build --release -p synddb-client --features ffi && \
+    cargo build --release -p price-oracle-validator
 
 # Python application stage
 FROM python:3.12-slim-bookworm
@@ -33,7 +30,7 @@ WORKDIR /app
 
 # Copy Rust binaries
 COPY --from=rust-builder /app/target/release/synddb-sequencer /usr/local/bin/
-COPY --from=rust-builder /app/examples/price-oracle/validator/target/release/price-oracle-validator /usr/local/bin/
+COPY --from=rust-builder /app/target/release/price-oracle-validator /usr/local/bin/
 
 # Copy FFI library for Python bindings
 COPY --from=rust-builder /app/target/release/libsynddb_client.so /usr/local/lib/
