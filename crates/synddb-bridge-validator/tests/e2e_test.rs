@@ -252,3 +252,240 @@ async fn test_e2e_bridge_client_queries() {
     println!("  Signature threshold: {}", threshold);
 }
 
+#[tokio::test]
+#[ignore = "requires anvil with deployed contracts"]
+async fn test_e2e_full_message_submission_flow() {
+    let bridge_address = get_bridge_address()
+        .await
+        .expect("BRIDGE_ADDRESS not set. Run setup-e2e-test.sh first.");
+
+    // Create clients for primary validator
+    let primary_client = BridgeClient::new(ANVIL_URL, bridge_address, VALIDATOR_PRIVATE_KEY)
+        .expect("Failed to create primary bridge client");
+
+    let primary_signer = MessageSigner::new(VALIDATOR_PRIVATE_KEY, ANVIL_CHAIN_ID, bridge_address)
+        .expect("Failed to create primary signer");
+
+    // Get the domain for test-app
+    let domain: [u8; 32] = Keccak256::digest(b"test-app").into();
+
+    // Get the next nonce
+    let last_nonce = primary_client
+        .get_last_nonce(domain)
+        .await
+        .expect("Failed to get last nonce");
+    let nonce = last_nonce + 1;
+
+    // Create message
+    let message_type = "setValue(uint256)";
+    // Encode setValue(42) - selector 0x55241077 + uint256(42)
+    let calldata = hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002a")
+        .unwrap();
+    let metadata = serde_json::json!({"test": true});
+    let metadata_bytes = serde_json::to_vec(&metadata).unwrap();
+    let metadata_hash: [u8; 32] = Keccak256::digest(&metadata_bytes).into();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // Compute message ID
+    let message_id = compute_message_id(
+        message_type,
+        &calldata,
+        &metadata_hash,
+        nonce,
+        timestamp,
+        &domain,
+    );
+
+    let message = Message {
+        id: message_id,
+        message_type: message_type.to_string(),
+        calldata,
+        metadata,
+        metadata_hash,
+        nonce,
+        timestamp,
+        domain,
+        value: None,
+    };
+
+    println!("  Message ID: 0x{}", hex::encode(message_id));
+    println!("  Nonce: {}", nonce);
+    println!("  Timestamp: {}", timestamp);
+
+    // Sign the message
+    let signature = primary_signer
+        .sign_message(&message)
+        .await
+        .expect("Failed to sign message");
+
+    println!("  Signature: 0x{}", hex::encode(&signature));
+    println!("  Signer: {}", primary_signer.address());
+
+    // Submit message with initialize_and_sign
+    primary_client
+        .initialize_and_sign(&message, "memory://test", &signature, None)
+        .await
+        .expect("Failed to initialize and sign message");
+
+    println!("  Message submitted to bridge");
+
+    // Verify message stage (should be Initialized = 1 or higher)
+    let stage = primary_client
+        .get_message_stage(message_id)
+        .await
+        .expect("Failed to get message stage");
+    assert!(stage >= 1, "Message should be initialized, got stage {}", stage);
+    println!("  Message stage: {}", stage);
+
+    // Verify signature count
+    let sig_count = primary_client
+        .get_signature_count(message_id)
+        .await
+        .expect("Failed to get signature count");
+    assert_eq!(sig_count, 1, "Should have 1 signature from primary validator");
+    println!("  Signature count: {}", sig_count);
+
+    // Verify validator signed
+    let signed = primary_client
+        .has_validator_signed(message_id, primary_signer.address())
+        .await
+        .expect("Failed to check if validator signed");
+    assert!(signed, "Primary validator should have signed");
+
+    println!("✓ Full message submission flow works correctly");
+}
+
+#[tokio::test]
+#[ignore = "requires anvil with deployed contracts"]
+async fn test_e2e_witness_signing() {
+    let bridge_address = get_bridge_address()
+        .await
+        .expect("BRIDGE_ADDRESS not set. Run setup-e2e-test.sh first.");
+
+    // Create clients
+    let primary_client = BridgeClient::new(ANVIL_URL, bridge_address, VALIDATOR_PRIVATE_KEY)
+        .expect("Failed to create primary bridge client");
+    let witness_client = BridgeClient::new(ANVIL_URL, bridge_address, WITNESS_PRIVATE_KEY)
+        .expect("Failed to create witness bridge client");
+
+    let primary_signer = MessageSigner::new(VALIDATOR_PRIVATE_KEY, ANVIL_CHAIN_ID, bridge_address)
+        .expect("Failed to create primary signer");
+    let witness_signer = MessageSigner::new(WITNESS_PRIVATE_KEY, ANVIL_CHAIN_ID, bridge_address)
+        .expect("Failed to create witness signer");
+
+    // Get the domain for test-app
+    let domain: [u8; 32] = Keccak256::digest(b"test-app").into();
+
+    // Get the next nonce
+    let last_nonce = primary_client
+        .get_last_nonce(domain)
+        .await
+        .expect("Failed to get last nonce");
+    let nonce = last_nonce + 1;
+
+    // Create message
+    let message_type = "setValue(uint256)";
+    let calldata = hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002b")
+        .unwrap(); // setValue(43)
+    let metadata = serde_json::json!({"witness_test": true});
+    let metadata_bytes = serde_json::to_vec(&metadata).unwrap();
+    let metadata_hash: [u8; 32] = Keccak256::digest(&metadata_bytes).into();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let message_id = compute_message_id(
+        message_type,
+        &calldata,
+        &metadata_hash,
+        nonce,
+        timestamp,
+        &domain,
+    );
+
+    let message = Message {
+        id: message_id,
+        message_type: message_type.to_string(),
+        calldata,
+        metadata,
+        metadata_hash,
+        nonce,
+        timestamp,
+        domain,
+        value: None,
+    };
+
+    println!("  Message ID: 0x{}", hex::encode(message_id));
+
+    // Primary validator signs and initializes
+    let primary_signature = primary_signer
+        .sign_message(&message)
+        .await
+        .expect("Failed to sign message with primary");
+
+    primary_client
+        .initialize_and_sign(&message, "memory://test", &primary_signature, None)
+        .await
+        .expect("Failed to initialize and sign message");
+
+    println!("  Primary validator submitted message");
+
+    // Witness validator signs
+    let witness_signature = witness_signer
+        .sign_message(&message)
+        .await
+        .expect("Failed to sign message with witness");
+
+    witness_client
+        .sign_message(message_id, &witness_signature)
+        .await
+        .expect("Failed to submit witness signature");
+
+    println!("  Witness validator signed message");
+
+    // Verify both signatures
+    let sig_count = primary_client
+        .get_signature_count(message_id)
+        .await
+        .expect("Failed to get signature count");
+    assert_eq!(sig_count, 2, "Should have 2 signatures (primary + witness)");
+
+    let primary_signed = primary_client
+        .has_validator_signed(message_id, primary_signer.address())
+        .await
+        .expect("Failed to check primary signature");
+    assert!(primary_signed, "Primary should have signed");
+
+    let witness_signed = primary_client
+        .has_validator_signed(message_id, witness_signer.address())
+        .await
+        .expect("Failed to check witness signature");
+    assert!(witness_signed, "Witness should have signed");
+
+    // Check if threshold is met (threshold is 2)
+    let threshold = primary_client
+        .get_signature_threshold()
+        .await
+        .expect("Failed to get threshold");
+
+    let stage = primary_client
+        .get_message_stage(message_id)
+        .await
+        .expect("Failed to get message stage");
+
+    println!("  Signature count: {} / {} threshold", sig_count, threshold);
+    println!("  Message stage: {}", stage);
+
+    // Stage should be 2 (Signed) if threshold is met
+    if sig_count >= threshold {
+        assert!(stage >= 2, "Message should be Signed stage when threshold met");
+        println!("✓ Witness signing flow works - threshold met!");
+    } else {
+        println!("✓ Witness signing flow works - waiting for more signatures");
+    }
+}
+
