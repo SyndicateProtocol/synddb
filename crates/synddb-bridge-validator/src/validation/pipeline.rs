@@ -8,8 +8,9 @@ use crate::state::{MessageStore, NonceStore};
 use crate::types::{ApplicationConfig, Message, MessageTypeConfig};
 
 use super::{
-    AppAuthValidator, CalldataValidator, MessageTypeValidator, NonceValidator, ReplayValidator,
-    SchemaValidator, TimestampValidator,
+    AppAuthValidator, CalldataValidator, CustomRulesValidator, MessageTypeValidator,
+    NonceValidator, RateLimitConfig, ReplayValidator, SchemaFetcher, SchemaValidator,
+    TimestampValidator,
 };
 
 pub struct ValidationContext {
@@ -23,7 +24,9 @@ pub struct ValidationPipeline {
     nonce_store: Arc<NonceStore>,
     timestamp_validator: TimestampValidator,
     schema_validator: SchemaValidator,
+    schema_fetcher: SchemaFetcher,
     invariant_registry: InvariantRegistry,
+    custom_rules: CustomRulesValidator,
 }
 
 impl ValidationPipeline {
@@ -38,8 +41,20 @@ impl ValidationPipeline {
             nonce_store,
             timestamp_validator: TimestampValidator::new(max_clock_drift),
             schema_validator: SchemaValidator::new(schema_cache_ttl),
+            schema_fetcher: SchemaFetcher::new(schema_cache_ttl),
             invariant_registry: InvariantRegistry::new(),
+            custom_rules: CustomRulesValidator::new(RateLimitConfig::default()),
         }
+    }
+
+    pub fn with_rate_limit_config(mut self, config: RateLimitConfig) -> Self {
+        self.custom_rules = CustomRulesValidator::new(config);
+        self
+    }
+
+    pub fn with_domain_rate_limit(mut self, domain: [u8; 32], config: RateLimitConfig) -> Self {
+        self.custom_rules = self.custom_rules.with_domain_config(domain, config);
+        self
     }
 
     pub fn register_invariant(&mut self, invariant: Box<dyn crate::invariants::Invariant>) {
@@ -87,11 +102,15 @@ impl ValidationPipeline {
             .check_all(message, &invariant_ctx)
             .await?;
 
-        // Stage 9: Custom rules (rate limits, thresholds) - placeholder
+        // Stage 9: Custom rules (rate limits, thresholds)
         tracing::debug!(message_id = %hex::encode(message.id), "Stage 9: Custom rules check");
-        // No custom rules implemented yet
+        self.custom_rules.validate(message)?;
 
         tracing::info!(message_id = %hex::encode(message.id), "All validation stages passed");
+
+        // Record the message for rate limiting after successful validation
+        self.custom_rules.record(message);
+
         Ok(())
     }
 
@@ -112,8 +131,39 @@ impl ValidationPipeline {
             .await
             .map_err(|e| ValidationError::BridgeConnectionFailed(e.to_string()))?;
 
-        // TODO: Fetch schema from schema_uri if present
-        let schema = None;
+        // Fetch schema from schema_uri if present
+        let schema = if !message_type_config.schema_uri.is_empty() {
+            // Convert schema_hash to Option for verification
+            let expected_hash = if message_type_config.schema_hash != [0u8; 32] {
+                Some(&message_type_config.schema_hash)
+            } else {
+                None
+            };
+
+            match self
+                .schema_fetcher
+                .fetch(&message_type_config.schema_uri, expected_hash)
+                .await
+            {
+                Ok(schema) => {
+                    tracing::debug!(
+                        schema_uri = %message_type_config.schema_uri,
+                        "Schema fetched successfully"
+                    );
+                    Some(schema)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        schema_uri = %message_type_config.schema_uri,
+                        error = %e,
+                        "Failed to fetch schema, proceeding without schema validation"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         Ok(ValidationContext {
             app_config,

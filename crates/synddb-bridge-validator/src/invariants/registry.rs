@@ -1,15 +1,32 @@
+use alloy::providers::ProviderBuilder;
 use async_trait::async_trait;
 
 use crate::error::ValidationError;
 use crate::types::Message;
 
 pub struct InvariantContext {
-    // TODO: Add RPC client, oracle clients, etc.
+    rpc_url: Option<String>,
 }
 
 impl InvariantContext {
     pub fn new() -> Self {
-        Self {}
+        Self { rpc_url: None }
+    }
+
+    pub fn with_rpc_url(rpc_url: String) -> Self {
+        Self {
+            rpc_url: Some(rpc_url),
+        }
+    }
+
+    pub fn rpc_url(&self) -> Option<&str> {
+        self.rpc_url.as_deref()
+    }
+
+    pub fn create_provider(&self) -> Option<impl alloy::providers::Provider + Clone> {
+        let url = self.rpc_url.as_ref()?;
+        let parsed_url: reqwest::Url = url.parse().ok()?;
+        Some(ProviderBuilder::new().connect_http(parsed_url))
     }
 }
 

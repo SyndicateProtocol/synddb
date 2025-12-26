@@ -9,10 +9,13 @@ use synddb_bridge_validator::{
     http::{handlers::AppState, start_server},
     signing::MessageSigner,
     state::{MessageStore, NonceStore},
-    storage::providers::MemoryPublisher,
+    storage::{providers::MemoryPublisher, StoragePublisher},
     validation::ValidationPipeline,
     LogFormat, ValidatorConfig, ValidatorMode,
 };
+
+#[cfg(feature = "gcs")]
+use synddb_bridge_validator::storage::providers::GcsPublisher;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -89,9 +92,7 @@ async fn run_primary_validator(config: ValidatorConfig) -> Result<()> {
     ));
 
     // 6. Create storage publisher
-    // TODO: Support GCS based on config
-    let storage: Arc<dyn synddb_bridge_validator::storage::StoragePublisher> =
-        Arc::new(MemoryPublisher::new());
+    let storage: Arc<dyn StoragePublisher> = create_storage_publisher(&config).await?;
 
     // 7. Create app state
     let state = Arc::new(AppState {
@@ -125,4 +126,18 @@ async fn run_witness_validator(_config: ValidatorConfig) -> Result<()> {
 
     info!("Witness validator not yet implemented");
     Ok(())
+}
+
+async fn create_storage_publisher(
+    #[allow(unused_variables)] config: &ValidatorConfig,
+) -> Result<Arc<dyn StoragePublisher>> {
+    #[cfg(feature = "gcs")]
+    if let Some(bucket) = &config.gcs_bucket {
+        info!(bucket = %bucket, "Initializing GCS storage publisher");
+        let publisher = GcsPublisher::new(bucket.clone()).await?;
+        return Ok(Arc::new(publisher));
+    }
+
+    info!("Using in-memory storage publisher");
+    Ok(Arc::new(MemoryPublisher::new()))
 }

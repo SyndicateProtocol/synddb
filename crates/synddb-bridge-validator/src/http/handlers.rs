@@ -233,19 +233,79 @@ fn error_response(
 pub struct MessageStatusResponse {
     pub id: String,
     pub status: String,
-    pub signatures_collected: u32,
+    pub stage: u8,
+    pub signatures_collected: u64,
+    pub signature_threshold: u64,
+    pub executed: bool,
 }
 
 pub async fn get_message_status(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(message_id): Path<String>,
-) -> Result<Json<MessageStatusResponse>, StatusCode> {
-    // TODO: Query bridge for message status
+) -> Result<Json<MessageStatusResponse>, (StatusCode, String)> {
+    // Parse message ID from hex
+    let id_bytes: [u8; 32] = hex::decode(message_id.trim_start_matches("0x"))
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid message ID: {}", e)))?
+        .try_into()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Message ID must be 32 bytes".to_string()))?;
+
+    // Query bridge for message stage
+    let stage = state
+        .bridge_client
+        .get_message_stage(id_bytes)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("Failed to query bridge: {}", e),
+            )
+        })?;
+
+    // Query signature count
+    let signatures_collected = state
+        .bridge_client
+        .get_signature_count(id_bytes)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("Failed to query signatures: {}", e),
+            )
+        })?;
+
+    // Query threshold
+    let signature_threshold = state
+        .bridge_client
+        .get_signature_threshold()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("Failed to query threshold: {}", e),
+            )
+        })?;
+
+    // Map stage to status string
+    let status = match stage {
+        0 => "not_initialized",
+        1 => "pending",
+        2 => "ready",
+        3 => "pre_execution",
+        4 => "executing",
+        5 => "post_execution",
+        6 => "completed",
+        7 => "failed",
+        8 => "expired",
+        _ => "unknown",
+    };
 
     Ok(Json(MessageStatusResponse {
-        id: message_id,
-        status: "unknown".to_string(),
-        signatures_collected: 0,
+        id: format!("0x{}", hex::encode(id_bytes)),
+        status: status.to_string(),
+        stage,
+        signatures_collected,
+        signature_threshold,
+        executed: stage == 6,
     }))
 }
 
@@ -255,18 +315,60 @@ pub struct SchemaResponse {
     pub schema: Option<serde_json::Value>,
     pub schema_hash: String,
     pub schema_uri: String,
+    pub enabled: bool,
+    pub target: String,
 }
 
 pub async fn get_schema(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(message_type): Path<String>,
-) -> Result<Json<SchemaResponse>, StatusCode> {
-    // TODO: Fetch schema from cache or bridge
+) -> Result<Json<SchemaResponse>, (StatusCode, String)> {
+    // Fetch message type config from bridge
+    let config = state
+        .bridge_client
+        .get_message_type_config(&message_type)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("Failed to query bridge: {}", e),
+            )
+        })?;
+
+    // Try to fetch schema if URI is present
+    let schema = if !config.schema_uri.is_empty() {
+        let expected_hash = if config.schema_hash != [0u8; 32] {
+            Some(&config.schema_hash)
+        } else {
+            None
+        };
+
+        // Use a temporary fetcher since we don't have direct access to pipeline's
+        use crate::validation::SchemaFetcher;
+        use std::time::Duration;
+
+        let fetcher = SchemaFetcher::new(Duration::from_secs(3600));
+        match fetcher.fetch(&config.schema_uri, expected_hash).await {
+            Ok(schema) => Some(schema),
+            Err(e) => {
+                tracing::warn!(
+                    schema_uri = %config.schema_uri,
+                    error = %e,
+                    "Failed to fetch schema"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     Ok(Json(SchemaResponse {
-        message_type,
-        schema: None,
-        schema_hash: "0x".to_string() + &hex::encode([0u8; 32]),
-        schema_uri: String::new(),
+        message_type: config.message_type,
+        schema,
+        schema_hash: format!("0x{}", hex::encode(config.schema_hash)),
+        schema_uri: config.schema_uri,
+        enabled: config.enabled,
+        target: format!("{}", config.target),
     }))
 }

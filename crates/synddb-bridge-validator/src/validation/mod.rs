@@ -1,17 +1,21 @@
 mod app_auth;
 mod calldata;
+mod custom_rules;
 mod message_type;
 mod nonce;
 mod pipeline;
 mod replay;
 mod schema;
+mod schema_fetcher;
 mod timestamp;
 
 pub use app_auth::AppAuthValidator;
 pub use calldata::CalldataValidator;
+pub use custom_rules::{CustomRulesValidator, RateLimitConfig};
 pub use message_type::MessageTypeValidator;
 pub use nonce::NonceValidator;
 pub use pipeline::{ValidationContext, ValidationPipeline};
 pub use replay::ReplayValidator;
 pub use schema::SchemaValidator;
+pub use schema_fetcher::SchemaFetcher;
 pub use timestamp::TimestampValidator;
