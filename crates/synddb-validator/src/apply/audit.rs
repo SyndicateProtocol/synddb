@@ -24,6 +24,46 @@
 //! - [`PendingChangesetStore`] - Persists changesets that couldn't be applied
 //! - [`invert_changeset`] - Inverts a changeset for reverse application
 //! - [`verify_changeset_chain`] - Verifies changesets against a snapshot
+//!
+//! # Integration Guide
+//!
+//! To integrate audit trail verification into the validator:
+//!
+//! ```text
+//! 1. Create a PendingChangesetStore with its own SQLite connection:
+//!    let store_conn = Connection::open("pending_changesets.db")?;
+//!    let pending_store = PendingChangesetStore::new(store_conn)?;
+//!
+//! 2. When apply_message fails with schema mismatch, store the changeset:
+//!    match applier.apply_message(&message) {
+//!        Err(e) if e.to_string().contains("Schema mismatch") => {
+//!            pending_store.store(&PendingChangeset {
+//!                sequence: message.sequence,
+//!                data: message.payload.clone(),
+//!                reason: DeferralReason::MissingTable("...".into()),
+//!            })?;
+//!        }
+//!        other => other?,
+//!    }
+//!
+//! 3. After applying a snapshot, verify pending changesets:
+//!    if message.message_type == MessageType::Snapshot {
+//!        let pending = pending_store.get_all()?;
+//!        let result = verify_changeset_chain(&applier.conn, &pending)?;
+//!        pending_store.clear_up_to(snapshot_sequence)?;
+//!    }
+//! ```
+//!
+//! # Limitations
+//!
+//! The current `verify_changeset_chain` implementation verifies each changeset
+//! independently against the current state. This means:
+//!
+//! - Only the most recent changeset (whose post-state matches the snapshot) will verify
+//! - Earlier changesets in the chain may fail verification
+//!
+//! For complete chain verification, a more sophisticated approach would be needed
+//! that maintains state across verifications.
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
