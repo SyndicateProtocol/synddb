@@ -252,11 +252,28 @@ impl Validator {
                         };
 
                         store.store(&pending)?;
-                        warn!(
-                            sequence = message.sequence,
-                            error = %error_msg,
-                            "Stored changeset as pending due to schema mismatch - sync will continue"
-                        );
+
+                        // Check pending count and warn if accumulating
+                        let pending_count = store.count().unwrap_or(0);
+                        if pending_count > 100 {
+                            error!(
+                                pending_count,
+                                sequence = message.sequence,
+                                "Large number of pending changesets - snapshot required urgently"
+                            );
+                        } else if pending_count > 10 {
+                            warn!(
+                                pending_count,
+                                sequence = message.sequence,
+                                "Pending changesets accumulating - waiting for snapshot"
+                            );
+                        } else {
+                            warn!(
+                                sequence = message.sequence,
+                                error = %error_msg,
+                                "Stored changeset as pending due to schema mismatch - sync will continue"
+                            );
+                        }
 
                         // Return success - changeset is stored for later verification
                         return Ok(ApplyResult::StoredAsPending);

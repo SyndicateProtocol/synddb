@@ -54,16 +54,55 @@
 //!    }
 //! ```
 //!
-//! # Limitations
+//! # Known Limitations
+//!
+//! ## 1. Chain Verification
 //!
 //! The current `verify_changeset_chain` implementation verifies each changeset
 //! independently against the current state. This means:
 //!
 //! - Only the most recent changeset (whose post-state matches the snapshot) will verify
 //! - Earlier changesets in the chain may fail verification
+//! - For complete chain verification, a more sophisticated approach would be needed
+//!   that maintains state across verifications
 //!
-//! For complete chain verification, a more sophisticated approach would be needed
-//! that maintains state across verifications.
+//! **Impact**: When multiple changesets are stored as pending (e.g., sequences 5, 6, 7),
+//! only the most recent one (7) will verify successfully. This is acceptable for
+//! detecting tampering but doesn't provide full chain proof.
+//!
+//! ## 2. Column Type Changes Not Detected
+//!
+//! Schema mismatch detection only checks:
+//! - Missing tables (detected)
+//! - Column count mismatches (detected)
+//!
+//! It does NOT detect:
+//! - Column type changes (e.g., TEXT → INTEGER)
+//! - Column reordering
+//! - Column renaming
+//!
+//! **Impact**: If a DDL changes column types without changing count, the changeset
+//! may still fail at apply time with a conflict, but we won't detect it early.
+//! The audit trail still captures the attempt for later analysis.
+//!
+//! ## 3. No Snapshot After DDL Scenario
+//!
+//! If schema changes are made but no snapshot is sent:
+//! - Changesets continue to be stored as pending
+//! - Pending count warnings are emitted (>10 = warn, >100 = error)
+//! - Validators are blocked until a snapshot arrives
+//!
+//! **Mitigation**: The sequencer should use `auto_snapshot_after_ddl` (enabled by default)
+//! to automatically send snapshots after schema changes.
+//!
+//! ## 4. `SQLite`'s Silent Column Ignoring
+//!
+//! `SQLite`'s session extension silently ignores extra columns in changesets when
+//! the target table has fewer columns. This is handled by validating column counts
+//! BEFORE applying changesets (see `validate_changeset_schema` in applier.rs).
+//!
+//! **Impact**: Without the column count check, data loss could occur silently.
+//! The current implementation prevents this by detecting mismatches early.
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -724,5 +763,428 @@ mod tests {
             .query_row("SELECT val FROM t WHERE id = 1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(val, 100);
+    }
+
+    // ========== E2E TESTS FOR AUDIT TRAIL ==========
+
+    /// E2E test: Full flow of schema mismatch → pending storage → snapshot → verification
+    ///
+    /// This tests the complete audit trail workflow:
+    /// 1. Changeset created with schema (users table with 3 columns)
+    /// 2. Validator has no schema → changeset stored as pending
+    /// 3. Snapshot arrives with schema
+    /// 4. Pending changesets are verified via inversion
+    #[test]
+    fn test_e2e_pending_changeset_verified_after_snapshot() {
+        // === Setup: Create source database with schema and data ===
+        let source = Connection::open_in_memory().unwrap();
+        source
+            .execute(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)",
+                [],
+            )
+            .unwrap();
+        source
+            .execute(
+                "INSERT INTO users VALUES (1, 'Alice', 'alice@test.com')",
+                [],
+            )
+            .unwrap();
+
+        // === Step 1: Generate changeset (Alice -> Bob) ===
+        let mut session = Session::new(&source).unwrap();
+        session.attach(None::<&str>).unwrap();
+        source
+            .execute(
+                "UPDATE users SET name = 'Bob', email = 'bob@test.com' WHERE id = 1",
+                [],
+            )
+            .unwrap();
+
+        let mut changeset = Vec::new();
+        session.changeset_strm(&mut changeset).unwrap();
+        assert!(!changeset.is_empty(), "Should have captured changeset");
+
+        // === Step 2: Store as pending (simulating schema mismatch) ===
+        let pending_conn = Connection::open_in_memory().unwrap();
+        let store = PendingChangesetStore::new(pending_conn).unwrap();
+
+        store
+            .store(&PendingChangeset {
+                sequence: 1,
+                data: changeset,
+                reason: DeferralReason::MissingTable("users".to_string()),
+            })
+            .unwrap();
+
+        assert_eq!(store.count().unwrap(), 1);
+
+        // === Step 3: Create "snapshot" database (same state as source after changeset) ===
+        let snapshot_db = Connection::open_in_memory().unwrap();
+        snapshot_db
+            .execute(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)",
+                [],
+            )
+            .unwrap();
+        snapshot_db
+            .execute("INSERT INTO users VALUES (1, 'Bob', 'bob@test.com')", [])
+            .unwrap();
+
+        // === Step 4: Verify pending changesets against snapshot state ===
+        let pending = store.get_all().unwrap();
+        let result = verify_changeset_chain(&snapshot_db, &pending).unwrap();
+
+        // The changeset (Alice->Bob) should verify because:
+        // - Snapshot has Bob
+        // - Inverted changeset (Bob->Alice) applies successfully
+        // - Re-apply (Alice->Bob) restores state
+        assert_eq!(result.verified.len(), 1, "Changeset should verify");
+        assert!(result.verified.contains(&1));
+        assert!(result.failed.is_empty(), "No failures expected");
+
+        // === Step 5: Clear verified pending ===
+        let cleared = store.clear_up_to(1).unwrap();
+        assert_eq!(cleared, 1);
+        assert_eq!(store.count().unwrap(), 0);
+
+        // Final state should be unchanged
+        let (name, email): (String, String) = snapshot_db
+            .query_row("SELECT name, email FROM users WHERE id = 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(name, "Bob");
+        assert_eq!(email, "bob@test.com");
+    }
+
+    /// E2E test: Multiple changesets pending then verified
+    ///
+    /// Tests that multiple changesets stored as pending can be partially verified
+    /// (documents current limitation where only most recent verifies).
+    #[test]
+    fn test_e2e_multiple_pending_changesets() {
+        // === Source with initial state ===
+        let source = Connection::open_in_memory().unwrap();
+        source
+            .execute(
+                "CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER)",
+                [],
+            )
+            .unwrap();
+        source
+            .execute("INSERT INTO counter VALUES (1, 0)", [])
+            .unwrap();
+
+        // === Generate changeset 1: 0 -> 10 ===
+        let mut session1 = Session::new(&source).unwrap();
+        session1.attach(None::<&str>).unwrap();
+        source
+            .execute("UPDATE counter SET value = 10 WHERE id = 1", [])
+            .unwrap();
+        let mut cs1 = Vec::new();
+        session1.changeset_strm(&mut cs1).unwrap();
+
+        // === Generate changeset 2: 10 -> 20 ===
+        let mut session2 = Session::new(&source).unwrap();
+        session2.attach(None::<&str>).unwrap();
+        source
+            .execute("UPDATE counter SET value = 20 WHERE id = 1", [])
+            .unwrap();
+        let mut cs2 = Vec::new();
+        session2.changeset_strm(&mut cs2).unwrap();
+
+        // === Generate changeset 3: 20 -> 30 ===
+        let mut session3 = Session::new(&source).unwrap();
+        session3.attach(None::<&str>).unwrap();
+        source
+            .execute("UPDATE counter SET value = 30 WHERE id = 1", [])
+            .unwrap();
+        let mut cs3 = Vec::new();
+        session3.changeset_strm(&mut cs3).unwrap();
+
+        // === Store all as pending ===
+        let pending_conn = Connection::open_in_memory().unwrap();
+        let store = PendingChangesetStore::new(pending_conn).unwrap();
+
+        for (seq, data) in [(1, cs1), (2, cs2), (3, cs3)] {
+            store
+                .store(&PendingChangeset {
+                    sequence: seq,
+                    data,
+                    reason: DeferralReason::MissingTable("counter".to_string()),
+                })
+                .unwrap();
+        }
+
+        assert_eq!(store.count().unwrap(), 3);
+
+        // === Snapshot at final state (value = 30) ===
+        let snapshot_db = Connection::open_in_memory().unwrap();
+        snapshot_db
+            .execute(
+                "CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER)",
+                [],
+            )
+            .unwrap();
+        snapshot_db
+            .execute("INSERT INTO counter VALUES (1, 30)", [])
+            .unwrap();
+
+        // === Verify ===
+        let pending = store.get_all().unwrap();
+        let result = verify_changeset_chain(&snapshot_db, &pending).unwrap();
+
+        // Current limitation: Only cs3 (20->30) verifies because its post-state matches snapshot
+        assert!(
+            result.verified.contains(&3),
+            "Most recent changeset should verify"
+        );
+
+        // cs1 and cs2 fail in current implementation
+        assert!(
+            !result.failed.is_empty(),
+            "Earlier changesets fail in current impl (documented limitation)"
+        );
+
+        // State unchanged
+        let value: i32 = snapshot_db
+            .query_row("SELECT value FROM counter WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(value, 30);
+    }
+
+    /// E2E test: INSERT changeset verified after snapshot
+    ///
+    /// Tests that INSERT operations (not just UPDATEs) work with the audit trail.
+    #[test]
+    fn test_e2e_insert_changeset_verification() {
+        // === Source starts empty (schema only) ===
+        let source = Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+
+        // === Generate INSERT changeset ===
+        let mut session = Session::new(&source).unwrap();
+        session.attach(None::<&str>).unwrap();
+        source
+            .execute("INSERT INTO items VALUES (1, 'Widget')", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO items VALUES (2, 'Gadget')", [])
+            .unwrap();
+        let mut changeset = Vec::new();
+        session.changeset_strm(&mut changeset).unwrap();
+
+        // === Store as pending ===
+        let pending_conn = Connection::open_in_memory().unwrap();
+        let store = PendingChangesetStore::new(pending_conn).unwrap();
+        store
+            .store(&PendingChangeset {
+                sequence: 1,
+                data: changeset,
+                reason: DeferralReason::MissingTable("items".to_string()),
+            })
+            .unwrap();
+
+        // === Snapshot has the inserted data ===
+        let snapshot_db = Connection::open_in_memory().unwrap();
+        snapshot_db
+            .execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        snapshot_db
+            .execute("INSERT INTO items VALUES (1, 'Widget')", [])
+            .unwrap();
+        snapshot_db
+            .execute("INSERT INTO items VALUES (2, 'Gadget')", [])
+            .unwrap();
+
+        // === Verify ===
+        let pending = store.get_all().unwrap();
+        let result = verify_changeset_chain(&snapshot_db, &pending).unwrap();
+
+        // INSERT verification works by:
+        // 1. Invert INSERT -> DELETE
+        // 2. Apply DELETE to snapshot (removes rows)
+        // 3. Re-apply INSERT (adds rows back)
+        assert_eq!(result.verified.len(), 1, "INSERT changeset should verify");
+        assert!(result.failed.is_empty());
+
+        // State unchanged
+        let count: i32 = snapshot_db
+            .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    /// E2E test: DELETE changeset verified after snapshot
+    ///
+    /// Tests that DELETE operations work with the audit trail.
+    #[test]
+    fn test_e2e_delete_changeset_verification() {
+        // === Source has data that will be deleted ===
+        let source = Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE logs (id INTEGER PRIMARY KEY, msg TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO logs VALUES (1, 'log1')", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO logs VALUES (2, 'log2')", [])
+            .unwrap();
+
+        // === Generate DELETE changeset ===
+        let mut session = Session::new(&source).unwrap();
+        session.attach(None::<&str>).unwrap();
+        source.execute("DELETE FROM logs WHERE id = 1", []).unwrap();
+        let mut changeset = Vec::new();
+        session.changeset_strm(&mut changeset).unwrap();
+
+        // === Store as pending ===
+        let pending_conn = Connection::open_in_memory().unwrap();
+        let store = PendingChangesetStore::new(pending_conn).unwrap();
+        store
+            .store(&PendingChangeset {
+                sequence: 1,
+                data: changeset,
+                reason: DeferralReason::MissingTable("logs".to_string()),
+            })
+            .unwrap();
+
+        // === Snapshot has state after DELETE (only row 2) ===
+        let snapshot_db = Connection::open_in_memory().unwrap();
+        snapshot_db
+            .execute("CREATE TABLE logs (id INTEGER PRIMARY KEY, msg TEXT)", [])
+            .unwrap();
+        snapshot_db
+            .execute("INSERT INTO logs VALUES (2, 'log2')", [])
+            .unwrap();
+
+        // === Verify ===
+        let pending = store.get_all().unwrap();
+        let result = verify_changeset_chain(&snapshot_db, &pending).unwrap();
+
+        // DELETE verification works by:
+        // 1. Invert DELETE -> INSERT
+        // 2. Apply INSERT to snapshot (adds row 1 back)
+        // 3. Re-apply DELETE (removes row 1 again)
+        assert_eq!(result.verified.len(), 1, "DELETE changeset should verify");
+        assert!(result.failed.is_empty());
+
+        // State unchanged (only row 2)
+        let count: i32 = snapshot_db
+            .query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    /// E2E test: Column mismatch reason tracked correctly
+    #[test]
+    fn test_e2e_column_mismatch_stored_and_retrieved() {
+        let pending_conn = Connection::open_in_memory().unwrap();
+        let store = PendingChangesetStore::new(pending_conn).unwrap();
+
+        // Store with column mismatch reason
+        store
+            .store(&PendingChangeset {
+                sequence: 5,
+                data: vec![1, 2, 3],
+                reason: DeferralReason::ColumnMismatch {
+                    table: "users".to_string(),
+                    expected: 5,
+                    actual: 3,
+                },
+            })
+            .unwrap();
+
+        // Retrieve and verify
+        let pending = store.get_all().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].sequence, 5);
+        // Note: Current JSON parsing is simplified, so we just verify storage works
+    }
+
+    /// E2E test: Empty pending store doesn't affect verification
+    #[test]
+    fn test_e2e_empty_pending_store() {
+        let pending_conn = Connection::open_in_memory().unwrap();
+        let store = PendingChangesetStore::new(pending_conn).unwrap();
+
+        // No pending changesets
+        assert_eq!(store.count().unwrap(), 0);
+        assert!(store.sequence_range().unwrap().is_none());
+
+        // Verification with empty list should succeed
+        let snapshot_db = Connection::open_in_memory().unwrap();
+        snapshot_db
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+
+        let result = verify_changeset_chain(&snapshot_db, &[]).unwrap();
+        assert!(result.verified.is_empty());
+        assert!(result.failed.is_empty());
+    }
+
+    /// E2E test: Inversion failure tracked in audit result
+    #[test]
+    fn test_e2e_invalid_changeset_fails_gracefully() {
+        let snapshot_db = Connection::open_in_memory().unwrap();
+        snapshot_db
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+
+        // Invalid changeset data (not a valid SQLite changeset)
+        let pending = vec![PendingChangeset {
+            sequence: 1,
+            data: vec![0xFF, 0xFE, 0x00, 0x01], // garbage
+            reason: DeferralReason::MissingTable("t".to_string()),
+        }];
+
+        let result = verify_changeset_chain(&snapshot_db, &pending).unwrap();
+
+        // Should fail gracefully, not panic
+        assert!(result.verified.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert!(result.failed[0].reason.contains("invert"));
+    }
+
+    /// E2E test: Range queries work correctly
+    #[test]
+    fn test_e2e_pending_store_range_queries() {
+        let pending_conn = Connection::open_in_memory().unwrap();
+        let store = PendingChangesetStore::new(pending_conn).unwrap();
+
+        // Store changesets at various sequences
+        for seq in [10, 20, 30, 40, 50] {
+            store
+                .store(&PendingChangeset {
+                    sequence: seq,
+                    data: vec![seq as u8],
+                    reason: DeferralReason::MissingTable("t".to_string()),
+                })
+                .unwrap();
+        }
+
+        // Test range query
+        let range = store.get_range(20, 40).unwrap();
+        assert_eq!(range.len(), 3);
+        assert_eq!(range[0].sequence, 20);
+        assert_eq!(range[1].sequence, 30);
+        assert_eq!(range[2].sequence, 40);
+
+        // Test sequence range
+        let (min, max) = store.sequence_range().unwrap().unwrap();
+        assert_eq!(min, 10);
+        assert_eq!(max, 50);
+
+        // Clear up to 30
+        store.clear_up_to(30).unwrap();
+
+        let remaining = store.get_all().unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(remaining[0].sequence, 40);
+        assert_eq!(remaining[1].sequence, 50);
     }
 }
