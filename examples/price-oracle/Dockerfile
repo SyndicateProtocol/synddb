@@ -1,6 +1,9 @@
 # Build stage for Rust components
 FROM rust:1.91-bookworm AS rust-builder
 
+# Install clang for bindgen (needed for rusqlite bundled feature)
+RUN apt-get update && apt-get install -y clang && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy all workspace members needed for cargo to resolve
