@@ -452,12 +452,19 @@ impl SyndDB {
                 }
             }
         } else {
+            warn!(
+                "Recovery storage is DISABLED. Failed batches will be lost. \
+                Set ENABLE_RECOVERY=true for production."
+            );
             None
         };
 
         // Create attestation client unless explicitly disabled (enabled by default for production)
         let attestation_client = if config.disable_attestation {
-            info!("Attestation disabled");
+            warn!(
+                "Attestation is DISABLED. Requests will not include TEE tokens. \
+                Only disable for local development."
+            );
             None
         } else {
             match AttestationClient::new(

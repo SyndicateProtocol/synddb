@@ -15,10 +15,15 @@ use url::Url;
 #[command(author, version, about, long_about = None)]
 pub struct ChainMonitorConfig {
     /// WebSocket RPC URL (can be specified multiple times for failover)
-    #[arg(long, env = "WS_URL", value_parser = parse_url, default_value = "wss://localhost:8546")]
+    ///
+    /// Default is Anvil's local WebSocket endpoint.
+    #[arg(long, env = "WS_URL", value_parser = parse_url, default_value = "ws://localhost:8545")]
     pub ws_urls: Vec<Url>,
 
     /// Contract address to monitor
+    ///
+    /// Default is the zero address (placeholder). You must set this to your
+    /// deployed contract address for chain monitoring to work.
     #[arg(long, env = "CONTRACT_ADDRESS", value_parser = parse_address, default_value = "0x0000000000000000000000000000000000000000")]
     pub contract_address: Address,
 
@@ -71,7 +76,7 @@ impl ChainMonitorConfig {
         let mut config = Self::parse_from([
             "chain-monitor",
             "--ws-urls",
-            "wss://placeholder.invalid",
+            "ws://placeholder.invalid",
             "--contract-address",
             "0x0000000000000000000000000000000000000000",
             "--start-block",

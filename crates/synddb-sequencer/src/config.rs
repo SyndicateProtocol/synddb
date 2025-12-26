@@ -53,12 +53,14 @@ impl Default for BatchConfig {
 #[serde(rename_all = "lowercase")]
 pub enum PublisherType {
     /// No persistence (messages only kept in memory during request)
-    #[default]
+    ///
+    /// WARNING: Data is lost after each request. Only use for testing.
     None,
     /// Local storage for testing with HTTP fetch API (CBOR format with COSE signatures)
     ///
     /// Uses `SQLite` for file persistence if `LOCAL_STORAGE_PATH` is set,
     /// otherwise uses in-memory storage.
+    #[default]
     Local,
     /// Google Cloud Storage (CBOR format with COSE signatures)
     Gcs,
@@ -113,7 +115,7 @@ pub struct SequencerConfig {
     pub verify_attestation: bool,
 
     /// Publisher type for message persistence
-    #[arg(long, env = "PUBLISHER_TYPE", value_enum, default_value = "none")]
+    #[arg(long, env = "PUBLISHER_TYPE", value_enum, default_value = "local")]
     pub publisher_type: PublisherType,
 
     /// Local `SQLite` database path (required when `publisher_type=local`)
