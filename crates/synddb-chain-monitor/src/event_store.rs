@@ -1,6 +1,6 @@
 //! Event persistence and idempotency tracking.
 //!
-//! This module provides SQLite-based storage for tracking processed blockchain
+//! This module provides `SQLite`-based storage for tracking processed blockchain
 //! events to ensure idempotency and enable crash recovery.
 
 use alloy::primitives::B256;
@@ -8,7 +8,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use tracing::{debug, info};
 
-/// SQLite-based event store for tracking processed events.
+/// `SQLite`-based event store for tracking processed events.
 ///
 /// This store provides:
 /// - Idempotency checking (prevent duplicate event processing)

@@ -7,7 +7,7 @@
 //! # Architecture
 //!
 //! ```text
-//! App SQLite (message_log)
+//! App `SQLite` (`message_log`)
 //!     │
 //!     │ SELECT WHERE status = 'pending'
 //!     ▼

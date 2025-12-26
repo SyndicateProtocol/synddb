@@ -10,7 +10,7 @@
 //! - `ChainMonitor`: Main service that orchestrates blockchain listening
 //! - `EthClient`: Robust Ethereum client wrapper with retry logic
 //! - `MessageHandler`: Trait for custom event processing logic
-//! - `EventStore`: SQLite-based persistence for idempotency and crash recovery
+//! - `EventStore`: `SQLite`-based persistence for idempotency and crash recovery
 //!
 //! See the [examples directory](https://github.com/SyndicateProtocol/SyndDB/tree/main/crates/synddb-chain-monitor/examples)
 //! for detailed usage patterns including deposit handling, multi-event routing, and production configurations.

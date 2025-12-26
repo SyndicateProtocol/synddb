@@ -31,7 +31,7 @@
 //!          │
 //!          ▼
 //! ┌─────────────────┐
-//! │  SQLite Tables  │  (inbound_deposits, outbound_withdrawals)
+//! │  `SQLite` Tables │  (`inbound_deposits`, `outbound_withdrawals`)
 //! └─────────────────┘
 //! ```
 

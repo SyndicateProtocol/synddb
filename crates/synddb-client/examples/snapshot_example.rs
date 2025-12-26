@@ -5,7 +5,7 @@
 //! - `create_snapshot()`: Creates a local snapshot (does NOT send to sequencer)
 //! - `publish_snapshot()`: Creates AND sends snapshot to sequencer
 //!
-//! Note: Since v0.2, DDL executed through SyndDB methods automatically triggers
+//! Note: Since v0.2, DDL executed through `SyndDB` methods automatically triggers
 //! snapshot publishing. This ensures validators can always reconstruct schemas.
 //!
 //! **Complexity:** Intermediate

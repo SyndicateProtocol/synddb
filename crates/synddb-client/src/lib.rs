@@ -14,7 +14,7 @@
 //! // Open database with replication enabled
 //! let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
 //!
-//! // Use the connection for normal SQLite operations
+//! // Use the connection for normal `SQLite` operations
 //! synddb.connection().execute(
 //!     "CREATE TABLE IF NOT EXISTS trades (id INTEGER, amount INTEGER)",
 //!     [],
@@ -41,7 +41,7 @@
 //! use rusqlite::Connection;
 //! use synddb_client::SyndDB;
 //!
-//! // Create connection with 'static lifetime (required by SQLite Session Extension)
+//! // Create connection with 'static lifetime (required by `SQLite` Session Extension)
 //! let conn = Box::leak(Box::new(Connection::open("app.db")?));
 //! let synddb = SyndDB::attach(conn, "http://sequencer:8433")?;
 //!

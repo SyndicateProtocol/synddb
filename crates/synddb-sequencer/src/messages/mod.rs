@@ -20,7 +20,7 @@
 //! Client Application
 //!     │
 //!     ▼ writes to message_log table
-//! SQLite Database
+//! `SQLite` Database
 //!     │
 //!     ▼ (read-only)
 //! OutboundMonitor (polls for new messages)

@@ -2,7 +2,7 @@
 //!
 //! This example shows that DDL operations automatically trigger snapshots:
 //! - `execute_ddl()`: Executes DDL and automatically publishes snapshot
-//! - Direct connection DDL still detected via SQLite hooks
+//! - Direct connection DDL still detected via `SQLite` hooks
 //!
 //! **Complexity:** Advanced
 //! **Features:** Schema change detection, DDL-triggered snapshots
