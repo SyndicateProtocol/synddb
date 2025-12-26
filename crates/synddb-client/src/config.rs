@@ -37,7 +37,7 @@ pub struct Config {
     #[serde(with = "humantime_serde")]
     pub snapshot_request_timeout: Duration,
 
-    /// Number of changesets between automatic snapshots (0 to disable)
+    /// Number of changesets between automatic snapshots (must be > 0)
     #[arg(long, env = "SNAPSHOT_INTERVAL", default_value = "100")]
     pub snapshot_interval: u64,
 

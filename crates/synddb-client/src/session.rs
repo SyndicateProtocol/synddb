@@ -185,14 +185,10 @@ impl SessionMonitor {
     ) -> Result<Self> {
         debug!("Initializing SQLite Session Extension");
 
-        if snapshot_interval > 0 {
-            info!(
-                "Automatic snapshots enabled: every {} changesets",
-                snapshot_interval
-            );
-        } else {
-            info!("Automatic snapshots disabled");
-        }
+        info!(
+            "Automatic snapshots enabled: every {} changesets",
+            snapshot_interval
+        );
 
         // Create a session attached to the main database
         let mut session = Session::new(conn).context("Failed to create SQLite session")?;
@@ -308,30 +304,25 @@ impl SessionMonitor {
             );
 
             // Create and send snapshot before processing changesets
+            // snapshot_tx is guaranteed to be Some since snapshot_interval > 0 is enforced
             match Self::create_snapshot_internal(state) {
                 Ok(snapshot) => {
-                    if let Some(ref snapshot_tx) = state.snapshot_tx {
-                        if let Err(e) = snapshot_tx.try_send(snapshot.clone()) {
-                            error!("Failed to send schema-change snapshot: {}", e);
-                        } else {
-                            info!(
-                                "Schema-change snapshot sent: {} bytes at sequence {}",
-                                snapshot.data.len(),
-                                snapshot.sequence
-                            );
-                            // Increment sequence so subsequent changesets have a later sequence
-                            // This ensures validators apply snapshot before changesets
-                            state.sequence += 1;
-                            state.changesets_since_snapshot = 0;
-                        }
+                    let snapshot_tx = state
+                        .snapshot_tx
+                        .as_ref()
+                        .expect("snapshot_tx must be Some when snapshot_interval > 0");
+                    if let Err(e) = snapshot_tx.try_send(snapshot.clone()) {
+                        error!("Failed to send schema-change snapshot: {}", e);
                     } else {
-                        // No snapshot channel configured - log warning
-                        // This happens when snapshot_interval is 0 (disabled)
-                        // The snapshot is still important for schema changes
                         info!(
-                            "Schema changed but no snapshot channel configured. \
-                             Consider enabling snapshot_interval or calling publish_snapshot() manually."
+                            "Schema-change snapshot sent: {} bytes at sequence {}",
+                            snapshot.data.len(),
+                            snapshot.sequence
                         );
+                        // Increment sequence so subsequent changesets have a later sequence
+                        // This ensures validators apply snapshot before changesets
+                        state.sequence += 1;
+                        state.changesets_since_snapshot = 0;
                     }
                 }
                 Err(e) => {
@@ -379,9 +370,8 @@ impl SessionMonitor {
         }
 
         // Check if we should create a regular interval-based snapshot
-        if state.snapshot_interval > 0
-            && state.changesets_since_snapshot >= state.snapshot_interval
-            && state.conn.is_autocommit()
+        // (snapshot_interval > 0 is enforced at startup, so we only check the count)
+        if state.changesets_since_snapshot >= state.snapshot_interval && state.conn.is_autocommit()
         {
             info!(
                 "Snapshot threshold reached ({} changesets), creating automatic snapshot",
@@ -390,13 +380,15 @@ impl SessionMonitor {
 
             match Self::create_snapshot_internal(state) {
                 Ok(snapshot) => {
-                    if let Some(ref snapshot_tx) = state.snapshot_tx {
-                        if let Err(e) = snapshot_tx.try_send(snapshot) {
-                            error!("Failed to send interval snapshot: {}", e);
-                        } else {
-                            info!("Automatic snapshot sent at sequence {}", state.sequence);
-                            state.changesets_since_snapshot = 0;
-                        }
+                    let snapshot_tx = state
+                        .snapshot_tx
+                        .as_ref()
+                        .expect("snapshot_tx must be Some when snapshot_interval > 0");
+                    if let Err(e) = snapshot_tx.try_send(snapshot) {
+                        error!("Failed to send interval snapshot: {}", e);
+                    } else {
+                        info!("Automatic snapshot sent at sequence {}", state.sequence);
+                        state.changesets_since_snapshot = 0;
                     }
                 }
                 Err(e) => {

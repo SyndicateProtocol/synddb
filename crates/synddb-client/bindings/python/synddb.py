@@ -186,7 +186,7 @@ class SyndDB:
         db_path: str,
         sequencer_url: str,
         flush_interval_ms: int = 1000,
-        snapshot_interval: int = 0
+        snapshot_interval: int = 100
     ) -> 'SyndDB':
         """
         Attach SyndDB with custom configuration
@@ -194,8 +194,8 @@ class SyndDB:
         Args:
             db_path: Path to SQLite database file
             sequencer_url: URL of sequencer TEE
-            flush_interval_ms: Milliseconds between automatic publishes (default: 1000)
-            snapshot_interval: Changesets between snapshots (default: 0 = disabled)
+            flush_interval_ms: Milliseconds between automatic publishes (must be > 0, default: 1000)
+            snapshot_interval: Changesets between snapshots (must be > 0, default: 100)
 
         Returns:
             SyndDB instance

@@ -234,7 +234,7 @@ pub struct SyndDB {
     /// Channel to send shutdown signal to changeset sender
     changeset_shutdown_tx: Sender<()>,
     /// Channel to send shutdown signal to snapshot sender
-    snapshot_shutdown_tx: Option<Sender<()>>,
+    snapshot_shutdown_tx: Sender<()>,
     /// Handle to background changeset sender thread
     changeset_handle: Option<thread::JoinHandle<()>>,
     /// Handle to background snapshot sender thread
@@ -392,6 +392,9 @@ impl SyndDB {
         info!("Attaching SyndDB client to SQLite connection");
         info!("Sequencer URL: {}", config.sequencer_url);
 
+        // Validate configuration values
+        Self::validate_config(&config)?;
+
         // Get database path (None for in-memory databases)
         let db_path = conn.path().map(String::from);
 
@@ -414,15 +417,16 @@ impl SyndDB {
         let (changeset_tx, changeset_rx) = bounded(config.buffer_size);
         let (changeset_shutdown_tx, changeset_shutdown_rx) = bounded(1);
 
-        // Create snapshot channel if automatic snapshots are enabled
-        let snapshot_channel = (config.snapshot_interval > 0).then(|| bounded(10)); // Buffer up to 10 snapshots
+        // Create snapshot channel (always enabled since snapshot_interval > 0 is enforced)
+        let snapshot_channel = bounded(10); // Buffer up to 10 snapshots
 
         // Start session monitor
+        let (snapshot_tx, snapshot_rx) = snapshot_channel;
         let monitor = SessionMonitor::new(
             conn,
             changeset_tx,
             config.snapshot_interval,
-            snapshot_channel.as_ref().map(|(tx, _)| tx).cloned(),
+            Some(snapshot_tx),
         )?;
         monitor.start(conn)?;
 
@@ -477,29 +481,25 @@ impl SyndDB {
             }
         };
 
-        // Start snapshot sender thread if enabled
-        let (snapshot_shutdown_tx, snapshot_handle) = snapshot_channel
-            .map(|(_, snapshot_rx)| {
-                let (shutdown_tx, shutdown_rx) = bounded(1);
-                let cfg = config.clone();
-                let rec = recovery.clone();
-                let att = attestation_client.clone();
+        // Start snapshot sender thread (always enabled since snapshot_interval > 0 is enforced)
+        let (snapshot_shutdown_tx, snapshot_shutdown_rx) = bounded(1);
+        let snapshot_handle = {
+            let cfg = config.clone();
+            let rec = recovery.clone();
+            let att = attestation_client.clone();
 
-                let handle = thread::spawn(move || {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("Failed to create tokio runtime for snapshot sender")
-                        .block_on(async {
-                            SnapshotSender::new(cfg, rec, att)
-                                .run(snapshot_rx, shutdown_rx)
-                                .await
-                        });
-                });
-
-                (Some(shutdown_tx), Some(handle))
+            thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create tokio runtime for snapshot sender")
+                    .block_on(async {
+                        SnapshotSender::new(cfg, rec, att)
+                            .run(snapshot_rx, snapshot_shutdown_rx)
+                            .await
+                    });
             })
-            .unwrap_or_default();
+        };
 
         // Start background changeset sender thread
         let changeset_handle = thread::spawn({
@@ -543,7 +543,7 @@ impl SyndDB {
             changeset_shutdown_tx,
             snapshot_shutdown_tx,
             changeset_handle: Some(changeset_handle),
-            snapshot_handle,
+            snapshot_handle: Some(snapshot_handle),
             recovery,
             chain_monitor,
             stats,
@@ -585,6 +585,34 @@ impl SyndDB {
         info!("SyndDB client attached successfully");
 
         Ok(synddb)
+    }
+
+    /// Validate configuration values.
+    ///
+    /// Returns an error if any configuration values are invalid.
+    fn validate_config(config: &Config) -> Result<()> {
+        if config.snapshot_interval == 0 {
+            anyhow::bail!(
+                "snapshot_interval must be greater than 0. \
+                Use a high value (e.g., u64::MAX) if you want infrequent snapshots."
+            );
+        }
+
+        if config.buffer_size == 0 {
+            anyhow::bail!(
+                "buffer_size must be greater than 0. \
+                A zero-capacity channel causes blocking behavior."
+            );
+        }
+
+        if config.flush_interval.is_zero() {
+            anyhow::bail!(
+                "flush_interval must be greater than 0. \
+                Use a small value (e.g., 1ms) if you want fast flushing."
+            );
+        }
+
+        Ok(())
     }
 
     // =========================================================================
@@ -1010,9 +1038,7 @@ impl SyndDB {
 
         // Send shutdown signals
         let _ = self.changeset_shutdown_tx.send(());
-        if let Some(ref tx) = self.snapshot_shutdown_tx {
-            let _ = tx.send(());
-        }
+        let _ = self.snapshot_shutdown_tx.send(());
 
         // Wait for changeset sender thread to finish
         if let Some(handle) = self.changeset_handle.take() {
@@ -1046,9 +1072,7 @@ impl Drop for SyndDB {
 
         // Then send shutdown signals to sender threads
         let _ = self.changeset_shutdown_tx.send(());
-        if let Some(ref tx) = self.snapshot_shutdown_tx {
-            let _ = tx.send(());
-        }
+        let _ = self.snapshot_shutdown_tx.send(());
 
         // Wait for changeset sender thread
         if let Some(handle) = self.changeset_handle.take() {
@@ -2806,35 +2830,53 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_detection_disabled_when_snapshot_interval_zero() {
-        // When snapshot_interval is 0, schema detection still happens but
-        // can't auto-send snapshot (no channel). A warning is logged instead.
+    fn test_config_validation_rejects_zero_snapshot_interval() {
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            snapshot_interval: 0, // Disabled
+            snapshot_interval: 0,
             ..Default::default()
         };
-        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+        let result = SyndDB::attach_with_config(conn, config);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("snapshot_interval must be greater than 0"));
+    }
 
-        // Direct DDL
-        conn.execute("CREATE TABLE test (id INTEGER)", []).unwrap();
+    #[test]
+    fn test_config_validation_rejects_zero_buffer_size() {
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
-        // Insert data
-        conn.execute("INSERT INTO test VALUES (1)", []).unwrap();
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            buffer_size: 0,
+            ..Default::default()
+        };
+        let result = SyndDB::attach_with_config(conn, config);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("buffer_size must be greater than 0"));
+    }
 
-        // Publish - schema change detected but no snapshot channel
-        // In this case, developer should call publish_snapshot() manually
-        synddb.publish_changeset().unwrap();
+    #[test]
+    fn test_config_validation_rejects_zero_flush_interval() {
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
-        // The warning is logged but the changeset is still sent
-        // Developer needs to call publish_snapshot() for recovery
-        synddb.publish_snapshot().unwrap();
-
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 1);
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            flush_interval: std::time::Duration::ZERO,
+            ..Default::default()
+        };
+        let result = SyndDB::attach_with_config(conn, config);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("flush_interval must be greater than 0"));
     }
 }
