@@ -759,8 +759,10 @@ impl SyndDB {
     /// 2. Sends the snapshot to the sequencer via HTTP (synchronous, blocking)
     /// 3. Waits for sequencer acknowledgment before returning
     ///
-    /// This is consistent with [`publish()`] for changesets - both methods send data
+    /// This is consistent with [`publish_changeset()`] - both methods send data
     /// to the sequencer immediately.
+    ///
+    /// [`publish_changeset()`]: Self::publish_changeset
     ///
     /// # When to Use
     ///
@@ -787,7 +789,6 @@ impl SyndDB {
     /// ```
     ///
     /// [`create_snapshot()`]: Self::create_snapshot
-    /// [`publish()`]: Self::publish
     pub fn publish_snapshot(&self) -> Result<Snapshot> {
         let snapshot = self.create_snapshot()?;
 

@@ -125,6 +125,11 @@ jobs:
           cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/Cargo.toml
           cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
 
+      - name: Check documentation builds
+        run: cargo doc --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
   test:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Tests
