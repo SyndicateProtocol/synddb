@@ -1,5 +1,7 @@
-use crate::error::ValidationError;
-use crate::types::{ApplicationConfig, Message};
+use crate::{
+    error::ValidationError,
+    types::{ApplicationConfig, Message},
+};
 
 pub struct AppAuthValidator;
 

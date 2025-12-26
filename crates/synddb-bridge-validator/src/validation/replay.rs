@@ -1,6 +1,4 @@
-use crate::error::ValidationError;
-use crate::state::MessageStore;
-use crate::types::Message;
+use crate::{error::ValidationError, state::MessageStore, types::Message};
 
 pub struct ReplayValidator<'a> {
     message_store: &'a MessageStore,

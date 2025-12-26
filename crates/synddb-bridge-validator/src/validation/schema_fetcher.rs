@@ -1,6 +1,8 @@
-use std::collections::HashMap;
-use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    sync::RwLock,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use sha3::{Digest, Keccak256};
@@ -27,11 +29,7 @@ impl SchemaFetcher {
         }
     }
 
-    pub fn with_gateways(
-        ttl: Duration,
-        ipfs_gateway: String,
-        arweave_gateway: String,
-    ) -> Self {
+    pub fn with_gateways(ttl: Duration, ipfs_gateway: String, arweave_gateway: String) -> Self {
         Self {
             cache: RwLock::new(HashMap::new()),
             ttl,
@@ -146,9 +144,7 @@ mod tests {
     #[test]
     fn test_resolve_ipfs_uri() {
         let fetcher = SchemaFetcher::new(Duration::from_secs(3600));
-        let url = fetcher
-            .resolve_uri("ipfs://QmTest123456")
-            .unwrap();
+        let url = fetcher.resolve_uri("ipfs://QmTest123456").unwrap();
         assert_eq!(url, "https://ipfs.io/ipfs/QmTest123456");
     }
 

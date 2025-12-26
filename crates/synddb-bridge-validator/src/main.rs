@@ -101,6 +101,7 @@ async fn run_primary_validator(config: ValidatorConfig) -> Result<()> {
         signer,
         bridge_client,
         storage,
+        api_key: config.api_key.clone(),
     });
 
     // 8. Start HTTP server

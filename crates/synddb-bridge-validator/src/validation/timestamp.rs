@@ -1,7 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::error::ValidationError;
-use crate::types::Message;
+use crate::{error::ValidationError, types::Message};
 
 pub struct TimestampValidator {
     max_clock_drift: Duration,

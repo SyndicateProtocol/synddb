@@ -1,10 +1,11 @@
-use alloy::primitives::{Address, U256};
-use alloy::sol;
+use alloy::{
+    primitives::{Address, U256},
+    sol,
+};
 use async_trait::async_trait;
 
 use super::{Invariant, InvariantContext};
-use crate::error::ValidationError;
-use crate::types::Message;
+use crate::{error::ValidationError, types::Message};
 
 sol! {
     #[sol(rpc)]
@@ -51,14 +52,12 @@ impl Invariant for SupplyCapInvariant {
 
         // Query current total supply
         let contract = IERC20::new(self.token_address, provider);
-        let current_supply = contract
-            .totalSupply()
-            .call()
-            .await
-            .map_err(|e| ValidationError::InvariantViolated {
+        let current_supply = contract.totalSupply().call().await.map_err(|e| {
+            ValidationError::InvariantViolated {
                 invariant: self.name().to_string(),
                 message: format!("Failed to query totalSupply: {}", e),
-            })?;
+            }
+        })?;
 
         // Check if mint would exceed cap
         let new_supply = current_supply.saturating_add(mint_amount);
@@ -112,14 +111,12 @@ impl Invariant for BalanceCheckInvariant {
 
         // Query sender's balance
         let contract = IERC20::new(self.token_address, provider);
-        let balance = contract
-            .balanceOf(sender)
-            .call()
-            .await
-            .map_err(|e| ValidationError::InvariantViolated {
+        let balance = contract.balanceOf(sender).call().await.map_err(|e| {
+            ValidationError::InvariantViolated {
                 invariant: self.name().to_string(),
                 message: format!("Failed to query balanceOf: {}", e),
-            })?;
+            }
+        })?;
 
         // Check if sender has sufficient balance
         if balance < amount {
@@ -147,12 +144,13 @@ fn extract_mint_amount(message: &Message) -> Result<U256, ValidationError> {
     }
 
     // Extract amount from bytes 36-68 (after selector + address)
-    let amount_bytes: [u8; 32] = message.calldata[36..68]
-        .try_into()
-        .map_err(|_| ValidationError::InvariantViolated {
-            invariant: "supply_cap".to_string(),
-            message: "Failed to extract amount from calldata".to_string(),
-        })?;
+    let amount_bytes: [u8; 32] =
+        message.calldata[36..68]
+            .try_into()
+            .map_err(|_| ValidationError::InvariantViolated {
+                invariant: "supply_cap".to_string(),
+                message: "Failed to extract amount from calldata".to_string(),
+            })?;
 
     Ok(U256::from_be_bytes(amount_bytes))
 }
@@ -180,21 +178,22 @@ fn extract_transfer_details(message: &Message) -> Result<(Address, U256), Valida
     // For transferFrom(address from, address to, uint256 amount)
     if message.message_type.starts_with("transferFrom") && message.calldata.len() >= 100 {
         // Extract from address (bytes 4-36)
-        let from_bytes: [u8; 32] = message.calldata[4..36]
-            .try_into()
-            .map_err(|_| ValidationError::InvariantViolated {
-                invariant: "balance_check".to_string(),
-                message: "Failed to extract from address".to_string(),
-            })?;
+        let from_bytes: [u8; 32] =
+            message.calldata[4..36]
+                .try_into()
+                .map_err(|_| ValidationError::InvariantViolated {
+                    invariant: "balance_check".to_string(),
+                    message: "Failed to extract from address".to_string(),
+                })?;
         let from = Address::from_slice(&from_bytes[12..32]);
 
         // Extract amount (bytes 68-100)
-        let amount_bytes: [u8; 32] = message.calldata[68..100]
-            .try_into()
-            .map_err(|_| ValidationError::InvariantViolated {
+        let amount_bytes: [u8; 32] = message.calldata[68..100].try_into().map_err(|_| {
+            ValidationError::InvariantViolated {
                 invariant: "balance_check".to_string(),
                 message: "Failed to extract amount".to_string(),
-            })?;
+            }
+        })?;
 
         return Ok((from, U256::from_be_bytes(amount_bytes)));
     }
@@ -217,7 +216,10 @@ mod tests {
         let mut calldata = vec![0x40, 0xc1, 0x0f, 0x19];
         // Recipient address (32 bytes, padded)
         calldata.extend_from_slice(&[0u8; 12]);
-        calldata.extend_from_slice(&[0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78]);
+        calldata.extend_from_slice(&[
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc,
+            0xde, 0xf0, 0x12, 0x34, 0x56, 0x78,
+        ]);
         // Amount (32 bytes)
         calldata.extend_from_slice(&amount.to_be_bytes::<32>());
 

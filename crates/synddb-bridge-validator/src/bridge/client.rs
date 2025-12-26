@@ -1,7 +1,9 @@
-use alloy::network::EthereumWallet;
-use alloy::primitives::{Address, Bytes, FixedBytes, U256};
-use alloy::providers::ProviderBuilder;
-use alloy::signers::local::PrivateKeySigner;
+use alloy::{
+    network::EthereumWallet,
+    primitives::{Address, Bytes, FixedBytes, U256},
+    providers::ProviderBuilder,
+    signers::local::PrivateKeySigner,
+};
 use anyhow::{Context, Result};
 
 use super::types::IMessageBridge;
@@ -29,21 +31,15 @@ impl BridgeClient {
         self.signer.address()
     }
 
-    async fn read_provider(
-        &self,
-    ) -> Result<impl alloy::providers::Provider + Clone> {
+    async fn read_provider(&self) -> Result<impl alloy::providers::Provider + Clone> {
         let url: reqwest::Url = self.rpc_url.parse().context("Invalid RPC URL")?;
         Ok(ProviderBuilder::new().connect_http(url))
     }
 
-    async fn write_provider(
-        &self,
-    ) -> Result<impl alloy::providers::Provider + Clone> {
+    async fn write_provider(&self) -> Result<impl alloy::providers::Provider + Clone> {
         let url: reqwest::Url = self.rpc_url.parse().context("Invalid RPC URL")?;
         let wallet = EthereumWallet::from(self.signer.clone());
-        Ok(ProviderBuilder::new()
-            .wallet(wallet)
-            .connect_http(url))
+        Ok(ProviderBuilder::new().wallet(wallet).connect_http(url))
     }
 
     pub async fn get_last_nonce(&self, domain: [u8; 32]) -> Result<u64> {
@@ -276,7 +272,11 @@ impl BridgeClient {
         Ok(count.try_into().unwrap_or(u64::MAX))
     }
 
-    pub async fn has_validator_signed(&self, message_id: [u8; 32], validator: Address) -> Result<bool> {
+    pub async fn has_validator_signed(
+        &self,
+        message_id: [u8; 32],
+        validator: Address,
+    ) -> Result<bool> {
         let provider = self.read_provider().await?;
         let contract = IMessageBridge::new(self.bridge_address, provider);
 

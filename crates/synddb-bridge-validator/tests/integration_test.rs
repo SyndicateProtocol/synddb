@@ -10,19 +10,26 @@
 //! cargo test -p synddb-bridge-validator --test integration_test -- --ignored
 //! ```
 
-use alloy::primitives::Address;
-use alloy::providers::{Provider, ProviderBuilder};
+use alloy::{
+    primitives::Address,
+    providers::{Provider, ProviderBuilder},
+};
 use sha3::{Digest, Keccak256};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-use synddb_bridge_validator::signing::MessageSigner;
-use synddb_bridge_validator::state::{MessageStore, NonceStore};
-use synddb_bridge_validator::types::Message;
-use synddb_bridge_validator::validation::ValidationPipeline;
+use synddb_bridge_validator::{
+    signing::MessageSigner,
+    state::{MessageStore, NonceStore},
+    types::Message,
+    validation::ValidationPipeline,
+};
 
 const ANVIL_URL: &str = "http://127.0.0.1:8545";
-const ANVIL_PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const ANVIL_PRIVATE_KEY: &str =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const ANVIL_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 
 #[tokio::test]
@@ -31,8 +38,9 @@ async fn test_message_id_computation_matches_contract() {
     // This test verifies our Rust message ID computation matches the Solidity implementation
 
     let message_type = "setValue(uint256)";
-    let calldata = hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002a")
-        .unwrap();
+    let calldata =
+        hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002a")
+            .unwrap();
     let metadata_hash = [0u8; 32];
     let nonce = 1u64;
     let timestamp = 1735200000u64;
@@ -74,7 +82,9 @@ async fn test_message_id_computation_matches_contract() {
 async fn test_eip712_signing_produces_valid_signature() {
     // Create a signer with the same parameters as would be used with the contract
     let chain_id = 31337u64; // Anvil default chain ID
-    let bridge_address: Address = "0x5FbDB2315678afecb367f032d93F642f64180aa3".parse().unwrap();
+    let bridge_address: Address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+        .parse()
+        .unwrap();
 
     let signer = MessageSigner::new(ANVIL_PRIVATE_KEY, chain_id, bridge_address)
         .expect("Failed to create signer");
@@ -150,8 +160,10 @@ async fn test_validation_pipeline_with_stores() {
     message.id = message.compute_id();
 
     // Create validation context
-    use synddb_bridge_validator::types::{ApplicationConfig, MessageTypeConfig};
-    use synddb_bridge_validator::validation::ValidationContext;
+    use synddb_bridge_validator::{
+        types::{ApplicationConfig, MessageTypeConfig},
+        validation::ValidationContext,
+    };
 
     let ctx = ValidationContext {
         app_config: ApplicationConfig {

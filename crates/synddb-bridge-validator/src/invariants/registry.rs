@@ -1,8 +1,7 @@
 use alloy::providers::ProviderBuilder;
 use async_trait::async_trait;
 
-use crate::error::ValidationError;
-use crate::types::Message;
+use crate::{error::ValidationError, types::Message};
 
 pub struct InvariantContext {
     rpc_url: Option<String>,
@@ -40,11 +39,8 @@ impl Default for InvariantContext {
 pub trait Invariant: Send + Sync {
     fn name(&self) -> &str;
 
-    async fn check(
-        &self,
-        message: &Message,
-        ctx: &InvariantContext,
-    ) -> Result<(), ValidationError>;
+    async fn check(&self, message: &Message, ctx: &InvariantContext)
+        -> Result<(), ValidationError>;
 }
 
 pub struct InvariantRegistry {

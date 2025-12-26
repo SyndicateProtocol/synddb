@@ -1,6 +1,7 @@
-use alloy::primitives::Address;
-use alloy::signers::local::PrivateKeySigner;
-use alloy::signers::Signer;
+use alloy::{
+    primitives::Address,
+    signers::{local::PrivateKeySigner, Signer},
+};
 use anyhow::{Context, Result};
 
 use crate::types::Message;

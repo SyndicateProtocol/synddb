@@ -11,23 +11,30 @@
 //! cargo test -p synddb-bridge-validator --test e2e_test -- --ignored
 //! ```
 
-use alloy::primitives::{Address, FixedBytes};
-use alloy::providers::ProviderBuilder;
-use alloy::sol;
+use alloy::{
+    primitives::{Address, FixedBytes},
+    providers::ProviderBuilder,
+    sol,
+};
 use sha3::{Digest, Keccak256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use synddb_bridge_validator::bridge::BridgeClient;
-use synddb_bridge_validator::signing::{compute_domain_separator, compute_message_id, MessageSigner};
-use synddb_bridge_validator::types::Message;
+use synddb_bridge_validator::{
+    bridge::BridgeClient,
+    signing::{compute_domain_separator, compute_message_id, MessageSigner},
+    types::Message,
+};
 
 const ANVIL_URL: &str = "http://127.0.0.1:8545";
 const ANVIL_CHAIN_ID: u64 = 31337;
 
 // Anvil default accounts (deterministic)
-const ADMIN_PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-const VALIDATOR_PRIVATE_KEY: &str = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
-const WITNESS_PRIVATE_KEY: &str = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
+const ADMIN_PRIVATE_KEY: &str =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const VALIDATOR_PRIVATE_KEY: &str =
+    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+const WITNESS_PRIVATE_KEY: &str =
+    "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
 
 sol! {
     #[sol(rpc)]
@@ -72,8 +79,9 @@ async fn test_e2e_message_id_computation_matches_contract() {
 
     // Test parameters
     let message_type = "setValue(uint256)";
-    let calldata = hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002a")
-        .unwrap();
+    let calldata =
+        hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002a")
+            .unwrap();
     let metadata_hash = [0u8; 32];
     let nonce = 1u64;
     let timestamp = 1735200000u64;
@@ -106,7 +114,8 @@ async fn test_e2e_message_id_computation_matches_contract() {
     let contract_message_id: [u8; 32] = contract_result.into();
 
     assert_eq!(
-        rust_message_id, contract_message_id,
+        rust_message_id,
+        contract_message_id,
         "Message ID computation mismatch:\nRust: {}\nContract: {}",
         hex::encode(rust_message_id),
         hex::encode(contract_message_id)
@@ -139,7 +148,8 @@ async fn test_e2e_domain_separator_matches_contract() {
     let contract_separator_bytes: [u8; 32] = contract_separator.into();
 
     assert_eq!(
-        rust_separator, contract_separator_bytes,
+        rust_separator,
+        contract_separator_bytes,
         "Domain separator mismatch:\nRust: {}\nContract: {}",
         hex::encode(rust_separator),
         hex::encode(contract_separator_bytes)
@@ -161,8 +171,9 @@ async fn test_e2e_signature_verification() {
 
     // Create a test message
     let domain: [u8; 32] = Keccak256::digest(b"test-app").into();
-    let calldata = hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002a")
-        .unwrap();
+    let calldata =
+        hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002a")
+            .unwrap();
     let metadata_hash = Keccak256::digest(b"{}").into();
     let nonce = 1u64;
     let timestamp = SystemTime::now()
@@ -198,7 +209,11 @@ async fn test_e2e_signature_verification() {
         .expect("Failed to sign message");
 
     // Verify signature structure
-    assert_eq!(signature.len(), 65, "Signature should be 65 bytes (r + s + v)");
+    assert_eq!(
+        signature.len(),
+        65,
+        "Signature should be 65 bytes (r + s + v)"
+    );
 
     // The v value should be 27 or 28 (or 0/1 in EIP-155)
     let v = signature[64];
@@ -229,7 +244,10 @@ async fn test_e2e_bridge_client_queries() {
         .get_domain_separator()
         .await
         .expect("Failed to get domain separator");
-    assert_ne!(domain_separator, [0u8; 32], "Domain separator should not be zero");
+    assert_ne!(
+        domain_separator, [0u8; 32],
+        "Domain separator should not be zero"
+    );
 
     // Test signature threshold query
     let threshold = client
@@ -279,8 +297,9 @@ async fn test_e2e_full_message_submission_flow() {
     // Create message
     let message_type = "setValue(uint256)";
     // Encode setValue(42) - selector 0x55241077 + uint256(42)
-    let calldata = hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002a")
-        .unwrap();
+    let calldata =
+        hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002a")
+            .unwrap();
     let metadata = serde_json::json!({"test": true});
     let metadata_bytes = serde_json::to_vec(&metadata).unwrap();
     let metadata_hash: [u8; 32] = Keccak256::digest(&metadata_bytes).into();
@@ -337,7 +356,11 @@ async fn test_e2e_full_message_submission_flow() {
         .get_message_stage(message_id)
         .await
         .expect("Failed to get message stage");
-    assert!(stage >= 1, "Message should be initialized, got stage {}", stage);
+    assert!(
+        stage >= 1,
+        "Message should be initialized, got stage {}",
+        stage
+    );
     println!("  Message stage: {}", stage);
 
     // Verify signature count
@@ -345,7 +368,10 @@ async fn test_e2e_full_message_submission_flow() {
         .get_signature_count(message_id)
         .await
         .expect("Failed to get signature count");
-    assert_eq!(sig_count, 1, "Should have 1 signature from primary validator");
+    assert_eq!(
+        sig_count, 1,
+        "Should have 1 signature from primary validator"
+    );
     println!("  Signature count: {}", sig_count);
 
     // Verify validator signed
@@ -388,8 +414,9 @@ async fn test_e2e_witness_signing() {
 
     // Create message
     let message_type = "setValue(uint256)";
-    let calldata = hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002b")
-        .unwrap(); // setValue(43)
+    let calldata =
+        hex::decode("55241077000000000000000000000000000000000000000000000000000000000000002b")
+            .unwrap(); // setValue(43)
     let metadata = serde_json::json!({"witness_test": true});
     let metadata_bytes = serde_json::to_vec(&metadata).unwrap();
     let metadata_hash: [u8; 32] = Keccak256::digest(&metadata_bytes).into();
@@ -482,10 +509,12 @@ async fn test_e2e_witness_signing() {
 
     // Stage should be 2 (Signed) if threshold is met
     if sig_count >= threshold {
-        assert!(stage >= 2, "Message should be Signed stage when threshold met");
+        assert!(
+            stage >= 2,
+            "Message should be Signed stage when threshold met"
+        );
         println!("✓ Witness signing flow works - threshold met!");
     } else {
         println!("✓ Witness signing flow works - waiting for more signatures");
     }
 }
-

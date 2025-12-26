@@ -144,15 +144,22 @@ mod tests {
     #[test]
     fn test_resolve_https_url() {
         let fetcher = StorageFetcher::new();
-        let url = fetcher.resolve_url("https://example.com/message.json").unwrap();
+        let url = fetcher
+            .resolve_url("https://example.com/message.json")
+            .unwrap();
         assert_eq!(url, "https://example.com/message.json");
     }
 
     #[test]
     fn test_resolve_gcs_url() {
         let fetcher = StorageFetcher::new();
-        let url = fetcher.resolve_url("gcs://my-bucket/path/to/message.json").unwrap();
-        assert_eq!(url, "https://storage.googleapis.com/my-bucket/path/to/message.json");
+        let url = fetcher
+            .resolve_url("gcs://my-bucket/path/to/message.json")
+            .unwrap();
+        assert_eq!(
+            url,
+            "https://storage.googleapis.com/my-bucket/path/to/message.json"
+        );
     }
 
     #[test]

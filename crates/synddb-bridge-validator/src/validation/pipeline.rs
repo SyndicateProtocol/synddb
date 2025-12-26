@@ -1,11 +1,12 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use crate::bridge::BridgeClient;
-use crate::error::ValidationError;
-use crate::invariants::{InvariantContext, InvariantRegistry};
-use crate::state::{MessageStore, NonceStore};
-use crate::types::{ApplicationConfig, Message, MessageTypeConfig};
+use crate::{
+    bridge::BridgeClient,
+    error::ValidationError,
+    invariants::{InvariantContext, InvariantRegistry},
+    state::{MessageStore, NonceStore},
+    types::{ApplicationConfig, Message, MessageTypeConfig},
+};
 
 use super::{
     AppAuthValidator, CalldataValidator, CustomRulesValidator, MessageTypeValidator,

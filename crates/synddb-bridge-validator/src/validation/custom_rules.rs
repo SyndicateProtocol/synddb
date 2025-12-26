@@ -1,9 +1,10 @@
-use std::collections::HashMap;
-use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    sync::RwLock,
+    time::{Duration, Instant},
+};
 
-use crate::error::ValidationError;
-use crate::types::Message;
+use crate::{error::ValidationError, types::Message};
 
 #[derive(Debug, Clone)]
 pub struct RateLimitConfig {
@@ -52,7 +53,8 @@ impl SlidingWindow {
 
     fn count(&mut self) -> usize {
         let now = Instant::now();
-        self.timestamps.retain(|t| now.duration_since(*t) < self.duration);
+        self.timestamps
+            .retain(|t| now.duration_since(*t) < self.duration);
         self.timestamps.len()
     }
 
@@ -76,7 +78,8 @@ impl ValueWindow {
 
     fn total(&mut self) -> u128 {
         let now = Instant::now();
-        self.entries.retain(|(t, _)| now.duration_since(*t) < self.duration);
+        self.entries
+            .retain(|(t, _)| now.duration_since(*t) < self.duration);
         self.entries.iter().map(|(_, v)| v).sum()
     }
 

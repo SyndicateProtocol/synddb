@@ -304,7 +304,7 @@ GET /schemas/{messageType}
 ```solidity
 keccak256(abi.encode(
     keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-    keccak256("MessageBridge"),
+    keccak256("SyndBridge"),
     keccak256("1"),
     chainId,
     bridgeAddress
@@ -376,33 +376,33 @@ pub struct ValidatorConfig {
 ## 14. Implementation Checklist
 
 ### Primary Validator
-- [ ] HTTP server with mTLS/API key auth
-- [ ] Validation pipeline (all 9 stages)
-- [ ] Schema fetching and caching
-- [ ] Invariant checking (on-chain, oracle, app logic)
-- [ ] Nonce tracking with Bridge sync
-- [ ] EIP-712 signing
-- [ ] Storage publication (Arweave, IPFS, GCS)
-- [ ] Bridge interaction (initializeAndSign, rejectProposal)
-- [ ] Health/status endpoints
+- [x] HTTP server with mTLS/API key auth
+- [x] Validation pipeline (all 9 stages)
+- [x] Schema fetching and caching
+- [x] Invariant checking (on-chain, oracle, app logic)
+- [x] Nonce tracking with Bridge sync
+- [x] EIP-712 signing
+- [x] Storage publication (GCS, Memory) - Arweave/IPFS publishers pending
+- [x] Bridge interaction (initializeAndSign, rejectProposal)
+- [x] Health/status endpoints
 
 ### Witness Validator
-- [ ] Event monitoring (MessageInitialized)
-- [ ] Storage fetching with fallback
+- [x] Event monitoring (MessageInitialized)
+- [x] Storage fetching with fallback (IPFS, Arweave, GCS, HTTP)
 - [ ] Metadata re-derivation
 - [ ] Verification API client
-- [ ] Independent invariant checking
-- [ ] Bridge interaction (signMessage, rejectMessage)
+- [x] Independent invariant checking
+- [x] Bridge interaction (signMessage, rejectMessage)
 
 ### Shared Components
-- [ ] Configuration loading
+- [x] Configuration loading
 - [ ] TEE key management
 - [ ] Oracle client (Chainlink, Pyth)
-- [ ] RPC client with retry
-- [ ] Error types and responses
-- [ ] Logging (structured, JSON)
+- [x] RPC client with retry
+- [x] Error types and responses
+- [x] Logging (structured, JSON)
 
 ### Testing
-- [ ] Unit tests for validation pipeline
+- [x] Unit tests for validation pipeline
 - [ ] Integration tests with mock Bridge
-- [ ] End-to-end tests with testnet
+- [x] End-to-end tests with testnet

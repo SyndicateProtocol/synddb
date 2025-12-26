@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use google_cloud_storage::client::{Client, ClientConfig};
-use google_cloud_storage::http::objects::upload::{Media, UploadObjectRequest, UploadType};
+use google_cloud_storage::{
+    client::{Client, ClientConfig},
+    http::objects::upload::{Media, UploadObjectRequest, UploadType},
+};
 
 use crate::storage::{StoragePublisher, StorageRecord};
 

@@ -37,7 +37,7 @@ impl NonceStore {
             )
             .ok();
 
-        Ok(nonce.map(|n| n as u64 + 1).unwrap_or(1))
+        Ok(nonce.map_or(1, |n| n as u64 + 1))
     }
 
     pub fn consume_nonce(&self, domain: &[u8; 32], nonce: u64) -> Result<()> {

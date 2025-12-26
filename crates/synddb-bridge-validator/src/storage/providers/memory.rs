@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Mutex};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -41,7 +40,10 @@ impl StoragePublisher for MemoryPublisher {
         };
 
         let key = format!("{}", id);
-        self.records.lock().unwrap().insert(key.clone(), record.clone());
+        self.records
+            .lock()
+            .unwrap()
+            .insert(key.clone(), record.clone());
 
         Ok(format!("memory://{}", key))
     }

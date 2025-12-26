@@ -131,7 +131,11 @@ pub struct MessageResponse {
     pub status: MessageStatus,
     #[serde(with = "hex_bytes_32")]
     pub message_id: [u8; 32],
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "hex_bytes_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "hex_bytes_opt"
+    )]
     pub signature: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_ref: Option<String>,
@@ -172,7 +176,7 @@ mod hex_bytes {
     }
 }
 
-mod hex_bytes_32 {
+pub mod hex_bytes_32 {
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
@@ -230,13 +234,22 @@ mod tests {
     #[test]
     fn test_compute_message_id() {
         let message_type = "setValue(uint256)";
-        let calldata = hex::decode("60fe47b1000000000000000000000000000000000000000000000000000000000000002a").unwrap();
+        let calldata =
+            hex::decode("60fe47b1000000000000000000000000000000000000000000000000000000000000002a")
+                .unwrap();
         let metadata_hash = [0u8; 32];
         let nonce = 1u64;
         let timestamp = 1234567890u64;
         let domain = [0u8; 32];
 
-        let id = compute_message_id(message_type, &calldata, &metadata_hash, nonce, timestamp, &domain);
+        let id = compute_message_id(
+            message_type,
+            &calldata,
+            &metadata_hash,
+            nonce,
+            timestamp,
+            &domain,
+        );
 
         assert_eq!(id.len(), 32);
         assert_ne!(id, [0u8; 32]);
@@ -263,7 +276,14 @@ mod tests {
         let timestamp = 1234567890u64;
         let domain = [0u8; 32];
 
-        let id = compute_message_id(&message_type, &calldata, &metadata_hash, nonce, timestamp, &domain);
+        let id = compute_message_id(
+            &message_type,
+            &calldata,
+            &metadata_hash,
+            nonce,
+            timestamp,
+            &domain,
+        );
 
         let message = Message {
             id,

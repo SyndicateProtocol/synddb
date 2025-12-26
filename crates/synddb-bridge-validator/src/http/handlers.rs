@@ -4,19 +4,26 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use crate::bridge::BridgeClient;
-use crate::config::ValidatorMode;
-use crate::signing::MessageSigner;
-use crate::storage::{StoragePublisher, StorageRecord};
-use crate::storage::record::{MessageRecord, PublicationRecord, SignatureRecord};
-use crate::types::{
-    compute_message_id, compute_metadata_hash, ErrorResponse, Message, MessageRequest,
-    MessageResponse, MessageStatus,
+use sha3::Digest;
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
-use crate::validation::ValidationPipeline;
+
+use crate::{
+    bridge::BridgeClient,
+    config::ValidatorMode,
+    signing::MessageSigner,
+    storage::{
+        record::{MessageRecord, PublicationRecord, SignatureRecord},
+        StoragePublisher, StorageRecord,
+    },
+    types::{
+        compute_message_id, compute_metadata_hash, ErrorResponse, Message, MessageRequest,
+        MessageResponse, MessageStatus,
+    },
+    validation::ValidationPipeline,
+};
 
 pub struct AppState {
     pub mode: ValidatorMode,
@@ -24,6 +31,7 @@ pub struct AppState {
     pub signer: Arc<MessageSigner>,
     pub bridge_client: Arc<BridgeClient>,
     pub storage: Arc<dyn StoragePublisher>,
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -245,9 +253,19 @@ pub async fn get_message_status(
 ) -> Result<Json<MessageStatusResponse>, (StatusCode, String)> {
     // Parse message ID from hex
     let id_bytes: [u8; 32] = hex::decode(message_id.trim_start_matches("0x"))
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid message ID: {}", e)))?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid message ID: {}", e),
+            )
+        })?
         .try_into()
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Message ID must be 32 bytes".to_string()))?;
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Message ID must be 32 bytes".to_string(),
+            )
+        })?;
 
     // Query bridge for message stage
     let stage = state
@@ -371,4 +389,182 @@ pub async fn get_schema(
         enabled: config.enabled,
         target: format!("{}", config.target),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RejectProposalRequest {
+    pub message_type: String,
+    #[serde(with = "crate::types::hex_bytes_32")]
+    pub domain: [u8; 32],
+    pub nonce: u64,
+    pub reason: RejectionReason,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RejectMessageRequest {
+    #[serde(with = "crate::types::hex_bytes_32")]
+    pub message_id: [u8; 32],
+    pub reason: RejectionReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RejectionReason {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RejectionResponse {
+    pub success: bool,
+    pub message_id: String,
+    pub reason_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Reject a message proposal before initialization (Primary Validator only)
+/// This consumes the nonce, preventing the message from ever being initialized.
+pub async fn reject_proposal(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<RejectProposalRequest>,
+) -> Result<Json<RejectionResponse>, (StatusCode, Json<RejectionResponse>)> {
+    // Compute message ID from the proposal details
+    let metadata_hash = [0u8; 32]; // Rejection doesn't require metadata
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let message_id = compute_message_id(
+        &request.message_type,
+        &[], // No calldata for rejection
+        &metadata_hash,
+        request.nonce,
+        timestamp,
+        &request.domain,
+    );
+
+    // Compute reason hash
+    let reason_json = serde_json::to_vec(&request.reason).map_err(|e| {
+        rejection_error_response(
+            StatusCode::BAD_REQUEST,
+            &message_id,
+            &format!("Failed to serialize reason: {}", e),
+        )
+    })?;
+    let reason_hash: [u8; 32] = sha3::Keccak256::digest(&reason_json).into();
+
+    // Create a minimal message for the rejection
+    let message = Message {
+        id: message_id,
+        message_type: request.message_type.clone(),
+        calldata: vec![],
+        metadata: serde_json::json!({}),
+        metadata_hash,
+        nonce: request.nonce,
+        timestamp,
+        domain: request.domain,
+        value: None,
+    };
+
+    // Publish rejection reason to storage
+    let reason_ref = format!("rejection:{}", hex::encode(reason_hash));
+
+    // Call rejectProposal on bridge
+    state
+        .bridge_client
+        .reject_proposal(&message, reason_hash, &reason_ref)
+        .await
+        .map_err(|e| {
+            rejection_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &message_id,
+                &format!("Failed to reject proposal on bridge: {}", e),
+            )
+        })?;
+
+    // Consume nonce locally
+    let _ = state.pipeline.consume_nonce(&request.domain, request.nonce);
+
+    tracing::info!(
+        message_id = %hex::encode(message_id),
+        reason_code = %request.reason.code,
+        "Proposal rejected"
+    );
+
+    Ok(Json(RejectionResponse {
+        success: true,
+        message_id: format!("0x{}", hex::encode(message_id)),
+        reason_hash: format!("0x{}", hex::encode(reason_hash)),
+        error: None,
+    }))
+}
+
+/// Reject an initialized message (Witness Validator action)
+/// This records the rejection but does not prevent execution if threshold is met.
+pub async fn reject_message(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<RejectMessageRequest>,
+) -> Result<Json<RejectionResponse>, (StatusCode, Json<RejectionResponse>)> {
+    // Compute reason hash
+    let reason_json = serde_json::to_vec(&request.reason).map_err(|e| {
+        rejection_error_response(
+            StatusCode::BAD_REQUEST,
+            &request.message_id,
+            &format!("Failed to serialize reason: {}", e),
+        )
+    })?;
+    let reason_hash: [u8; 32] = sha3::Keccak256::digest(&reason_json).into();
+
+    let reason_ref = format!("rejection:{}", hex::encode(reason_hash));
+
+    // Call rejectMessage on bridge
+    state
+        .bridge_client
+        .reject_message(request.message_id, reason_hash, &reason_ref)
+        .await
+        .map_err(|e| {
+            rejection_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &request.message_id,
+                &format!("Failed to reject message on bridge: {}", e),
+            )
+        })?;
+
+    tracing::info!(
+        message_id = %hex::encode(request.message_id),
+        reason_code = %request.reason.code,
+        "Message rejected"
+    );
+
+    Ok(Json(RejectionResponse {
+        success: true,
+        message_id: format!("0x{}", hex::encode(request.message_id)),
+        reason_hash: format!("0x{}", hex::encode(reason_hash)),
+        error: None,
+    }))
+}
+
+fn rejection_error_response(
+    status: StatusCode,
+    message_id: &[u8; 32],
+    error_message: &str,
+) -> (StatusCode, Json<RejectionResponse>) {
+    tracing::warn!(
+        message_id = %hex::encode(message_id),
+        error = error_message,
+        "Rejection failed"
+    );
+
+    (
+        status,
+        Json(RejectionResponse {
+            success: false,
+            message_id: format!("0x{}", hex::encode(message_id)),
+            reason_hash: String::new(),
+            error: Some(error_message.to_string()),
+        }),
+    )
 }

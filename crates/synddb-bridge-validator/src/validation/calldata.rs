@@ -1,5 +1,4 @@
-use crate::error::ValidationError;
-use crate::types::Message;
+use crate::{error::ValidationError, types::Message};
 use sha3::{Digest, Keccak256};
 
 pub struct CalldataValidator;

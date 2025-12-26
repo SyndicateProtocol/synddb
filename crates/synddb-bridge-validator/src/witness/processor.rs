@@ -8,11 +8,13 @@ use anyhow::{Context, Result};
 use sha3::{Digest, Keccak256};
 use tracing::{debug, info};
 
-use crate::bridge::BridgeClient;
-use crate::signing::{compute_message_id, MessageSigner};
-use crate::storage::StorageFetcher;
-use crate::types::Message;
-use crate::validation::ValidationPipeline;
+use crate::{
+    bridge::BridgeClient,
+    signing::{compute_message_id, MessageSigner},
+    storage::StorageFetcher,
+    types::Message,
+    validation::ValidationPipeline,
+};
 
 /// Processes a single message: fetch, validate, sign
 pub struct MessageProcessor {

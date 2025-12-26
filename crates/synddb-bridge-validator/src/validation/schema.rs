@@ -1,12 +1,13 @@
-use std::collections::HashMap;
-use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    sync::RwLock,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use jsonschema::Validator;
 
-use crate::error::ValidationError;
-use crate::types::Message;
+use crate::{error::ValidationError, types::Message};
 
 pub struct SchemaValidator {
     cache: RwLock<HashMap<String, CachedSchema>>,

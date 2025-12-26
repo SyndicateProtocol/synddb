@@ -3,7 +3,8 @@ use sha3::{Digest, Keccak256};
 
 use crate::types::Message;
 
-const DOMAIN_TYPEHASH: &[u8] = b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
+const DOMAIN_TYPEHASH: &[u8] =
+    b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
 const MESSAGE_TYPEHASH: &[u8] = b"Message(bytes32 messageId,string messageType,bytes calldata_,bytes32 metadataHash,uint64 nonce,uint64 timestamp,bytes32 domain)";
 
 pub fn compute_domain_separator(chain_id: u64, bridge_address: Address) -> [u8; 32] {

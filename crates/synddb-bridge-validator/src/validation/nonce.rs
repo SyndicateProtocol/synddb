@@ -1,6 +1,4 @@
-use crate::error::ValidationError;
-use crate::state::NonceStore;
-use crate::types::Message;
+use crate::{error::ValidationError, state::NonceStore, types::Message};
 
 pub struct NonceValidator<'a> {
     nonce_store: &'a NonceStore,

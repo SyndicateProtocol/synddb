@@ -1,5 +1,7 @@
-use crate::error::ValidationError;
-use crate::types::{Message, MessageTypeConfig};
+use crate::{
+    error::ValidationError,
+    types::{Message, MessageTypeConfig},
+};
 
 pub struct MessageTypeValidator;
 

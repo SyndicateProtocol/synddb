@@ -6,24 +6,26 @@
 
 mod processor;
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use alloy::primitives::keccak256;
-use alloy::providers::{Provider, ProviderBuilder, WsConnect};
-use alloy::rpc::types::Filter;
+use alloy::{
+    primitives::keccak256,
+    providers::{Provider, ProviderBuilder, WsConnect},
+    rpc::types::Filter,
+};
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use crate::bridge::IMessageBridge;
-use crate::bridge::BridgeClient;
-use crate::signing::MessageSigner;
-use crate::state::MessageStore;
-use crate::storage::StorageFetcher;
-use crate::validation::ValidationPipeline;
-use crate::ValidatorConfig;
+use crate::{
+    bridge::{BridgeClient, IMessageBridge},
+    signing::MessageSigner,
+    state::MessageStore,
+    storage::StorageFetcher,
+    validation::ValidationPipeline,
+    ValidatorConfig,
+};
 
 pub use processor::MessageProcessor;
 
@@ -113,9 +115,8 @@ impl WitnessValidator {
 
         // Create filter for MessageInitialized events
         // MessageInitialized(bytes32 indexed messageId, bytes32 indexed domain, address indexed primaryValidator, string messageType, string storageRef)
-        let event_signature = keccak256(
-            "MessageInitialized(bytes32,bytes32,address,string,string)"
-        );
+        let event_signature =
+            keccak256("MessageInitialized(bytes32,bytes32,address,string,string)");
         let filter = Filter::new()
             .address(self.config.bridge_address)
             .event_signature(event_signature);
