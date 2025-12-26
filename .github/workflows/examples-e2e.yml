@@ -1,0 +1,129 @@
+name: Examples E2E Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "crates/**"
+      - "examples/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/examples-e2e.yml"
+
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  prediction-market-e2e:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Prediction Market E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: examples/prediction-market
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and start services
+        run: docker compose up -d --build --wait
+        timeout-minutes: 20
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for sequencer to be healthy..."
+          for i in {1..60}; do
+            if curl -sf http://localhost:8433/health > /dev/null 2>&1; then
+              echo "Sequencer is healthy"
+              break
+            fi
+            echo "Waiting... ($i/60)"
+            sleep 2
+          done
+
+      - name: Run E2E tests
+        run: ./e2e-test.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  price-oracle-e2e:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Price Oracle E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: examples/price-oracle
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and start services
+        run: docker compose up -d --build --wait
+        timeout-minutes: 20
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for sequencer to be healthy..."
+          for i in {1..60}; do
+            if curl -sf http://localhost:8433/health > /dev/null 2>&1; then
+              echo "Sequencer is healthy"
+              break
+            fi
+            echo "Waiting... ($i/60)"
+            sleep 2
+          done
+
+      - name: Run E2E tests
+        run: ./e2e-test.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  price-oracle-unit-tests:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Price Oracle Python Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: examples/price-oracle
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r app/requirements.txt
+
+      - name: Run pytest
+        run: |
+          cd app
+          python -m pytest tests/ -v --tb=short
