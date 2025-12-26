@@ -259,3 +259,25 @@ jobs:
           if [ -f /tmp/sequencer.pid ]; then
             kill $(cat /tmp/sequencer.pid) || true
           fi
+
+  fuzzer:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: SQLite Fuzzer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run fuzzer tests
+        run: cargo test -p synddb-fuzzer --release
+        env:
+          # Run more proptest iterations in CI
+          PROPTEST_CASES: "256"
