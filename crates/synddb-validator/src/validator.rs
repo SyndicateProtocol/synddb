@@ -44,10 +44,8 @@ pub struct Validator {
     applier: ChangesetApplier,
     /// State persistence for crash recovery
     state: StateStore,
-    /// Pending changeset store for audit trail (optional)
-    pending_store: Option<PendingChangesetStore>,
-    /// Whether audit trail is enabled
-    audit_trail_enabled: bool,
+    /// Pending changeset store for audit trail (always enabled)
+    pending_store: PendingChangesetStore,
     /// Sync poll interval
     sync_interval: Duration,
     /// Shutdown receiver
@@ -81,18 +79,14 @@ impl Validator {
         let applier = ChangesetApplier::new(&config.database_path)?;
         let state = StateStore::new(&config.state_db_path)?;
 
-        // Initialize pending changeset store if audit trail is enabled
-        let pending_store = if config.audit_trail_enabled {
-            let pending_conn = if config.pending_changesets_db_path == ":memory:" {
-                Connection::open_in_memory()
-            } else {
-                Connection::open(&config.pending_changesets_db_path)
-            }
-            .context("Failed to open pending changesets database")?;
-            Some(PendingChangesetStore::new(pending_conn)?)
+        // Initialize pending changeset store (always enabled for audit trail)
+        let pending_conn = if config.pending_changesets_db_path == ":memory:" {
+            Connection::open_in_memory()
         } else {
-            None
-        };
+            Connection::open(&config.pending_changesets_db_path)
+        }
+        .context("Failed to open pending changesets database")?;
+        let pending_store = PendingChangesetStore::new(pending_conn)?;
 
         info!(
             sequencer_pubkey = %config.sequencer_pubkey,
@@ -100,7 +94,6 @@ impl Validator {
             gap_retry_count = config.gap_retry_count,
             gap_skip_on_failure = config.gap_skip_on_failure,
             batch_sync_enabled = config.batch_sync_enabled,
-            audit_trail_enabled = config.audit_trail_enabled,
             "Validator initialized"
         );
 
@@ -110,7 +103,6 @@ impl Validator {
             applier,
             state,
             pending_store,
-            audit_trail_enabled: config.audit_trail_enabled,
             sync_interval: config.sync_interval,
             shutdown_rx,
             gap_retry_count: config.gap_retry_count,
@@ -132,10 +124,10 @@ impl Validator {
         let applier = ChangesetApplier::in_memory()?;
         let state = StateStore::in_memory()?;
 
-        // Create in-memory pending store for testing
+        // Create in-memory pending store for testing (always enabled)
         let pending_conn = Connection::open_in_memory()
             .context("Failed to open in-memory pending changesets database")?;
-        let pending_store = Some(PendingChangesetStore::new(pending_conn)?);
+        let pending_store = PendingChangesetStore::new(pending_conn)?;
 
         Ok(Self {
             fetcher,
@@ -143,7 +135,6 @@ impl Validator {
             applier,
             state,
             pending_store,
-            audit_trail_enabled: true,
             sync_interval: Duration::from_millis(100),
             shutdown_rx,
             gap_retry_count: 3,
@@ -186,16 +177,14 @@ impl Validator {
 
     /// Get the count of pending changesets awaiting verification
     pub fn pending_changeset_count(&self) -> Result<u64> {
-        self.pending_store
-            .as_ref()
-            .map_or(Ok(0), PendingChangesetStore::count)
+        self.pending_store.count()
     }
 
     /// Apply a message with schema mismatch handling
     ///
-    /// If the message fails due to schema mismatch and audit trail is enabled,
-    /// the changeset is stored for later verification when a snapshot arrives,
-    /// and `Ok(ApplyResult::StoredAsPending)` is returned to allow sync to continue.
+    /// If the message fails due to schema mismatch, the changeset is stored for
+    /// later verification when a snapshot arrives, and `Ok(ApplyResult::StoredAsPending)`
+    /// is returned to allow sync to continue.
     ///
     /// For snapshot messages, pending changesets are verified after application.
     ///
@@ -225,62 +214,60 @@ impl Validator {
                     || error_msg.contains("column");
 
                 if is_schema_mismatch && message.message_type == MessageType::Changeset {
-                    // Store as pending if audit trail is enabled
-                    if let Some(store) = &self.pending_store {
-                        let reason = if error_msg.contains("don't exist") {
-                            // Extract table name from error if possible
-                            DeferralReason::MissingTable(
-                                error_msg
-                                    .split(':')
-                                    .next_back()
-                                    .unwrap_or("unknown")
-                                    .trim()
-                                    .to_string(),
-                            )
-                        } else {
-                            DeferralReason::ColumnMismatch {
-                                table: "unknown".to_string(),
-                                expected: 0,
-                                actual: 0,
-                            }
-                        };
-
-                        let pending = PendingChangeset {
-                            sequence: message.sequence,
-                            data: message.payload.clone(),
-                            reason,
-                        };
-
-                        store.store(&pending)?;
-
-                        // Check pending count and warn if accumulating
-                        let pending_count = store.count().unwrap_or(0);
-                        if pending_count > 100 {
-                            error!(
-                                pending_count,
-                                sequence = message.sequence,
-                                "Large number of pending changesets - snapshot required urgently"
-                            );
-                        } else if pending_count > 10 {
-                            warn!(
-                                pending_count,
-                                sequence = message.sequence,
-                                "Pending changesets accumulating - waiting for snapshot"
-                            );
-                        } else {
-                            warn!(
-                                sequence = message.sequence,
-                                error = %error_msg,
-                                "Stored changeset as pending due to schema mismatch - sync will continue"
-                            );
+                    // Store as pending for later verification
+                    let reason = if error_msg.contains("don't exist") {
+                        // Extract table name from error if possible
+                        DeferralReason::MissingTable(
+                            error_msg
+                                .split(':')
+                                .next_back()
+                                .unwrap_or("unknown")
+                                .trim()
+                                .to_string(),
+                        )
+                    } else {
+                        DeferralReason::ColumnMismatch {
+                            table: "unknown".to_string(),
+                            expected: 0,
+                            actual: 0,
                         }
+                    };
 
-                        // Return success - changeset is stored for later verification
-                        return Ok(ApplyResult::StoredAsPending);
+                    let pending = PendingChangeset {
+                        sequence: message.sequence,
+                        data: message.payload.clone(),
+                        reason,
+                    };
+
+                    self.pending_store.store(&pending)?;
+
+                    // Check pending count and warn if accumulating
+                    let pending_count = self.pending_store.count().unwrap_or(0);
+                    if pending_count > 100 {
+                        error!(
+                            pending_count,
+                            sequence = message.sequence,
+                            "Large number of pending changesets - snapshot required urgently"
+                        );
+                    } else if pending_count > 10 {
+                        warn!(
+                            pending_count,
+                            sequence = message.sequence,
+                            "Pending changesets accumulating - waiting for snapshot"
+                        );
+                    } else {
+                        warn!(
+                            sequence = message.sequence,
+                            error = %error_msg,
+                            "Stored changeset as pending due to schema mismatch - sync will continue"
+                        );
                     }
+
+                    // Return success - changeset is stored for later verification
+                    return Ok(ApplyResult::StoredAsPending);
                 }
 
-                // Not a schema mismatch or audit trail disabled - propagate error
+                // Not a schema mismatch - propagate error
                 Err(e)
             }
         }
@@ -288,12 +275,7 @@ impl Validator {
 
     /// Verify pending changesets after a snapshot has been applied
     fn verify_pending_changesets_after_snapshot(&self, snapshot_sequence: u64) -> Result<()> {
-        let store = match &self.pending_store {
-            Some(s) => s,
-            None => return Ok(()),
-        };
-
-        let pending_count = store.count()?;
+        let pending_count = self.pending_store.count()?;
         if pending_count == 0 {
             return Ok(());
         }
@@ -304,7 +286,7 @@ impl Validator {
         );
 
         // Get pending changesets up to this snapshot
-        let pending = store.get_all()?;
+        let pending = self.pending_store.get_all()?;
         let relevant: Vec<_> = pending
             .into_iter()
             .filter(|p| p.sequence < snapshot_sequence)
@@ -332,7 +314,7 @@ impl Validator {
         }
 
         // Clear verified changesets up to the snapshot
-        store.clear_up_to(snapshot_sequence)?;
+        self.pending_store.clear_up_to(snapshot_sequence)?;
 
         Ok(())
     }

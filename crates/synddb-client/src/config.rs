@@ -57,12 +57,6 @@ pub struct Config {
     #[command(flatten)]
     #[serde(default)]
     pub chain_monitor: Option<ChainMonitorConfig>,
-
-    /// Automatically create and publish a snapshot when attaching to a database
-    /// that already has tables. This ensures validators can reconstruct schemas
-    /// that existed before `SyndDB` was attached.
-    #[arg(long, env = "AUTO_SNAPSHOT_ON_ATTACH", default_value = "true")]
-    pub auto_snapshot_on_attach: bool,
 }
 
 impl Default for Config {

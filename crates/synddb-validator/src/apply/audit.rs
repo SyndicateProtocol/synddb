@@ -43,7 +43,7 @@
 //! │     │                                                           │
 //! │     ├─→ Schema OK → Apply changeset → ApplyResult::Applied      │
 //! │     │                                                           │
-//! │     └─→ Schema Mismatch (audit_trail_enabled=true)              │
+//! │     └─→ Schema Mismatch                                         │
 //! │         ├─→ Store in PendingChangesetStore                      │
 //! │         ├─→ Return ApplyResult::StoredAsPending                 │
 //! │         ├─→ Record sequence as synced                           │
@@ -145,8 +145,8 @@
 //!    when column types differ.
 //!
 //! 2. **DDL changes trigger snapshots**: If schema changes (including column type
-//!    changes), this is detected by DDL monitoring which triggers automatic snapshots
-//!    via `auto_snapshot_after_ddl`.
+//!    changes), this is detected by DDL monitoring which triggers automatic snapshots.
+//!    This is always-on behavior built into `execute_ddl()`.
 //!
 //! 3. **`SQLite` succeeds, so we succeed**: Our goal is to match `SQLite`'s behavior.
 //!    Since `SQLite` handles type mismatches gracefully, so does our replication.
@@ -161,8 +161,10 @@
 //! - Pending count warnings are emitted (>10 = warn, >100 = error)
 //! - Validators are blocked until a snapshot arrives
 //!
-//! **Mitigation**: The sequencer should use `auto_snapshot_after_ddl` (enabled by default)
-//! to automatically send snapshots after schema changes.
+//! **Mitigation**: Applications MUST use `execute_ddl()` for all schema changes.
+//! This function automatically triggers a snapshot after DDL execution (always-on
+//! behavior, not configurable). Direct DDL via `connection().execute()` bypasses
+//! this and will cause validators to accumulate pending changesets.
 //!
 //! ## 3. `SQLite`'s Silent Column Ignoring
 //!

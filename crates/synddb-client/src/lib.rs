@@ -120,10 +120,11 @@
 //!
 //! - **On attach**: When attaching to a database with existing tables, automatically
 //!   publishes a snapshot so validators can reconstruct the pre-existing state.
-//!   Controlled by `auto_snapshot_on_attach` (default: true).
+//!   This is always enabled - it's critical for validator sync.
 //!
 //! - **After DDL**: After executing DDL via [`SyndDB::execute_ddl()`], automatically
 //!   publishes a snapshot. This ensures validators can always reconstruct the schema.
+//!   This is always enabled and built into `execute_ddl()`.
 //!
 //! **Important**: Always use [`SyndDB::execute_ddl()`] for schema changes (CREATE, ALTER,
 //! DROP). Direct DDL via [`SyndDB::connection()`] bypasses snapshot creation and cannot
@@ -536,7 +537,7 @@ impl SyndDB {
 
         let synddb = Self {
             conn,
-            sequencer_url: config.sequencer_url.clone(),
+            sequencer_url: config.sequencer_url,
             db_path,
             monitor: Some(monitor),
             changeset_shutdown_tx,
@@ -568,8 +569,10 @@ impl SyndDB {
             }
         }
 
-        // Auto-snapshot on attach if enabled and database has existing tables
-        if config.auto_snapshot_on_attach && Self::has_existing_tables(conn) {
+        // Auto-snapshot on attach if database has existing tables (always enabled)
+        // This is critical for validator sync - without it, validators can't
+        // reconstruct schemas that existed before SyndDB was attached.
+        if Self::has_existing_tables(conn) {
             info!("Database has existing tables, creating initial snapshot for validator bootstrapping");
             if let Err(e) = synddb.publish_snapshot() {
                 warn!(
@@ -1294,28 +1297,10 @@ mod tests {
         conn.execute("INSERT INTO preexisting VALUES (1, 'test')", [])
             .unwrap();
 
-        // Attach SyndDB with auto_snapshot_on_attach enabled
+        // Attach SyndDB - auto snapshot is always enabled
         // This should attempt to publish a snapshot (will fail since no sequencer, but shouldn't panic)
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            auto_snapshot_on_attach: true,
-            ..Default::default()
-        };
-
-        let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
-    }
-
-    #[test]
-    fn test_attach_with_disabled_auto_snapshot() {
-        // Create a database with existing tables
-        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
-        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)", [])
-            .unwrap();
-
-        // Attach SyndDB with auto_snapshot_on_attach disabled
-        let config = Config {
-            sequencer_url: "http://localhost:8433".parse().unwrap(),
-            auto_snapshot_on_attach: false,
             ..Default::default()
         };
 
@@ -1381,7 +1366,7 @@ mod tests {
     fn test_preexisting_data_then_modifications() {
         // Simulates the orderbook benchmark pattern:
         // 1. Schema and initial data exist BEFORE SyndDB attaches
-        // 2. SyndDB attaches (triggers auto_snapshot_on_attach)
+        // 2. SyndDB attaches (triggers auto snapshot)
         // 3. New modifications are captured as changesets
         //
         // The changesets should only contain the NEW modifications, not the
@@ -1402,10 +1387,9 @@ mod tests {
             .unwrap();
         }
 
-        // Step 2: Attach SyndDB with auto_snapshot_on_attach
+        // Step 2: Attach SyndDB (auto snapshot is always enabled)
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            auto_snapshot_on_attach: true,
             ..Default::default()
         };
         let synddb = SyndDB::attach_with_config(conn, config).unwrap();
@@ -1771,7 +1755,7 @@ mod tests {
     #[test]
     fn test_preexisting_data_then_ddl() {
         // Attach to database with existing data, then perform DDL.
-        // Tests auto_snapshot_on_attach combined with DDL snapshots.
+        // Tests auto snapshot on attach combined with DDL snapshots.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
         // Pre-existing schema and data
@@ -1780,10 +1764,9 @@ mod tests {
         conn.execute("INSERT INTO t1 VALUES (1, 'existing')", [])
             .unwrap();
 
-        // Attach with auto_snapshot_on_attach enabled
+        // Attach (auto snapshot is always enabled)
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            auto_snapshot_on_attach: true,
             ..Default::default()
         };
         let synddb = SyndDB::attach_with_config(conn, config).unwrap();
@@ -1974,10 +1957,9 @@ mod tests {
         // Opposite of pre-existing data pattern.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
-        // Attach to empty DB - no auto_snapshot_on_attach (no tables)
+        // Attach to empty DB - auto snapshot won't trigger (no tables)
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            auto_snapshot_on_attach: true, // Won't trigger - no tables
             ..Default::default()
         };
         let synddb = SyndDB::attach_with_config(conn, config).unwrap();
