@@ -3,16 +3,17 @@ use async_trait::async_trait;
 
 use crate::{error::ValidationError, types::Message};
 
+#[derive(Debug)]
 pub struct InvariantContext {
     rpc_url: Option<String>,
 }
 
 impl InvariantContext {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { rpc_url: None }
     }
 
-    pub fn with_rpc_url(rpc_url: String) -> Self {
+    pub const fn with_rpc_url(rpc_url: String) -> Self {
         Self {
             rpc_url: Some(rpc_url),
         }
@@ -45,6 +46,14 @@ pub trait Invariant: Send + Sync {
 
 pub struct InvariantRegistry {
     invariants: Vec<Box<dyn Invariant>>,
+}
+
+impl std::fmt::Debug for InvariantRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InvariantRegistry")
+            .field("invariants_count", &self.invariants.len())
+            .finish()
+    }
 }
 
 impl InvariantRegistry {

@@ -69,7 +69,7 @@ pub enum ValidationError {
 }
 
 impl ValidationError {
-    pub fn error_code(&self) -> &'static str {
+    pub const fn error_code(&self) -> &'static str {
         match self {
             Self::ReplayDetected(_) => "REPLAY_DETECTED",
             Self::InvalidNonce { .. } => "INVALID_NONCE",
@@ -94,7 +94,7 @@ impl ValidationError {
         }
     }
 
-    pub fn is_retryable(&self) -> bool {
+    pub const fn is_retryable(&self) -> bool {
         matches!(
             self,
             Self::StoragePublishFailed(_)

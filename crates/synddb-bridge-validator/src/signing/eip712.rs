@@ -81,7 +81,7 @@ pub fn compute_message_id(
 
     // Calculate string data padding
     let string_bytes = message_type.as_bytes();
-    let padded_string_len = ((string_bytes.len() + 31) / 32) * 32;
+    let padded_string_len = string_bytes.len().div_ceil(32) * 32;
 
     let mut encoded = Vec::with_capacity(192 + 32 + padded_string_len);
 

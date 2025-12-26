@@ -14,6 +14,7 @@ use super::{
     TimestampValidator,
 };
 
+#[derive(Debug)]
 pub struct ValidationContext {
     pub app_config: ApplicationConfig,
     pub message_type_config: MessageTypeConfig,
@@ -28,6 +29,16 @@ pub struct ValidationPipeline {
     schema_fetcher: SchemaFetcher,
     invariant_registry: InvariantRegistry,
     custom_rules: CustomRulesValidator,
+}
+
+impl std::fmt::Debug for ValidationPipeline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValidationPipeline")
+            .field("timestamp_validator", &self.timestamp_validator)
+            .field("invariant_registry", &self.invariant_registry)
+            .field("custom_rules", &self.custom_rules)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ValidationPipeline {
@@ -133,13 +144,12 @@ impl ValidationPipeline {
             .map_err(|e| ValidationError::BridgeConnectionFailed(e.to_string()))?;
 
         // Fetch schema from schema_uri if present
-        let schema = if !message_type_config.schema_uri.is_empty() {
+        let schema = if message_type_config.schema_uri.is_empty() {
+            None
+        } else {
             // Convert schema_hash to Option for verification
-            let expected_hash = if message_type_config.schema_hash != [0u8; 32] {
-                Some(&message_type_config.schema_hash)
-            } else {
-                None
-            };
+            let expected_hash =
+                (message_type_config.schema_hash != [0u8; 32]).then_some(&message_type_config.schema_hash);
 
             match self
                 .schema_fetcher
@@ -162,8 +172,6 @@ impl ValidationPipeline {
                     None
                 }
             }
-        } else {
-            None
         };
 
         Ok(ValidationContext {

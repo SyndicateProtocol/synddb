@@ -60,6 +60,7 @@ pub struct PublicationRecord {
     pub published_at: u64,
 }
 
+#[allow(unreachable_pub)]
 mod hex_bytes {
     use serde::{Deserialize, Deserializer, Serializer};
 
@@ -80,6 +81,7 @@ mod hex_bytes {
     }
 }
 
+#[allow(unreachable_pub)]
 mod hex_bytes_32 {
     use serde::{Deserialize, Deserializer, Serializer};
 
@@ -103,6 +105,7 @@ mod hex_bytes_32 {
     }
 }
 
+#[allow(unreachable_pub)]
 mod hex_bytes_20 {
     use serde::{Deserialize, Deserializer, Serializer};
 

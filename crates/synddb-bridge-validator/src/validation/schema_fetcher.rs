@@ -14,6 +14,16 @@ pub struct SchemaFetcher {
     arweave_gateway: String,
 }
 
+impl std::fmt::Debug for SchemaFetcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SchemaFetcher")
+            .field("ttl", &self.ttl)
+            .field("ipfs_gateway", &self.ipfs_gateway)
+            .field("arweave_gateway", &self.arweave_gateway)
+            .finish_non_exhaustive()
+    }
+}
+
 struct CachedFetch {
     schema: serde_json::Value,
     cached_at: Instant,

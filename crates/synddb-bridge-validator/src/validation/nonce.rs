@@ -1,11 +1,12 @@
 use crate::{error::ValidationError, state::NonceStore, types::Message};
 
+#[derive(Debug)]
 pub struct NonceValidator<'a> {
     nonce_store: &'a NonceStore,
 }
 
 impl<'a> NonceValidator<'a> {
-    pub fn new(nonce_store: &'a NonceStore) -> Self {
+    pub const fn new(nonce_store: &'a NonceStore) -> Self {
         Self { nonce_store }
     }
 

@@ -24,8 +24,16 @@ pub struct MessageProcessor {
     storage_fetcher: Arc<StorageFetcher>,
 }
 
+impl std::fmt::Debug for MessageProcessor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageProcessor")
+            .field("signer", &self.signer)
+            .finish_non_exhaustive()
+    }
+}
+
 impl MessageProcessor {
-    pub fn new(
+    pub const fn new(
         bridge_client: Arc<BridgeClient>,
         signer: Arc<MessageSigner>,
         pipeline: Arc<ValidationPipeline>,

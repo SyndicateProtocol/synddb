@@ -12,6 +12,14 @@ pub struct GcsPublisher {
     bucket: String,
 }
 
+impl std::fmt::Debug for GcsPublisher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcsPublisher")
+            .field("bucket", &self.bucket)
+            .finish_non_exhaustive()
+    }
+}
+
 impl GcsPublisher {
     pub async fn new(bucket: String) -> Result<Self> {
         let config = ClientConfig::default()

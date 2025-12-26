@@ -2,12 +2,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{error::ValidationError, types::Message};
 
+#[derive(Debug)]
 pub struct TimestampValidator {
     max_clock_drift: Duration,
 }
 
 impl TimestampValidator {
-    pub fn new(max_clock_drift: Duration) -> Self {
+    pub const fn new(max_clock_drift: Duration) -> Self {
         Self { max_clock_drift }
     }
 

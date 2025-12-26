@@ -31,6 +31,15 @@ pub struct CustomRulesValidator {
     domain_configs: HashMap<[u8; 32], RateLimitConfig>,
 }
 
+impl std::fmt::Debug for CustomRulesValidator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomRulesValidator")
+            .field("default_config", &self.default_config)
+            .field("domain_configs_count", &self.domain_configs.len())
+            .finish_non_exhaustive()
+    }
+}
+
 struct DomainRateLimiter {
     second_window: SlidingWindow,
     minute_window: SlidingWindow,
@@ -44,7 +53,7 @@ struct SlidingWindow {
 }
 
 impl SlidingWindow {
-    fn new(duration: Duration) -> Self {
+    const fn new(duration: Duration) -> Self {
         Self {
             timestamps: Vec::new(),
             duration,
@@ -69,7 +78,7 @@ struct ValueWindow {
 }
 
 impl ValueWindow {
-    fn new(duration: Duration) -> Self {
+    const fn new(duration: Duration) -> Self {
         Self {
             entries: Vec::new(),
             duration,
@@ -89,7 +98,7 @@ impl ValueWindow {
 }
 
 impl DomainRateLimiter {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             second_window: SlidingWindow::new(Duration::from_secs(1)),
             minute_window: SlidingWindow::new(Duration::from_secs(60)),

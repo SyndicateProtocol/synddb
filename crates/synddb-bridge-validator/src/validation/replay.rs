@@ -1,11 +1,12 @@
 use crate::{error::ValidationError, state::MessageStore, types::Message};
 
+#[derive(Debug)]
 pub struct ReplayValidator<'a> {
     message_store: &'a MessageStore,
 }
 
 impl<'a> ReplayValidator<'a> {
-    pub fn new(message_store: &'a MessageStore) -> Self {
+    pub const fn new(message_store: &'a MessageStore) -> Self {
         Self { message_store }
     }
 

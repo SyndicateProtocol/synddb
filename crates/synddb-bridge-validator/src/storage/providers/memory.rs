@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{atomic::{AtomicU64, Ordering}, Mutex},
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -7,14 +10,20 @@ use crate::storage::{StoragePublisher, StorageRecord};
 
 pub struct MemoryPublisher {
     records: Mutex<HashMap<String, StorageRecord>>,
-    counter: Mutex<u64>,
+    counter: AtomicU64,
+}
+
+impl std::fmt::Debug for MemoryPublisher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryPublisher").finish_non_exhaustive()
+    }
 }
 
 impl MemoryPublisher {
     pub fn new() -> Self {
         Self {
             records: Mutex::new(HashMap::new()),
-            counter: Mutex::new(0),
+            counter: AtomicU64::new(0),
         }
     }
 
@@ -33,11 +42,7 @@ impl Default for MemoryPublisher {
 #[async_trait]
 impl StoragePublisher for MemoryPublisher {
     async fn publish(&self, record: &StorageRecord) -> Result<String> {
-        let id = {
-            let mut counter = self.counter.lock().unwrap();
-            *counter += 1;
-            *counter
-        };
+        let id = self.counter.fetch_add(1, Ordering::Relaxed) + 1;
 
         let key = format!("{}", id);
         self.records

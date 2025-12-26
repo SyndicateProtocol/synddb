@@ -25,7 +25,6 @@ serde_json = { workspace = true }
 
 # Configuration
 humantime-serde = { workspace = true }
-humantime = { workspace = true }
 
 # Logging and tracing
 tracing = { workspace = true }

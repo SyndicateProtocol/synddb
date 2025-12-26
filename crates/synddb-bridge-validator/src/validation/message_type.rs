@@ -3,10 +3,11 @@ use crate::{
     types::{Message, MessageTypeConfig},
 };
 
+#[derive(Debug)]
 pub struct MessageTypeValidator;
 
 impl MessageTypeValidator {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 

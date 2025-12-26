@@ -72,7 +72,7 @@ pub enum LogFormat {
 }
 
 impl ValidatorConfig {
-    pub fn max_clock_drift(&self) -> Duration {
+    pub const fn max_clock_drift(&self) -> Duration {
         Duration::from_secs(self.max_clock_drift_seconds)
     }
 }

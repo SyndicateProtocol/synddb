@@ -6,6 +6,12 @@ pub struct MessageStore {
     conn: Mutex<Connection>,
 }
 
+impl std::fmt::Debug for MessageStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageStore").finish_non_exhaustive()
+    }
+}
+
 impl MessageStore {
     pub fn new(path: &str) -> Result<Self> {
         let conn = if path == ":memory:" {

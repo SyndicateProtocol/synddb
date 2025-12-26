@@ -14,6 +14,14 @@ pub struct SchemaValidator {
     ttl: Duration,
 }
 
+impl std::fmt::Debug for SchemaValidator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SchemaValidator")
+            .field("ttl", &self.ttl)
+            .finish_non_exhaustive()
+    }
+}
+
 struct CachedSchema {
     validator: Validator,
     cached_at: Instant,

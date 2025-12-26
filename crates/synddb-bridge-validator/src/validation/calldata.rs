@@ -1,10 +1,11 @@
 use crate::{error::ValidationError, types::Message};
 use sha3::{Digest, Keccak256};
 
+#[derive(Debug)]
 pub struct CalldataValidator;
 
 impl CalldataValidator {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 

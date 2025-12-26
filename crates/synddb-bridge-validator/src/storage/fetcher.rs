@@ -42,6 +42,15 @@ pub struct StorageFetcher {
     arweave_gateway: String,
 }
 
+impl std::fmt::Debug for StorageFetcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageFetcher")
+            .field("ipfs_gateway", &self.ipfs_gateway)
+            .field("arweave_gateway", &self.arweave_gateway)
+            .finish_non_exhaustive()
+    }
+}
+
 impl StorageFetcher {
     pub fn new() -> Self {
         Self {

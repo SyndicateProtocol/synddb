@@ -15,13 +15,14 @@ sol! {
     }
 }
 
+#[derive(Debug)]
 pub struct SupplyCapInvariant {
     token_address: Address,
     max_supply: U256,
 }
 
 impl SupplyCapInvariant {
-    pub fn new(token_address: Address, max_supply: U256) -> Self {
+    pub const fn new(token_address: Address, max_supply: U256) -> Self {
         Self {
             token_address,
             max_supply,
@@ -75,12 +76,13 @@ impl Invariant for SupplyCapInvariant {
     }
 }
 
+#[derive(Debug)]
 pub struct BalanceCheckInvariant {
     token_address: Address,
 }
 
 impl BalanceCheckInvariant {
-    pub fn new(token_address: Address) -> Self {
+    pub const fn new(token_address: Address) -> Self {
         Self { token_address }
     }
 }

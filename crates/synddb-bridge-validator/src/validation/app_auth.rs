@@ -3,10 +3,11 @@ use crate::{
     types::{ApplicationConfig, Message},
 };
 
+#[derive(Debug)]
 pub struct AppAuthValidator;
 
 impl AppAuthValidator {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 

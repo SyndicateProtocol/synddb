@@ -1,7 +1,7 @@
 //! Witness Validator implementation
 //!
 //! Witness Validators provide independent verification of messages
-//! by watching for MessageInitialized events and re-verifying the
+//! by watching for `MessageInitialized` events and re-verifying the
 //! message data fetched from storage.
 
 mod processor;
@@ -29,7 +29,7 @@ use crate::{
 
 pub use processor::MessageProcessor;
 
-/// Witness Validator that watches for MessageInitialized events
+/// Witness Validator that watches for `MessageInitialized` events
 /// and independently verifies and signs messages.
 pub struct WitnessValidator {
     config: ValidatorConfig,
@@ -41,8 +41,18 @@ pub struct WitnessValidator {
     shutdown_rx: watch::Receiver<bool>,
 }
 
+impl std::fmt::Debug for WitnessValidator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WitnessValidator")
+            .field("config", &self.config)
+            .field("bridge_client", &self.bridge_client)
+            .field("signer", &self.signer)
+            .finish_non_exhaustive()
+    }
+}
+
 impl WitnessValidator {
-    pub fn new(
+    pub const fn new(
         config: ValidatorConfig,
         bridge_client: Arc<BridgeClient>,
         signer: Arc<MessageSigner>,

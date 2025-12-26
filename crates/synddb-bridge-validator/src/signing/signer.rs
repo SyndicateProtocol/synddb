@@ -13,6 +13,15 @@ pub struct MessageSigner {
     domain_separator: [u8; 32],
 }
 
+impl std::fmt::Debug for MessageSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageSigner")
+            .field("address", &self.signer.address())
+            .field("signer", &"<redacted>")
+            .finish()
+    }
+}
+
 impl MessageSigner {
     pub fn new(private_key: &str, chain_id: u64, bridge_address: Address) -> Result<Self> {
         let key_bytes = private_key.strip_prefix("0x").unwrap_or(private_key);
@@ -26,7 +35,7 @@ impl MessageSigner {
         })
     }
 
-    pub fn address(&self) -> Address {
+    pub const fn address(&self) -> Address {
         self.signer.address()
     }
 
@@ -43,7 +52,7 @@ impl MessageSigner {
         Ok(signature.as_bytes().to_vec())
     }
 
-    pub fn domain_separator(&self) -> &[u8; 32] {
+    pub const fn domain_separator(&self) -> &[u8; 32] {
         &self.domain_separator
     }
 }
