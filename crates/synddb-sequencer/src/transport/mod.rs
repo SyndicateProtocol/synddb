@@ -20,8 +20,9 @@ pub mod traits;
 #[cfg(feature = "gcs")]
 pub mod gcs;
 
-// Update these and add feature flags once implemented;
+// TODO: Implement additional DA layer transports (see PLAN_TODO.md)
+// - arweave: Permanent storage via ANS-104 bundles (detailed plan in arweave.rs)
+// - celestia: Celestia DA layer
+// - eigenda: EigenDA layer
+// - ipfs: IPFS storage
 pub mod arweave;
-// pub mod celestia;
-// pub mod eigenda;
-// pub mod ipfs;
