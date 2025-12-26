@@ -11,6 +11,7 @@ use std::{
     os::raw::c_char,
     time::Duration,
 };
+use tracing::{info, warn};
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
@@ -431,6 +432,10 @@ pub unsafe extern "C" fn synddb_execute(handle: *mut SyndDBHandle, sql: *const c
 /// This is useful for executing schema creation or multiple statements at once.
 /// Changes made through this function are captured and published to the sequencer.
 ///
+/// **Automatic Snapshotting**: If DDL statements (CREATE, ALTER, DROP) are detected,
+/// a snapshot is automatically published after execution. This ensures validators
+/// can always reconstruct the schema without manual intervention.
+///
 /// # Arguments
 /// * `handle` - `SyndDB` handle from `synddb_attach()`
 /// * `sql` - SQL statements to execute (UTF-8 C string, semicolon-separated)
@@ -448,6 +453,7 @@ pub unsafe extern "C" fn synddb_execute(handle: *mut SyndDBHandle, sql: *const c
 ///     CREATE TABLE IF NOT EXISTS prices (id INTEGER PRIMARY KEY, asset TEXT, price REAL);
 ///     CREATE INDEX IF NOT EXISTS idx_asset ON prices(asset);
 /// \0''')
+/// # Snapshot is automatically published - no manual snapshot() call needed!
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn synddb_execute_batch(
@@ -477,13 +483,22 @@ pub unsafe extern "C" fn synddb_execute_batch(
     let synddb = &*(handle as *const SyndDB);
     let conn = synddb.connection();
 
-    match conn.execute_batch(sql_str) {
-        Ok(()) => SyndDBError::Success,
-        Err(e) => {
-            set_last_error(format!("SQL batch execution failed: {}", e));
-            SyndDBError::DatabaseError
+    // Execute the SQL batch
+    if let Err(e) = conn.execute_batch(sql_str) {
+        set_last_error(format!("SQL batch execution failed: {}", e));
+        return SyndDBError::DatabaseError;
+    }
+
+    // Auto-snapshot after DDL (always enabled for FFI - simplest DX)
+    if SyndDB::is_ddl(sql_str) {
+        info!("DDL executed via FFI, creating automatic snapshot");
+        if let Err(e) = synddb.publish_snapshot() {
+            warn!("Failed to auto-snapshot after DDL: {}. Continuing.", e);
+            // Don't fail the execute - the DDL succeeded, snapshot is best-effort
         }
     }
+
+    SyndDBError::Success
 }
 
 /// Begin a transaction on the monitored connection

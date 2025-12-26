@@ -197,6 +197,8 @@ pub struct SyndDB {
     conn: &'static Connection,
     /// Sequencer URL for publishing snapshots
     sequencer_url: url::Url,
+    /// Whether to auto-snapshot after DDL statements
+    auto_snapshot_after_ddl: bool,
     /// Session monitor for capturing changesets
     monitor: Option<SessionMonitor>,
     /// Channel to send shutdown signal to changeset sender
@@ -488,11 +490,10 @@ impl SyndDB {
             }
         });
 
-        info!("SyndDB client attached successfully");
-
-        Ok(Self {
+        let synddb = Self {
             conn,
-            sequencer_url: config.sequencer_url,
+            sequencer_url: config.sequencer_url.clone(),
+            auto_snapshot_after_ddl: config.auto_snapshot_after_ddl,
             monitor: Some(monitor),
             changeset_shutdown_tx,
             snapshot_shutdown_tx,
@@ -501,7 +502,22 @@ impl SyndDB {
             recovery,
             chain_monitor,
             stats,
-        })
+        };
+
+        // Auto-snapshot on attach if enabled and database has existing tables
+        if config.auto_snapshot_on_attach && Self::has_existing_tables(conn) {
+            info!("Database has existing tables, creating initial snapshot for validator bootstrapping");
+            if let Err(e) = synddb.publish_snapshot() {
+                warn!(
+                    "Failed to create initial snapshot on attach: {}. Continuing without it.",
+                    e
+                );
+            }
+        }
+
+        info!("SyndDB client attached successfully");
+
+        Ok(synddb)
     }
 
     // =========================================================================
@@ -722,6 +738,58 @@ impl SyndDB {
         );
 
         Ok(snapshot)
+    }
+
+    // =========================================================================
+    // DDL Execution with Auto-Snapshot
+    // =========================================================================
+
+    /// Execute DDL statements with automatic snapshot publishing
+    ///
+    /// This method executes the given SQL (which should be DDL like CREATE TABLE)
+    /// and automatically publishes a snapshot afterward if `auto_snapshot_after_ddl`
+    /// is enabled in the configuration.
+    ///
+    /// Use this for schema changes instead of `connection().execute_batch()` to ensure
+    /// validators can reconstruct the schema.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use synddb_client::SyndDB;
+    /// # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+    /// synddb.execute_ddl("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")?;
+    /// // Snapshot is automatically published - validators can now reconstruct this schema
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn execute_ddl(&self, sql: &str) -> Result<()> {
+        self.conn.execute_batch(sql)?;
+
+        if self.auto_snapshot_after_ddl && Self::is_ddl(sql) {
+            info!("DDL executed, creating automatic snapshot");
+            self.publish_snapshot()?;
+        }
+
+        Ok(())
+    }
+
+    /// Check if database has any user tables (excluding internal `SQLite` tables)
+    fn has_existing_tables(conn: &Connection) -> bool {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false)
+    }
+
+    /// Check if SQL contains DDL statements (CREATE, ALTER, DROP)
+    ///
+    /// This is used internally by `execute_ddl()` and the FFI layer to detect
+    /// when automatic snapshots should be created.
+    pub(crate) fn is_ddl(sql: &str) -> bool {
+        let upper = sql.trim_start().to_uppercase();
+        upper.starts_with("CREATE ") || upper.starts_with("ALTER ") || upper.starts_with("DROP ")
     }
 
     /// Process pending deposits from the blockchain
@@ -1083,5 +1151,86 @@ mod tests {
         assert_eq!(count, 100);
 
         eprintln!("Test passed with {} rows", count);
+    }
+
+    #[test]
+    fn test_is_ddl() {
+        // CREATE statements
+        assert!(SyndDB::is_ddl("CREATE TABLE test (id INT)"));
+        assert!(SyndDB::is_ddl("  CREATE TABLE test (id INT)")); // Leading whitespace
+        assert!(SyndDB::is_ddl("create table test (id INT)")); // Lowercase
+        assert!(SyndDB::is_ddl("CREATE INDEX idx ON test(id)"));
+        assert!(SyndDB::is_ddl(
+            "CREATE TRIGGER trg AFTER INSERT ON test BEGIN END"
+        ));
+
+        // ALTER statements
+        assert!(SyndDB::is_ddl("ALTER TABLE test ADD COLUMN name TEXT"));
+        assert!(SyndDB::is_ddl("alter table test add column name text"));
+
+        // DROP statements
+        assert!(SyndDB::is_ddl("DROP TABLE test"));
+        assert!(SyndDB::is_ddl("DROP INDEX idx"));
+        assert!(SyndDB::is_ddl("drop table if exists test"));
+
+        // Non-DDL statements
+        assert!(!SyndDB::is_ddl("INSERT INTO test VALUES (1)"));
+        assert!(!SyndDB::is_ddl("SELECT * FROM test"));
+        assert!(!SyndDB::is_ddl("UPDATE test SET id = 2"));
+        assert!(!SyndDB::is_ddl("DELETE FROM test"));
+        assert!(!SyndDB::is_ddl("BEGIN TRANSACTION"));
+        assert!(!SyndDB::is_ddl("COMMIT"));
+    }
+
+    #[test]
+    fn test_has_existing_tables() {
+        // Empty database has no tables
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        assert!(!SyndDB::has_existing_tables(conn));
+
+        // Create a table
+        conn.execute("CREATE TABLE test (id INTEGER)", []).unwrap();
+        assert!(SyndDB::has_existing_tables(conn));
+    }
+
+    #[test]
+    fn test_attach_with_existing_tables_auto_snapshots() {
+        // Create a database with existing tables before attaching SyndDB
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute(
+            "CREATE TABLE preexisting (id INTEGER PRIMARY KEY, data TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO preexisting VALUES (1, 'test')", [])
+            .unwrap();
+
+        // Attach SyndDB with auto_snapshot_on_attach enabled
+        // This should attempt to publish a snapshot (will fail since no sequencer, but shouldn't panic)
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            auto_snapshot_on_attach: true,
+            ..Default::default()
+        };
+
+        let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
+    }
+
+    #[test]
+    fn test_attach_with_disabled_auto_snapshot() {
+        // Create a database with existing tables
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+
+        // Attach SyndDB with auto_snapshot_on_attach disabled
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            auto_snapshot_on_attach: false,
+            auto_snapshot_after_ddl: false,
+            ..Default::default()
+        };
+
+        let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
     }
 }
