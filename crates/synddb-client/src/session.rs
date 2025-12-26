@@ -241,7 +241,9 @@ impl SessionMonitor {
                                         warn!(
                                             "Direct schema change detected ({:?} on {})! \
                                             Use execute_ddl() instead of connection().execute() for DDL statements. \
-                                            A snapshot will be created on the next publish(), but this pattern is not recommended. \
+                                            WARNING: If the app crashes before publish(), this schema change will be lost \
+                                            and validators will fail to reconstruct the database. \
+                                            Using execute_ddl() publishes immediately and is crash-safe. \
                                             Enable strict_ddl_mode to enforce this.",
                                             action, table
                                         );

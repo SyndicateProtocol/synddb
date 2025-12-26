@@ -164,6 +164,38 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! ## Manual Publishing with Strict DDL (Recommended for Fine-Grained Control)
+//!
+//! If you want manual control over when DML changes are published, but still want
+//! crash-safe DDL handling, use this combination:
+//!
+//! ```rust,no_run
+//! use synddb_client::{Config, PublishStrategy, SyndDB};
+//!
+//! let config = Config {
+//!     sequencer_url: "http://sequencer:8433".parse().unwrap(),
+//!     publish_strategy: PublishStrategy::Manual,  // Manual control for DML
+//!     strict_ddl_mode: true,                      // Enforce execute_ddl() for DDL
+//!     auto_snapshot_after_ddl: true,              // DDL publishes immediately (default)
+//!     ..Default::default()
+//! };
+//! let synddb = SyndDB::open_with_config("app.db", config)?;
+//!
+//! // DDL is published immediately (crash-safe)
+//! synddb.execute_ddl("CREATE TABLE users (id INTEGER PRIMARY KEY)")?;
+//!
+//! // DML waits for explicit publish
+//! synddb.connection().execute("INSERT INTO users VALUES (1)", [])?;
+//! synddb.connection().execute("INSERT INTO users VALUES (2)", [])?;
+//! synddb.publish()?;  // Batch publish when ready
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! This pattern ensures:
+//! - Schema changes are always crash-safe (published immediately)
+//! - DML changes can be batched for efficiency
+//! - Direct DDL via `connection()` will panic, preventing accidents
+//!
 //! # Thread Safety
 //!
 //! The `SQLite` Session Extension is only accessed from the main thread. Background
@@ -403,6 +435,15 @@ impl SyndDB {
         info!("Attaching SyndDB client to SQLite connection");
         info!("Sequencer URL: {}", config.sequencer_url);
         info!("Publish strategy: {:?}", config.publish_strategy);
+
+        // Validate config: strict_ddl_mode requires auto_snapshot_after_ddl for crash safety
+        if config.strict_ddl_mode && !config.auto_snapshot_after_ddl {
+            warn!(
+                "strict_ddl_mode is enabled but auto_snapshot_after_ddl is disabled. \
+                This combination is not crash-safe: execute_ddl() will not publish immediately. \
+                Enable auto_snapshot_after_ddl for full protection."
+            );
+        }
 
         // Create shared stats handle
         let stats = stats::new_stats_handle();
