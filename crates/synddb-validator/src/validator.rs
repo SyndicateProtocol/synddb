@@ -25,6 +25,15 @@ use synddb_shared::types::message::{MessageType, SignedBatch, SignedMessage};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
+/// Result of applying a message with audit trail handling
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyResult {
+    /// Message was applied successfully
+    Applied,
+    /// Message was stored as pending due to schema mismatch (audit trail enabled)
+    StoredAsPending,
+}
+
 /// Core validator that syncs and applies state from the sequencer
 pub struct Validator {
     /// Storage fetcher for retrieving messages
@@ -185,10 +194,16 @@ impl Validator {
     /// Apply a message with schema mismatch handling
     ///
     /// If the message fails due to schema mismatch and audit trail is enabled,
-    /// the changeset is stored for later verification when a snapshot arrives.
+    /// the changeset is stored for later verification when a snapshot arrives,
+    /// and `Ok(ApplyResult::StoredAsPending)` is returned to allow sync to continue.
     ///
     /// For snapshot messages, pending changesets are verified after application.
-    fn apply_message_with_audit(&mut self, message: &SignedMessage) -> Result<()> {
+    ///
+    /// Returns:
+    /// - `Ok(ApplyResult::Applied)` - message was applied to the database
+    /// - `Ok(ApplyResult::StoredAsPending)` - changeset stored for later verification
+    /// - `Err(...)` - non-recoverable error
+    fn apply_message_with_audit(&mut self, message: &SignedMessage) -> Result<ApplyResult> {
         let result = self
             .applier
             .apply_message_with_rules(message, self.rules.as_ref());
@@ -199,7 +214,7 @@ impl Validator {
                 if message.message_type == MessageType::Snapshot {
                     self.verify_pending_changesets_after_snapshot(message.sequence)?;
                 }
-                Ok(())
+                Ok(ApplyResult::Applied)
             }
             Err(e) => {
                 let error_msg = e.to_string();
@@ -240,11 +255,11 @@ impl Validator {
                         warn!(
                             sequence = message.sequence,
                             error = %error_msg,
-                            "Stored changeset as pending due to schema mismatch"
+                            "Stored changeset as pending due to schema mismatch - sync will continue"
                         );
 
-                        // Return the original error - caller decides how to handle
-                        return Err(e);
+                        // Return success - changeset is stored for later verification
+                        return Ok(ApplyResult::StoredAsPending);
                     }
                 }
 
@@ -532,13 +547,19 @@ impl Validator {
             on_withdrawal(&withdrawal);
         }
 
-        // 4. Apply to database with validation rules
-        self.applier
-            .apply_message_with_rules(&message, self.rules.as_ref())?;
+        // 4. Apply to database with audit trail handling
+        let apply_result = self.apply_message_with_audit(&message)?;
 
-        debug!(sequence, "Message applied");
+        match apply_result {
+            ApplyResult::Applied => {
+                debug!(sequence, "Message applied");
+            }
+            ApplyResult::StoredAsPending => {
+                debug!(sequence, "Message stored as pending (schema mismatch)");
+            }
+        }
 
-        // 5. Update state
+        // 5. Update state (even if stored as pending - we've processed this sequence)
         self.state.record_sync(sequence)?;
 
         info!(sequence, "Synced message");
@@ -637,13 +658,22 @@ impl Validator {
                 on_withdrawal(&withdrawal);
             }
 
-            // Apply to database with validation rules
-            self.applier
-                .apply_message_with_rules(message, self.rules.as_ref())?;
+            // Apply to database with audit trail handling
+            let apply_result = self.apply_message_with_audit(message)?;
 
-            debug!(sequence = message.sequence, "Message applied");
+            match apply_result {
+                ApplyResult::Applied => {
+                    debug!(sequence = message.sequence, "Message applied");
+                }
+                ApplyResult::StoredAsPending => {
+                    debug!(
+                        sequence = message.sequence,
+                        "Message stored as pending (schema mismatch)"
+                    );
+                }
+            }
 
-            // Update state
+            // Update state (even if stored as pending)
             self.state.record_sync(message.sequence)?;
             synced += 1;
         }
@@ -819,20 +849,28 @@ impl Validator {
                                 on_withdrawal(&withdrawal);
                             }
 
-                            // Apply with validation rules
-                            if let Err(e) = self
-                                .applier
-                                .apply_message_with_rules(message, self.rules.as_ref())
-                            {
-                                error!(
-                                    sequence = message.sequence,
-                                    error = %e,
-                                    "Failed to apply message"
-                                );
-                                return Err(e);
+                            // Apply with audit trail handling
+                            match self.apply_message_with_audit(message) {
+                                Ok(ApplyResult::Applied) => {
+                                    debug!(sequence = message.sequence, "Message applied");
+                                }
+                                Ok(ApplyResult::StoredAsPending) => {
+                                    debug!(
+                                        sequence = message.sequence,
+                                        "Message stored as pending (schema mismatch)"
+                                    );
+                                }
+                                Err(e) => {
+                                    error!(
+                                        sequence = message.sequence,
+                                        error = %e,
+                                        "Failed to apply message"
+                                    );
+                                    return Err(e);
+                                }
                             }
 
-                            // Record sync
+                            // Record sync (even if stored as pending)
                             self.state.record_sync(message.sequence)?;
                             on_sync(message.sequence);
                             next_sequence = message.sequence + 1;
