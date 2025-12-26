@@ -61,6 +61,15 @@ pub struct ValidatorConfig {
 
     #[arg(long, env = "LOG_FORMAT", default_value = "pretty")]
     pub log_format: LogFormat,
+
+    /// Enable price oracle invariants (metadata consistency and divergence checks)
+    #[arg(long, env = "ENABLE_PRICE_ORACLE_INVARIANTS", default_value = "false")]
+    pub enable_price_oracle_invariants: bool,
+
+    /// Maximum allowed price divergence in basis points (100 bps = 1%)
+    /// Only applies when price oracle invariants are enabled
+    #[arg(long, env = "PRICE_DIVERGENCE_MAX_BPS", default_value = "100")]
+    pub price_divergence_max_bps: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
@@ -97,6 +106,8 @@ impl ValidatorConfig {
             gcs_bucket: None,
             schema_cache_ttl: Duration::from_secs(3600),
             log_format: LogFormat::Pretty,
+            enable_price_oracle_invariants: false,
+            price_divergence_max_bps: 100,
         }
     }
 }

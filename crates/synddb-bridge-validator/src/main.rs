@@ -7,6 +7,7 @@ use tracing::info;
 use synddb_bridge_validator::{
     bridge::BridgeClient,
     http::{handlers::AppState, start_server},
+    invariants::{PriceDivergenceInvariant, PriceMetadataConsistencyInvariant},
     signing::MessageSigner,
     state::{MessageStore, NonceStore},
     storage::{providers::MemoryPublisher, StorageFetcher, StoragePublisher},
@@ -84,12 +85,26 @@ async fn run_primary_validator(config: ValidatorConfig) -> Result<()> {
     );
 
     // 5. Create validation pipeline
-    let pipeline = Arc::new(ValidationPipeline::new(
+    let mut pipeline = ValidationPipeline::new(
         message_store,
         nonce_store,
         config.max_clock_drift(),
         config.schema_cache_ttl,
-    ));
+    );
+
+    // Register price oracle invariants if enabled
+    if config.enable_price_oracle_invariants {
+        info!(
+            max_divergence_bps = config.price_divergence_max_bps,
+            "Enabling price oracle invariants"
+        );
+        pipeline.register_invariant(Box::new(PriceMetadataConsistencyInvariant::new()));
+        pipeline.register_invariant(Box::new(PriceDivergenceInvariant::new(
+            config.price_divergence_max_bps,
+        )));
+    }
+
+    let pipeline = Arc::new(pipeline);
 
     // 6. Create storage publisher
     let storage: Arc<dyn StoragePublisher> = create_storage_publisher(&config).await?;
@@ -156,12 +171,26 @@ async fn run_witness_validator(config: ValidatorConfig) -> Result<()> {
     );
 
     // 6. Create validation pipeline
-    let pipeline = Arc::new(ValidationPipeline::new(
+    let mut pipeline = ValidationPipeline::new(
         message_store.clone(),
         nonce_store,
         config.max_clock_drift(),
         config.schema_cache_ttl,
-    ));
+    );
+
+    // Register price oracle invariants if enabled
+    if config.enable_price_oracle_invariants {
+        info!(
+            max_divergence_bps = config.price_divergence_max_bps,
+            "Enabling price oracle invariants"
+        );
+        pipeline.register_invariant(Box::new(PriceMetadataConsistencyInvariant::new()));
+        pipeline.register_invariant(Box::new(PriceDivergenceInvariant::new(
+            config.price_divergence_max_bps,
+        )));
+    }
+
+    let pipeline = Arc::new(pipeline);
 
     // 7. Create storage fetcher
     let storage_fetcher = Arc::new(StorageFetcher::new());

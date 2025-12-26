@@ -377,7 +377,74 @@ The target contract `PriceOracle.sol` implements:
 
 ---
 
-## 12. Testing Requirements
+## 12. End-to-End Testing
+
+The price oracle includes comprehensive E2E tests that verify the full flow from price fetching through validator to smart contract.
+
+### Prerequisites
+
+1. **Anvil** - Local Ethereum node
+2. **Foundry** - For contract deployment and interaction
+3. **Rust** - For building the validator
+
+### Setup Steps
+
+```bash
+# 1. Start Anvil
+anvil --host 127.0.0.1 --port 8545 --chain-id 31337
+
+# 2. Deploy base Bridge contracts (from project root)
+./scripts/setup-e2e-test.sh
+
+# 3. Deploy PriceOracle and register domain
+./examples/price-oracle/scripts/setup-e2e.sh
+
+# 4. Start the validator with price oracle invariants
+source .e2e-test-env
+source examples/price-oracle/.e2e-env
+cargo run -p synddb-bridge-validator -- \
+    --bridge-address $BRIDGE_ADDRESS \
+    --bridge-chain-id 31337 \
+    --rpc-url $RPC_URL \
+    --private-key $VALIDATOR_PRIVATE_KEY \
+    --http-port 8080 \
+    --enable-price-oracle-invariants \
+    --price-divergence-max-bps 100
+```
+
+### Test Suites
+
+| Test File | Description | Requires Validator |
+|-----------|-------------|--------------------|
+| `test_oracle.py` | Unit tests for price fetching and comparison | No |
+| `test_bridge_integration.py` | Calldata encoding and message structure | No |
+| `test_e2e_bridge.py` | Contract deployment and registration | No |
+| `test_validator_e2e.py` | Full validator message submission flow | Yes |
+
+### Running Tests
+
+```bash
+# Without validator (unit tests and contract tests)
+source examples/price-oracle/.e2e-env
+cd examples/price-oracle
+source .venv/bin/activate
+pytest tests/test_oracle.py tests/test_bridge_integration.py tests/test_e2e_bridge.py -v
+
+# With validator (full E2E flow)
+# Start validator first, then:
+pytest tests/test_validator_e2e.py -v -s
+```
+
+### Validator Configuration Options
+
+| Option | Env Var | Description |
+|--------|---------|-------------|
+| `--enable-price-oracle-invariants` | `ENABLE_PRICE_ORACLE_INVARIANTS` | Enable metadata/calldata consistency checks |
+| `--price-divergence-max-bps` | `PRICE_DIVERGENCE_MAX_BPS` | Maximum allowed price divergence (100 = 1%) |
+
+---
+
+## 13. Mock Testing
 
 ### Mock Mode
 
@@ -407,7 +474,7 @@ Script to orchestrate all components:
 
 ---
 
-## 13. Error Handling
+## 14. Error Handling
 
 ### API Errors
 
