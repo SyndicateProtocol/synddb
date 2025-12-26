@@ -4,7 +4,16 @@
 //! with snapshots, enabling a "changeset-centric" architecture where all state
 //! transitions are auditable even when snapshots are used for efficiency.
 //!
-//! # Background
+//! # Problem Statement
+//!
+//! When validators sync from the sequencer, they may encounter schema mismatches:
+//! - A new table was added (validator doesn't have the schema yet)
+//! - A column was added/removed (validator's schema is outdated)
+//!
+//! Without this module, validators would fail and stop syncing until manually
+//! restarted with a fresh database. This is unacceptable for production systems.
+//!
+//! # Solution: Audit Trail with Deferred Verification
 //!
 //! `SQLite` changesets are invertible - an UPDATE that changes A→B can be inverted
 //! to produce a changeset that changes B→A. This property enables verification:
@@ -19,40 +28,106 @@
 //!   2. Verify the pre-image in original changeset matches S_{N-1}
 //! ```
 //!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                    Complete Audit Trail Flow                    │
+//! ├─────────────────────────────────────────────────────────────────┤
+//! │                                                                 │
+//! │  Changeset Arrives                                              │
+//! │     │                                                           │
+//! │     ├─→ validate_changeset_schema()                             │
+//! │     │   ├─→ Tables exist? ✓                                     │
+//! │     │   └─→ Column counts match? ✓                              │
+//! │     │                                                           │
+//! │     ├─→ Schema OK → Apply changeset → ApplyResult::Applied      │
+//! │     │                                                           │
+//! │     └─→ Schema Mismatch (audit_trail_enabled=true)              │
+//! │         ├─→ Store in PendingChangesetStore                      │
+//! │         ├─→ Return ApplyResult::StoredAsPending                 │
+//! │         ├─→ Record sequence as synced                           │
+//! │         └─→ Continue to next message (no failure!)              │
+//! │                                                                 │
+//! │  Snapshot Arrives                                               │
+//! │     │                                                           │
+//! │     ├─→ Apply snapshot (restores schema + data)                 │
+//! │     │                                                           │
+//! │     └─→ verify_pending_changesets_after_snapshot()              │
+//! │         ├─→ Get all pending changesets < snapshot_seq           │
+//! │         ├─→ For each: invert and verify consistency             │
+//! │         ├─→ Log verification results                            │
+//! │         └─→ Clear verified from store                           │
+//! │                                                                 │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Key Design Decisions
+//!
+//! ## 1. Sync Continues on Schema Mismatch
+//!
+//! | Before                                  | After                                    |
+//! |-----------------------------------------|------------------------------------------|
+//! | Schema mismatch → Error → Sync stops    | Schema mismatch → Store pending → Continue |
+//! | Validator waits for manual intervention | Validator auto-recovers when snapshot arrives |
+//! | No audit trail of missed changesets     | Full audit trail with verification       |
+//!
+//! **Rationale**: In a production system, validators must not halt due to schema
+//! evolution. The sequencer is the source of truth - if it sent changesets, they
+//! must be valid. Validators store what they can't apply and verify later.
+//!
+//! ## 2. Verification via Inversion
+//!
+//! Rather than replaying changesets forward (which would require the original
+//! pre-state), we verify by:
+//! 1. Starting from the snapshot (known good state)
+//! 2. Inverting the changeset (reversing the operation)
+//! 3. Applying the inverted changeset
+//! 4. If it applies cleanly, the original changeset is consistent
+//!
+//! **Rationale**: This leverages `SQLite`'s native changeset inversion, avoiding
+//! the need to maintain historical state. The snapshot provides a consistent
+//! reference point for verification.
+//!
+//! ## 3. Persistent Pending Store
+//!
+//! Pending changesets are stored in a separate `SQLite` database, not the main
+//! replicated database. This ensures:
+//! - Pending state survives validator restarts
+//! - No interference with the replicated state
+//! - Clear separation between "what we have" and "what we're verifying"
+//!
+//! ## 4. Warning Escalation for Accumulating Pending
+//!
+//! | Pending Count | Action                                           |
+//! |---------------|--------------------------------------------------|
+//! | 1-10          | Debug log, normal operation                      |
+//! | 11-100        | Warning: "Pending changesets accumulating"       |
+//! | 100+          | Error: "Snapshot required urgently"              |
+//!
+//! **Rationale**: Pending changesets should be a temporary state. If they
+//! accumulate, it indicates the sequencer isn't sending snapshots after DDL
+//! (misconfiguration) or there's a systemic issue.
+//!
 //! # Components
 //!
 //! - [`PendingChangesetStore`] - Persists changesets that couldn't be applied
 //! - [`invert_changeset`] - Inverts a changeset for reverse application
 //! - [`verify_changeset_chain`] - Verifies changesets against a snapshot
 //!
-//! # Integration Guide
+//! # Integration
 //!
-//! To integrate audit trail verification into the validator:
+//! This module is integrated into the validator via `apply_message_with_audit()`
+//! in `validator.rs`. The integration handles:
 //!
-//! ```text
-//! 1. Create a PendingChangesetStore with its own SQLite connection:
-//!    let store_conn = Connection::open("pending_changesets.db")?;
-//!    let pending_store = PendingChangesetStore::new(store_conn)?;
+//! 1. **Detection**: `validate_changeset_schema()` in `applier.rs` checks for
+//!    missing tables and column count mismatches BEFORE applying.
 //!
-//! 2. When apply_message fails with schema mismatch, store the changeset:
-//!    match applier.apply_message(&message) {
-//!        Err(e) if e.to_string().contains("Schema mismatch") => {
-//!            pending_store.store(&PendingChangeset {
-//!                sequence: message.sequence,
-//!                data: message.payload.clone(),
-//!                reason: DeferralReason::MissingTable("...".into()),
-//!            })?;
-//!        }
-//!        other => other?,
-//!    }
+//! 2. **Storage**: On schema mismatch, the changeset is stored with its
+//!    sequence number and reason in [`PendingChangesetStore`].
 //!
-//! 3. After applying a snapshot, verify pending changesets:
-//!    if message.message_type == MessageType::Snapshot {
-//!        let pending = pending_store.get_all()?;
-//!        let result = verify_changeset_chain(&applier.conn, &pending)?;
-//!        pending_store.clear_up_to(snapshot_sequence)?;
-//!    }
-//! ```
+//! 3. **Recovery**: When a snapshot arrives, `verify_pending_changesets_after_snapshot()`
+//!    verifies all pending changesets and clears them.
 //!
 //! # Known Limitations
 //!
