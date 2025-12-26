@@ -76,10 +76,10 @@ const synddb = attach('app.db', 'http://localhost:8433');
 // Critical transaction - publish immediately after commit
 const db = new Database('app.db');
 db.prepare('INSERT INTO trades VALUES (?, ?)').run(1, 1000000);
-synddb.publish();  // Don't wait for automatic publish
+synddb.publishChangeset();  // Force immediate publish
 ```
 
-**When to call `publish()` manually:**
+**When to call `publishChangeset()` manually:**
 - After critical transactions that must be sent immediately
 - Before application shutdown (handled automatically by `detach()`)
 - When you need to ensure data is sent before proceeding
@@ -127,9 +127,9 @@ Attach with custom configuration.
 
 **Returns:** SyndDB instance
 
-### `synddb.publish()`
+### `synddb.publishChangeset()`
 
-Manually publish all pending changesets immediately.
+Force immediate publication of all pending changesets.
 
 ### `synddb.snapshot()`
 

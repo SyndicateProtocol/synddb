@@ -73,10 +73,10 @@ import sqlite3
 conn = sqlite3.connect('app.db')
 conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 1000000))
 conn.commit()
-synddb.publish()  # Don't wait for automatic publish
+synddb.publish_changeset()  # Force immediate publish
 ```
 
-**When to call `publish()` manually:**
+**When to call `publish_changeset()` manually:**
 - After critical transactions that must be sent immediately
 - Before application shutdown (handled automatically by `detach()`)
 - When you need to ensure data is sent before proceeding
@@ -122,9 +122,9 @@ Attach with custom configuration.
 
 **Returns:** SyndDB instance
 
-### `synddb.publish()`
+### `synddb.publish_changeset()`
 
-Manually publish all pending changesets immediately.
+Force immediate publication of all pending changesets.
 
 ### `synddb.snapshot()`
 

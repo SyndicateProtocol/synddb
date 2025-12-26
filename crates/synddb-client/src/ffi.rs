@@ -216,7 +216,10 @@ pub unsafe extern "C" fn synddb_attach_with_config(
     SyndDBError::Success
 }
 
-/// Manually publish all pending changesets
+/// Manually publish all pending changesets immediately
+///
+/// Changesets are automatically published on a timer. Use this to force
+/// immediate publication for low-latency or high-value changes.
 ///
 /// # Arguments
 /// * `handle` - `SyndDB` handle from `synddb_attach()`
@@ -227,7 +230,7 @@ pub unsafe extern "C" fn synddb_attach_with_config(
 /// # Safety
 /// - `handle` must be a valid handle from `synddb_attach()`
 #[no_mangle]
-pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBError {
+pub unsafe extern "C" fn synddb_publish_changeset(handle: *mut SyndDBHandle) -> SyndDBError {
     clear_last_error();
 
     if handle.is_null() {
@@ -237,10 +240,10 @@ pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBErro
 
     let synddb = &*(handle as *const SyndDB);
 
-    match synddb.publish() {
+    match synddb.publish_changeset() {
         Ok(_) => SyndDBError::Success,
         Err(e) => {
-            set_last_error(format!("Failed to publish: {}", e));
+            set_last_error(format!("Failed to publish changeset: {}", e));
             SyndDBError::PublishError
         }
     }

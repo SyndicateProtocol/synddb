@@ -376,7 +376,7 @@ async fn create_account(
 ) -> Result<Json<IdResponse>, AppError> {
     let app = config.connect()?;
     let id = app.create_account(&req.name)?;
-    app.publish()?;
+    app.publish_changeset()?;
     Ok(Json(IdResponse { id }))
 }
 
@@ -414,7 +414,7 @@ async fn create_market(
         req.description.as_deref(),
         req.resolution_time,
     )?;
-    app.publish()?;
+    app.publish_changeset()?;
     Ok(Json(IdResponse { id }))
 }
 
@@ -440,7 +440,7 @@ async fn buy_shares(
 ) -> Result<Json<TradeJson>, AppError> {
     let app = config.connect()?;
     let trade = app.buy_shares(req.account_id, market_id, &req.outcome, req.shares)?;
-    app.publish()?;
+    app.publish_changeset()?;
     Ok(Json(trade.into()))
 }
 
@@ -451,7 +451,7 @@ async fn sell_shares(
 ) -> Result<Json<TradeJson>, AppError> {
     let app = config.connect()?;
     let trade = app.sell_shares(req.account_id, market_id, &req.outcome, req.shares)?;
-    app.publish()?;
+    app.publish_changeset()?;
     Ok(Json(trade.into()))
 }
 
@@ -462,7 +462,7 @@ async fn resolve_market(
 ) -> Result<StatusCode, AppError> {
     let app = config.connect()?;
     app.resolve_market(market_id, &req.outcome)?;
-    app.publish()?;
+    app.publish_changeset()?;
     Ok(StatusCode::OK)
 }
 
@@ -478,14 +478,14 @@ async fn simulate_deposit(
         req.amount,
         req.block_number,
     )?;
-    app.publish()?;
+    app.publish_changeset()?;
     Ok(Json(IdResponse { id }))
 }
 
 async fn process_deposits(State(config): State<AppState>) -> Result<Json<CountResponse>, AppError> {
     let app = config.connect()?;
     let count = app.process_deposits()?;
-    app.publish()?;
+    app.publish_changeset()?;
     Ok(Json(CountResponse { count }))
 }
 
@@ -495,7 +495,7 @@ async fn request_withdrawal(
 ) -> Result<Json<IdResponse>, AppError> {
     let app = config.connect()?;
     let id = app.request_withdrawal(req.account_id, req.amount, &req.destination_address)?;
-    app.publish()?;
+    app.publish_changeset()?;
     Ok(Json(IdResponse { id }))
 }
 

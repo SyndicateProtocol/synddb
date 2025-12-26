@@ -50,34 +50,15 @@
 //! tx.execute("INSERT INTO trades VALUES (1, 100)", [])?;
 //! tx.commit()?;
 //!
-//! synddb.publish()?;
+//! synddb.publish_changeset()?; // Optionally force immediate publish
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Publishing Strategies
+//! # Automatic Publishing
 //!
-//! `SyndDB` supports different strategies for when to publish changesets:
-//!
-//! - **Timer** (default): Automatically publishes every 1 second
-//! - **Manual**: Only publishes when you call [`SyndDB::publish()`]
-//!
-//! Configure via [`Config::publish_strategy`]:
-//!
-//! ```rust,no_run
-//! use synddb_client::{Config, PublishStrategy, SyndDB};
-//!
-//! let config = Config {
-//!     sequencer_url: "http://sequencer:8433".parse().unwrap(),
-//!     publish_strategy: PublishStrategy::Manual,
-//!     ..Default::default()
-//! };
-//! let synddb = SyndDB::open_with_config("app.db", config)?;
-//!
-//! // With Manual strategy, you control when to publish
-//! synddb.connection().execute("INSERT INTO trades VALUES (1, 100)", [])?;
-//! synddb.publish()?; // Explicitly send to sequencer
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
+//! Changesets are automatically published every second (configurable via `flush_interval`).
+//! Use [`SyndDB::publish_changeset()`] to force immediate publication for low-latency
+//! or high-value changes.
 //!
 //! # Transactions
 //!
@@ -189,7 +170,7 @@ pub mod chain_monitor_integration;
 use chain_monitor_integration::ChainMonitorHandle;
 
 pub use attestation::{is_confidential_space, AttestationClient, TokenType};
-pub use config::{Config, PublishStrategy};
+pub use config::Config;
 use recovery::FailedBatchRecovery;
 use sender::ChangesetSender;
 use session::SessionMonitor;
@@ -308,11 +289,12 @@ impl SyndDB {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use synddb_client::{Config, PublishStrategy, SyndDB};
+    /// use synddb_client::{Config, SyndDB};
+    /// use std::time::Duration;
     ///
     /// let config = Config {
     ///     sequencer_url: "http://sequencer:8433".parse().unwrap(),
-    ///     publish_strategy: PublishStrategy::Manual,
+    ///     flush_interval: Duration::from_millis(100), // Faster auto-publish
     ///     ..Default::default()
     /// };
     /// let synddb = SyndDB::open_with_config("app.db", config)?;
@@ -390,7 +372,6 @@ impl SyndDB {
     pub fn attach_with_config(conn: &'static Connection, config: Config) -> Result<Self> {
         info!("Attaching SyndDB client to SQLite connection");
         info!("Sequencer URL: {}", config.sequencer_url);
-        info!("Publish strategy: {:?}", config.publish_strategy);
 
         // Get database path (None for in-memory databases)
         let db_path = conn.path().map(String::from);
@@ -645,7 +626,7 @@ impl SyndDB {
         let tx = self.conn.unchecked_transaction()?;
         let result = f(&tx)?;
         tx.commit()?;
-        self.publish()?;
+        self.publish_changeset()?;
         Ok(result)
     }
 
@@ -653,11 +634,14 @@ impl SyndDB {
     // Publishing
     // =========================================================================
 
-    /// Publish all pending changesets to the sequencer
+    /// Publish all pending changesets to the sequencer immediately
     ///
-    /// Call this after committing transactions to send changesets to the sequencer.
+    /// Changesets are automatically published on a timer (default: every second).
+    /// Use this method to force immediate publication for low-latency or high-value
+    /// changes that shouldn't wait for the next timer tick.
+    ///
     /// Also called automatically on `Drop` for graceful shutdown.
-    pub fn publish(&self) -> Result<()> {
+    pub fn publish_changeset(&self) -> Result<()> {
         self.monitor
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Monitor already shut down"))?
@@ -1353,7 +1337,7 @@ mod tests {
             .unwrap();
 
         // Publish first batch
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Cycle 2: Insert more rows
         conn.execute("INSERT INTO test VALUES (3, 'third')", [])
@@ -1362,14 +1346,14 @@ mod tests {
             .unwrap();
 
         // Publish second batch - should NOT include rows 1-2
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Cycle 3: Update existing rows
         conn.execute("UPDATE test SET value = 'updated' WHERE id = 1", [])
             .unwrap();
 
         // Publish third batch - should only include the update
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // If session recreation is working, we should have 3 independent changesets
         // (The actual verification happens in E2E tests with validator)
@@ -1416,7 +1400,7 @@ mod tests {
 
         // Publish - this changeset should only contain the update and insert,
         // not the original 10 users (those are in the snapshot)
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
@@ -1457,7 +1441,7 @@ mod tests {
         }
 
         // Publish after batch
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Individual balance inserts (like benchmark setup)
         for i in 0..100 {
@@ -1469,7 +1453,7 @@ mod tests {
         }
 
         // Publish after individual ops
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // More batch operations
         {
@@ -1485,7 +1469,7 @@ mod tests {
         }
 
         // Final publish
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         let user_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
@@ -1516,7 +1500,7 @@ mod tests {
         for i in 1..=50 {
             conn.execute("UPDATE counter SET value = ?1 WHERE id = 1", [i])
                 .unwrap();
-            synddb.publish().unwrap();
+            synddb.publish_changeset().unwrap();
         }
 
         // Verify final state
@@ -1548,7 +1532,7 @@ mod tests {
 
         // Insert data
         conn.execute("INSERT INTO t1 VALUES (1, 'a')", []).unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Create second table (another DDL)
         synddb
@@ -1558,7 +1542,7 @@ mod tests {
         // Insert into both tables
         conn.execute("INSERT INTO t1 VALUES (2, 'b')", []).unwrap();
         conn.execute("INSERT INTO t2 VALUES (1, 1)", []).unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Verify state
         let t1_count: i64 = conn
@@ -1582,17 +1566,17 @@ mod tests {
         let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
         // Multiple empty publishes
-        synddb.publish().unwrap();
-        synddb.publish().unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
+        synddb.publish_changeset().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Now make a change
         conn.execute("INSERT INTO test VALUES (1)", []).unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // More empty publishes
-        synddb.publish().unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
+        synddb.publish_changeset().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
@@ -1623,7 +1607,7 @@ mod tests {
             tx.commit().unwrap();
         }
 
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Follow up with smaller batches
         for batch in 0..5 {
@@ -1637,7 +1621,7 @@ mod tests {
                 .unwrap();
             }
             tx.commit().unwrap();
-            synddb.publish().unwrap();
+            synddb.publish_changeset().unwrap();
         }
 
         let count: i64 = conn
@@ -1659,7 +1643,7 @@ mod tests {
         // Insert a row and commit
         conn.execute("INSERT INTO test VALUES (1, 'committed')", [])
             .unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Start a transaction, make changes, then rollback
         {
@@ -1673,12 +1657,12 @@ mod tests {
         }
 
         // Publish - should have nothing new (rollback discarded changes)
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Make another committed change
         conn.execute("INSERT INTO test VALUES (3, 'after_rollback')", [])
             .unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Verify database state
         let count: i64 = conn
@@ -1709,16 +1693,16 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Delete some rows
         conn.execute("DELETE FROM test WHERE id IN (2, 4)", [])
             .unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Delete all remaining
         conn.execute("DELETE FROM test", []).unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
@@ -1747,7 +1731,7 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Use INSERT OR REPLACE to update values (like orderbook benchmark)
         for i in 1..=10 {
@@ -1757,7 +1741,7 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Verify final state
         let total: i64 = conn
@@ -1795,7 +1779,7 @@ mod tests {
         conn.execute("INSERT INTO t1 VALUES (2, 'new')", [])
             .unwrap();
         conn.execute("INSERT INTO t2 VALUES (1, 2)", []).unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Verify state
         let t1_count: i64 = conn
@@ -1829,7 +1813,7 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Update large text
         let updated_text = "y".repeat(100 * 1024);
@@ -1838,7 +1822,7 @@ mod tests {
             rusqlite::params![&updated_text],
         )
         .unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM docs", [], |row| row.get(0))
@@ -1864,7 +1848,7 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
@@ -1910,7 +1894,7 @@ mod tests {
             .unwrap();
             tx.commit().unwrap();
         }
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Verify all tables updated
         let user_count: i64 = conn
@@ -1946,7 +1930,7 @@ mod tests {
             .unwrap();
         conn.execute("INSERT INTO nullable VALUES (3, NULL, 42)", [])
             .unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         // Update NULL to value
         conn.execute("UPDATE nullable SET val1 = 'now_set' WHERE id = 1", [])
@@ -1954,7 +1938,7 @@ mod tests {
         // Update value to NULL
         conn.execute("UPDATE nullable SET val1 = NULL WHERE id = 2", [])
             .unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -1988,7 +1972,7 @@ mod tests {
         // Insert data
         conn.execute("INSERT INTO test VALUES (1, 'first')", [])
             .unwrap();
-        synddb.publish().unwrap();
+        synddb.publish_changeset().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
