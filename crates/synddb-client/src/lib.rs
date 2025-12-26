@@ -1560,4 +1560,356 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1050);
     }
+
+    #[test]
+    fn test_rollback_not_captured() {
+        // Verify that rolled-back transactions are NOT captured in changesets.
+        // This is important for data integrity - only committed changes should replicate.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Insert a row and commit
+        conn.execute("INSERT INTO test VALUES (1, 'committed')", [])
+            .unwrap();
+        synddb.publish().unwrap();
+
+        // Start a transaction, make changes, then rollback
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            tx.execute("INSERT INTO test VALUES (2, 'will_rollback')", [])
+                .unwrap();
+            tx.execute("UPDATE test SET value = 'modified' WHERE id = 1", [])
+                .unwrap();
+            // Explicitly rollback (drop without commit)
+            drop(tx);
+        }
+
+        // Publish - should have nothing new (rollback discarded changes)
+        synddb.publish().unwrap();
+
+        // Make another committed change
+        conn.execute("INSERT INTO test VALUES (3, 'after_rollback')", [])
+            .unwrap();
+        synddb.publish().unwrap();
+
+        // Verify database state
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2); // Only rows 1 and 3
+
+        let value: String = conn
+            .query_row("SELECT value FROM test WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "committed"); // Not modified
+    }
+
+    #[test]
+    fn test_delete_operations() {
+        // Verify DELETE operations are captured correctly.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Insert rows
+        for i in 1..=5 {
+            conn.execute(
+                "INSERT INTO test VALUES (?1, ?2)",
+                rusqlite::params![i, format!("value{}", i)],
+            )
+            .unwrap();
+        }
+        synddb.publish().unwrap();
+
+        // Delete some rows
+        conn.execute("DELETE FROM test WHERE id IN (2, 4)", [])
+            .unwrap();
+        synddb.publish().unwrap();
+
+        // Delete all remaining
+        conn.execute("DELETE FROM test", []).unwrap();
+        synddb.publish().unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_insert_or_replace_pattern() {
+        // Test INSERT OR REPLACE (used in orderbook benchmark for balance updates).
+        // This generates DELETE + INSERT changesets, not UPDATE.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute(
+            "CREATE TABLE balances (user_id INTEGER PRIMARY KEY, amount INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Initial inserts
+        for i in 1..=10 {
+            conn.execute(
+                "INSERT INTO balances VALUES (?1, ?2)",
+                rusqlite::params![i, 1000],
+            )
+            .unwrap();
+        }
+        synddb.publish().unwrap();
+
+        // Use INSERT OR REPLACE to update values (like orderbook benchmark)
+        for i in 1..=10 {
+            conn.execute(
+                "INSERT OR REPLACE INTO balances VALUES (?1, ?2)",
+                rusqlite::params![i, 2000],
+            )
+            .unwrap();
+        }
+        synddb.publish().unwrap();
+
+        // Verify final state
+        let total: i64 = conn
+            .query_row("SELECT SUM(amount) FROM balances", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(total, 20000); // 10 users * 2000
+    }
+
+    #[test]
+    fn test_preexisting_data_then_ddl() {
+        // Attach to database with existing data, then perform DDL.
+        // This combines auto_snapshot_on_attach with auto_snapshot_after_ddl.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        // Pre-existing schema and data
+        conn.execute("CREATE TABLE t1 (id INTEGER PRIMARY KEY, val TEXT)", [])
+            .unwrap();
+        conn.execute("INSERT INTO t1 VALUES (1, 'existing')", [])
+            .unwrap();
+
+        // Attach with both auto-snapshot features enabled
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            auto_snapshot_on_attach: true,
+            auto_snapshot_after_ddl: true,
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // DDL after attach (should trigger another snapshot)
+        synddb
+            .execute_ddl("CREATE TABLE t2 (id INTEGER PRIMARY KEY, ref_id INTEGER)")
+            .unwrap();
+
+        // DML on both tables
+        conn.execute("INSERT INTO t1 VALUES (2, 'new')", [])
+            .unwrap();
+        conn.execute("INSERT INTO t2 VALUES (1, 2)", []).unwrap();
+        synddb.publish().unwrap();
+
+        // Verify state
+        let t1_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM t1", [], |row| row.get(0))
+            .unwrap();
+        let t2_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM t2", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(t1_count, 2);
+        assert_eq!(t2_count, 1);
+    }
+
+    #[test]
+    fn test_large_text_values() {
+        // Test handling of large TEXT values (edge case for changeset size).
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute(
+            "CREATE TABLE docs (id INTEGER PRIMARY KEY, content TEXT)",
+            [],
+        )
+        .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Insert rows with large text (100KB each)
+        let large_text = "x".repeat(100 * 1024);
+        for i in 1..=5 {
+            conn.execute(
+                "INSERT INTO docs VALUES (?1, ?2)",
+                rusqlite::params![i, &large_text],
+            )
+            .unwrap();
+        }
+        synddb.publish().unwrap();
+
+        // Update large text
+        let updated_text = "y".repeat(100 * 1024);
+        conn.execute(
+            "UPDATE docs SET content = ?1 WHERE id = 1",
+            rusqlite::params![&updated_text],
+        )
+        .unwrap();
+        synddb.publish().unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM docs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_blob_values() {
+        // Test handling of BLOB values.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE files (id INTEGER PRIMARY KEY, data BLOB)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Insert binary data
+        let blob_data: Vec<u8> = (0..=255).cycle().take(50 * 1024).collect();
+        for i in 1..=3 {
+            conn.execute(
+                "INSERT INTO files VALUES (?1, ?2)",
+                rusqlite::params![i, &blob_data],
+            )
+            .unwrap();
+        }
+        synddb.publish().unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_multiple_tables_single_transaction() {
+        // Test modifications to multiple tables in a single transaction.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, item TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE audit_log (id INTEGER PRIMARY KEY, action TEXT, ts INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Single transaction touching all tables
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            tx.execute("INSERT INTO users VALUES (1, 'Alice')", [])
+                .unwrap();
+            tx.execute("INSERT INTO orders VALUES (1, 1, 'Widget')", [])
+                .unwrap();
+            tx.execute(
+                "INSERT INTO audit_log VALUES (1, 'user_created', 12345)",
+                [],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO audit_log VALUES (2, 'order_placed', 12346)",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        synddb.publish().unwrap();
+
+        // Verify all tables updated
+        let user_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .unwrap();
+        let order_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM orders", [], |row| row.get(0))
+            .unwrap();
+        let audit_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(user_count, 1);
+        assert_eq!(order_count, 1);
+        assert_eq!(audit_count, 2);
+    }
+
+    #[test]
+    fn test_null_values() {
+        // Test handling of NULL values in changesets.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute(
+            "CREATE TABLE nullable (id INTEGER PRIMARY KEY, val1 TEXT, val2 INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Insert with NULLs
+        conn.execute("INSERT INTO nullable VALUES (1, NULL, NULL)", [])
+            .unwrap();
+        conn.execute("INSERT INTO nullable VALUES (2, 'has_value', NULL)", [])
+            .unwrap();
+        conn.execute("INSERT INTO nullable VALUES (3, NULL, 42)", [])
+            .unwrap();
+        synddb.publish().unwrap();
+
+        // Update NULL to value
+        conn.execute("UPDATE nullable SET val1 = 'now_set' WHERE id = 1", [])
+            .unwrap();
+        // Update value to NULL
+        conn.execute("UPDATE nullable SET val1 = NULL WHERE id = 2", [])
+            .unwrap();
+        synddb.publish().unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM nullable WHERE val1 IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2); // Rows 2 and 3
+    }
+
+    #[test]
+    fn test_empty_database_then_schema() {
+        // Attach to completely empty database, then create schema.
+        // Opposite of pre-existing data pattern.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        // Attach to empty DB - no auto_snapshot_on_attach (no tables)
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            auto_snapshot_on_attach: true, // Won't trigger - no tables
+            auto_snapshot_after_ddl: true,
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Create schema (triggers snapshot)
+        synddb
+            .execute_ddl("CREATE TABLE test (id INTEGER PRIMARY KEY, val TEXT)")
+            .unwrap();
+
+        // Insert data
+        conn.execute("INSERT INTO test VALUES (1, 'first')", [])
+            .unwrap();
+        synddb.publish().unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
 }
