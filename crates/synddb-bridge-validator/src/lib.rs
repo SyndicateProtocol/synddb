@@ -12,3 +12,4 @@ pub mod validation;
 
 pub use config::{LogFormat, ValidatorConfig, ValidatorMode};
 pub use error::ValidationError;
+pub use http::start_server;

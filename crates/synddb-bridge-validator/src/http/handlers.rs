@@ -1,18 +1,29 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::bridge::BridgeClient;
 use crate::config::ValidatorMode;
-use crate::types::{ErrorResponse, MessageRequest, MessageResponse, MessageStatus};
+use crate::signing::MessageSigner;
+use crate::storage::{StoragePublisher, StorageRecord};
+use crate::storage::record::{MessageRecord, PublicationRecord, SignatureRecord};
+use crate::types::{
+    compute_message_id, compute_metadata_hash, ErrorResponse, Message, MessageRequest,
+    MessageResponse, MessageStatus,
+};
+use crate::validation::ValidationPipeline;
 
 pub struct AppState {
     pub mode: ValidatorMode,
-    // TODO: Add pipeline, signer, storage, bridge client
+    pub pipeline: Arc<ValidationPipeline>,
+    pub signer: Arc<MessageSigner>,
+    pub bridge_client: Arc<BridgeClient>,
+    pub storage: Arc<dyn StoragePublisher>,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,32 +51,182 @@ pub async fn ready() -> Json<ReadyResponse> {
 }
 
 pub async fn submit_message(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<MessageRequest>,
 ) -> Result<Json<MessageResponse>, (StatusCode, Json<MessageResponse>)> {
-    // TODO: Implement full message validation flow
-    // 1. Compute message ID
-    // 2. Run validation pipeline
-    // 3. Sign message
-    // 4. Publish to storage
-    // 5. Initialize on bridge
-    // 6. Return response
+    // 1. Parse request and compute message ID
+    let metadata_hash = compute_metadata_hash(&request.metadata).map_err(|e| {
+        error_response(
+            StatusCode::BAD_REQUEST,
+            "METADATA_INVALID",
+            &format!("Failed to compute metadata hash: {}", e),
+        )
+    })?;
 
-    let message_id = [0u8; 32]; // TODO: compute actual message ID
+    let message_id = compute_message_id(
+        &request.message_type,
+        &request.calldata,
+        &metadata_hash,
+        request.nonce,
+        request.timestamp,
+        &request.domain,
+    );
 
-    // Placeholder response
-    let response = MessageResponse {
-        status: MessageStatus::Rejected,
-        message_id,
-        signature: None,
-        storage_ref: None,
-        error: Some(ErrorResponse {
-            code: "NOT_IMPLEMENTED".to_string(),
-            message: format!("Message submission not yet implemented for type: {}", request.message_type),
-        }),
+    let value = request
+        .value
+        .as_ref()
+        .map(|v| v.parse::<u128>())
+        .transpose()
+        .map_err(|e| {
+            error_response(
+                StatusCode::BAD_REQUEST,
+                "VALUE_INVALID",
+                &format!("Failed to parse value: {}", e),
+            )
+        })?;
+
+    let message = Message {
+        id: message_id,
+        message_type: request.message_type.clone(),
+        calldata: request.calldata.clone(),
+        metadata: request.metadata.clone(),
+        metadata_hash,
+        nonce: request.nonce,
+        timestamp: request.timestamp,
+        domain: request.domain,
+        value,
     };
 
-    Err((StatusCode::NOT_IMPLEMENTED, Json(response)))
+    // 2. Fetch validation context from bridge
+    let ctx = state
+        .pipeline
+        .fetch_context(&message, &state.bridge_client)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                e.error_code(),
+                &e.to_string(),
+            )
+        })?;
+
+    // 3. Run validation pipeline
+    state
+        .pipeline
+        .validate(&message, &ctx)
+        .await
+        .map_err(|e| error_response(StatusCode::BAD_REQUEST, e.error_code(), &e.to_string()))?;
+
+    // 4. Sign the message
+    let signature = state.signer.sign_message(&message).await.map_err(|e| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "SIGNING_FAILED",
+            &format!("Failed to sign message: {}", e),
+        )
+    })?;
+
+    // 5. Publish to storage
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let validator_address: [u8; 20] = state.signer.address().into_array();
+
+    let record = StorageRecord {
+        message: MessageRecord::from(&message),
+        primary_signature: SignatureRecord {
+            validator: validator_address,
+            signature: signature.clone(),
+            signed_at: now,
+        },
+        publication: PublicationRecord {
+            published_by: validator_address,
+            published_at: now,
+        },
+    };
+
+    let storage_ref = state.storage.publish(&record).await.map_err(|e| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "STORAGE_PUBLISH_FAILED",
+            &format!("Failed to publish to storage: {}", e),
+        )
+    })?;
+
+    // 6. Initialize message on bridge
+    state
+        .bridge_client
+        .initialize_message(&message, &storage_ref, value)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "BRIDGE_SUBMIT_FAILED",
+                &format!("Failed to initialize message on bridge: {}", e),
+            )
+        })?;
+
+    // 7. Consume nonce and mark processed
+    state
+        .pipeline
+        .consume_nonce(&message.domain, message.nonce)
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                &e.to_string(),
+            )
+        })?;
+
+    state
+        .pipeline
+        .mark_message_processed(&message.id)
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                &e.to_string(),
+            )
+        })?;
+
+    // 8. Return success response
+    tracing::info!(
+        message_id = %hex::encode(message_id),
+        storage_ref = %storage_ref,
+        "Message accepted and initialized on bridge"
+    );
+
+    Ok(Json(MessageResponse {
+        status: MessageStatus::Accepted,
+        message_id,
+        signature: Some(signature),
+        storage_ref: Some(storage_ref),
+        error: None,
+    }))
+}
+
+fn error_response(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+) -> (StatusCode, Json<MessageResponse>) {
+    tracing::warn!(code = code, message = message, "Message rejected");
+
+    (
+        status,
+        Json(MessageResponse {
+            status: MessageStatus::Rejected,
+            message_id: [0u8; 32],
+            signature: None,
+            storage_ref: None,
+            error: Some(ErrorResponse {
+                code: code.to_string(),
+                message: message.to_string(),
+            }),
+        }),
+    )
 }
 
 #[derive(Debug, Serialize)]

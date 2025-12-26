@@ -10,13 +10,8 @@ use tokio::net::TcpListener;
 use tracing::info;
 
 use super::handlers::{get_message_status, get_schema, health, ready, submit_message, AppState};
-use crate::config::ValidatorConfig;
 
-pub async fn start_server(config: &ValidatorConfig) -> Result<()> {
-    let state = Arc::new(AppState {
-        mode: config.mode,
-    });
-
+pub async fn start_server(state: Arc<AppState>, host: &str, port: u16) -> Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
@@ -25,7 +20,7 @@ pub async fn start_server(config: &ValidatorConfig) -> Result<()> {
         .route("/schemas/:message_type", get(get_schema))
         .with_state(state);
 
-    let addr: SocketAddr = format!("{}:{}", config.http_host, config.http_port).parse()?;
+    let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
     let listener = TcpListener::bind(addr).await?;
 
     info!(address = %addr, "HTTP server listening");
