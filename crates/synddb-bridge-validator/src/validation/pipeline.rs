@@ -148,8 +148,8 @@ impl ValidationPipeline {
             None
         } else {
             // Convert schema_hash to Option for verification
-            let expected_hash =
-                (message_type_config.schema_hash != [0u8; 32]).then_some(&message_type_config.schema_hash);
+            let expected_hash = (message_type_config.schema_hash != [0u8; 32])
+                .then_some(&message_type_config.schema_hash);
 
             match self
                 .schema_fetcher

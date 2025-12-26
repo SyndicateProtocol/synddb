@@ -1,6 +1,6 @@
 //! End-to-end tests for the bridge validator against real contracts.
 //!
-//! These tests require Anvil to be running with the MessageBridge contract deployed.
+//! These tests require Anvil to be running with the `MessageBridge` contract deployed.
 //! Run the setup script first:
 //! ```
 //! ./scripts/setup-e2e-test.sh

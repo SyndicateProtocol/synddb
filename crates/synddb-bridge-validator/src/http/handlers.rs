@@ -366,8 +366,7 @@ pub async fn get_schema(
     let schema = if config.schema_uri.is_empty() {
         None
     } else {
-        let expected_hash =
-            (config.schema_hash != [0u8; 32]).then_some(&config.schema_hash);
+        let expected_hash = (config.schema_hash != [0u8; 32]).then_some(&config.schema_hash);
 
         // Use a temporary fetcher since we don't have direct access to pipeline's
         use crate::validation::SchemaFetcher;

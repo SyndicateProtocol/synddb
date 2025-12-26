@@ -64,11 +64,11 @@ async fn test_message_id_computation_matches_contract() {
     // Compute expected using the same algorithm
     let mut hasher = Keccak256::new();
     hasher.update(message_type.as_bytes());
-    hasher.update(&calldata);
-    hasher.update(&metadata_hash);
-    hasher.update(&nonce.to_be_bytes());
-    hasher.update(&timestamp.to_be_bytes());
-    hasher.update(&domain);
+    hasher.update(calldata);
+    hasher.update(metadata_hash);
+    hasher.update(nonce.to_be_bytes());
+    hasher.update(timestamp.to_be_bytes());
+    hasher.update(domain);
     let expected: [u8; 32] = hasher.finalize().into();
 
     assert_eq!(
