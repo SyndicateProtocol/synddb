@@ -53,6 +53,54 @@ CREATE TABLE IF NOT EXISTS tracked_assets (
 INSERT OR IGNORE INTO tracked_assets (symbol, display_name, active) VALUES
     ('bitcoin', 'BTC', 1),
     ('ethereum', 'ETH', 1);
+
+-- ============================================================
+-- BRIDGE MESSAGE TABLES
+-- These tables enable bidirectional communication with the
+-- PriceOracle smart contract via the SyndDB Bridge.
+-- ============================================================
+
+-- Outbound messages: Price updates pushed to the contract
+-- The sequencer reads from this table and submits to Bridge.sol
+CREATE TABLE IF NOT EXISTS message_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_type TEXT NOT NULL,         -- 'price_update', 'batch_price_update', 'price_response'
+    payload TEXT NOT NULL,              -- JSON: {asset, price, timestamp} or array for batch
+    idempotency_key TEXT UNIQUE,        -- Prevents duplicate messages
+    status TEXT DEFAULT 'pending',      -- 'pending', 'submitted', 'confirmed', 'failed'
+    created_at INTEGER DEFAULT (unixepoch()),
+    -- Audit fields
+    trigger_event TEXT,                 -- What caused this message (e.g., 'scheduled_update', 'price_request')
+    trigger_id TEXT,                    -- Reference to causing record (e.g., request_id)
+    -- Status tracking
+    submitted_at INTEGER,
+    tx_hash TEXT,
+    error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_log_status ON message_log(status);
+CREATE INDEX IF NOT EXISTS idx_message_log_type ON message_log(message_type);
+
+-- Inbound messages: Price requests from the contract
+-- The chain monitor listens for PriceRequested events and inserts here
+CREATE TABLE IF NOT EXISTS inbound_message_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT UNIQUE NOT NULL,    -- requestId from the PriceRequested event
+    message_type TEXT NOT NULL,         -- 'price_request'
+    payload TEXT NOT NULL,              -- JSON: {asset, requester, max_age, block_number, tx_hash}
+    block_number INTEGER NOT NULL,
+    tx_hash TEXT NOT NULL,
+    log_index INTEGER,
+    processed INTEGER NOT NULL DEFAULT 0,
+    processed_at INTEGER,
+    created_at INTEGER DEFAULT (unixepoch()),
+    -- Response tracking
+    response_message_id INTEGER,        -- FK to message_log if we sent a response
+    FOREIGN KEY (response_message_id) REFERENCES message_log(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inbound_processed ON inbound_message_log(processed);
+CREATE INDEX IF NOT EXISTS idx_inbound_type ON inbound_message_log(message_type);
 """
 
 
@@ -115,3 +163,66 @@ def remove_tracked_asset(conn: sqlite3.Connection, symbol: str) -> None:
         "UPDATE tracked_assets SET active = 0 WHERE symbol = ?", (symbol,)
     )
     conn.commit()
+
+
+# ============================================================
+# Message Log Functions
+# ============================================================
+
+
+def get_pending_outbound_messages(conn: sqlite3.Connection) -> list[dict]:
+    """Get all pending outbound messages.
+
+    Returns:
+        List of message dicts with id, message_type, payload, etc.
+    """
+    cursor = conn.execute(
+        """
+        SELECT id, message_type, payload, idempotency_key, status, created_at,
+               trigger_event, trigger_id
+        FROM message_log
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+        """
+    )
+    return [
+        {
+            "id": row[0],
+            "message_type": row[1],
+            "payload": row[2],
+            "idempotency_key": row[3],
+            "status": row[4],
+            "created_at": row[5],
+            "trigger_event": row[6],
+            "trigger_id": row[7],
+        }
+        for row in cursor.fetchall()
+    ]
+
+
+def get_unprocessed_inbound_messages(conn: sqlite3.Connection) -> list[dict]:
+    """Get all unprocessed inbound messages (price requests).
+
+    Returns:
+        List of message dicts with message_id, payload, etc.
+    """
+    cursor = conn.execute(
+        """
+        SELECT id, message_id, message_type, payload, block_number, tx_hash, log_index
+        FROM inbound_message_log
+        WHERE processed = 0
+        ORDER BY created_at ASC
+        """
+    )
+    return [
+        {
+            "id": row[0],
+            "message_id": row[1],
+            "message_type": row[2],
+            "payload": row[3],
+            "block_number": row[4],
+            "tx_hash": row[5],
+            "log_index": row[6],
+        }
+        for row in cursor.fetchall()
+    ]
