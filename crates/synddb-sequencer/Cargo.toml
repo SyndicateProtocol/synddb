@@ -69,11 +69,12 @@ gcs = ["google-cloud-storage"]
 
 # TODO: Implement additional DA layer transports
 # See PLAN_TODO.md for tracking and crates/synddb-sequencer/src/transport/ for implementation plans
-tee = []        # TEE-specific functionality
-celestia = []   # Celestia DA layer
-eigenda = []    # EigenDA layer
-ipfs = []       # IPFS storage
-arweave = []    # Arweave permanent storage (see transport/arweave.rs for detailed plan)
+tee = [] # TEE-specific functionality
+celestia = [] # Celestia DA layer
+eigenda = [] # EigenDA layer
+ipfs = [] # IPFS storage
+arweave = [
+] # Arweave permanent storage (see transport/arweave.rs for detailed plan)
 
 [dev-dependencies]
 tempfile = "3.24.0"

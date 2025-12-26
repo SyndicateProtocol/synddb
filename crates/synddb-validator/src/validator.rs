@@ -1054,7 +1054,7 @@ mod tests {
     }
 
     /// Create a changeset for testing
-    fn create_update_changeset(conn: &rusqlite::Connection, new_name: &str) -> Vec<u8> {
+    fn create_update_changeset(conn: &Connection, new_name: &str) -> Vec<u8> {
         let mut session = Session::new(conn).unwrap();
         session.attach(None::<&str>).unwrap();
 
@@ -1069,7 +1069,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_one() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1133,7 +1133,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_to_head() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1282,7 +1282,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_batch() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1338,7 +1338,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_to_head_batched() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1398,7 +1398,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_to_head_batched_fallback() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1487,7 +1487,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_batch_skip_already_synced() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1546,7 +1546,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_rejects_invalid_batch_signature() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1607,7 +1607,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_rejects_tampered_batch_messages() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();

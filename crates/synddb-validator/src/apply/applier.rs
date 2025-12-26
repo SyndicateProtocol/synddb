@@ -480,6 +480,7 @@ impl std::fmt::Debug for ChangesetApplier {
 mod tests {
     use super::*;
     use rusqlite::session::Session;
+    use Cursor;
 
     /// Create a test changeset that modifies a table (returns raw bytes)
     fn create_test_changeset(source_conn: &Connection) -> Vec<u8> {
@@ -640,7 +641,7 @@ mod tests {
         encoder.finish().unwrap()
     }
 
-    /// Create bytes from a given connection using SQLite backup
+    /// Create bytes from a given connection using `SQLite` backup
     fn create_database_bytes_from(conn: &Connection) -> Vec<u8> {
         use std::{
             fs,
@@ -1348,7 +1349,7 @@ mod tests {
         let mut applier = ChangesetApplier::in_memory().unwrap();
 
         // Step 1: Changeset fails (no schema)
-        let compressed1 = create_compressed_batch(vec![changeset.clone()]);
+        let compressed1 = create_compressed_batch(vec![changeset]);
         let message1 = SignedMessage {
             sequence: 0,
             timestamp: 1700000000,
@@ -1445,7 +1446,7 @@ mod tests {
             .unwrap();
 
         // Apply the TEXT changeset to INTEGER column
-        let mut cursor = std::io::Cursor::new(&changeset_text);
+        let mut cursor = Cursor::new(&changeset_text);
         let result = target.apply_strm(&mut cursor, None::<fn(&str) -> bool>, |_, _| {
             ConflictAction::SQLITE_CHANGESET_ABORT
         });
@@ -1495,7 +1496,7 @@ mod tests {
             .unwrap();
 
         // Apply the INTEGER changeset to TEXT column
-        let mut cursor2 = std::io::Cursor::new(&changeset_int);
+        let mut cursor2 = Cursor::new(&changeset_int);
         let result2 = target2.apply_strm(&mut cursor2, None::<fn(&str) -> bool>, |_, _| {
             ConflictAction::SQLITE_CHANGESET_ABORT
         });
