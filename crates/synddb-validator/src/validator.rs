@@ -4,7 +4,10 @@
 //! sequenced messages to maintain a replica of the sequenced state.
 
 use crate::{
-    apply::applier::ChangesetApplier,
+    apply::{
+        applier::ChangesetApplier,
+        audit::{DeferralReason, PendingChangeset, PendingChangesetStore},
+    },
     config::ValidatorConfig,
     error::ValidatorError,
     rules::RuleRegistry,
@@ -16,8 +19,9 @@ use crate::{
     },
 };
 use anyhow::{Context, Result};
+use rusqlite::Connection;
 use std::{sync::Arc, time::Duration};
-use synddb_shared::types::message::SignedBatch;
+use synddb_shared::types::message::{MessageType, SignedBatch, SignedMessage};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
@@ -31,6 +35,10 @@ pub struct Validator {
     applier: ChangesetApplier,
     /// State persistence for crash recovery
     state: StateStore,
+    /// Pending changeset store for audit trail (optional)
+    pending_store: Option<PendingChangesetStore>,
+    /// Whether audit trail is enabled
+    audit_trail_enabled: bool,
     /// Sync poll interval
     sync_interval: Duration,
     /// Shutdown receiver
@@ -64,12 +72,26 @@ impl Validator {
         let applier = ChangesetApplier::new(&config.database_path)?;
         let state = StateStore::new(&config.state_db_path)?;
 
+        // Initialize pending changeset store if audit trail is enabled
+        let pending_store = if config.audit_trail_enabled {
+            let pending_conn = if config.pending_changesets_db_path == ":memory:" {
+                Connection::open_in_memory()
+            } else {
+                Connection::open(&config.pending_changesets_db_path)
+            }
+            .context("Failed to open pending changesets database")?;
+            Some(PendingChangesetStore::new(pending_conn)?)
+        } else {
+            None
+        };
+
         info!(
             sequencer_pubkey = %config.sequencer_pubkey,
             database = %config.database_path,
             gap_retry_count = config.gap_retry_count,
             gap_skip_on_failure = config.gap_skip_on_failure,
             batch_sync_enabled = config.batch_sync_enabled,
+            audit_trail_enabled = config.audit_trail_enabled,
             "Validator initialized"
         );
 
@@ -78,6 +100,8 @@ impl Validator {
             verifier,
             applier,
             state,
+            pending_store,
+            audit_trail_enabled: config.audit_trail_enabled,
             sync_interval: config.sync_interval,
             shutdown_rx,
             gap_retry_count: config.gap_retry_count,
@@ -99,11 +123,18 @@ impl Validator {
         let applier = ChangesetApplier::in_memory()?;
         let state = StateStore::in_memory()?;
 
+        // Create in-memory pending store for testing
+        let pending_conn = Connection::open_in_memory()
+            .context("Failed to open in-memory pending changesets database")?;
+        let pending_store = Some(PendingChangesetStore::new(pending_conn)?);
+
         Ok(Self {
             fetcher,
             verifier,
             applier,
             state,
+            pending_store,
+            audit_trail_enabled: true,
             sync_interval: Duration::from_millis(100),
             shutdown_rx,
             gap_retry_count: 3,
@@ -140,8 +171,138 @@ impl Validator {
     }
 
     /// Get a reference to the database connection (for queries)
-    pub const fn connection(&self) -> &rusqlite::Connection {
+    pub const fn connection(&self) -> &Connection {
         &self.applier.conn
+    }
+
+    /// Get the count of pending changesets awaiting verification
+    pub fn pending_changeset_count(&self) -> Result<u64> {
+        self.pending_store
+            .as_ref()
+            .map_or(Ok(0), PendingChangesetStore::count)
+    }
+
+    /// Apply a message with schema mismatch handling
+    ///
+    /// If the message fails due to schema mismatch and audit trail is enabled,
+    /// the changeset is stored for later verification when a snapshot arrives.
+    ///
+    /// For snapshot messages, pending changesets are verified after application.
+    fn apply_message_with_audit(&mut self, message: &SignedMessage) -> Result<()> {
+        let result = self
+            .applier
+            .apply_message_with_rules(message, self.rules.as_ref());
+
+        match result {
+            Ok(()) => {
+                // If this was a snapshot, verify pending changesets
+                if message.message_type == MessageType::Snapshot {
+                    self.verify_pending_changesets_after_snapshot(message.sequence)?;
+                }
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+
+                // Check if this is a schema mismatch error
+                let is_schema_mismatch = error_msg.contains("Schema mismatch")
+                    || error_msg.contains("don't exist")
+                    || error_msg.contains("column");
+
+                if is_schema_mismatch && message.message_type == MessageType::Changeset {
+                    // Store as pending if audit trail is enabled
+                    if let Some(store) = &self.pending_store {
+                        let reason = if error_msg.contains("don't exist") {
+                            // Extract table name from error if possible
+                            DeferralReason::MissingTable(
+                                error_msg
+                                    .split(':')
+                                    .next_back()
+                                    .unwrap_or("unknown")
+                                    .trim()
+                                    .to_string(),
+                            )
+                        } else {
+                            DeferralReason::ColumnMismatch {
+                                table: "unknown".to_string(),
+                                expected: 0,
+                                actual: 0,
+                            }
+                        };
+
+                        let pending = PendingChangeset {
+                            sequence: message.sequence,
+                            data: message.payload.clone(),
+                            reason,
+                        };
+
+                        store.store(&pending)?;
+                        warn!(
+                            sequence = message.sequence,
+                            error = %error_msg,
+                            "Stored changeset as pending due to schema mismatch"
+                        );
+
+                        // Return the original error - caller decides how to handle
+                        return Err(e);
+                    }
+                }
+
+                // Not a schema mismatch or audit trail disabled - propagate error
+                Err(e)
+            }
+        }
+    }
+
+    /// Verify pending changesets after a snapshot has been applied
+    fn verify_pending_changesets_after_snapshot(&self, snapshot_sequence: u64) -> Result<()> {
+        let store = match &self.pending_store {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+
+        let pending_count = store.count()?;
+        if pending_count == 0 {
+            return Ok(());
+        }
+
+        info!(
+            snapshot_sequence,
+            pending_count, "Verifying pending changesets after snapshot"
+        );
+
+        // Get pending changesets up to this snapshot
+        let pending = store.get_all()?;
+        let relevant: Vec<_> = pending
+            .into_iter()
+            .filter(|p| p.sequence < snapshot_sequence)
+            .collect();
+
+        if relevant.is_empty() {
+            return Ok(());
+        }
+
+        // Verify the changesets
+        let result = crate::apply::audit::verify_changeset_chain(&self.applier.conn, &relevant)?;
+
+        info!(
+            verified = result.verified.len(),
+            failed = result.failed.len(),
+            "Pending changeset verification complete"
+        );
+
+        for failure in &result.failed {
+            warn!(
+                sequence = failure.sequence,
+                reason = %failure.reason,
+                "Changeset verification failed"
+            );
+        }
+
+        // Clear verified changesets up to the snapshot
+        store.clear_up_to(snapshot_sequence)?;
+
+        Ok(())
     }
 
     /// Run the sync loop with callbacks for withdrawals and progress updates

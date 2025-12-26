@@ -51,6 +51,24 @@ pub struct ValidatorConfig {
     )]
     pub state_db_path: String,
 
+    /// Path to the `SQLite` database file for pending changesets (audit trail)
+    ///
+    /// Stores changesets that couldn't be applied due to schema mismatch.
+    /// These are verified when a snapshot arrives to maintain audit trail.
+    #[arg(
+        long,
+        env = "PENDING_CHANGESETS_DB_PATH",
+        default_value = "/data/pending_changesets.db"
+    )]
+    pub pending_changesets_db_path: String,
+
+    /// Enable audit trail for schema mismatch recovery
+    ///
+    /// When enabled, changesets that fail due to schema mismatch are stored
+    /// and verified against snapshots for auditability.
+    #[arg(long, env = "AUDIT_TRAIL_ENABLED", default_value = "true", action = clap::ArgAction::Set)]
+    pub audit_trail_enabled: bool,
+
     /// Expected sequencer public key (for signature verification)
     ///
     /// This should be the 64-byte uncompressed public key in hex format (128 hex chars),
@@ -169,6 +187,8 @@ impl ValidatorConfig {
             "--database-path",
             ":memory:",
             "--state-db-path",
+            ":memory:",
+            "--pending-changesets-db-path",
             ":memory:",
         ])
     }
