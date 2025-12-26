@@ -64,9 +64,6 @@ struct SessionState {
     snapshot_tx: Option<Sender<Snapshot>>,
     /// Flag to indicate changes have occurred since last publish
     has_changes: bool,
-    // Note: We previously had schema_changed, strict_ddl_mode, and db_path fields here
-    // for DDL detection via update hook. However, SQLite's update hook does NOT fire
-    // for DDL operations. DDL crash recovery is now handled in execute_ddl() directly.
 }
 
 impl SessionState {
@@ -227,9 +224,8 @@ impl SessionMonitor {
     /// Extract changeset from session and send to background thread.
     /// This must be called from the main thread.
     fn extract_and_send_changeset(state: &mut SessionState) -> Result<()> {
-        // Note: Schema change detection was removed because SQLite's update hook
-        // doesn't fire for DDL operations. DDL snapshots are now handled in
-        // execute_ddl() via auto_snapshot_after_ddl config option.
+        // Note: SQLite's update hook doesn't fire for DDL operations.
+        // DDL snapshots are handled in execute_ddl() which always publishes a snapshot.
 
         // Only extract if there might be changes and we're not in a transaction
         if !state.has_changes {

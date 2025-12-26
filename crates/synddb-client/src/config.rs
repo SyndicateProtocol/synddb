@@ -78,25 +78,6 @@ pub struct Config {
     /// that existed before `SyndDB` was attached.
     #[arg(long, env = "AUTO_SNAPSHOT_ON_ATTACH", default_value = "true")]
     pub auto_snapshot_on_attach: bool,
-
-    /// Automatically create and publish a snapshot after DDL statements
-    /// (CREATE, ALTER, DROP) are executed through `SyndDB` methods.
-    /// This ensures validators can always reconstruct the schema.
-    #[arg(long, env = "AUTO_SNAPSHOT_AFTER_DDL", default_value = "true")]
-    pub auto_snapshot_after_ddl: bool,
-
-    /// Strict DDL mode: panic if schema changes are made directly via
-    /// `connection()` instead of through `execute_ddl()`.
-    ///
-    /// When disabled (default), direct schema changes are allowed but a warning
-    /// is logged. When enabled, direct DDL will cause a panic, enforcing that
-    /// all schema changes go through the proper `execute_ddl()` method which
-    /// ensures automatic snapshot publication.
-    ///
-    /// Recommended for production to prevent accidental schema changes that
-    /// validators cannot reconstruct.
-    #[arg(long, env = "STRICT_DDL_MODE")]
-    pub strict_ddl_mode: bool,
 }
 
 impl Default for Config {

@@ -40,8 +40,8 @@ use crate::{
 ///   attaches, a snapshot is automatically published so validators can reconstruct
 ///   the pre-existing state.
 ///
-/// - **`auto_snapshot_after_ddl`**: Schema changes executed via `execute_ddl()` trigger
-///   automatic snapshot publishing, ensuring validators can reconstruct the schema.
+/// - **Automatic DDL snapshots**: Schema changes executed via `execute_ddl()` always
+///   trigger automatic snapshot publishing, ensuring validators can reconstruct the schema.
 ///
 /// - **Session-based change capture**: All row-level changes are captured via the
 ///   `SQLite` Session Extension and sent to the sequencer as changesets.

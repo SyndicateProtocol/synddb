@@ -138,63 +138,18 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! ## Automatic Snapshot Features
+//! ## Automatic Snapshot Behavior
 //!
-//! - **`auto_snapshot_on_attach`** (default: true): When attaching to a database with
-//!   existing tables, automatically publishes a snapshot so validators can reconstruct
-//!   the pre-existing state.
+//! - **On attach**: When attaching to a database with existing tables, automatically
+//!   publishes a snapshot so validators can reconstruct the pre-existing state.
+//!   Controlled by `auto_snapshot_on_attach` (default: true).
 //!
-//! - **`auto_snapshot_after_ddl`** (default: true): After executing DDL via
-//!   [`SyndDB::execute_ddl()`], automatically publishes a snapshot.
+//! - **After DDL**: After executing DDL via [`SyndDB::execute_ddl()`], automatically
+//!   publishes a snapshot. This ensures validators can always reconstruct the schema.
 //!
-//! ## Strict DDL Mode
-//!
-//! For production environments, enable `strict_ddl_mode` to enforce that all schema
-//! changes go through [`SyndDB::execute_ddl()`]:
-//!
-//! ```rust,no_run
-//! use synddb_client::{Config, SyndDB};
-//!
-//! let config = Config {
-//!     sequencer_url: "http://sequencer:8433".parse().unwrap(),
-//!     strict_ddl_mode: true,  // Panics on direct DDL via connection()
-//!     ..Default::default()
-//! };
-//! let synddb = SyndDB::open_with_config("app.db", config)?;
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! ## Manual Publishing with Strict DDL (Recommended for Fine-Grained Control)
-//!
-//! If you want manual control over when DML changes are published, but still want
-//! crash-safe DDL handling, use this combination:
-//!
-//! ```rust,no_run
-//! use synddb_client::{Config, PublishStrategy, SyndDB};
-//!
-//! let config = Config {
-//!     sequencer_url: "http://sequencer:8433".parse().unwrap(),
-//!     publish_strategy: PublishStrategy::Manual,  // Manual control for DML
-//!     strict_ddl_mode: true,                      // Enforce execute_ddl() for DDL
-//!     auto_snapshot_after_ddl: true,              // DDL publishes immediately (default)
-//!     ..Default::default()
-//! };
-//! let synddb = SyndDB::open_with_config("app.db", config)?;
-//!
-//! // DDL is published immediately (crash-safe)
-//! synddb.execute_ddl("CREATE TABLE users (id INTEGER PRIMARY KEY)")?;
-//!
-//! // DML waits for explicit publish
-//! synddb.connection().execute("INSERT INTO users VALUES (1)", [])?;
-//! synddb.connection().execute("INSERT INTO users VALUES (2)", [])?;
-//! synddb.publish()?;  // Batch publish when ready
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! This pattern ensures:
-//! - Schema changes are always crash-safe (published immediately)
-//! - DML changes can be batched for efficiency
-//! - Direct DDL via `connection()` will panic, preventing accidents
+//! **Important**: Always use [`SyndDB::execute_ddl()`] for schema changes (CREATE, ALTER,
+//! DROP). Direct DDL via [`SyndDB::connection()`] bypasses snapshot creation and cannot
+//! be detected by `SyndDB`.
 //!
 //! # Thread Safety
 //!
@@ -272,8 +227,6 @@ pub struct SyndDB {
     conn: &'static Connection,
     /// Sequencer URL for publishing snapshots
     sequencer_url: url::Url,
-    /// Whether to auto-snapshot after DDL statements
-    auto_snapshot_after_ddl: bool,
     /// Database path for DDL recovery marker (None for in-memory)
     db_path: Option<String>,
     /// Session monitor for capturing changesets
@@ -454,15 +407,6 @@ impl SyndDB {
             );
         }
 
-        // Validate config: strict_ddl_mode requires auto_snapshot_after_ddl for crash safety
-        if config.strict_ddl_mode && !config.auto_snapshot_after_ddl {
-            warn!(
-                "strict_ddl_mode is enabled but auto_snapshot_after_ddl is disabled. \
-                This combination is not crash-safe: execute_ddl() will not publish immediately. \
-                Enable auto_snapshot_after_ddl for full protection."
-            );
-        }
-
         // Create shared stats handle
         let stats = stats::new_stats_handle();
 
@@ -594,7 +538,6 @@ impl SyndDB {
         let synddb = Self {
             conn,
             sequencer_url: config.sequencer_url.clone(),
-            auto_snapshot_after_ddl: config.auto_snapshot_after_ddl,
             db_path,
             monitor: Some(monitor),
             changeset_shutdown_tx,
@@ -876,11 +819,10 @@ impl SyndDB {
     /// Execute DDL statements with automatic snapshot publishing
     ///
     /// This method executes the given SQL (which should be DDL like CREATE TABLE)
-    /// and automatically publishes a snapshot afterward if `auto_snapshot_after_ddl`
-    /// is enabled in the configuration.
+    /// and automatically publishes a snapshot afterward.
     ///
-    /// Use this for schema changes instead of `connection().execute_batch()` to ensure
-    /// validators can reconstruct the schema.
+    /// **Always use this method for schema changes** instead of `connection().execute_batch()`.
+    /// Direct DDL bypasses snapshot creation and cannot be detected by `SyndDB`.
     ///
     /// # Example
     ///
@@ -908,15 +850,9 @@ impl SyndDB {
 
         // Create snapshot after DDL to capture the schema change.
         // Note: publish_snapshot() clears the DDL recovery marker after creating the snapshot.
-        if self.auto_snapshot_after_ddl && is_ddl {
+        if is_ddl {
             info!("DDL executed, creating automatic snapshot");
             self.publish_snapshot()?;
-        } else if is_ddl {
-            // DDL executed but auto_snapshot disabled - clear marker since DDL succeeded
-            // User is responsible for calling publish_snapshot() manually
-            if let Some(ref path) = self.db_path {
-                ddl_recovery::clear_marker(path);
-            }
         }
 
         Ok(())
@@ -1378,7 +1314,6 @@ mod tests {
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
             auto_snapshot_on_attach: false,
-            auto_snapshot_after_ddl: false,
             ..Default::default()
         };
 
@@ -1596,13 +1531,12 @@ mod tests {
     #[test]
     fn test_mixed_ddl_and_dml() {
         // Test interleaving DDL (schema changes) and DML (data changes).
-        // DDL triggers auto_snapshot_after_ddl, which should play nicely
+        // DDL always triggers a snapshot, which should play nicely
         // with the session recreation mechanism.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            auto_snapshot_after_ddl: true,
             ..Default::default()
         };
         let synddb = SyndDB::attach_with_config(conn, config).unwrap();
@@ -1835,7 +1769,7 @@ mod tests {
     #[test]
     fn test_preexisting_data_then_ddl() {
         // Attach to database with existing data, then perform DDL.
-        // This combines auto_snapshot_on_attach with auto_snapshot_after_ddl.
+        // Tests auto_snapshot_on_attach combined with DDL snapshots.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
         // Pre-existing schema and data
@@ -1844,11 +1778,10 @@ mod tests {
         conn.execute("INSERT INTO t1 VALUES (1, 'existing')", [])
             .unwrap();
 
-        // Attach with both auto-snapshot features enabled
+        // Attach with auto_snapshot_on_attach enabled
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
             auto_snapshot_on_attach: true,
-            auto_snapshot_after_ddl: true,
             ..Default::default()
         };
         let synddb = SyndDB::attach_with_config(conn, config).unwrap();
@@ -2043,7 +1976,6 @@ mod tests {
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
             auto_snapshot_on_attach: true, // Won't trigger - no tables
-            auto_snapshot_after_ddl: true,
             ..Default::default()
         };
         let synddb = SyndDB::attach_with_config(conn, config).unwrap();
@@ -2122,43 +2054,6 @@ mod tests {
             2,
             "UPDATE should fire update hook"
         );
-    }
-
-    #[test]
-    fn test_ddl_recovery_marker_written_by_execute_ddl() {
-        // Test that execute_ddl() writes a recovery marker before execution
-        // and clears it after snapshot (or after DDL if auto_snapshot is disabled)
-
-        let temp_dir = std::env::temp_dir();
-        let db_file = temp_dir.join(format!("test_ddl_marker_{}.db", std::process::id()));
-
-        let conn = Box::leak(Box::new(Connection::open(&db_file).unwrap()));
-        let db_path = conn.path().unwrap();
-
-        // Clean up any existing marker
-        ddl_recovery::clear_marker(db_path);
-
-        let config = Config {
-            sequencer_url: "http://localhost:8433".parse().unwrap(),
-            auto_snapshot_after_ddl: false, // Disable auto-snapshot to test marker behavior
-            ..Default::default()
-        };
-        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
-
-        // Verify no marker yet
-        assert!(!ddl_recovery::check_marker(db_path));
-
-        // execute_ddl writes marker before execution and clears after (when auto_snapshot is off)
-        synddb
-            .execute_ddl("CREATE TABLE test_ddl (id INTEGER)")
-            .unwrap();
-
-        // Marker should be cleared after successful DDL execution
-        // (even with auto_snapshot_after_ddl=false, marker is cleared on success)
-        assert!(!ddl_recovery::check_marker(db_path));
-
-        // Clean up
-        let _ = std::fs::remove_file(&db_file);
     }
 
     #[test]
@@ -2266,8 +2161,8 @@ mod tests {
     }
 
     #[test]
-    fn test_ddl_recovery_marker_with_auto_snapshot() {
-        // Test that execute_ddl() with auto_snapshot_after_ddl clears marker after snapshot
+    fn test_execute_ddl_clears_marker_after_snapshot() {
+        // Test that execute_ddl() writes marker before DDL and clears after snapshot
 
         let temp_dir = std::env::temp_dir();
         let db_file = temp_dir.join(format!("test_execute_ddl_{}.db", std::process::id()));
@@ -2279,7 +2174,6 @@ mod tests {
 
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            auto_snapshot_after_ddl: true, // Enable auto-snapshot
             ..Default::default()
         };
         let synddb = SyndDB::attach_with_config(conn, config).unwrap();
@@ -2304,7 +2198,6 @@ mod tests {
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            strict_ddl_mode: false,
             ..Default::default()
         };
         let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
