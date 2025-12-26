@@ -43,6 +43,7 @@ hex = { workspace = true }
 
 # Database
 rusqlite = { workspace = true, features = ["bundled", "backup", "session"] }
+fallible-streaming-iterator = "0.1"
 
 # Compression
 zstd = { workspace = true }

@@ -97,8 +97,10 @@ impl SessionState {
     /// When the schema hash changes, we automatically trigger a snapshot to ensure
     /// validators have the updated schema.
     fn compute_schema_hash(conn: &Connection) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use std::{
+            collections::hash_map::DefaultHasher,
+            hash::{Hash, Hasher},
+        };
 
         let mut hasher = DefaultHasher::new();
 
