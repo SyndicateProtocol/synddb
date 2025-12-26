@@ -8,7 +8,7 @@ const MESSAGE_TYPEHASH: &[u8] = b"Message(bytes32 messageId,string messageType,b
 
 pub fn compute_domain_separator(chain_id: u64, bridge_address: Address) -> [u8; 32] {
     let domain_typehash = Keccak256::digest(DOMAIN_TYPEHASH);
-    let name_hash = Keccak256::digest(b"MessageBridge");
+    let name_hash = Keccak256::digest(b"SyndBridge");
     let version_hash = Keccak256::digest(b"1");
 
     let mut chain_id_bytes = [0u8; 32];
@@ -56,6 +56,69 @@ pub fn compute_digest(domain_separator: &[u8; 32], struct_hash: &[u8; 32]) -> [u
     encoded.extend_from_slice(b"\x19\x01");
     encoded.extend_from_slice(domain_separator);
     encoded.extend_from_slice(struct_hash);
+
+    Keccak256::digest(&encoded).into()
+}
+
+/// Compute message ID using Solidity ABI encoding.
+/// Matches: keccak256(abi.encode(messageType, keccak256(calldata_), metadataHash, nonce, timestamp, domain))
+pub fn compute_message_id(
+    message_type: &str,
+    calldata: &[u8],
+    metadata_hash: &[u8; 32],
+    nonce: u64,
+    timestamp: u64,
+    domain: &[u8; 32],
+) -> [u8; 32] {
+    // Solidity abi.encode for (string, bytes32, bytes32, uint64, uint64, bytes32):
+    // - Head section: 6 slots of 32 bytes each
+    //   - slot 0: offset to string data (192 = 0xc0)
+    //   - slot 1-5: fixed size values (padded to 32 bytes)
+    // - Tail section: string length + string data (padded to 32-byte boundary)
+
+    let calldata_hash: [u8; 32] = Keccak256::digest(calldata).into();
+
+    // Calculate string data padding
+    let string_bytes = message_type.as_bytes();
+    let padded_string_len = ((string_bytes.len() + 31) / 32) * 32;
+
+    let mut encoded = Vec::with_capacity(192 + 32 + padded_string_len);
+
+    // Head section
+    // Slot 0: offset to string (192 = 6*32)
+    let mut offset = [0u8; 32];
+    offset[31] = 192;
+    encoded.extend_from_slice(&offset);
+
+    // Slot 1: keccak256(calldata)
+    encoded.extend_from_slice(&calldata_hash);
+
+    // Slot 2: metadataHash
+    encoded.extend_from_slice(metadata_hash);
+
+    // Slot 3: nonce (uint64 padded to 32 bytes)
+    let mut nonce_bytes = [0u8; 32];
+    nonce_bytes[24..].copy_from_slice(&nonce.to_be_bytes());
+    encoded.extend_from_slice(&nonce_bytes);
+
+    // Slot 4: timestamp (uint64 padded to 32 bytes)
+    let mut timestamp_bytes = [0u8; 32];
+    timestamp_bytes[24..].copy_from_slice(&timestamp.to_be_bytes());
+    encoded.extend_from_slice(&timestamp_bytes);
+
+    // Slot 5: domain
+    encoded.extend_from_slice(domain);
+
+    // Tail section
+    // String length
+    let mut len_bytes = [0u8; 32];
+    len_bytes[24..].copy_from_slice(&(string_bytes.len() as u64).to_be_bytes());
+    encoded.extend_from_slice(&len_bytes);
+
+    // String data (padded to 32-byte boundary)
+    let mut padded_string = vec![0u8; padded_string_len];
+    padded_string[..string_bytes.len()].copy_from_slice(string_bytes);
+    encoded.extend_from_slice(&padded_string);
 
     Keccak256::digest(&encoded).into()
 }
