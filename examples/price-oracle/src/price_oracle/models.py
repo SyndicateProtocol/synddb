@@ -55,3 +55,31 @@ class FetchedPrice(BaseModel):
     price: float
     volume_24h: Optional[float] = None
     market_cap: Optional[float] = None
+
+
+class PriceStats(BaseModel):
+    """Statistical summary of prices over a time window."""
+
+    asset: str
+    window_seconds: int
+    count: int
+    avg_price: float
+    min_price: float
+    max_price: float
+    stddev: float
+    volatility_pct: float  # stddev / avg * 100
+    from_timestamp: int
+    to_timestamp: int
+
+
+class OHLCCandle(BaseModel):
+    """OHLC candlestick data for a time interval."""
+
+    asset: str
+    interval: str  # e.g., "1m", "5m", "1h", "1d"
+    open_price: float
+    high_price: float
+    low_price: float
+    close_price: float
+    volume: Optional[float] = None
+    timestamp: int  # candle start time

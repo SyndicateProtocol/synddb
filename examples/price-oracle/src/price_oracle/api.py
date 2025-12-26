@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from .comparison import InsufficientSourcesError, PriceDivergenceError, compare_prices
 from .config import FetchMode, settings
 from .db import PriceStore
-from .models import Asset, PriceComparison, PriceRecord, Snapshot
+from .models import Asset, OHLCCandle, PriceComparison, PriceRecord, PriceStats, Snapshot
 from .sources import CoinGeckoSource, CoinMarketCapSource, MockMode, MockSource, PriceSource
 
 
@@ -81,6 +81,89 @@ def create_app(store: Optional[PriceStore] = None) -> FastAPI:
         if not prices:
             raise HTTPException(status_code=404, detail=f"No prices found for {asset}")
         return prices
+
+    # -------------------------------------------------------------------------
+    # Complex Query Endpoints - Demonstrating SQLite analytical capabilities
+    # -------------------------------------------------------------------------
+
+    @app.get("/prices/{asset}/history", response_model=list[PriceRecord])
+    async def get_price_history(
+        asset: str,
+        from_ts: int = Query(..., description="Start timestamp (unix seconds)"),
+        to_ts: int = Query(..., description="End timestamp (unix seconds)"),
+    ) -> list[PriceRecord]:
+        """Get price history for an asset within a time range.
+
+        This endpoint demonstrates SQLite's efficient time-range queries.
+        In a pure message-passing system, you'd need to:
+        - Query each block/event individually, or
+        - Build an off-chain indexer
+        """
+        if from_ts > to_ts:
+            raise HTTPException(status_code=400, detail="from_ts must be <= to_ts")
+        return store.get_price_history(asset, from_ts, to_ts)
+
+    @app.get("/prices/{asset}/stats", response_model=PriceStats)
+    async def get_price_stats(
+        asset: str,
+        window: str = Query(
+            "1h",
+            description="Time window: 1m, 5m, 15m, 1h, 4h, 1d",
+            regex="^(1m|5m|15m|1h|4h|1d)$",
+        ),
+    ) -> PriceStats:
+        """Get statistical summary of prices over a time window.
+
+        Returns: count, avg, min, max, stddev, volatility_pct
+
+        This single query demonstrates what would require either:
+        - Multiple contract calls in pure message-passing, or
+        - An off-chain indexer to aggregate historical data
+        """
+        window_seconds = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+            "1h": 3600,
+            "4h": 14400,
+            "1d": 86400,
+        }.get(window, 3600)
+
+        stats = store.get_price_stats(asset, window_seconds)
+        if stats is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No prices found for {asset} in the last {window}",
+            )
+        return stats
+
+    @app.get("/prices/{asset}/ohlc", response_model=list[OHLCCandle])
+    async def get_ohlc(
+        asset: str,
+        interval: str = Query(
+            "1h",
+            description="Candle interval: 1m, 5m, 15m, 1h, 4h, 1d",
+            regex="^(1m|5m|15m|1h|4h|1d)$",
+        ),
+        limit: int = Query(24, ge=1, le=100, description="Number of candles"),
+    ) -> list[OHLCCandle]:
+        """Get OHLC candlestick data for charting.
+
+        This query demonstrates SQLite's ability to:
+        - Bucket data by time intervals
+        - Compute open/close via subqueries
+        - Aggregate within each bucket
+
+        In pure message-passing, you'd need to store individual price events
+        on-chain (expensive) or build an off-chain indexer.
+        """
+        candles = store.get_ohlc(asset, interval, limit)
+        if not candles:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No OHLC data for {asset} at {interval} interval",
+            )
+        return candles
 
     @app.get("/compare/{asset}", response_model=PriceComparison)
     async def compare_asset(asset: str) -> PriceComparison:

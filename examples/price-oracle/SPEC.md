@@ -229,6 +229,9 @@ A custom SyndDB validator rule that rejects changesets where prices from differe
 | `GET` | `/health` | Health check |
 | `GET` | `/prices` | List recent prices (query: `asset`, `limit`) |
 | `GET` | `/prices/<asset>` | Get prices for specific asset |
+| `GET` | `/prices/<asset>/history` | Get price history in time range |
+| `GET` | `/prices/<asset>/stats` | Get statistical summary over time window |
+| `GET` | `/prices/<asset>/ohlc` | Get OHLC candlestick data |
 | `GET` | `/compare/<asset>` | Compare prices across sources |
 | `POST` | `/fetch` | Trigger manual price fetch |
 | `GET` | `/assets` | List tracked assets |
@@ -258,6 +261,36 @@ A custom SyndDB validator rule that rejects changesets where prices from differe
   "difference_bps": 47,
   "difference_pct": 0.47,
   "sources": ["coingecko", "coinmarketcap"]
+}
+```
+
+#### Price Stats Response
+```json
+{
+  "asset": "BTC",
+  "window_seconds": 3600,
+  "count": 120,
+  "avg_price": 42150.50,
+  "min_price": 41800.00,
+  "max_price": 42500.00,
+  "stddev": 185.32,
+  "volatility_pct": 0.44,
+  "from_timestamp": 1703516400,
+  "to_timestamp": 1703520000
+}
+```
+
+#### OHLC Candle Response
+```json
+{
+  "asset": "BTC",
+  "interval": "1h",
+  "open_price": 42100.00,
+  "high_price": 42500.00,
+  "low_price": 41800.00,
+  "close_price": 42350.00,
+  "volume": 1500000000,
+  "timestamp": 1703516400
 }
 ```
 
@@ -496,6 +529,155 @@ Script to orchestrate all components:
 
 ---
 
+## 15. Complex Queries (SQLite vs Message-Passing)
+
+This section documents the analytical query capabilities that demonstrate SQLite's strengths compared to pure message-passing architectures.
+
+### SQLite Advantages
+
+SQLite enables complex analytical queries with a single statement:
+
+| Query Type | SQLite | Message-Passing |
+|------------|--------|-----------------|
+| Historical stats (avg, min, max, stddev) | One SQL query | Must index events off-chain |
+| OHLC candlestick data | GROUP BY with time buckets | Requires off-chain indexer |
+| Time-range queries | Indexed scan | Query each block/event |
+| Ad-hoc analysis | Any SQL query | Must pre-plan indexes |
+
+### Available Analytical Endpoints
+
+#### Price Statistics (`GET /prices/<asset>/stats`)
+
+Returns statistical summary over a configurable time window:
+- Supported windows: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`
+- Computes: count, avg, min, max, stddev, volatility percentage
+
+**SQL Query Pattern:**
+```sql
+SELECT
+    COUNT(*) as count,
+    AVG(price) as avg_price,
+    MIN(price) as min_price,
+    MAX(price) as max_price,
+    AVG(price * price) as avg_sq  -- For stddev calculation
+FROM prices
+WHERE asset = ? AND timestamp >= ?
+```
+
+#### OHLC Candlesticks (`GET /prices/<asset>/ohlc`)
+
+Returns candlestick data for charting:
+- Supported intervals: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`
+- Computes: open, high, low, close prices per interval
+
+**SQL Query Pattern:**
+```sql
+WITH bucketed AS (
+    SELECT price, timestamp, (timestamp / interval) * interval as bucket
+    FROM prices WHERE asset = ?
+)
+SELECT bucket, MIN(price), MAX(price),
+       FIRST_VALUE(price) as open, LAST_VALUE(price) as close
+FROM bucketed GROUP BY bucket
+```
+
+### Message-Passing Equivalent
+
+In a pure message-passing system (no local database), these queries would require:
+
+1. **Off-chain indexer**: A separate service that watches on-chain events and builds queryable state
+2. **Repeated contract calls**: Query the contract for each data point (expensive, slow)
+3. **Pre-computed views**: Store aggregations on-chain (high gas costs)
+
+This tradeoff is fundamental: SQLite provides rich query capabilities at the cost of decentralization, while message-passing provides consensus guarantees at the cost of query flexibility.
+
+---
+
+## 16. Failure Handling (Message-Passing Challenges)
+
+This section documents the failure handling patterns required for reliable message-passing, contrasting with SQLite's simpler transactional model.
+
+### Error Classification
+
+The Bridge validator returns error codes that clients must classify:
+
+| Error Type | Retryable | Example Codes |
+|------------|-----------|---------------|
+| Transient | Yes | `BRIDGE_CONNECTION_FAILED`, `TIMEOUT`, `INTERNAL_ERROR` |
+| Validation | No | `INVALID_NONCE`, `SCHEMA_VALIDATION_FAILED`, `INVARIANT_VIOLATED` |
+| Authorization | No | `APP_NOT_AUTHORIZED`, `MESSAGE_TYPE_NOT_REGISTERED` |
+| State | No | `REPLAY_DETECTED`, `TIMESTAMP_EXPIRED` |
+
+### Retry Logic
+
+The `BridgeClient` implements automatic retry with exponential backoff:
+
+```python
+class BridgeClient:
+    def __init__(
+        self,
+        validator_url: str,
+        domain: str,
+        max_retries: int = 3,      # Retry limit
+        retry_delay: float = 1.0,  # Initial delay (doubles each attempt)
+        timeout: float = 30.0,     # Request timeout
+    ):
+        ...
+
+    async def push_price_with_retry(
+        self, asset: str, price: float, **kwargs
+    ) -> PushResult:
+        """Push with automatic retry for transient errors."""
+```
+
+### Status Polling
+
+Messages progress through 9 stages on-chain. Clients must poll to track progress:
+
+| Stage | Status | Description |
+|-------|--------|-------------|
+| 0 | `not_initialized` | Message not yet submitted |
+| 1 | `pending` | Awaiting validator signatures |
+| 2 | `ready` | Signature threshold met |
+| 3-5 | `executing` | Execution in progress |
+| 6 | `completed` | Successfully executed |
+| 7 | `failed` | Execution failed |
+| 8 | `expired` | Message expired before execution |
+
+```python
+# Wait for message to complete with timeout
+status = await client.wait_for_completion(
+    message_id,
+    timeout=60.0,
+    poll_interval=2.0,
+)
+if status.is_success:
+    print("Message executed successfully")
+```
+
+### SQLite Comparison
+
+| Aspect | SQLite | Message-Passing |
+|--------|--------|-----------------|
+| Transaction result | Immediate (commit/rollback) | Must poll for status |
+| Retry logic | Not needed (ACID) | Client must implement |
+| Error handling | Exception-based | Error code classification |
+| Status tracking | N/A | 9-stage lifecycle |
+| Timeout handling | Connection timeout only | Request + polling timeout |
+
+### Failure Scenarios
+
+| Scenario | Expected Behavior |
+|----------|-------------------|
+| Validator down | Retry with backoff, fail after max_retries |
+| Invalid domain | Immediate failure, no retry |
+| Nonce conflict | Immediate failure, client increments nonce |
+| Price divergence | Immediate failure (invariant violated) |
+| Network timeout | Retry with backoff |
+| Message pending | Poll until completed/failed/expired |
+
+---
+
 ## Summary
 
 The price oracle demonstrates:
@@ -506,3 +688,5 @@ The price oracle demonstrates:
 4. **Flexible operation modes** - CLI, daemon, and HTTP API
 5. **Testing support** - Mock sources with configurable behavior
 6. **Optional blockchain bridge** - Bidirectional smart contract communication
+7. **Complex analytical queries** - Demonstrating SQLite's query capabilities
+8. **Failure handling patterns** - Retry, polling, and error classification for message-passing
