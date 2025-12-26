@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syndicate.io/bridge/price-oracle/update-price.schema.json",
+  "title": "updatePrice Metadata Schema",
+  "description": "Schema for validating metadata in updatePrice(string,uint256,uint256) messages",
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string",
+      "const": "price_update",
+      "description": "The reason for this message, must be 'price_update'"
+    },
+    "asset": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_-]*$",
+      "description": "Asset symbol (e.g., 'bitcoin', 'ethereum')"
+    },
+    "price_scaled": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Price scaled by 10^18, as a string to preserve precision"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix timestamp of the price observation"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Identifier of the price source (e.g., 'price-oracle')"
+    },
+    "sources_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of data sources that were aggregated (optional)"
+    },
+    "price_diff_bps": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000,
+      "description": "Price difference across sources in basis points (optional)"
+    }
+  },
+  "required": ["reason", "asset", "price_scaled", "timestamp", "source"],
+  "additionalProperties": true
+}

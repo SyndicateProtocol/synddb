@@ -295,33 +295,61 @@ A custom SyndDB validator rule that rejects changesets where prices from differe
 
 ---
 
-## 10. Bridge Integration (Optional)
+## 10. Bridge Integration
 
-For blockchain-connected oracles, support bidirectional messaging:
+For blockchain-connected oracles, support bidirectional messaging via the Bridge validator.
 
-### Outbound Messages
+### Message Format
 
-Push price updates to smart contracts:
+Price updates use the `updatePrice(string,uint256,uint256)` message type:
 
-| Field | Description |
-|-------|-------------|
-| `message_type` | `price_update`, `batch_price_update`, `price_response` |
-| `payload` | JSON with price data |
-| `idempotency_key` | Prevents duplicate submissions |
-| `status` | `pending`, `submitted`, `confirmed`, `failed` |
-| `tx_hash` | Blockchain transaction hash |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `asset` | string | Asset symbol (e.g., "bitcoin", "ethereum") |
+| `priceScaled` | uint256 | Price scaled by 10^18 (1 USD = 1e18) |
+| `timestamp` | uint256 | Unix timestamp of the price observation |
 
-### Inbound Messages
+### Calldata Encoding
 
-Receive price requests from contracts:
+Calldata is ABI-encoded using proper Ethereum ABI encoding:
+- 4-byte function selector: keccak256("updatePrice(string,uint256,uint256)")[:4]
+- Followed by ABI-encoded parameters
 
-| Field | Description |
-|-------|-------------|
-| `message_id` | Request ID from blockchain |
-| `message_type` | `price_request` |
-| `payload` | JSON with asset, requester, max_age |
-| `block_number` | Source block |
-| `processed` | Whether response has been sent |
+### Metadata Schema
+
+Messages include metadata for validator verification. Schema: `schemas/update-price.schema.json`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `reason` | string | Yes | Must be "price_update" |
+| `asset` | string | Yes | Asset symbol matching calldata |
+| `price_scaled` | string | Yes | Price as string matching calldata |
+| `timestamp` | integer | Yes | Timestamp matching calldata |
+| `source` | string | Yes | Source identifier (e.g., "price-oracle") |
+| `sources_count` | integer | No | Number of aggregated sources |
+| `price_diff_bps` | integer | No | Price divergence in basis points |
+
+### Validator Invariants
+
+The Bridge validator can be configured with custom invariants for price validation:
+
+1. **PriceMetadataConsistencyInvariant**: Verifies metadata matches calldata
+   - Decodes calldata using ABI
+   - Compares asset, price, and timestamp with metadata
+   - Rejects if any value mismatches
+
+2. **PriceDivergenceInvariant**: Enforces price consistency across sources
+   - Reads `price_diff_bps` from metadata
+   - Rejects if divergence exceeds threshold (default: 100 bps = 1%)
+
+### PriceOracle Contract
+
+The target contract `PriceOracle.sol` implements:
+- `updatePrice(string,uint256,uint256)` - Updates on-chain price
+- `getPrice(string)` - Returns price, timestamp, and block number
+- Stale price rejection (older timestamps not accepted)
+- Future timestamp rejection (max 5 minutes ahead)
+- Zero price rejection
 
 ### Bridge Commands
 
