@@ -3,10 +3,11 @@ FROM rust:1.91-bookworm AS rust-builder
 
 WORKDIR /app
 
-# Copy workspace files (including examples for workspace resolution)
+# Copy all workspace members needed for cargo to resolve
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY examples ./examples
+COPY tests ./tests
 
 # Build the sequencer and FFI library
 RUN cargo build --release -p synddb-sequencer && \
