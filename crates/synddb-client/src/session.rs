@@ -22,7 +22,7 @@ use std::{
     thread::{self, ThreadId},
     time::{Duration, SystemTime},
 };
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Changeset {
@@ -65,6 +65,8 @@ struct SessionState {
     schema_changed: bool,
     /// Flag to indicate changes have occurred since last publish
     has_changes: bool,
+    /// Strict DDL mode: panic on direct schema changes
+    strict_ddl_mode: bool,
 }
 
 impl SessionState {
@@ -95,6 +97,24 @@ thread_local! {
     /// Note: This is thread-local, so each thread gets its own instance.
     /// The SessionMonitor API is designed so that only the main thread accesses SESSION_STATE.
     static SESSION_STATE: RefCell<Option<SessionState>> = const { RefCell::new(None) };
+
+    /// Flag indicating we're inside an `execute_ddl()` call.
+    /// When true, schema changes are expected and handled properly.
+    /// When false and a schema change is detected, we warn or panic.
+    static IN_EXECUTE_DDL: RefCell<bool> = const { RefCell::new(false) };
+}
+
+/// Set the `IN_EXECUTE_DDL` flag for the duration of a closure.
+/// This is called by `SyndDB::execute_ddl()` to indicate that schema changes
+/// are expected and should not trigger warnings.
+pub(crate) fn with_ddl_context<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    IN_EXECUTE_DDL.with(|flag| *flag.borrow_mut() = true);
+    let result = f();
+    IN_EXECUTE_DDL.with(|flag| *flag.borrow_mut() = false);
+    result
 }
 
 #[derive(Debug)]
@@ -111,6 +131,7 @@ impl SessionMonitor {
         changeset_tx: Sender<Changeset>,
         snapshot_interval: u64,
         snapshot_tx: Option<Sender<Snapshot>>,
+        strict_ddl_mode: bool,
     ) -> Result<Self> {
         debug!("Initializing SQLite Session Extension");
 
@@ -121,6 +142,10 @@ impl SessionMonitor {
             );
         } else {
             info!("Automatic snapshots disabled");
+        }
+
+        if strict_ddl_mode {
+            info!("Strict DDL mode enabled: direct schema changes will panic");
         }
 
         // Create a session attached to the main database
@@ -145,6 +170,7 @@ impl SessionMonitor {
                 snapshot_tx,
                 schema_changed: false,
                 has_changes: false,
+                strict_ddl_mode,
             });
         });
 
@@ -190,11 +216,37 @@ impl SessionMonitor {
                             if !s.schema_changed
                                 && (table == "sqlite_schema" || table == "sqlite_master")
                             {
-                                info!(
-                                    "Schema change detected ({:?} on {}), will trigger snapshot",
-                                    action, table
-                                );
                                 s.schema_changed = true;
+
+                                // Check if we're inside execute_ddl() context
+                                let in_ddl_context =
+                                    IN_EXECUTE_DDL.with(|flag| *flag.borrow());
+
+                                if in_ddl_context {
+                                    // Expected: DDL through proper channel
+                                    info!(
+                                        "Schema change via execute_ddl() ({:?} on {}), will trigger snapshot",
+                                        action, table
+                                    );
+                                } else {
+                                    // Direct DDL detected - warn or panic
+                                    if s.strict_ddl_mode {
+                                        panic!(
+                                            "STRICT_DDL_MODE: Direct schema change detected ({:?} on {}). \
+                                            Use execute_ddl() instead of connection().execute() for DDL statements. \
+                                            This ensures validators can reconstruct the schema.",
+                                            action, table
+                                        );
+                                    } else {
+                                        warn!(
+                                            "Direct schema change detected ({:?} on {})! \
+                                            Use execute_ddl() instead of connection().execute() for DDL statements. \
+                                            A snapshot will be created on the next publish(), but this pattern is not recommended. \
+                                            Enable strict_ddl_mode to enforce this.",
+                                            action, table
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -374,6 +426,15 @@ impl SessionMonitor {
                 Self::extract_and_send_changeset,
             )
         })
+    }
+
+    /// Check if there are pending schema changes that need to be published.
+    ///
+    /// Returns true if a schema change (CREATE/ALTER/DROP) has been detected
+    /// but not yet published via a snapshot. This can be used to warn users
+    /// that they need to call `publish()`.
+    pub(crate) fn has_pending_schema_changes(&self) -> bool {
+        SESSION_STATE.with(|state| state.borrow().as_ref().is_some_and(|s| s.schema_changed))
     }
 
     /// Create a complete snapshot of the database.

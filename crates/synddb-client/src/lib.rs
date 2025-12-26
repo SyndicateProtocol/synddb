@@ -122,6 +122,48 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! # Schema Changes (DDL)
+//!
+//! Schema changes (CREATE, ALTER, DROP) require special handling to ensure validators
+//! can reconstruct the database state. Always use [`SyndDB::execute_ddl()`] for DDL:
+//!
+//! ```rust,no_run
+//! # use synddb_client::SyndDB;
+//! # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+//! // CORRECT: Use execute_ddl() for schema changes
+//! synddb.execute_ddl("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")?;
+//!
+//! // AVOID: Direct connection access for DDL (triggers warning)
+//! // synddb.connection().execute("CREATE TABLE bad_pattern (...)", [])?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ## Automatic Snapshot Features
+//!
+//! - **`auto_snapshot_on_attach`** (default: true): When attaching to a database with
+//!   existing tables, automatically publishes a snapshot so validators can reconstruct
+//!   the pre-existing state.
+//!
+//! - **`auto_snapshot_after_ddl`** (default: true): After executing DDL via
+//!   [`SyndDB::execute_ddl()`], automatically publishes a snapshot.
+//!
+//! ## Strict DDL Mode
+//!
+//! For production environments, enable `strict_ddl_mode` to enforce that all schema
+//! changes go through [`SyndDB::execute_ddl()`]:
+//!
+//! ```rust,no_run
+//! use synddb_client::{Config, SyndDB};
+//!
+//! let config = Config {
+//!     sequencer_url: "http://sequencer:8433".parse().unwrap(),
+//!     strict_ddl_mode: true,  // Panics on direct DDL via connection()
+//!     ..Default::default()
+//! };
+//! let synddb = SyndDB::open_with_config("app.db", config)?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
 //! # Thread Safety
 //!
 //! The `SQLite` Session Extension is only accessed from the main thread. Background
@@ -378,6 +420,7 @@ impl SyndDB {
             changeset_tx,
             config.snapshot_interval,
             snapshot_channel.as_ref().map(|(tx, _)| tx).cloned(),
+            config.strict_ddl_mode,
         )?;
         monitor.start(conn)?;
 
@@ -763,7 +806,8 @@ impl SyndDB {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn execute_ddl(&self, sql: &str) -> Result<()> {
-        self.conn.execute_batch(sql)?;
+        // Execute within DDL context so the session hook knows this is expected
+        session::with_ddl_context(|| self.conn.execute_batch(sql))?;
 
         if self.auto_snapshot_after_ddl && Self::is_ddl(sql) {
             info!("DDL executed, creating automatic snapshot");
@@ -888,6 +932,28 @@ impl SyndDB {
         self.stats.is_healthy()
     }
 
+    /// Check if there are pending schema changes that need to be published.
+    ///
+    /// Returns true if a schema change (CREATE/ALTER/DROP) has been detected
+    /// but not yet published via a snapshot. You should call `publish()` to
+    /// ensure validators can reconstruct the schema.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use synddb_client::SyndDB;
+    /// # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+    /// if synddb.has_pending_schema_changes() {
+    ///     synddb.publish()?;  // Ensure schema changes are published
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn has_pending_schema_changes(&self) -> bool {
+        self.monitor
+            .as_ref()
+            .is_some_and(|m| m.has_pending_schema_changes())
+    }
+
     /// Get the number of changesets waiting to be published
     ///
     /// # Example
@@ -946,8 +1012,20 @@ impl Drop for SyndDB {
     fn drop(&mut self) {
         debug!("Dropping SyndDB handle");
 
+        // Check for pending schema changes before dropping
+        // The monitor's drop will attempt to publish them, but we warn here
+        // in case something goes wrong
+        if self.has_pending_schema_changes() {
+            info!(
+                "SyndDB shutting down with pending schema changes - \
+                attempting final publish to ensure validators can reconstruct schema"
+            );
+        }
+
         // First, drop the monitor which will stop the publish thread
         // This ensures no more changesets or snapshots are generated
+        // Note: SessionMonitor::drop() calls extract_and_send_changeset() which
+        // will create a snapshot if schema_changed is true
         if let Some(monitor) = self.monitor.take() {
             drop(monitor);
         }
