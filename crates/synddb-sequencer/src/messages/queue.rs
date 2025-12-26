@@ -37,7 +37,7 @@ pub struct InboundMessage {
     pub id: u64,
     /// Message ID from the blockchain event (e.g., requestId)
     pub message_id: String,
-    /// Type of message (e.g., "price_request", "deposit")
+    /// Type of message (e.g., `price_request`, `deposit`)
     pub message_type: String,
     /// JSON payload with message-specific data
     pub payload: String,
@@ -60,7 +60,7 @@ pub struct InboundMessage {
 /// Status of an outbound message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundMessageStatus {
-    /// Message ID from the app's message_log table
+    /// Message ID from the app's `message_log` table
     pub id: u64,
     /// Current status: "pending", "submitted", "confirmed", "failed"
     pub status: String,
@@ -98,6 +98,7 @@ impl MessageQueue {
     }
 
     /// Create a new message queue with custom configuration
+    #[allow(clippy::missing_const_for_fn)] // VecDeque::new() is not const
     pub fn with_config(config: MessageQueueConfig) -> Self {
         Self {
             config,
@@ -109,6 +110,7 @@ impl MessageQueue {
     /// Add a new inbound message to the queue
     ///
     /// Returns the assigned message ID
+    #[allow(clippy::too_many_arguments)]
     pub fn add_message(
         &mut self,
         message_id: String,

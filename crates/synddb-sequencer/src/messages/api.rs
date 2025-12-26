@@ -108,11 +108,11 @@ pub struct GetMessagesQuery {
     pub pending_only: bool,
 }
 
-fn default_limit() -> usize {
+const fn default_limit() -> usize {
     100
 }
 
-fn default_pending_only() -> bool {
+const fn default_pending_only() -> bool {
     true
 }
 
@@ -184,7 +184,7 @@ pub struct AckRequest {
     pub note: Option<String>,
 }
 
-fn default_processed() -> bool {
+const fn default_processed() -> bool {
     true
 }
 
@@ -200,7 +200,7 @@ pub struct AckResponse {
 /// Response for outbound message status
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OutboundStatusResponse {
-    /// Message ID from app's message_log
+    /// Message ID from app's `message_log`
     pub id: u64,
     /// Type of message
     pub message_type: String,
@@ -291,7 +291,7 @@ impl From<QueueStats> for QueueStatsResponse {
 pub struct PushInboundRequest {
     /// Message ID from blockchain event (e.g., requestId)
     pub message_id: String,
-    /// Type of message (e.g., "price_request", "deposit")
+    /// Type of message (e.g., `price_request`, `deposit`)
     #[serde(rename = "type")]
     pub message_type: String,
     /// JSON payload with message-specific data
@@ -312,7 +312,7 @@ pub struct PushInboundRequest {
 pub struct PushInboundResponse {
     /// Sequencer-assigned ID for the message
     pub id: u64,
-    /// The message_id that was provided
+    /// The `message_id` that was provided
     pub message_id: String,
 }
 
@@ -342,22 +342,25 @@ async fn get_inbound_messages(
 
     let messages: Vec<InboundMessageResponse> = if query.pending_only {
         // Get pending messages
-        if let Some(ref msg_type) = query.message_type {
-            queue
-                .get_pending_by_type(msg_type, limit)
-                .into_iter()
-                .filter(|m| m.id > query.after_id)
-                .map(InboundMessageResponse::from)
-                .collect()
-        } else {
-            queue
-                .get_pending_messages(limit + 1) // +1 to check has_more
-                .into_iter()
-                .filter(|m| m.id > query.after_id)
-                .take(limit)
-                .map(InboundMessageResponse::from)
-                .collect()
-        }
+        query.message_type.as_ref().map_or_else(
+            || {
+                queue
+                    .get_pending_messages(limit + 1) // +1 to check has_more
+                    .into_iter()
+                    .filter(|m| m.id > query.after_id)
+                    .take(limit)
+                    .map(InboundMessageResponse::from)
+                    .collect()
+            },
+            |msg_type| {
+                queue
+                    .get_pending_by_type(msg_type, limit)
+                    .into_iter()
+                    .filter(|m| m.id > query.after_id)
+                    .map(InboundMessageResponse::from)
+                    .collect()
+            },
+        )
     } else {
         // Get all messages after ID
         queue
@@ -503,7 +506,7 @@ async fn push_inbound_message(
 
 /// Get outbound message status
 ///
-/// Checks the status of an outbound message (from app's message_log).
+/// Checks the status of an outbound message (from app's `message_log`).
 /// This is used by clients to track whether their messages were submitted
 /// to the blockchain.
 async fn get_outbound_status(
@@ -543,11 +546,9 @@ async fn get_outbound_status(
 async fn get_outbound_stats(
     State(state): State<MessageApiState>,
 ) -> Result<Json<OutboundStatsResponse>, (StatusCode, String)> {
-    if let Some(ref outbound) = state.outbound {
-        Ok(Json(OutboundStatsResponse::from(outbound.stats())))
-    } else {
+    Ok(Json(state.outbound.as_ref().map_or(
         // Return empty stats if monitor not configured
-        Ok(Json(OutboundStatsResponse {
+        OutboundStatsResponse {
             total: 0,
             pending: 0,
             queued: 0,
@@ -556,8 +557,9 @@ async fn get_outbound_stats(
             confirmed: 0,
             failed: 0,
             monitor_active: false,
-        }))
-    }
+        },
+        |outbound| OutboundStatsResponse::from(outbound.stats()),
+    )))
 }
 
 #[cfg(test)]

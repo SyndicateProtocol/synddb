@@ -3268,7 +3268,6 @@ dependencies = [
  "synddb-validator",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

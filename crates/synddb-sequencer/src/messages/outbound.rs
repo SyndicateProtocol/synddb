@@ -33,7 +33,7 @@ use tracing::{debug, info, warn};
 /// Configuration for the outbound monitor
 #[derive(Debug, Clone)]
 pub struct OutboundMonitorConfig {
-    /// Path to the application's SQLite database
+    /// Path to the application's `SQLite` database
     pub db_path: String,
     /// How often to poll for new messages (default: 1 second)
     pub poll_interval: Duration,
@@ -85,9 +85,9 @@ impl std::fmt::Display for OutboundStatus {
 /// Tracked state of an outbound message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackedOutboundMessage {
-    /// Message ID from app's message_log
+    /// Message ID from app's `message_log`
     pub id: u64,
-    /// Type of message (price_update, batch_price_update, price_response)
+    /// Type of message (`price_update`, `batch_price_update`, `price_response`)
     pub message_type: String,
     /// JSON payload
     pub payload: String,
@@ -254,7 +254,7 @@ pub struct OutboundStats {
     pub failed: usize,
 }
 
-/// Outbound message monitor that polls the app's SQLite database
+/// Outbound message monitor that polls the app's `SQLite` database
 pub struct OutboundMonitor {
     config: OutboundMonitorConfig,
     tracker: OutboundTracker,
@@ -383,7 +383,7 @@ pub struct OutboundMonitorHandle {
 }
 
 impl OutboundMonitorHandle {
-    pub fn new(tracker: OutboundTracker) -> Self {
+    pub const fn new(tracker: OutboundTracker) -> Self {
         Self { tracker }
     }
 

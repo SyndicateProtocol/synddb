@@ -1,8 +1,10 @@
 # Price Oracle Example
 
-This example demonstrates **custom validator rules** in SyndDB. The key insight:
+This example demonstrates **custom validator rules** and **bidirectional message passing** in SyndDB. Key concepts:
 
 > **The application maintains API keys; validators check database changesets without needing API access.**
+
+> **Smart contracts can request price updates (pull model) or receive pushed prices (push model) via the Bridge.**
 
 The Python application fetches cryptocurrency prices from multiple sources (CoinGecko, CoinMarketCap) and logs both to the database. The custom validator checks that prices from different sources agree within a configurable tolerance (default: 1%).
 
@@ -14,12 +16,15 @@ The Python application fetches cryptocurrency prices from multiple sources (Coin
 │  - Fetches prices from CoinGecko API (needs API key)            │
 │  - Fetches prices from CoinMarketCap API (needs API key)        │
 │  - Writes BOTH prices to database (good logging practice)       │
+│  - Listens for PriceRequested events (pull model)               │
+│  - Pushes prices to chain via Bridge (push model)               │
 └─────────────────────────────────────────────────────────────────┘
                               │ changesets
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Sequencer                                │
 │  - Signs and orders changesets                                   │
+│  - Provides message queue API for inbound/outbound messages     │
 └─────────────────────────────────────────────────────────────────┘
                               │ signed batches
                               ▼
@@ -28,6 +33,22 @@ The Python application fetches cryptocurrency prices from multiple sources (Coin
 │  - Extends synddb-validator with PriceConsistencyRule           │
 │  - Queries DB: "Are both prices within 1%?"                     │
 │  - Rejects if difference > threshold (NO API keys needed!)      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Anvil (Local Ethereum)                        │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ Bridge.sol                                                   ││
+│  │  - MESSAGE_INITIALIZER_ROLE → Sequencer                     ││
+│  │  - Executes validated messages on target contracts          ││
+│  └─────────────────────────────────────────────────────────────┘│
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ PriceOracle.sol                                              ││
+│  │  - UPDATER_ROLE → Bridge                                    ││
+│  │  - updatePrice(): Receive pushed prices                     ││
+│  │  - requestPrice(): Emit PriceRequested event                ││
+│  └─────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -51,13 +72,30 @@ examples/price-oracle/
 │   ├── oracle.py             # Core logic
 │   ├── http.py               # Flask HTTP server
 │   ├── fetcher.py            # Periodic fetch daemon
+│   ├── bridge.py             # Bridge contract interaction
+│   ├── chain_monitor.py      # Blockchain event monitoring
 │   └── api/                  # Price API adapters
 │       ├── base.py           # Abstract base class
 │       ├── mock.py           # Mock API for testing
 │       ├── coingecko.py      # CoinGecko implementation
 │       └── coinmarketcap.py  # CoinMarketCap implementation
-└── scripts/
-    └── dev-env.sh            # Development environment script
+├── scripts/
+│   └── dev-env.sh            # Development environment script
+└── data/                     # Runtime data (gitignored)
+    ├── sequencer/            # Sequencer state
+    ├── validator/            # Validator state
+    ├── app/                  # Application database
+    └── contracts/            # Deployed contract addresses
+        └── addresses.json    # Contract addresses for current session
+
+contracts/                    # Solidity contracts (project root)
+├── src/
+│   ├── Bridge.sol            # Cross-chain message bridge
+│   └── examples/
+│       └── PriceOracle.sol   # On-chain price oracle
+└── script/
+    ├── DeployLocalDevEnv.s.sol   # Combined local deployment
+    └── DeployPriceOracle.s.sol   # Standalone PriceOracle deployment
 ```
 
 ## Quick Start
@@ -66,15 +104,19 @@ examples/price-oracle/
 
 - Rust toolchain (1.70+)
 - Python 3.10+
+- [Foundry](https://book.getfoundry.sh/getting-started/installation) (for Anvil and contract deployment)
 - OpenSSL (for key generation)
 
 ### Run the Demo
+
+The dev environment script starts all components including Anvil with deployed contracts:
 
 ```bash
 # From the SyndDB root directory
 cd examples/price-oracle
 
 # Run with consistent mock APIs (validator accepts)
+# This starts: Anvil, deploys contracts, sequencer, validator, fetcher
 ./scripts/dev-env.sh
 
 # Run with divergent mock APIs (validator rejects!)
@@ -84,7 +126,17 @@ cd examples/price-oracle
 export COINGECKO_API_KEY="your-key"  # Optional, free tier works
 export CMC_API_KEY="your-key"         # Required for CMC
 ./scripts/dev-env.sh --real
+
+# Skip Anvil and contract deployment (off-chain only)
+./scripts/dev-env.sh --no-anvil
 ```
+
+When running with Anvil, the script will:
+1. Start Anvil on port 8545
+2. Deploy MockWETH, Bridge, and PriceOracle contracts
+3. Grant `MESSAGE_INITIALIZER_ROLE` to the sequencer on Bridge
+4. Grant `UPDATER_ROLE` to Bridge on PriceOracle
+5. Save deployed addresses to `data/contracts/addresses.json`
 
 ### Manual Setup
 
@@ -291,6 +343,66 @@ To add your own validation rules:
    registry.register(Box::new(PriceConsistencyRule::new(100)));
    validator.set_rules(registry);
    ```
+
+## Smart Contracts
+
+### PriceOracle.sol
+
+The on-chain price oracle contract supports two message flows:
+
+**Push Model** (off-chain → on-chain):
+```solidity
+// Off-chain app submits price via Bridge
+bridge.initializeAndHandleMessage(
+    messageId,
+    priceOracleAddress,
+    abi.encodeCall(PriceOracle.updatePrice, ("BTC", 50000_00000000, timestamp)),
+    sequencerSignature,
+    validatorSignatures,
+    0  // no native token
+);
+```
+
+**Pull Model** (on-chain → off-chain → on-chain):
+```solidity
+// 1. Contract emits request
+bytes32 requestId = priceOracle.requestPrice("BTC", 300);  // max 5min old
+// Emits: PriceRequested(requestId, "BTC", requester, 300)
+
+// 2. Off-chain app listens, fetches price, responds via Bridge
+bridge.initializeAndHandleMessage(
+    messageId,
+    priceOracleAddress,
+    abi.encodeCall(PriceOracle.fulfillPriceRequest, (requestId, "BTC", price, timestamp)),
+    ...
+);
+// Emits: PriceRequestFulfilled(requestId, "BTC", price)
+```
+
+### Contract Addresses
+
+After running `dev-env.sh`, deployed addresses are saved to `data/contracts/addresses.json`:
+
+```json
+{
+    "chainId": 31337,
+    "rpcUrl": "http://127.0.0.1:8545",
+    "admin": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "sequencer": "0x...",
+    "weth": "0x...",
+    "bridge": "0x...",
+    "priceOracle": "0x..."
+}
+```
+
+### Role Configuration
+
+| Contract | Role | Granted To | Purpose |
+|----------|------|------------|---------|
+| Bridge | `MESSAGE_INITIALIZER_ROLE` | Sequencer | Initialize and execute messages |
+| Bridge | `DEFAULT_ADMIN_ROLE` | Admin (Anvil account 0) | Manage roles and modules |
+| PriceOracle | `UPDATER_ROLE` | Bridge | Call `updatePrice()` and `fulfillPriceRequest()` |
+| PriceOracle | `DEFAULT_ADMIN_ROLE` | Admin | Manage roles |
 
 ## API Endpoints (HTTP Server)
 

@@ -175,7 +175,7 @@ pub struct SequencerConfig {
     // ========================================================================
     // Outbound message monitor configuration
     // ========================================================================
-    /// Path to the application's SQLite database for outbound message monitoring
+    /// Path to the application's `SQLite` database for outbound message monitoring
     ///
     /// When set, the sequencer will poll this database for pending outbound
     /// messages in the `message_log` table and track their status.
