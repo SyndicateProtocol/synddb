@@ -183,6 +183,56 @@ impl ValidationPipeline {
             .mark_processed(message_id)
             .map_err(|e| ValidationError::Internal(e.to_string()))
     }
+
+    /// Validate a message as a Witness Validator.
+    ///
+    /// Witness validation skips stages 1 (replay) and 2 (nonce) since:
+    /// - Replay: The primary validator already initialized the message
+    /// - Nonce: The primary validator already consumed the nonce
+    ///
+    /// The witness independently verifies all other validation stages.
+    pub async fn validate_witness(
+        &self,
+        message: &Message,
+        bridge_client: &BridgeClient,
+    ) -> Result<(), ValidationError> {
+        // Fetch validation context from bridge
+        let ctx = self.fetch_context(message, bridge_client).await?;
+
+        // Stage 3: Timestamp freshness (witnesses still check this)
+        tracing::debug!(message_id = %hex::encode(message.id), timestamp = message.timestamp, "Stage 3: Timestamp check");
+        self.timestamp_validator.validate(message)?;
+
+        // Stage 4: App authorization
+        tracing::debug!(message_id = %hex::encode(message.id), domain = %hex::encode(message.domain), "Stage 4: App auth check");
+        AppAuthValidator::new().validate(message, &ctx.app_config)?;
+
+        // Stage 5: Message type validation
+        tracing::debug!(message_id = %hex::encode(message.id), message_type = %message.message_type, "Stage 5: Message type check");
+        MessageTypeValidator::new().validate(message, &ctx.message_type_config)?;
+
+        // Stage 6: Calldata validation (ABI decode)
+        tracing::debug!(message_id = %hex::encode(message.id), "Stage 6: Calldata check");
+        CalldataValidator::new().validate(message)?;
+
+        // Stage 7: Schema validation
+        tracing::debug!(message_id = %hex::encode(message.id), "Stage 7: Schema check");
+        self.schema_validator
+            .validate(message, ctx.schema.as_ref())?;
+
+        // Stage 8: Invariant checking
+        tracing::debug!(message_id = %hex::encode(message.id), "Stage 8: Invariant check");
+        let invariant_ctx = InvariantContext::new();
+        self.invariant_registry
+            .check_all(message, &invariant_ctx)
+            .await?;
+
+        // Skip Stage 9 (custom rules) for witnesses - rate limiting is per-validator
+
+        tracing::info!(message_id = %hex::encode(message.id), "All witness validation stages passed");
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

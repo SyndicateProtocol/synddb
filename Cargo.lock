@@ -4349,6 +4349,7 @@ dependencies = [
  "async-trait",
  "axum",
  "clap",
+ "futures",
  "google-cloud-storage",
  "hex",
  "humantime",

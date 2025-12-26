@@ -45,6 +45,7 @@ rusqlite = { workspace = true, features = ["bundled"] }
 
 # Utilities
 async-trait = { workspace = true }
+futures = "0.3"
 
 # JSON Schema validation
 jsonschema = "0.27"
