@@ -3,16 +3,14 @@ FROM rust:1.91-bookworm AS rust-builder
 
 WORKDIR /app
 
-# Copy the main workspace first (for building sequencer and FFI lib)
+# Copy workspace files (including examples for workspace resolution)
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY examples ./examples
 
 # Build the sequencer and FFI library
 RUN cargo build --release -p synddb-sequencer && \
     cargo build --release -p synddb-client --features ffi
-
-# Now copy the validator (which has path deps to crates/)
-COPY examples/price-oracle/validator ./examples/price-oracle/validator
 
 # Build the validator - it's standalone but references main crates
 WORKDIR /app/examples/price-oracle/validator

@@ -3,10 +3,10 @@ FROM rust:1.91-bookworm AS builder
 
 WORKDIR /app
 
-# Copy workspace files
+# Copy workspace files (including examples for workspace resolution)
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY examples/prediction-market ./examples/prediction-market
+COPY examples ./examples
 
 # Build the prediction-market binary and sequencer
 RUN cargo build --release -p prediction-market -p synddb-sequencer
