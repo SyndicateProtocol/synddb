@@ -1233,4 +1233,331 @@ mod tests {
 
         let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
     }
+
+    // =========================================================================
+    // Robustness tests based on learnings from E2E debugging
+    // =========================================================================
+    //
+    // Key learning: SQLite Session Extension does NOT reset after changeset_strm()
+    // extraction. Each call returns ALL changes since session creation. We must
+    // recreate the session after each extraction to get only new changes.
+    //
+    // Bug symptoms we observed:
+    // - Changeset sizes grew over time (34KB -> 44KB -> 53KB -> 63KB)
+    // - Validator received duplicate data in each batch
+    // - SQLITE_CHANGESET_CONFLICT on INSERT (same rows inserted twice)
+
+    #[test]
+    fn test_multiple_publish_cycles_independent() {
+        // Test that multiple publish cycles produce independent changesets.
+        // This is the core test for the session recreation fix.
+        //
+        // Before the fix: Each publish would include ALL previous changes.
+        // After the fix: Each publish only includes changes since last publish.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Cycle 1: Insert some rows
+        conn.execute("INSERT INTO test VALUES (1, 'first')", [])
+            .unwrap();
+        conn.execute("INSERT INTO test VALUES (2, 'second')", [])
+            .unwrap();
+
+        // Publish first batch
+        synddb.publish().unwrap();
+
+        // Cycle 2: Insert more rows
+        conn.execute("INSERT INTO test VALUES (3, 'third')", [])
+            .unwrap();
+        conn.execute("INSERT INTO test VALUES (4, 'fourth')", [])
+            .unwrap();
+
+        // Publish second batch - should NOT include rows 1-2
+        synddb.publish().unwrap();
+
+        // Cycle 3: Update existing rows
+        conn.execute("UPDATE test SET value = 'updated' WHERE id = 1", [])
+            .unwrap();
+
+        // Publish third batch - should only include the update
+        synddb.publish().unwrap();
+
+        // If session recreation is working, we should have 3 independent changesets
+        // (The actual verification happens in E2E tests with validator)
+    }
+
+    #[test]
+    fn test_preexisting_data_then_modifications() {
+        // Simulates the orderbook benchmark pattern:
+        // 1. Schema and initial data exist BEFORE SyndDB attaches
+        // 2. SyndDB attaches (triggers auto_snapshot_on_attach)
+        // 3. New modifications are captured as changesets
+        //
+        // The changesets should only contain the NEW modifications, not the
+        // pre-existing data (which is in the snapshot).
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        // Step 1: Create schema and insert initial data BEFORE SyndDB
+        conn.execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, balance INTEGER)",
+            [],
+        )
+        .unwrap();
+        for i in 0..10 {
+            conn.execute(
+                "INSERT INTO users VALUES (?1, ?2, ?3)",
+                rusqlite::params![i, format!("User{}", i), 1000],
+            )
+            .unwrap();
+        }
+
+        // Step 2: Attach SyndDB with auto_snapshot_on_attach
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            auto_snapshot_on_attach: true,
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Step 3: Make modifications AFTER attach
+        conn.execute("UPDATE users SET balance = 2000 WHERE id = 0", [])
+            .unwrap();
+        conn.execute("INSERT INTO users VALUES (10, 'NewUser', 500)", [])
+            .unwrap();
+
+        // Publish - this changeset should only contain the update and insert,
+        // not the original 10 users (those are in the snapshot)
+        synddb.publish().unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 11);
+    }
+
+    #[test]
+    fn test_transaction_batch_then_individual_ops() {
+        // Simulates the exact orderbook benchmark pattern that revealed the bug:
+        // 1. Batch insert users in a transaction
+        // 2. Individual balance inserts
+        // 3. Multiple publish cycles
+        //
+        // This pattern was causing duplicate changesets before the fix.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE balances (user_id INTEGER PRIMARY KEY, amount INTEGER)",
+            [],
+        )
+        .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Batch insert users in a transaction (like benchmark initialization)
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            for i in 0..100 {
+                tx.execute(
+                    "INSERT INTO users VALUES (?1, ?2)",
+                    rusqlite::params![i, format!("User{}", i)],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        // Publish after batch
+        synddb.publish().unwrap();
+
+        // Individual balance inserts (like benchmark setup)
+        for i in 0..100 {
+            conn.execute(
+                "INSERT INTO balances VALUES (?1, ?2)",
+                rusqlite::params![i, 10000],
+            )
+            .unwrap();
+        }
+
+        // Publish after individual ops
+        synddb.publish().unwrap();
+
+        // More batch operations
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            for i in 0..50 {
+                tx.execute(
+                    "UPDATE balances SET amount = amount + 100 WHERE user_id = ?1",
+                    rusqlite::params![i],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        // Final publish
+        synddb.publish().unwrap();
+
+        let user_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .unwrap();
+        let balance_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM balances", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(user_count, 100);
+        assert_eq!(balance_count, 100);
+    }
+
+    #[test]
+    fn test_rapid_publish_cycles() {
+        // Test rapid succession of changes and publishes.
+        // This stress tests the session recreation mechanism.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute(
+            "CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO counter VALUES (1, 0)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Rapid cycles of update + publish
+        for i in 1..=50 {
+            conn.execute("UPDATE counter SET value = ?1 WHERE id = 1", [i])
+                .unwrap();
+            synddb.publish().unwrap();
+        }
+
+        // Verify final state
+        let value: i64 = conn
+            .query_row("SELECT value FROM counter WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(value, 50);
+    }
+
+    #[test]
+    fn test_mixed_ddl_and_dml() {
+        // Test interleaving DDL (schema changes) and DML (data changes).
+        // DDL triggers auto_snapshot_after_ddl, which should play nicely
+        // with the session recreation mechanism.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            auto_snapshot_after_ddl: true,
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Create first table (DDL triggers snapshot)
+        synddb
+            .execute_ddl("CREATE TABLE t1 (id INTEGER PRIMARY KEY, val TEXT)")
+            .unwrap();
+
+        // Insert data
+        conn.execute("INSERT INTO t1 VALUES (1, 'a')", []).unwrap();
+        synddb.publish().unwrap();
+
+        // Create second table (another DDL)
+        synddb
+            .execute_ddl("CREATE TABLE t2 (id INTEGER PRIMARY KEY, ref_id INTEGER)")
+            .unwrap();
+
+        // Insert into both tables
+        conn.execute("INSERT INTO t1 VALUES (2, 'b')", []).unwrap();
+        conn.execute("INSERT INTO t2 VALUES (1, 1)", []).unwrap();
+        synddb.publish().unwrap();
+
+        // Verify state
+        let t1_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM t1", [], |row| row.get(0))
+            .unwrap();
+        let t2_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM t2", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(t1_count, 2);
+        assert_eq!(t2_count, 1);
+    }
+
+    #[test]
+    fn test_empty_publish_cycles() {
+        // Test that publish() with no changes doesn't cause issues.
+        // The session should handle empty extractions gracefully.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Multiple empty publishes
+        synddb.publish().unwrap();
+        synddb.publish().unwrap();
+        synddb.publish().unwrap();
+
+        // Now make a change
+        conn.execute("INSERT INTO test VALUES (1)", []).unwrap();
+        synddb.publish().unwrap();
+
+        // More empty publishes
+        synddb.publish().unwrap();
+        synddb.publish().unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_large_batch_single_transaction() {
+        // Test a large batch in a single transaction.
+        // This is common in data import scenarios.
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, data TEXT)", [])
+            .unwrap();
+
+        let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
+
+        // Large batch insert
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            for i in 0..1000 {
+                tx.execute(
+                    "INSERT INTO items VALUES (?1, ?2)",
+                    rusqlite::params![i, format!("Item data {}", i)],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        synddb.publish().unwrap();
+
+        // Follow up with smaller batches
+        for batch in 0..5 {
+            let tx = conn.unchecked_transaction().unwrap();
+            for i in 0..10 {
+                let id = 1000 + batch * 10 + i;
+                tx.execute(
+                    "INSERT INTO items VALUES (?1, ?2)",
+                    rusqlite::params![id, format!("Batch {} item {}", batch, i)],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+            synddb.publish().unwrap();
+        }
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1050);
+    }
 }

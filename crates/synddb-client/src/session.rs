@@ -70,10 +70,10 @@ struct SessionState {
 impl SessionState {
     /// Recreate the session to clear accumulated changes.
     ///
-    /// The SQLite Session Extension does NOT reset after `changeset_strm()` extraction.
+    /// The `SQLite` Session Extension does NOT reset after `changeset_strm()` extraction.
     /// Each subsequent call returns ALL changes since session creation. To get only
     /// new changes in the next extraction, we must drop the old session and create
-    /// a fresh one. See: https://sqlite.org/session/sqlite3session_changeset.html
+    /// a fresh one. See: <https://sqlite.org/session/sqlite3session_changeset.html>
     fn recreate_session(&mut self) -> Result<()> {
         // Drop the old session by replacing it
         let mut new_session =
