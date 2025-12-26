@@ -463,12 +463,35 @@ The message-passing paradigm requires approximately **4x more code** for the sam
 
 ---
 
-## Recommendations
+## Recommendation: Use SQLite
 
-1. **Start with SQLite** for rapid prototyping and development
-2. **Add message-passing** only when on-chain guarantees are required
-3. **Use the hybrid pattern** (writes via Bridge, reads from local cache) for production
-4. **Invest in robust retry and timeout handling** from day one
-5. **Build event sync infrastructure early** - it's required for any meaningful reads
+**For most applications, use SQLite.** The message-passing paradigm introduces significant complexity that is only justified in narrow circumstances.
 
-The additional complexity of message-passing is justified when decentralized execution and blockchain guarantees are core requirements. For most applications, SQLite provides better developer experience with significantly lower operational overhead.
+### Why SQLite Wins
+
+1. **4x less code** for the same operation
+2. **Millisecond latency** vs seconds/minutes
+3. **Strong consistency** - no eventual consistency bugs
+4. **Simple error handling** - no retry logic, no error classification
+5. **Works offline** - no network dependencies
+6. **Easier debugging** - state is local and inspectable
+
+### When to Consider Message-Passing
+
+Only use message-passing when you have a **hard requirement** for:
+- On-chain execution with blockchain guarantees
+- Multi-party validation by independent validators
+- Immutable audit trail on a public ledger
+- Cross-chain message passing
+
+If you're unsure whether you need these, you don't. Start with SQLite.
+
+### The Hybrid Trap
+
+The hybrid approach (writes via Bridge, reads from local cache) combines the worst of both worlds:
+- All the complexity of message-passing for writes
+- Event sync infrastructure for reads
+- Eventual consistency bugs between chain and cache
+- Chain reorganization handling
+
+Only use hybrid if you've already committed to message-passing and need complex read queries. Even then, consider whether on-chain view functions could suffice.
