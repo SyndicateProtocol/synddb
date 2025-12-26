@@ -15,6 +15,7 @@ use synddb_sequencer::{
     config::{PublisherType, SequencerConfig},
     http_api::{create_router, AppState},
     inbox::Inbox,
+    messages::{create_messages_router, MessageApiState},
     signer::MessageSigner,
     transport::local::{LocalTransport, LocalTransportConfig},
 };
@@ -180,6 +181,10 @@ async fn main() -> Result<()> {
 
     // Create the HTTP router
     let mut app = create_router(state);
+
+    // Mount messages API for inbound/outbound message passing
+    let message_state = MessageApiState::new();
+    app = app.merge(create_messages_router(message_state));
 
     // Mount storage fetch API if local transport is configured
     if let Some(ref transport) = local_transport {

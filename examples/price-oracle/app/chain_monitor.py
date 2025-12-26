@@ -16,30 +16,30 @@ Architecture:
             v
     PriceRequestHandler (decodes event)
             |
-            v (channel or direct call)
-    insert_price_request() -> inbound_message_log
+            v (MessageClient.push)
+    Sequencer Message Queue
             |
-            v
-    process_pending_price_requests() -> message_log (response)
+            v (MessageClient.get_messages)
+    Application processes and acks
 """
 
-import json
 import logging
-import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional
 
 try:
     from web3 import Web3
-    from web3.contract import Contract
-    from eth_abi import decode
 
     HAS_WEB3 = True
 except ImportError:
     HAS_WEB3 = False
 
-from .bridge import PriceRequest, insert_price_request
+# Import MessageClient from SDK
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'crates', 'synddb-client', 'bindings', 'python'))
+from synddb import MessageClient
 
 logger = logging.getLogger(__name__)
 
@@ -102,20 +102,22 @@ class PriceRequestHandler:
     """Handler for PriceRequested events from the PriceOracle contract.
 
     When a user calls PriceOracle.requestPrice(), this handler captures
-    the event and inserts it into the inbound_message_log table.
+    the event and pushes it to the sequencer's message queue via MessageClient.
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, sequencer_url: str):
         """Initialize the handler.
 
         Args:
-            db_path: Path to the SQLite database
+            sequencer_url: URL of the sequencer (e.g., 'http://localhost:8433')
         """
-        self.db_path = db_path
+        self.client = MessageClient(sequencer_url)
         self.processed_count = 0
 
     def handle_event(self, event: dict) -> bool:
         """Process a PriceRequested event.
+
+        Pushes the event to the sequencer's message queue via MessageClient.push().
 
         Args:
             event: Decoded event data with keys:
@@ -128,35 +130,35 @@ class PriceRequestHandler:
                 - logIndex: index within tx
 
         Returns:
-            True if event was processed successfully
+            True if event was pushed successfully
         """
         try:
-            request = PriceRequest(
-                request_id=event["requestId"],
-                asset=event["asset"],
-                requester=event["requester"],
-                max_age=event["maxAge"],
-                block_number=event["blockNumber"],
+            result = self.client.push(
+                message_id=event["requestId"],
+                message_type="price_request",
+                payload={
+                    "asset": event["asset"],
+                    "requester": event["requester"],
+                    "max_age": event["maxAge"],
+                    "log_index": event.get("logIndex"),
+                },
+                sender=event["requester"],
                 tx_hash=event["transactionHash"],
+                block_number=event["blockNumber"],
+                confirmations=0,
             )
 
-            # Open a new connection for this event
-            conn = sqlite3.connect(self.db_path)
-            try:
-                result = insert_price_request(
-                    conn=conn,
-                    request=request,
-                    log_index=event.get("logIndex"),
+            if result.get("id"):
+                self.processed_count += 1
+                logger.info(
+                    f"Pushed price request to sequencer: id={result['id']}, "
+                    f"asset={event['asset']}, requester={event['requester']}"
                 )
-                if result > 0:
-                    self.processed_count += 1
-                    return True
-                return False
-            finally:
-                conn.close()
+                return True
+            return False
 
         except Exception as e:
-            logger.error(f"Error handling PriceRequested event: {e}")
+            logger.error(f"Error pushing PriceRequested event to sequencer: {e}")
             return False
 
 

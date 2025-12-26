@@ -57,5 +57,6 @@ pub mod config;
 pub mod http_api;
 pub mod http_errors;
 pub mod inbox;
+pub mod messages;
 pub mod signer;
 pub mod transport;

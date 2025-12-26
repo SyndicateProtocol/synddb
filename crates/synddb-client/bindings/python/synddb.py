@@ -484,3 +484,241 @@ def attach(db_path: str, sequencer_url: str, **kwargs) -> SyndDB:
         return SyndDB.attach_with_config(db_path, sequencer_url, **kwargs)
     else:
         return SyndDB.attach(db_path, sequencer_url)
+
+
+# ============================================================================
+# Message Passing API
+# ============================================================================
+
+import json
+import urllib.request
+import urllib.error
+
+
+class MessageClient:
+    """Simple client for interacting with the sequencer's message API.
+
+    This provides the simplest possible DX for receiving inbound messages
+    from the blockchain and sending responses.
+
+    Example:
+        >>> from synddb import MessageClient
+        >>> client = MessageClient('http://localhost:8433')
+        >>>
+        >>> # Get pending price requests
+        >>> messages = client.get_messages(type='price_request')
+        >>> for msg in messages:
+        ...     print(f"Request for {msg['payload']['asset']}")
+        ...     # Process and respond...
+        ...     client.ack(msg['id'])
+    """
+
+    def __init__(self, sequencer_url: str):
+        """Initialize the message client.
+
+        Args:
+            sequencer_url: URL of the sequencer (e.g., 'http://localhost:8433')
+        """
+        self.base_url = sequencer_url.rstrip('/')
+
+    def get_messages(
+        self,
+        type: Optional[str] = None,
+        after_id: int = 0,
+        limit: int = 100,
+        pending_only: bool = True,
+    ) -> list[dict]:
+        """Get inbound messages from the sequencer.
+
+        Args:
+            type: Filter by message type (e.g., 'price_request', 'deposit')
+            after_id: Get messages with ID greater than this
+            limit: Maximum messages to return (default: 100, max: 1000)
+            pending_only: Only return unacknowledged messages (default: True)
+
+        Returns:
+            List of message dicts with keys: id, message_id, type, payload,
+            sender, tx_hash, block_number, confirmations, timestamp, acknowledged
+
+        Example:
+            >>> messages = client.get_messages(type='price_request')
+            >>> for msg in messages:
+            ...     print(f"Asset: {msg['payload']['asset']}")
+        """
+        params = {
+            'after_id': after_id,
+            'limit': min(limit, 1000),
+            'pending_only': 'true' if pending_only else 'false',
+        }
+        if type:
+            params['type'] = type
+
+        query = '&'.join(f"{k}={v}" for k, v in params.items())
+        url = f"{self.base_url}/messages/inbound?{query}"
+
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                return data.get('messages', [])
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Failed to get messages: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to connect to sequencer: {e.reason}")
+
+    def get_message(self, message_id: int) -> dict:
+        """Get a specific message by ID.
+
+        Args:
+            message_id: The message ID
+
+        Returns:
+            Message dict
+
+        Raises:
+            RuntimeError: If message not found or request fails
+        """
+        url = f"{self.base_url}/messages/inbound/{message_id}"
+
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise RuntimeError(f"Message {message_id} not found")
+            raise RuntimeError(f"Failed to get message: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to connect to sequencer: {e.reason}")
+
+    def ack(self, message_id: int, processed: bool = True, note: Optional[str] = None) -> bool:
+        """Acknowledge an inbound message.
+
+        Call this after processing a message to mark it as handled.
+        Acknowledged messages won't be returned by get_messages() with pending_only=True.
+
+        Args:
+            message_id: The message ID to acknowledge
+            processed: Whether the message was successfully processed (default: True)
+            note: Optional note about processing
+
+        Returns:
+            True if message was acknowledged, False if already acknowledged
+
+        Example:
+            >>> messages = client.get_messages()
+            >>> for msg in messages:
+            ...     # Process...
+            ...     client.ack(msg['id'])
+        """
+        url = f"{self.base_url}/messages/inbound/{message_id}/ack"
+        data = json.dumps({'processed': processed, 'note': note}).encode('utf-8')
+
+        req = urllib.request.Request(url, data=data, method='POST')
+        req.add_header('Content-Type', 'application/json')
+
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                return result.get('acknowledged', False)
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Failed to acknowledge message: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to connect to sequencer: {e.reason}")
+
+    def get_outbound_status(self, message_id: int) -> dict:
+        """Get the status of an outbound message.
+
+        Check if a message you wrote to message_log has been submitted
+        to the blockchain.
+
+        Args:
+            message_id: The message ID from your message_log table
+
+        Returns:
+            Status dict with keys: id, status, tx_hash, confirmations, error, updated_at
+        """
+        url = f"{self.base_url}/messages/outbound/{message_id}/status"
+
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Failed to get outbound status: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to connect to sequencer: {e.reason}")
+
+    def stats(self) -> dict:
+        """Get message queue statistics.
+
+        Returns:
+            Stats dict with keys: total, pending, acknowledged, max_size
+        """
+        url = f"{self.base_url}/messages/inbound/stats"
+
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Failed to get stats: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to connect to sequencer: {e.reason}")
+
+    def push(
+        self,
+        message_id: str,
+        message_type: str,
+        payload: dict,
+        sender: str,
+        tx_hash: str,
+        block_number: int,
+        confirmations: int = 0,
+    ) -> dict:
+        """Push a new inbound message to the sequencer queue.
+
+        Called by chain monitors to submit blockchain events to the queue.
+        The message will be assigned a sequence ID and made available for
+        apps to retrieve via get_messages().
+
+        Args:
+            message_id: Message ID from blockchain (e.g., requestId)
+            message_type: Type of message (e.g., 'price_request')
+            payload: Message payload as dict
+            sender: Sender address on blockchain
+            tx_hash: Transaction hash where event was emitted
+            block_number: Block number where event was emitted
+            confirmations: Number of confirmations (default: 0)
+
+        Returns:
+            Dict with 'id' (sequencer-assigned) and 'message_id'
+
+        Example:
+            >>> client.push(
+            ...     message_id='0xabc123',
+            ...     message_type='price_request',
+            ...     payload={'asset': 'BTC', 'max_age': 300},
+            ...     sender='0x1234...',
+            ...     tx_hash='0xdef456...',
+            ...     block_number=12345,
+            ... )
+            {'id': 1, 'message_id': '0xabc123'}
+        """
+        url = f"{self.base_url}/messages/inbound"
+        data = json.dumps({
+            'message_id': message_id,
+            'type': message_type,
+            'payload': payload,
+            'sender': sender,
+            'tx_hash': tx_hash,
+            'block_number': block_number,
+            'confirmations': confirmations,
+        }).encode('utf-8')
+
+        req = urllib.request.Request(url, data=data, method='POST')
+        req.add_header('Content-Type', 'application/json')
+
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Failed to push message: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to connect to sequencer: {e.reason}")

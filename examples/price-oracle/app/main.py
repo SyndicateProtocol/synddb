@@ -22,11 +22,14 @@ from app.schema import init_database, add_tracked_asset, get_tracked_assets
 from app.bridge import (
     create_price_update_message,
     create_batch_price_update_message,
-    process_pending_price_requests,
+    create_price_response_message,
     get_outbound_message_stats,
-    get_inbound_message_stats,
     PriceUpdate,
 )
+
+# Import MessageClient from SDK
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'crates', 'synddb-client', 'bindings', 'python'))
+from synddb import MessageClient
 
 
 def setup_logging(verbose: bool) -> None:
@@ -321,16 +324,23 @@ def push_prices(ctx: click.Context, mock: bool, batch: bool) -> None:
 @click.option("--mock", is_flag=True, help="Use mock APIs for price lookup")
 @click.pass_context
 def process_requests(ctx: click.Context, mock: bool) -> None:
-    """Process pending price requests from the chain (pull model).
+    """Process pending price requests from the sequencer (pull model).
 
-    Reads unprocessed requests from inbound_message_log and creates
-    response messages in message_log.
+    Gets unprocessed price_request messages from the sequencer queue
+    and creates response messages in message_log.
     """
     db_path = ctx.obj["db_path"]
+    sequencer_url = ctx.obj["sequencer_url"]
 
+    if not sequencer_url:
+        click.echo("Error: --sequencer-url required for message processing", err=True)
+        sys.exit(1)
+
+    # Initialize database and message client
     conn = init_database(db_path)
+    client = MessageClient(sequencer_url)
 
-    # Define a function to get current prices
+    # Define a function to get current prices from the database
     def get_price(asset: str) -> Optional[tuple[float, int]]:
         """Get the latest price for an asset from the database."""
         cursor = conn.execute(
@@ -347,11 +357,54 @@ def process_requests(ctx: click.Context, mock: bool) -> None:
             return (row[0], row[1])
         return None
 
-    processed = process_pending_price_requests(conn, get_price)
+    # Get pending price requests from sequencer
+    messages = client.get_messages(type="price_request", pending_only=True)
+
+    processed = 0
+    for msg in messages:
+        try:
+            payload = msg.get("payload", {})
+            asset = payload.get("asset")
+            requester = payload.get("requester")
+
+            if not asset:
+                click.echo(f"Skipping message {msg['id']}: no asset in payload")
+                client.ack(msg["id"], processed=False, note="missing asset")
+                continue
+
+            # Look up the price
+            price_data = get_price(asset)
+            if not price_data:
+                click.echo(f"No price available for {asset}")
+                client.ack(msg["id"], processed=False, note=f"no price for {asset}")
+                continue
+
+            price, timestamp = price_data
+
+            # Create a response message in the outbound message_log
+            msg_id = create_price_response_message(
+                conn,
+                request_id=msg.get("message_id", ""),
+                asset=asset,
+                price=price,
+                timestamp=timestamp,
+            )
+
+            if msg_id:
+                click.echo(f"Created price response for {asset}: ${price:,.2f}")
+                # Acknowledge the inbound message
+                client.ack(msg["id"], processed=True, note=f"response_id={msg_id}")
+                processed += 1
+            else:
+                click.echo(f"Failed to create response for {asset}")
+
+        except Exception as e:
+            click.echo(f"Error processing message {msg['id']}: {e}", err=True)
+
     conn.close()
 
     if processed > 0:
-        click.echo(f"Processed {processed} price requests")
+        click.echo(f"\nProcessed {processed} price requests")
     else:
         click.echo("No pending price requests")
 
@@ -361,25 +414,34 @@ def process_requests(ctx: click.Context, mock: bool) -> None:
 def message_stats(ctx: click.Context) -> None:
     """Show message queue statistics."""
     db_path = ctx.obj["db_path"]
+    sequencer_url = ctx.obj["sequencer_url"]
 
+    # Show outbound stats from local database
     conn = init_database(db_path)
-
     outbound = get_outbound_message_stats(conn)
-    inbound = get_inbound_message_stats(conn)
-
     conn.close()
 
-    click.echo("\nOutbound Messages (message_log):")
+    click.echo("\nOutbound Messages (local message_log):")
     click.echo(f"  Pending:   {outbound['pending']:>6}")
     click.echo(f"  Submitted: {outbound['submitted']:>6}")
     click.echo(f"  Confirmed: {outbound['confirmed']:>6}")
     click.echo(f"  Failed:    {outbound['failed']:>6}")
     click.echo(f"  Total:     {outbound['total']:>6}")
 
-    click.echo("\nInbound Messages (inbound_message_log):")
-    click.echo(f"  Pending:   {inbound['pending']:>6}")
-    click.echo(f"  Processed: {inbound['processed']:>6}")
-    click.echo(f"  Total:     {inbound['total']:>6}")
+    # Show inbound stats from sequencer if available
+    if sequencer_url:
+        try:
+            client = MessageClient(sequencer_url)
+            inbound = client.stats()
+            click.echo("\nInbound Messages (sequencer queue):")
+            click.echo(f"  Pending:      {inbound['pending']:>6}")
+            click.echo(f"  Acknowledged: {inbound['acknowledged']:>6}")
+            click.echo(f"  Total:        {inbound['total']:>6}")
+            click.echo(f"  Max Size:     {inbound['max_size']:>6}")
+        except Exception as e:
+            click.echo(f"\nInbound Messages: Could not reach sequencer ({e})")
+    else:
+        click.echo("\nInbound Messages: --sequencer-url not set")
 
 
 @cli.command("watch")
@@ -398,9 +460,13 @@ def watch(
     """Watch for PriceRequested events from the contract.
 
     Starts a chain monitor that listens for price request events
-    and inserts them into inbound_message_log.
+    and pushes them to the sequencer's message queue.
     """
-    db_path = ctx.obj["db_path"]
+    sequencer_url = ctx.obj["sequencer_url"]
+
+    if not sequencer_url:
+        click.echo("Error: --sequencer-url required for chain monitoring", err=True)
+        sys.exit(1)
 
     try:
         from app.chain_monitor import (
@@ -413,10 +479,6 @@ def watch(
         click.echo("Install web3 with: pip install web3", err=True)
         sys.exit(1)
 
-    # Initialize database
-    conn = init_database(db_path)
-    conn.close()
-
     config = ChainMonitorConfig(
         rpc_url=rpc_url,
         contract_address=contract,
@@ -424,10 +486,11 @@ def watch(
         poll_interval=poll_interval,
     )
 
-    handler = PriceRequestHandler(db_path)
+    handler = PriceRequestHandler(sequencer_url)
 
     click.echo(f"Starting chain monitor for {contract}")
     click.echo(f"RPC: {rpc_url}")
+    click.echo(f"Sequencer: {sequencer_url}")
     click.echo(f"Starting from block: {start_block or 'latest'}")
     click.echo("Press Ctrl+C to stop\n")
 
@@ -521,21 +584,51 @@ def run_daemon(
                             click.echo(f"Created outbound message with {len(updates)} prices")
                     conn.close()
 
-                # Process any pending price requests
-                conn = init_database(db_path)
+                # Process any pending price requests from sequencer
+                if sequencer_url:
+                    conn = init_database(db_path)
+                    msg_client = MessageClient(sequencer_url)
 
-                def get_price(asset: str) -> Optional[tuple[float, int]]:
-                    cursor = conn.execute(
-                        "SELECT price, timestamp FROM prices WHERE asset = ? ORDER BY timestamp DESC LIMIT 1",
-                        (asset,),
-                    )
-                    row = cursor.fetchone()
-                    return (row[0], row[1]) if row else None
+                    def get_price(asset: str) -> Optional[tuple[float, int]]:
+                        cursor = conn.execute(
+                            "SELECT price, timestamp FROM prices WHERE asset = ? ORDER BY timestamp DESC LIMIT 1",
+                            (asset,),
+                        )
+                        row = cursor.fetchone()
+                        return (row[0], row[1]) if row else None
 
-                processed = process_pending_price_requests(conn, get_price)
-                if processed > 0:
-                    click.echo(f"Processed {processed} price requests")
-                conn.close()
+                    messages = msg_client.get_messages(type="price_request", pending_only=True)
+                    processed = 0
+                    for msg in messages:
+                        try:
+                            payload = msg.get("payload", {})
+                            asset = payload.get("asset")
+                            if not asset:
+                                msg_client.ack(msg["id"], processed=False, note="missing asset")
+                                continue
+
+                            price_data = get_price(asset)
+                            if not price_data:
+                                msg_client.ack(msg["id"], processed=False, note=f"no price for {asset}")
+                                continue
+
+                            price, timestamp = price_data
+                            resp_id = create_price_response_message(
+                                conn,
+                                request_id=msg.get("message_id", ""),
+                                asset=asset,
+                                price=price,
+                                timestamp=timestamp,
+                            )
+                            if resp_id:
+                                msg_client.ack(msg["id"], processed=True)
+                                processed += 1
+                        except Exception as e:
+                            logging.error(f"Error processing message {msg['id']}: {e}")
+
+                    if processed > 0:
+                        click.echo(f"Processed {processed} price requests")
+                    conn.close()
 
             except Exception as e:
                 logging.error(f"Error in daemon loop: {e}")
