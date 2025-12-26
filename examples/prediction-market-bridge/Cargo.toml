@@ -1,0 +1,55 @@
+[package]
+name = "prediction-market-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Binary prediction market example using message-passing Bridge paradigm"
+
+[lints]
+workspace = true
+
+[lib]
+name = "prediction_market_bridge"
+path = "src/lib.rs"
+
+[[bin]]
+name = "prediction-market-bridge"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# Database (for local cache)
+rusqlite = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# CLI
+clap = { workspace = true, features = ["env"] }
+
+# HTTP client and server
+reqwest = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+
+# Blockchain / ABI encoding
+alloy = { workspace = true }
+
+# Utils
+hex = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

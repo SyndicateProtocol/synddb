@@ -5,6 +5,7 @@ members = [
   "crates/synddb-chain-monitor",
   "crates/synddb-shared",
   "crates/synddb-bridge-validator",
+  "examples/prediction-market-bridge",
 ]
 
 [workspace.package]
