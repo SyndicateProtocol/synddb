@@ -5,7 +5,7 @@ use synddb_client::SyndDB;
 use crate::{
     bridge::{self, Withdrawal},
     market::{self, Market},
-    schema,
+    schema::{self, SCHEMA_SQL},
     trading::{self, Position, Trade},
 };
 
@@ -31,6 +31,20 @@ use crate::{
 /// let app = PredictionMarket::new("market.db", None)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+///
+/// # `SyndDB` Features
+///
+/// When replication is enabled, the following features are automatically active:
+///
+/// - **`auto_snapshot_on_attach`**: If the database already has tables when `SyndDB`
+///   attaches, a snapshot is automatically published so validators can reconstruct
+///   the pre-existing state.
+///
+/// - **`auto_snapshot_after_ddl`**: Schema changes executed via `execute_ddl()` trigger
+///   automatic snapshot publishing, ensuring validators can reconstruct the schema.
+///
+/// - **Session-based change capture**: All row-level changes are captured via the
+///   `SQLite` Session Extension and sent to the sequencer as changesets.
 #[allow(missing_debug_implementations)]
 pub struct PredictionMarket {
     /// When replicated, `SyndDB` manages the connection
@@ -43,12 +57,24 @@ impl PredictionMarket {
     /// Create a new prediction market instance
     ///
     /// If `sequencer_url` is provided, uses `SyndDB::open()` which handles
-    /// all the connection management internally.
+    /// all the connection management internally. Schema creation is done via
+    /// `execute_ddl()` which automatically publishes a snapshot.
     pub fn new(db_path: &str, sequencer_url: Option<&str>) -> Result<Self> {
         if let Some(url) = sequencer_url {
             // Use SyndDB::open() - it handles connection management internally
+            // Note: auto_snapshot_on_attach will fire if database already has tables
             let synddb = SyndDB::open(db_path, url)?;
-            schema::initialize_schema(synddb.connection())?;
+
+            // Configure connection pragmas for performance
+            schema::configure_connection(synddb.connection())?;
+
+            // Initialize schema if not already done
+            // Using execute_ddl() ensures a snapshot is published after schema creation
+            if !schema::is_initialized(synddb.connection())? {
+                synddb.execute_ddl(SCHEMA_SQL)?;
+                synddb.connection().pragma_update(None, "user_version", 1)?;
+            }
+
             Ok(Self {
                 synddb: Some(synddb),
                 standalone_conn: None,
@@ -68,7 +94,16 @@ impl PredictionMarket {
     pub fn in_memory(sequencer_url: Option<&str>) -> Result<Self> {
         if let Some(url) = sequencer_url {
             let synddb = SyndDB::open_in_memory(url)?;
-            schema::initialize_schema(synddb.connection())?;
+
+            // Configure connection pragmas for performance
+            schema::configure_connection(synddb.connection())?;
+
+            // Initialize schema via execute_ddl for automatic snapshot
+            if !schema::is_initialized(synddb.connection())? {
+                synddb.execute_ddl(SCHEMA_SQL)?;
+                synddb.connection().pragma_update(None, "user_version", 1)?;
+            }
+
             Ok(Self {
                 synddb: Some(synddb),
                 standalone_conn: None,
