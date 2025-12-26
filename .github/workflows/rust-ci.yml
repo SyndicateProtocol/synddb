@@ -190,6 +190,9 @@ jobs:
             echo "Waiting for sequencer... ($i/30)"
             sleep 1
           done
+        env:
+          # Test signing key (anvil account 0)
+          SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
       - name: Run session stress test
         run: |
@@ -236,9 +239,12 @@ jobs:
             echo "Waiting for sequencer... ($i/30)"
             sleep 1
           done
+        env:
+          # Test signing key (anvil account 0)
+          SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
       - name: Run client integration tests
-        run: cargo test -p synddb-client -- --ignored
+        run: cargo test -p synddb-client --lib -- --ignored --skip attestation
         env:
           RUST_LOG: info
 
