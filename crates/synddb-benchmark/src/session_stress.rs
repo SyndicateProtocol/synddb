@@ -87,7 +87,7 @@ fn main() -> Result<()> {
     // Configure SyndDB
     let config = Config {
         sequencer_url: args.sequencer_url.parse()?,
-        snapshot_interval: 0, // Disable automatic snapshots
+        snapshot_interval: u64::MAX, // Effectively disable automatic snapshots
         ..Default::default()
     };
 
