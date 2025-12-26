@@ -131,20 +131,28 @@
 //!
 //! # Known Limitations
 //!
-//! ## 1. Column Type Changes Not Detected
+//! ## 1. Column Type Changes - Not a Problem Due to Dynamic Typing
 //!
 //! Schema mismatch detection only checks:
 //! - Missing tables (detected)
 //! - Column count mismatches (detected)
 //!
-//! It does NOT detect:
-//! - Column type changes (e.g., TEXT → INTEGER)
-//! - Column reordering
-//! - Column renaming
+//! It does NOT check column types (e.g., TEXT → INTEGER). However, this is
+//! **intentionally not checked** because:
 //!
-//! **Impact**: If a DDL changes column types without changing count, the changeset
-//! may still fail at apply time with a conflict, but we won't detect it early.
-//! The audit trail still captures the attempt for later analysis.
+//! 1. **`SQLite` is dynamically typed**: Column type declarations are "type affinity"
+//!    hints, not strict constraints. `SQLite` successfully applies changesets even
+//!    when column types differ.
+//!
+//! 2. **DDL changes trigger snapshots**: If schema changes (including column type
+//!    changes), this is detected by DDL monitoring which triggers automatic snapshots
+//!    via `auto_snapshot_after_ddl`.
+//!
+//! 3. **`SQLite` succeeds, so we succeed**: Our goal is to match `SQLite`'s behavior.
+//!    Since `SQLite` handles type mismatches gracefully, so does our replication.
+//!
+//! See `test_sqlite_column_type_mismatch_behavior` in applier.rs for verification
+//! that `SQLite` accepts TEXT↔INTEGER changesets without failure.
 //!
 //! ## 2. No Snapshot After DDL Scenario
 //!

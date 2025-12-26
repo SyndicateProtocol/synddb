@@ -1405,4 +1405,149 @@ mod tests {
             "Schema should be restored by snapshot"
         );
     }
+
+    #[test]
+    fn test_sqlite_column_type_mismatch_behavior() {
+        // This test documents SQLite's actual behavior with column type mismatches.
+        // SQLite is dynamically typed - column type declarations are "type affinity"
+        // hints, not strict constraints. This test verifies that changesets can
+        // successfully apply even when column types differ.
+
+        use rusqlite::session::ConflictAction;
+
+        // === Case 1: TEXT changeset applied to INTEGER column ===
+        // Create source with TEXT column
+        let source = Connection::open_in_memory().unwrap();
+        source
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)", [])
+            .unwrap();
+        source
+            .execute("INSERT INTO t VALUES (1, 'hello')", [])
+            .unwrap();
+
+        // Capture UPDATE changeset (TEXT value 'hello' -> 'world')
+        let mut session = Session::new(&source).unwrap();
+        session.attach(None::<&str>).unwrap();
+        source
+            .execute("UPDATE t SET val = 'world' WHERE id = 1", [])
+            .unwrap();
+        let mut changeset_text = Vec::new();
+        session.changeset_strm(&mut changeset_text).unwrap();
+
+        // Create target with INTEGER column (same name, different type)
+        let target = Connection::open_in_memory().unwrap();
+        target
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)", [])
+            .unwrap();
+        // Insert same data - SQLite stores 'hello' even in INTEGER column (dynamic typing)
+        target
+            .execute("INSERT INTO t VALUES (1, 'hello')", [])
+            .unwrap();
+
+        // Apply the TEXT changeset to INTEGER column
+        let mut cursor = std::io::Cursor::new(&changeset_text);
+        let result = target.apply_strm(&mut cursor, None::<fn(&str) -> bool>, |_, _| {
+            ConflictAction::SQLITE_CHANGESET_ABORT
+        });
+
+        // SQLite succeeds because it's dynamically typed!
+        assert!(
+            result.is_ok(),
+            "SQLite accepts TEXT changeset on INTEGER column due to dynamic typing"
+        );
+
+        // Verify the value was updated
+        let val: String = target
+            .query_row("SELECT val FROM t WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            val, "world",
+            "Value should be updated even with type mismatch"
+        );
+
+        // === Case 2: INTEGER changeset applied to TEXT column ===
+        let source2 = Connection::open_in_memory().unwrap();
+        source2
+            .execute(
+                "CREATE TABLE nums (id INTEGER PRIMARY KEY, count INTEGER)",
+                [],
+            )
+            .unwrap();
+        source2
+            .execute("INSERT INTO nums VALUES (1, 100)", [])
+            .unwrap();
+
+        let mut session2 = Session::new(&source2).unwrap();
+        session2.attach(None::<&str>).unwrap();
+        source2
+            .execute("UPDATE nums SET count = 200 WHERE id = 1", [])
+            .unwrap();
+        let mut changeset_int = Vec::new();
+        session2.changeset_strm(&mut changeset_int).unwrap();
+
+        // Create target with TEXT column
+        let target2 = Connection::open_in_memory().unwrap();
+        target2
+            .execute("CREATE TABLE nums (id INTEGER PRIMARY KEY, count TEXT)", [])
+            .unwrap();
+        target2
+            .execute("INSERT INTO nums VALUES (1, 100)", [])
+            .unwrap();
+
+        // Apply the INTEGER changeset to TEXT column
+        let mut cursor2 = std::io::Cursor::new(&changeset_int);
+        let result2 = target2.apply_strm(&mut cursor2, None::<fn(&str) -> bool>, |_, _| {
+            ConflictAction::SQLITE_CHANGESET_ABORT
+        });
+
+        assert!(
+            result2.is_ok(),
+            "SQLite accepts INTEGER changeset on TEXT column due to dynamic typing"
+        );
+
+        // Note: We read as String here because the column is declared as TEXT,
+        // but SQLite stores the INTEGER value 200 correctly
+        let count: String = target2
+            .query_row("SELECT count FROM nums WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            count, "200",
+            "Value should be updated even with type mismatch"
+        );
+    }
+
+    #[test]
+    fn test_column_type_info_available_from_schema() {
+        // This test shows that we CAN get column type information from the target schema
+        // using pragma_table_info. However, since SQLite is dynamically typed,
+        // type mismatches don't cause changeset application to fail.
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE mixed (id INTEGER PRIMARY KEY, int_val INTEGER, text_val TEXT, real_val REAL)",
+            [],
+        )
+        .unwrap();
+
+        // Get column types from schema
+        let mut stmt = conn
+            .prepare("SELECT name, type FROM pragma_table_info('mixed')")
+            .unwrap();
+        let columns: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Verify we can extract type information from schema
+        assert_eq!(columns.len(), 4);
+        assert!(columns.contains(&("id".to_string(), "INTEGER".to_string())));
+        assert!(columns.contains(&("int_val".to_string(), "INTEGER".to_string())));
+        assert!(columns.contains(&("text_val".to_string(), "TEXT".to_string())));
+        assert!(columns.contains(&("real_val".to_string(), "REAL".to_string())));
+
+        // Key insight: While we CAN get type info from schema, it doesn't matter
+        // for changeset application because SQLite is dynamically typed.
+        // Type mismatches are handled gracefully by SQLite itself.
+    }
 }
