@@ -195,6 +195,8 @@ pub use stats::{StatsHandle, StatsSnapshot};
 pub struct SyndDB {
     /// Connection reference (always valid for lifetime of `SyndDB`)
     conn: &'static Connection,
+    /// Sequencer URL for publishing snapshots
+    sequencer_url: url::Url,
     /// Session monitor for capturing changesets
     monitor: Option<SessionMonitor>,
     /// Channel to send shutdown signal to changeset sender
@@ -490,6 +492,7 @@ impl SyndDB {
 
         Ok(Self {
             conn,
+            sequencer_url: config.sequencer_url,
             monitor: Some(monitor),
             changeset_shutdown_tx,
             snapshot_shutdown_tx,
@@ -580,16 +583,16 @@ impl SyndDB {
             .publish()
     }
 
-    /// Create a complete snapshot of the database
+    /// Create a local snapshot of the database (does NOT send to sequencer)
     ///
     /// This captures the full current state of the database as a portable `SQLite` file.
-    /// The snapshot includes the current sequence number, so replicas can know which
-    /// changesets to apply after restoring from this snapshot.
+    /// The snapshot is returned but **not sent to the sequencer**. Use this when you
+    /// need the snapshot data locally (e.g., for backup, testing, or manual transfer).
     ///
-    /// # Use Case
+    /// # Important
     ///
-    /// Snapshots are used when new replicas join the network and need to sync from
-    /// the current state rather than replaying all changesets from genesis.
+    /// This method only creates a local snapshot. To create AND publish a snapshot
+    /// to the sequencer (the typical use case), use [`publish_snapshot()`] instead.
     ///
     /// # Returns
     ///
@@ -605,22 +608,120 @@ impl SyndDB {
     /// # use synddb_client::SyndDB;
     /// # let conn = Box::leak(Box::new(Connection::open("app.db").unwrap()));
     /// # let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
-    /// // Create snapshot for new replicas
-    /// let snapshot = synddb.snapshot()?;
+    /// // Create local snapshot (NOT sent to sequencer)
+    /// let snapshot = synddb.create_snapshot()?;
     ///
-    /// println!("Snapshot size: {} bytes", snapshot.data.len());
-    /// println!("Snapshot at sequence: {}", snapshot.sequence);
+    /// // Save to file for manual backup
+    /// std::fs::write("backup.db", &snapshot.data)?;
     ///
-    /// // Replicas would:
-    /// // 1. Restore from snapshot.data
-    /// // 2. Apply changesets with sequence >= snapshot.sequence
+    /// println!("Local snapshot: {} bytes at sequence {}", snapshot.data.len(), snapshot.sequence);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn snapshot(&self) -> Result<Snapshot> {
+    ///
+    /// [`publish_snapshot()`]: Self::publish_snapshot
+    pub fn create_snapshot(&self) -> Result<Snapshot> {
         self.monitor
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Monitor already shut down"))?
             .snapshot()
+    }
+
+    /// Create and publish a snapshot to the sequencer
+    ///
+    /// This is the primary method for creating snapshots. It captures the full database
+    /// state and sends it to the sequencer for ordering and distribution. Use this after
+    /// schema changes (which aren't captured in changesets) or to create recovery points.
+    ///
+    /// # Behavior
+    ///
+    /// 1. Creates a complete database snapshot (like [`create_snapshot()`])
+    /// 2. Sends the snapshot to the sequencer via HTTP (synchronous, blocking)
+    /// 3. Waits for sequencer acknowledgment before returning
+    ///
+    /// This is consistent with [`publish()`] for changesets - both methods send data
+    /// to the sequencer immediately.
+    ///
+    /// # When to Use
+    ///
+    /// - After `CREATE TABLE`, `ALTER TABLE`, or other DDL statements
+    /// - To create periodic recovery checkpoints
+    /// - Before major migrations or updates
+    ///
+    /// # Returns
+    ///
+    /// The snapshot that was created and published
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use synddb_client::SyndDB;
+    /// # let synddb = SyndDB::open("app.db", "http://localhost:8433")?;
+    /// // Create schema (DDL is NOT captured in changesets)
+    /// synddb.connection().execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY)")?;
+    ///
+    /// // Publish snapshot so validators can reconstruct the schema
+    /// let snapshot = synddb.publish_snapshot()?;
+    /// println!("Published snapshot: {} bytes at sequence {}", snapshot.data.len(), snapshot.sequence);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// [`create_snapshot()`]: Self::create_snapshot
+    /// [`publish()`]: Self::publish
+    pub fn publish_snapshot(&self) -> Result<Snapshot> {
+        let snapshot = self.create_snapshot()?;
+
+        // Send snapshot synchronously via HTTP
+        let url = self
+            .sequencer_url
+            .join("snapshots")
+            .map_err(|e| anyhow::anyhow!("Invalid URL: {}", e))?;
+
+        let request = synddb_shared::types::payloads::SnapshotRequest {
+            snapshot: synddb_shared::types::payloads::SnapshotData {
+                data: snapshot.data.clone(),
+                timestamp: snapshot
+                    .timestamp
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+                sequence: snapshot.sequence,
+            },
+            message_id: uuid::Uuid::new_v4().to_string(),
+            attestation_token: None,
+        };
+
+        // Use blocking HTTP client for synchronous snapshot publishing
+        let cbor_bytes = request
+            .to_cbor()
+            .map_err(|e| anyhow::anyhow!("Failed to serialize snapshot: {}", e))?;
+
+        debug!(
+            "Publishing snapshot to {} ({} bytes)",
+            url,
+            cbor_bytes.len()
+        );
+
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .post(url)
+            .header("Content-Type", "application/cbor")
+            .body(cbor_bytes)
+            .send()
+            .map_err(|e| anyhow::anyhow!("Failed to send snapshot: {}", e))?;
+
+        debug!("Sequencer response status: {}", response.status());
+
+        response
+            .error_for_status()
+            .map_err(|e| anyhow::anyhow!("Sequencer rejected snapshot: {}", e))?;
+
+        info!(
+            "Published snapshot: {} bytes at sequence {}",
+            snapshot.data.len(),
+            snapshot.sequence
+        );
+
+        Ok(snapshot)
     }
 
     /// Process pending deposits from the blockchain

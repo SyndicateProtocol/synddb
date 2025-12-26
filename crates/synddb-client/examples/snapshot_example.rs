@@ -1,5 +1,9 @@
 //! Example demonstrating snapshot creation and restoration
 //!
+//! This example shows two snapshot methods:
+//! - `create_snapshot()`: Creates a local snapshot (does NOT send to sequencer)
+//! - `publish_snapshot()`: Creates AND sends snapshot to sequencer
+//!
 //! **Complexity:** Intermediate
 //! **Features:** Snapshot creation, verification, metadata inspection
 //! **Prerequisites:** Sequencer running on localhost:8433
@@ -47,9 +51,10 @@ fn main() -> Result<()> {
     // Wait a moment for initial flush
     std::thread::sleep(std::time::Duration::from_secs(1));
 
-    // Create snapshot
-    println!("Creating snapshot...");
-    let snapshot = synddb.snapshot()?;
+    // Create a LOCAL snapshot (does NOT send to sequencer)
+    // Use this when you need the snapshot data locally (backup, testing, etc.)
+    println!("Creating local snapshot (not sent to sequencer)...");
+    let snapshot = synddb.create_snapshot()?;
 
     println!("✓ Snapshot created:");
     println!("  - Size: {} bytes", snapshot.data.len());

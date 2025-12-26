@@ -197,14 +197,29 @@ class SyndDB {
   }
 
   /**
-   * Create a manual snapshot of the database
+   * Create and publish a snapshot to the sequencer.
+   *
+   * This creates a complete database snapshot (schema + data) and sends it
+   * to the sequencer. Use this after schema changes (CREATE TABLE, etc.)
+   * since DDL is NOT captured in changesets.
+   *
+   * This is consistent with publish() for changesets:
+   * - publish() - sends pending changesets to sequencer
+   * - snapshot() - creates and sends snapshot to sequencer
+   *
+   * When to use:
+   * - After CREATE TABLE, ALTER TABLE, or other DDL statements
+   * - To create periodic recovery checkpoints
+   * - Before major migrations
    *
    * @returns {number} Size of snapshot in bytes
-   * @throws {Error} If snapshot creation fails
+   * @throws {Error} If snapshot creation or publishing fails
    *
    * @example
-   * const size = synddb.snapshot();
-   * console.log(`Snapshot created: ${size} bytes`);
+   * // After creating schema
+   * synddb.executeBatch('CREATE TABLE users (id INTEGER PRIMARY KEY)');
+   * const size = synddb.snapshot();  // Creates AND publishes
+   * console.log(`Published snapshot: ${size} bytes`);
    */
   snapshot() {
     if (!this._handle) {
@@ -216,7 +231,7 @@ class SyndDB {
 
     if (result !== SyndDBError.SUCCESS) {
       const errorMsg = lib.synddb_last_error() || 'Unknown error';
-      throw new Error(`Failed to create snapshot (error ${result}): ${errorMsg}`);
+      throw new Error(`Failed to publish snapshot (error ${result}): ${errorMsg}`);
     }
 
     return sizePtr.deref();

@@ -45,7 +45,10 @@ def _find_library():
     search_paths = [
         # Current directory
         os.path.join('.', lib_name),
-        # Relative to this file
+        # Workspace root target (correct path for cargo workspace)
+        os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'target', 'release', lib_name),
+        os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'target', 'debug', lib_name),
+        # Crate-level target (legacy, may not exist)
         os.path.join(os.path.dirname(__file__), '..', '..', 'target', 'release', lib_name),
         os.path.join(os.path.dirname(__file__), '..', '..', 'target', 'debug', lib_name),
         # System paths
@@ -246,17 +249,32 @@ class SyndDB:
 
     def snapshot(self) -> int:
         """
-        Create a manual snapshot of the database
+        Create and publish a snapshot to the sequencer.
+
+        This creates a complete database snapshot (schema + data) and sends it
+        to the sequencer. Use this after schema changes (CREATE TABLE, etc.)
+        since DDL is NOT captured in changesets.
+
+        This is consistent with publish() for changesets:
+        - publish() - sends pending changesets to sequencer
+        - snapshot() - creates and sends snapshot to sequencer
+
+        When to use:
+        - After CREATE TABLE, ALTER TABLE, or other DDL statements
+        - To create periodic recovery checkpoints
+        - Before major migrations
 
         Returns:
             Size of snapshot in bytes
 
         Raises:
-            RuntimeError: If snapshot creation fails
+            RuntimeError: If snapshot creation or publishing fails
 
         Example:
-            >>> size = synddb.snapshot()
-            >>> print(f"Snapshot created: {size} bytes")
+            >>> # After creating schema
+            >>> synddb.execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+            >>> size = synddb.snapshot()  # Creates AND publishes
+            >>> print(f"Published snapshot: {size} bytes")
         """
         if not self._handle:
             raise RuntimeError("SyndDB handle already detached")

@@ -245,22 +245,47 @@ pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBErro
     }
 }
 
-/// Create a manual snapshot of the database
+/// Create and publish a snapshot to the sequencer
+///
+/// This creates a complete database snapshot and sends it to the sequencer.
+/// The snapshot includes the full database state (schema + data) and is used
+/// for replica synchronization and disaster recovery.
+///
+/// # Behavior
+///
+/// This function is consistent with `synddb_publish()` for changesets:
+/// - `synddb_publish()` - extracts pending changesets and sends to sequencer
+/// - `synddb_snapshot()` - creates database snapshot and sends to sequencer
+///
+/// Both operations send data to the sequencer immediately (synchronous).
+///
+/// # When to Use
+///
+/// - After schema changes (`CREATE TABLE`, `ALTER TABLE`, etc.)
+/// - To create periodic recovery checkpoints
+/// - Before major migrations
+///
+/// Note: Schema changes (DDL) are NOT captured in changesets. You must call
+/// this function after DDL to ensure validators can reconstruct the schema.
 ///
 /// # Arguments
 /// * `handle` - `SyndDB` handle from `synddb_attach()`
-/// * `out_size` - Output pointer to receive snapshot size in bytes
+/// * `out_size` - Output pointer to receive snapshot size in bytes (optional, can be NULL)
 ///
 /// # Returns
 /// 0 on success, error code otherwise
 ///
 /// # Safety
 /// - `handle` must be a valid handle from `synddb_attach()`
-/// - `out_size` must be a valid pointer
+/// - `out_size` can be NULL if size is not needed
 ///
-/// # Note
-/// The snapshot data itself is sent directly to the sequencer.
-/// This function only returns the size for informational purposes.
+/// # Example (Python)
+/// ```python
+/// # After creating schema
+/// synddb.execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+/// size = synddb.snapshot()  # Creates AND publishes to sequencer
+/// print(f"Published {size} byte snapshot")
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn synddb_snapshot(
     handle: *mut SyndDBHandle,
@@ -275,7 +300,8 @@ pub unsafe extern "C" fn synddb_snapshot(
 
     let synddb = &*(handle as *const SyndDB);
 
-    match synddb.snapshot() {
+    // Create AND publish snapshot to the sequencer (synchronous)
+    match synddb.publish_snapshot() {
         Ok(snapshot) => {
             if !out_size.is_null() {
                 *out_size = snapshot.data.len();
@@ -283,7 +309,7 @@ pub unsafe extern "C" fn synddb_snapshot(
             SyndDBError::Success
         }
         Err(e) => {
-            set_last_error(format!("Failed to create snapshot: {}", e));
+            set_last_error(format!("Failed to publish snapshot: {}", e));
             SyndDBError::SnapshotError
         }
     }

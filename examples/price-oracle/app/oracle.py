@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from .api.base import PriceAPI, PriceData
-from .schema import init_database, get_tracked_assets
+from .schema import init_database, get_tracked_assets, SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,6 @@ class PriceOracle:
     def start(self) -> None:
         """Start the oracle (initialize database and SyndDB)."""
         logger.info(f"Initializing database at {self.db_path}")
-        self._conn = init_database(self.db_path)
 
         if self.sequencer_url:
             logger.info(f"Attaching SyndDB to sequencer at {self.sequencer_url}")
@@ -60,12 +59,31 @@ class PriceOracle:
                 from synddb import SyndDB
                 self._synddb = SyndDB.attach(self.db_path, self.sequencer_url)
                 logger.info("SyndDB attached successfully")
+
+                # Initialize schema through SyndDB so it's captured
+                logger.info("Initializing schema through SyndDB")
+                self._synddb.execute_batch(SCHEMA)
+
+                # Create a snapshot after schema initialization
+                # This ensures validators can restore the full database state
+                # (SQLite session extension doesn't capture DDL, only DML)
+                logger.info("Creating snapshot after schema initialization")
+                snapshot_size = self._synddb.snapshot()
+                logger.info(f"Initial snapshot created: {snapshot_size} bytes")
+                self._synddb.publish()
+
+                # Also open a read-only connection for queries
+                self._conn = sqlite3.connect(self.db_path)
             except ImportError as e:
                 logger.warning(f"SyndDB bindings not available: {e}")
                 logger.warning("Running in standalone mode (no changeset capture)")
+                self._conn = init_database(self.db_path)
             except RuntimeError as e:
                 logger.error(f"Failed to attach SyndDB: {e}")
                 raise
+        else:
+            # Standalone mode
+            self._conn = init_database(self.db_path)
 
     def stop(self) -> None:
         """Stop the oracle (cleanup resources)."""
@@ -122,27 +140,49 @@ class PriceOracle:
         return results
 
     def _store_prices(self, prices: list[PriceData]) -> None:
-        """Store prices in the database."""
-        if not self._conn:
-            raise RuntimeError("Oracle not started")
+        """Store prices in the database.
 
-        for price in prices:
-            self._conn.execute(
-                """
-                INSERT INTO prices (asset, source, price, timestamp, volume_24h, market_cap)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    price.asset,
-                    price.source,
-                    price.price,
-                    price.timestamp,
-                    price.volume_24h,
-                    price.market_cap,
-                ),
-            )
+        When SyndDB is attached, uses the monitored connection so changes
+        are captured and published. Otherwise falls back to sqlite3.
+        """
+        if self._synddb:
+            # Use SyndDB's monitored connection for writes
+            self._synddb.begin()
+            try:
+                for price in prices:
+                    # Build SQL with inline values (SyndDB execute doesn't support params yet)
+                    volume = price.volume_24h if price.volume_24h is not None else "NULL"
+                    market_cap = price.market_cap if price.market_cap is not None else "NULL"
+                    sql = f"""
+                        INSERT INTO prices (asset, source, price, timestamp, volume_24h, market_cap)
+                        VALUES ('{price.asset}', '{price.source}', {price.price}, {price.timestamp}, {volume}, {market_cap})
+                    """
+                    self._synddb.execute(sql)
+                self._synddb.commit()
+            except Exception:
+                self._synddb.rollback()
+                raise
+        else:
+            # Fallback to sqlite3 connection (standalone mode)
+            if not self._conn:
+                raise RuntimeError("Oracle not started")
 
-        self._conn.commit()
+            for price in prices:
+                self._conn.execute(
+                    """
+                    INSERT INTO prices (asset, source, price, timestamp, volume_24h, market_cap)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        price.asset,
+                        price.source,
+                        price.price,
+                        price.timestamp,
+                        price.volume_24h,
+                        price.market_cap,
+                    ),
+                )
+            self._conn.commit()
 
     def get_latest_prices(self, asset: Optional[str] = None) -> list[dict]:
         """Get latest prices from the database.
