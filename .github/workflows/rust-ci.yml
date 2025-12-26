@@ -174,8 +174,77 @@ jobs:
       - name: Build stress test
         run: cargo build --package synddb-benchmark --bin session-stress-test --release
 
+      - name: Build sequencer
+        run: cargo build --package synddb-sequencer --release
+
+      - name: Start sequencer
+        run: |
+          ./target/release/synddb-sequencer &
+          echo $! > /tmp/sequencer.pid
+          # Wait for sequencer to be healthy
+          for i in {1..30}; do
+            if curl -s http://localhost:8433/health > /dev/null 2>&1; then
+              echo "Sequencer is healthy"
+              break
+            fi
+            echo "Waiting for sequencer... ($i/30)"
+            sleep 1
+          done
+
       - name: Run session stress test
         run: |
           ./target/release/session-stress-test --duration 15
         env:
           RUST_LOG: info
+
+      - name: Stop sequencer
+        if: always()
+        run: |
+          if [ -f /tmp/sequencer.pid ]; then
+            kill $(cat /tmp/sequencer.pid) || true
+          fi
+
+  client-integration:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Client Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build sequencer
+        run: cargo build --package synddb-sequencer --release
+
+      - name: Start sequencer
+        run: |
+          ./target/release/synddb-sequencer &
+          echo $! > /tmp/sequencer.pid
+          # Wait for sequencer to be healthy
+          for i in {1..30}; do
+            if curl -s http://localhost:8433/health > /dev/null 2>&1; then
+              echo "Sequencer is healthy"
+              break
+            fi
+            echo "Waiting for sequencer... ($i/30)"
+            sleep 1
+          done
+
+      - name: Run client integration tests
+        run: cargo test -p synddb-client -- --ignored
+        env:
+          RUST_LOG: info
+
+      - name: Stop sequencer
+        if: always()
+        run: |
+          if [ -f /tmp/sequencer.pid ]; then
+            kill $(cat /tmp/sequencer.pid) || true
+          fi
