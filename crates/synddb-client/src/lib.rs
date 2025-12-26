@@ -216,6 +216,7 @@ use tracing::{debug, info, warn};
 
 pub mod attestation;
 pub mod config;
+pub(crate) mod ddl_recovery;
 pub mod recovery;
 pub mod retry;
 pub mod sender;
@@ -273,6 +274,8 @@ pub struct SyndDB {
     sequencer_url: url::Url,
     /// Whether to auto-snapshot after DDL statements
     auto_snapshot_after_ddl: bool,
+    /// Database path for DDL recovery marker (None for in-memory)
+    db_path: Option<String>,
     /// Session monitor for capturing changesets
     monitor: Option<SessionMonitor>,
     /// Channel to send shutdown signal to changeset sender
@@ -436,6 +439,21 @@ impl SyndDB {
         info!("Sequencer URL: {}", config.sequencer_url);
         info!("Publish strategy: {:?}", config.publish_strategy);
 
+        // Get database path (None for in-memory databases)
+        let db_path = conn.path().map(String::from);
+
+        // Check for DDL recovery marker from previous crash
+        let needs_recovery_snapshot = db_path
+            .as_ref()
+            .is_some_and(|path| ddl_recovery::check_marker(path));
+
+        if needs_recovery_snapshot {
+            warn!(
+                "DDL recovery marker found! A previous run had uncommitted schema changes. \
+                Will force a snapshot after initialization to ensure validators can reconstruct the schema."
+            );
+        }
+
         // Validate config: strict_ddl_mode requires auto_snapshot_after_ddl for crash safety
         if config.strict_ddl_mode && !config.auto_snapshot_after_ddl {
             warn!(
@@ -461,7 +479,6 @@ impl SyndDB {
             changeset_tx,
             config.snapshot_interval,
             snapshot_channel.as_ref().map(|(tx, _)| tx).cloned(),
-            config.strict_ddl_mode,
         )?;
         monitor.start(conn)?;
 
@@ -578,6 +595,7 @@ impl SyndDB {
             conn,
             sequencer_url: config.sequencer_url.clone(),
             auto_snapshot_after_ddl: config.auto_snapshot_after_ddl,
+            db_path,
             monitor: Some(monitor),
             changeset_shutdown_tx,
             snapshot_shutdown_tx,
@@ -587,6 +605,26 @@ impl SyndDB {
             chain_monitor,
             stats,
         };
+
+        // Handle DDL crash recovery: force snapshot if marker exists from previous crash
+        if needs_recovery_snapshot {
+            info!("Forcing snapshot for DDL crash recovery");
+            match synddb.publish_snapshot() {
+                Ok(_snapshot) => {
+                    info!("DDL crash recovery snapshot published successfully");
+                }
+                Err(e) => {
+                    // Marker is cleared after snapshot creation (before HTTP send),
+                    // so even if HTTP fails, the marker should already be cleared.
+                    // This warning is mostly for visibility into the HTTP failure.
+                    warn!(
+                        "Failed to send DDL crash recovery snapshot to sequencer: {}. \
+                        The snapshot was created locally and the marker was cleared.",
+                        e
+                    );
+                }
+            }
+        }
 
         // Auto-snapshot on attach if enabled and database has existing tables
         if config.auto_snapshot_on_attach && Self::has_existing_tables(conn) {
@@ -770,6 +808,13 @@ impl SyndDB {
     pub fn publish_snapshot(&self) -> Result<Snapshot> {
         let snapshot = self.create_snapshot()?;
 
+        // Clear DDL recovery marker now that we've created the snapshot locally.
+        // Even if HTTP fails, we have the snapshot data and can retry.
+        // The marker's purpose is to detect "schema change with no snapshot created".
+        if let Some(ref path) = self.db_path {
+            ddl_recovery::clear_marker(path);
+        }
+
         // Send snapshot synchronously via HTTP
         let url = self
             .sequencer_url
@@ -847,12 +892,31 @@ impl SyndDB {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn execute_ddl(&self, sql: &str) -> Result<()> {
-        // Execute within DDL context so the session hook knows this is expected
+        let is_ddl = Self::is_ddl(sql);
+
+        // Write DDL recovery marker BEFORE execution.
+        // If the app crashes during DDL or before snapshot completes,
+        // the marker will remain and trigger recovery on next startup.
+        if is_ddl {
+            if let Some(ref path) = self.db_path {
+                ddl_recovery::write_marker(path);
+            }
+        }
+
+        // Execute within DDL context
         session::with_ddl_context(|| self.conn.execute_batch(sql))?;
 
-        if self.auto_snapshot_after_ddl && Self::is_ddl(sql) {
+        // Create snapshot after DDL to capture the schema change.
+        // Note: publish_snapshot() clears the DDL recovery marker after creating the snapshot.
+        if self.auto_snapshot_after_ddl && is_ddl {
             info!("DDL executed, creating automatic snapshot");
             self.publish_snapshot()?;
+        } else if is_ddl {
+            // DDL executed but auto_snapshot disabled - clear marker since DDL succeeded
+            // User is responsible for calling publish_snapshot() manually
+            if let Some(ref path) = self.db_path {
+                ddl_recovery::clear_marker(path);
+            }
         }
 
         Ok(())
@@ -975,24 +1039,18 @@ impl SyndDB {
 
     /// Check if there are pending schema changes that need to be published.
     ///
-    /// Returns true if a schema change (CREATE/ALTER/DROP) has been detected
-    /// but not yet published via a snapshot. You should call `publish()` to
-    /// ensure validators can reconstruct the schema.
+    /// **Note:** This method always returns `false` because `SQLite`'s update hook
+    /// doesn't fire for DDL operations, making schema changes undetectable.
     ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use synddb_client::SyndDB;
-    /// # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
-    /// if synddb.has_pending_schema_changes() {
-    ///     synddb.publish()?;  // Ensure schema changes are published
-    /// }
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
+    /// Use [`execute_ddl()`](Self::execute_ddl) for all DDL statements, which
+    /// automatically handles snapshot creation for schema changes.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Cannot detect schema changes via update hook. Use execute_ddl() for DDL."
+    )]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn has_pending_schema_changes(&self) -> bool {
-        self.monitor
-            .as_ref()
-            .is_some_and(|m| m.has_pending_schema_changes())
+        false
     }
 
     /// Get the number of changesets waiting to be published
@@ -1053,20 +1111,10 @@ impl Drop for SyndDB {
     fn drop(&mut self) {
         debug!("Dropping SyndDB handle");
 
-        // Check for pending schema changes before dropping
-        // The monitor's drop will attempt to publish them, but we warn here
-        // in case something goes wrong
-        if self.has_pending_schema_changes() {
-            info!(
-                "SyndDB shutting down with pending schema changes - \
-                attempting final publish to ensure validators can reconstruct schema"
-            );
-        }
-
-        // First, drop the monitor which will stop the publish thread
-        // This ensures no more changesets or snapshots are generated
-        // Note: SessionMonitor::drop() calls extract_and_send_changeset() which
-        // will create a snapshot if schema_changed is true
+        // First, drop the monitor which will stop the publish thread.
+        // This ensures no more changesets or snapshots are generated.
+        // SessionMonitor::drop() calls extract_and_send_changeset() for
+        // any pending data changes.
         if let Some(monitor) = self.monitor.take() {
             drop(monitor);
         }
@@ -2030,5 +2078,256 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    // =========================================================================
+    // DDL Crash Recovery Tests
+    // =========================================================================
+    //
+    // These tests verify the marker file system for recovering from crashes
+    // that occur after direct DDL but before publish().
+
+    #[test]
+    fn test_update_hook_behavior() {
+        // Understand what SQLite's update hook fires for.
+        // FINDING: The update hook does NOT fire for DDL (CREATE/ALTER/DROP).
+        // It only fires for INSERT/UPDATE/DELETE on user tables.
+        use rusqlite::hooks::Action;
+        use std::sync::{
+            atomic::{AtomicI32, Ordering},
+            Arc,
+        };
+
+        let conn = Connection::open_in_memory().unwrap();
+        let hook_count = Arc::new(AtomicI32::new(0));
+        let hook_count_clone = hook_count.clone();
+
+        conn.update_hook(Some(
+            move |action: Action, _db: &str, table: &str, rowid: i64| {
+                eprintln!("Hook fired: {:?} on {} rowid={}", action, table, rowid);
+                hook_count_clone.fetch_add(1, Ordering::SeqCst);
+            },
+        ));
+
+        // DDL does NOT fire the update hook
+        eprintln!("Creating table...");
+        conn.execute("CREATE TABLE test (id INTEGER, val TEXT)", [])
+            .unwrap();
+        assert_eq!(
+            hook_count.load(Ordering::SeqCst),
+            0,
+            "DDL should NOT fire update hook"
+        );
+
+        // DML (INSERT) DOES fire the update hook
+        eprintln!("Inserting row...");
+        conn.execute("INSERT INTO test VALUES (1, 'hello')", [])
+            .unwrap();
+        assert_eq!(
+            hook_count.load(Ordering::SeqCst),
+            1,
+            "INSERT should fire update hook"
+        );
+
+        // DML (UPDATE) DOES fire the update hook
+        eprintln!("Updating row...");
+        conn.execute("UPDATE test SET val = 'world' WHERE id = 1", [])
+            .unwrap();
+        assert_eq!(
+            hook_count.load(Ordering::SeqCst),
+            2,
+            "UPDATE should fire update hook"
+        );
+    }
+
+    #[test]
+    fn test_ddl_recovery_marker_written_by_execute_ddl() {
+        // Test that execute_ddl() writes a recovery marker before execution
+        // and clears it after snapshot (or after DDL if auto_snapshot is disabled)
+
+        let temp_dir = std::env::temp_dir();
+        let db_file = temp_dir.join(format!("test_ddl_marker_{}.db", std::process::id()));
+
+        let conn = Box::leak(Box::new(Connection::open(&db_file).unwrap()));
+        let db_path = conn.path().unwrap();
+
+        // Clean up any existing marker
+        ddl_recovery::clear_marker(db_path);
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            auto_snapshot_after_ddl: false, // Disable auto-snapshot to test marker behavior
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Verify no marker yet
+        assert!(!ddl_recovery::check_marker(db_path));
+
+        // execute_ddl writes marker before execution and clears after (when auto_snapshot is off)
+        synddb
+            .execute_ddl("CREATE TABLE test_ddl (id INTEGER)")
+            .unwrap();
+
+        // Marker should be cleared after successful DDL execution
+        // (even with auto_snapshot_after_ddl=false, marker is cleared on success)
+        assert!(!ddl_recovery::check_marker(db_path));
+
+        // Clean up
+        let _ = std::fs::remove_file(&db_file);
+    }
+
+    #[test]
+    fn test_direct_ddl_not_detected() {
+        // Verify that direct DDL (via connection().execute()) is NOT detected.
+        // This documents the limitation that SQLite's update hook doesn't fire for DDL.
+        // Users MUST use execute_ddl() for crash-safe DDL operations.
+
+        let temp_dir = std::env::temp_dir();
+        let db_file = temp_dir.join(format!("test_direct_ddl_{}.db", std::process::id()));
+
+        let conn = Box::leak(Box::new(Connection::open(&db_file).unwrap()));
+        let db_path = conn.path().unwrap();
+
+        ddl_recovery::clear_marker(db_path);
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            ..Default::default()
+        };
+        let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Direct DDL via connection - NOT detected (no marker written)
+        conn.execute("CREATE TABLE direct_ddl (id INTEGER)", [])
+            .unwrap();
+
+        // Marker is NOT written because we can't detect direct DDL
+        assert!(
+            !ddl_recovery::check_marker(db_path),
+            "Direct DDL should NOT write marker (limitation of SQLite update hook)"
+        );
+
+        // Clean up
+        let _ = std::fs::remove_file(&db_file);
+    }
+
+    #[test]
+    fn test_ddl_recovery_marker_cleared_on_snapshot() {
+        // Test that publish_snapshot() clears the recovery marker even when HTTP fails
+
+        let temp_dir = std::env::temp_dir();
+        let db_file = temp_dir.join(format!("test_ddl_clear_{}.db", std::process::id()));
+
+        let conn = Box::leak(Box::new(Connection::open(&db_file).unwrap()));
+        conn.execute("CREATE TABLE test (id INTEGER)", []).unwrap();
+
+        // Get the actual path as the connection sees it
+        let db_path = conn.path().unwrap();
+
+        // Manually write a marker to simulate previous crash
+        ddl_recovery::write_marker(db_path);
+        assert!(ddl_recovery::check_marker(db_path));
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            ..Default::default()
+        };
+        let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Attach should have detected the marker and triggered a recovery snapshot.
+        // Even if HTTP fails, the marker is cleared after creating the snapshot locally.
+        // Marker should already be cleared by the attach
+        assert!(!ddl_recovery::check_marker(db_path));
+
+        // Clean up
+        let _ = std::fs::remove_file(&db_file);
+    }
+
+    #[test]
+    fn test_ddl_recovery_forces_snapshot_on_attach() {
+        // Test that attaching with a marker forces a snapshot attempt
+
+        let temp_dir = std::env::temp_dir();
+        let db_file = temp_dir.join(format!("test_ddl_attach_{}.db", std::process::id()));
+
+        // Create DB with schema and get the path as the connection sees it
+        let db_path: String;
+        {
+            let conn = Connection::open(&db_file).unwrap();
+            db_path = conn.path().unwrap().to_string();
+            conn.execute("CREATE TABLE test (id INTEGER, val TEXT)", [])
+                .unwrap();
+            conn.execute("INSERT INTO test VALUES (1, 'data')", [])
+                .unwrap();
+        }
+
+        // Write marker to simulate crash after direct DDL
+        ddl_recovery::write_marker(&db_path);
+        assert!(ddl_recovery::check_marker(&db_path));
+
+        // Attach SyndDB - should detect marker and attempt recovery snapshot
+        let conn = Box::leak(Box::new(Connection::open(&db_file).unwrap()));
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            ..Default::default()
+        };
+        let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Marker should be cleared by the recovery snapshot attempt
+        // (Even if HTTP fails, the snapshot is created and marker cleared)
+        assert!(!ddl_recovery::check_marker(&db_path));
+
+        // Clean up
+        let _ = std::fs::remove_file(&db_file);
+    }
+
+    #[test]
+    fn test_ddl_recovery_marker_with_auto_snapshot() {
+        // Test that execute_ddl() with auto_snapshot_after_ddl clears marker after snapshot
+
+        let temp_dir = std::env::temp_dir();
+        let db_file = temp_dir.join(format!("test_execute_ddl_{}.db", std::process::id()));
+
+        let conn = Box::leak(Box::new(Connection::open(&db_file).unwrap()));
+        let db_path = conn.path().unwrap();
+
+        ddl_recovery::clear_marker(db_path);
+
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            auto_snapshot_after_ddl: true, // Enable auto-snapshot
+            ..Default::default()
+        };
+        let synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        assert!(!ddl_recovery::check_marker(db_path));
+
+        // execute_ddl writes marker, creates snapshot (HTTP fails but marker cleared)
+        synddb
+            .execute_ddl("CREATE TABLE proper_ddl (id INTEGER)")
+            .unwrap();
+
+        // Marker cleared by publish_snapshot() after creating snapshot locally
+        assert!(!ddl_recovery::check_marker(db_path));
+
+        // Clean up
+        let _ = std::fs::remove_file(&db_file);
+    }
+
+    #[test]
+    fn test_ddl_recovery_in_memory_db_no_marker() {
+        // Test that in-memory databases don't use markers (no path)
+        let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+        let config = Config {
+            sequencer_url: "http://localhost:8433".parse().unwrap(),
+            strict_ddl_mode: false,
+            ..Default::default()
+        };
+        let _synddb = SyndDB::attach_with_config(conn, config).unwrap();
+
+        // Direct DDL on in-memory DB
+        conn.execute("CREATE TABLE test (id INTEGER)", []).unwrap();
+
+        // No crash - test passes if no panic (markers are skipped for in-memory)
     }
 }

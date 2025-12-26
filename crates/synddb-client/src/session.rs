@@ -22,7 +22,7 @@ use std::{
     thread::{self, ThreadId},
     time::{Duration, SystemTime},
 };
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Changeset {
@@ -62,11 +62,11 @@ struct SessionState {
     snapshot_interval: u64,
     changesets_since_snapshot: u64,
     snapshot_tx: Option<Sender<Snapshot>>,
-    schema_changed: bool,
     /// Flag to indicate changes have occurred since last publish
     has_changes: bool,
-    /// Strict DDL mode: panic on direct schema changes
-    strict_ddl_mode: bool,
+    // Note: We previously had schema_changed, strict_ddl_mode, and db_path fields here
+    // for DDL detection via update hook. However, SQLite's update hook does NOT fire
+    // for DDL operations. DDL crash recovery is now handled in execute_ddl() directly.
 }
 
 impl SessionState {
@@ -131,7 +131,6 @@ impl SessionMonitor {
         changeset_tx: Sender<Changeset>,
         snapshot_interval: u64,
         snapshot_tx: Option<Sender<Snapshot>>,
-        strict_ddl_mode: bool,
     ) -> Result<Self> {
         debug!("Initializing SQLite Session Extension");
 
@@ -142,10 +141,6 @@ impl SessionMonitor {
             );
         } else {
             info!("Automatic snapshots disabled");
-        }
-
-        if strict_ddl_mode {
-            info!("Strict DDL mode enabled: direct schema changes will panic");
         }
 
         // Create a session attached to the main database
@@ -168,9 +163,7 @@ impl SessionMonitor {
                 snapshot_interval,
                 changesets_since_snapshot: 0,
                 snapshot_tx,
-                schema_changed: false,
                 has_changes: false,
-                strict_ddl_mode,
             });
         });
 
@@ -212,44 +205,15 @@ impl SessionMonitor {
                                 s.has_changes = true;
                             }
 
-                            // Detect schema changes by monitoring sqlite_schema table
-                            if !s.schema_changed
-                                && (table == "sqlite_schema" || table == "sqlite_master")
-                            {
-                                s.schema_changed = true;
-
-                                // Check if we're inside execute_ddl() context
-                                let in_ddl_context =
-                                    IN_EXECUTE_DDL.with(|flag| *flag.borrow());
-
-                                if in_ddl_context {
-                                    // Expected: DDL through proper channel
-                                    info!(
-                                        "Schema change via execute_ddl() ({:?} on {}), will trigger snapshot",
-                                        action, table
-                                    );
-                                } else {
-                                    // Direct DDL detected - warn or panic
-                                    if s.strict_ddl_mode {
-                                        panic!(
-                                            "STRICT_DDL_MODE: Direct schema change detected ({:?} on {}). \
-                                            Use execute_ddl() instead of connection().execute() for DDL statements. \
-                                            This ensures validators can reconstruct the schema.",
-                                            action, table
-                                        );
-                                    } else {
-                                        warn!(
-                                            "Direct schema change detected ({:?} on {})! \
-                                            Use execute_ddl() instead of connection().execute() for DDL statements. \
-                                            WARNING: If the app crashes before publish(), this schema change will be lost \
-                                            and validators will fail to reconstruct the database. \
-                                            Using execute_ddl() publishes immediately and is crash-safe. \
-                                            Enable strict_ddl_mode to enforce this.",
-                                            action, table
-                                        );
-                                    }
-                                }
-                            }
+                            // Note: We previously tried to detect schema changes by monitoring
+                            // sqlite_schema/sqlite_master tables here. However, SQLite's update
+                            // hook does NOT fire for DDL operations (CREATE/ALTER/DROP) - it only
+                            // fires for INSERT/UPDATE/DELETE on user tables.
+                            //
+                            // DDL crash recovery is now handled in execute_ddl() which writes
+                            // a marker before execution and clears it after the snapshot is created.
+                            // Direct DDL via connection().execute() cannot be detected and is
+                            // not covered by the crash recovery mechanism.
                         }
                     }
                 });
@@ -263,27 +227,9 @@ impl SessionMonitor {
     /// Extract changeset from session and send to background thread.
     /// This must be called from the main thread.
     fn extract_and_send_changeset(state: &mut SessionState) -> Result<()> {
-        // If schema changed, create and send snapshot BEFORE capturing changesets
-        if state.schema_changed && state.conn.is_autocommit() {
-            info!("Creating immediate snapshot for schema change");
-
-            match Self::create_snapshot_internal(state) {
-                Ok(snapshot) => {
-                    if let Some(ref snapshot_tx) = state.snapshot_tx {
-                        if let Err(e) = snapshot_tx.try_send(snapshot) {
-                            error!("Failed to send schema change snapshot: {}", e);
-                        } else {
-                            info!("Schema change snapshot sent at sequence {}", state.sequence);
-                            state.changesets_since_snapshot = 0;
-                        }
-                    }
-                    state.schema_changed = false;
-                }
-                Err(e) => {
-                    error!("Failed to create schema change snapshot: {}", e);
-                }
-            }
-        }
+        // Note: Schema change detection was removed because SQLite's update hook
+        // doesn't fire for DDL operations. DDL snapshots are now handled in
+        // execute_ddl() via auto_snapshot_after_ddl config option.
 
         // Only extract if there might be changes and we're not in a transaction
         if !state.has_changes {
@@ -432,11 +378,13 @@ impl SessionMonitor {
 
     /// Check if there are pending schema changes that need to be published.
     ///
-    /// Returns true if a schema change (CREATE/ALTER/DROP) has been detected
-    /// but not yet published via a snapshot. This can be used to warn users
-    /// that they need to call `publish()`.
+    /// Note: This method always returns false because `SQLite`'s update hook
+    /// doesn't fire for DDL operations, so we cannot detect schema changes.
+    /// Use `execute_ddl()` for DDL statements which handles snapshots automatically.
+    #[deprecated(note = "Cannot detect schema changes; use execute_ddl() for DDL")]
+    #[allow(clippy::missing_const_for_fn)]
     pub(crate) fn has_pending_schema_changes(&self) -> bool {
-        SESSION_STATE.with(|state| state.borrow().as_ref().is_some_and(|s| s.schema_changed))
+        false
     }
 
     /// Create a complete snapshot of the database.
