@@ -60,17 +60,12 @@ class PriceOracle:
                 self._synddb = SyndDB.attach(self.db_path, self.sequencer_url)
                 logger.info("SyndDB attached successfully")
 
-                # Initialize schema through SyndDB so it's captured
-                logger.info("Initializing schema through SyndDB")
+                # Initialize schema through SyndDB
+                # Note: execute_batch() automatically detects DDL and publishes
+                # a snapshot, so no manual snapshot() call is needed!
+                logger.info("Initializing schema through SyndDB (auto-snapshot on DDL)")
                 self._synddb.execute_batch(SCHEMA)
-
-                # Create a snapshot after schema initialization
-                # This ensures validators can restore the full database state
-                # (SQLite session extension doesn't capture DDL, only DML)
-                logger.info("Creating snapshot after schema initialization")
-                snapshot_size = self._synddb.snapshot()
-                logger.info(f"Initial snapshot created: {snapshot_size} bytes")
-                self._synddb.publish()
+                logger.info("Schema initialized - snapshot was automatically published")
 
                 # Also open a read-only connection for queries
                 self._conn = sqlite3.connect(self.db_path)
