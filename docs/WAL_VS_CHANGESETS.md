@@ -62,6 +62,7 @@ Build our own WAL-to-logical-changes converter for more control.
 | **Determinism** | Architecture-dependent | Architecture-independent |
 | **Complexity location** | Checkpoint coordination | Session lifecycle |
 | **Maturity** | Litestream is battle-tested | Session Extension is SQLite core |
+| **Inversion/undo** | Not possible (forward-only) | Native support via `sqlite3changeset_invert()` |
 
 ### WAL-Based: Detailed Analysis
 
@@ -169,6 +170,69 @@ Rough comparison for a single-column UPDATE:
 | ATTACH/DETACH | No | Yes |
 
 **Question:** Do we need to capture PRAGMAs or VACUUM?
+
+### 6. Changeset Inversion
+
+**This is a capability unique to changesets that WAL cannot provide.**
+
+The Session Extension provides `sqlite3changeset_invert()` to reverse any changeset:
+
+```c
+int sqlite3changeset_invert(
+  int nIn, const void *pIn,      // Input changeset
+  int *pnOut, void **ppOut       // OUT: Inverse of input
+);
+```
+
+**How inversion works:**
+- **INSERT** becomes **DELETE** (removes the inserted row)
+- **DELETE** becomes **INSERT** (re-inserts the deleted row with original values)
+- **UPDATE** swaps old/new values (reverts to previous column values)
+
+If changeset `C+` is the inverse of `C`, then applying `C` followed by `C+` leaves the database unchanged.
+
+**Why WAL cannot support inversion:**
+
+WAL is a forward-only, append-only logging mechanism:
+
+1. **No logical operations**: WAL contains raw page images, not row-level changes. There's no concept of "the row that was inserted" - just binary page data.
+
+2. **Checkpointing destroys history**: When WAL frames are checkpointed back to the main database, the WAL is truncated or overwritten. Previous states are not preserved for reversal.
+
+3. **Undo requires full restore**: To "undo" with WAL, you must restore from a previous snapshot. There's no incremental inverse operation.
+
+**Benefits of inversion for SyndDB:**
+
+| Use Case | How Inversion Helps |
+|----------|---------------------|
+| **Validator rollback** | If invalid state detected at seq N, apply inverse of changeset N to revert |
+| **Dispute resolution** | Surgically revert specific transactions without full restore |
+| **Optimistic execution** | Apply tentatively, roll back if sequencer rejects/reorders |
+| **Point-in-time recovery** | Store changesets + inverses for bidirectional replay |
+| **Testing** | Apply changes, verify, then revert - no database reset needed |
+
+**Example: Validator rollback scenario**
+```
+Sequence 100: Changeset C (valid)
+Sequence 101: Changeset D (later found to violate constraint)
+Sequence 102: Changeset D_inverse (surgical rollback)
+Sequence 103: Changeset E (corrected operation)
+```
+
+With WAL, the validator would need to restore a full snapshot from before sequence 101.
+
+**Is inversion worth the Session Extension complexity?**
+
+Strong yes when:
+- Validators may need to propose rollbacks for invalid transitions
+- System requires point-in-time recovery without full snapshots
+- Optimistic execution patterns are used (apply then verify)
+
+Less critical when:
+- Forward-only replication is sufficient
+- Full checkpoint restore is acceptable for all rollback scenarios
+
+**Question:** Do we anticipate validators needing fine-grained rollback, or is snapshot restore acceptable?
 
 ---
 
@@ -289,6 +353,7 @@ Application (TEE)
 
 Rationale:
 - Validator auditability requirement favors changesets
+- Changeset inversion enables surgical rollback that WAL cannot provide
 - Session Extension complexity is bounded and understood
 - WAL adaptation would be significant effort for unclear benefit
 - Litestream for DR is low-effort and provides safety net
@@ -302,5 +367,6 @@ Rationale:
 - [SQLite Session Extension](https://www.sqlite.org/sessionintro.html)
 - [SQLite WAL Mode](https://www.sqlite.org/wal.html)
 - [Litestream How It Works](https://litestream.io/how-it-works/)
+- [sqlite3changeset_invert() API](https://sqlite.org/session/sqlite3changeset_invert.html)
 - [SyndDB SPEC](../SPEC.md)
 - Current implementation: `crates/synddb-client/src/session.rs`, `snapshot_sender.rs`
