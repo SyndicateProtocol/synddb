@@ -67,6 +67,29 @@ struct SessionState {
     has_changes: bool,
 }
 
+impl SessionState {
+    /// Recreate the session to clear accumulated changes.
+    ///
+    /// The SQLite Session Extension does NOT reset after `changeset_strm()` extraction.
+    /// Each subsequent call returns ALL changes since session creation. To get only
+    /// new changes in the next extraction, we must drop the old session and create
+    /// a fresh one. See: https://sqlite.org/session/sqlite3session_changeset.html
+    fn recreate_session(&mut self) -> Result<()> {
+        // Drop the old session by replacing it
+        let mut new_session =
+            Session::new(self.conn).context("Failed to create new SQLite session")?;
+
+        // Attach to all tables (None means all tables)
+        new_session
+            .attach(None::<&str>)
+            .context("Failed to attach new session to tables")?;
+
+        self.session = new_session;
+        debug!("Session recreated to clear accumulated changes");
+        Ok(())
+    }
+}
+
 thread_local! {
     /// Thread-local storage for session state.
     /// Note: This is thread-local, so each thread gets its own instance.
@@ -235,7 +258,11 @@ impl SessionMonitor {
             return Ok(());
         }
 
-        trace!("Captured changeset: {} bytes", changeset_data.len());
+        info!(
+            sequence = state.sequence,
+            bytes = changeset_data.len(),
+            "Captured changeset"
+        );
 
         let changeset = Changeset {
             data: changeset_data,
@@ -277,6 +304,12 @@ impl SessionMonitor {
                 }
             }
         }
+
+        // Recreate session to clear accumulated changes.
+        // The SQLite Session Extension does NOT reset after changeset_strm() -
+        // it accumulates all changes since session creation. We must recreate
+        // the session so the next extraction only captures NEW changes.
+        state.recreate_session()?;
 
         Ok(())
     }

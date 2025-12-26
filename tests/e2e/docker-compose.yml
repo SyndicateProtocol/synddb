@@ -103,7 +103,8 @@ services:
       sequencer:
         condition: service_healthy
     # Run for 20 seconds at 50 ops/sec = ~1000 changesets
-    command: ["run", "--db", "/tmp/orderbook.db", "--simple", "--duration", "20", "--rate", "50"]
+    # --clean ensures fresh start (no stale data from previous runs)
+    command: ["run", "--db", "/tmp/orderbook.db", "--clean", "--simple", "--duration", "20", "--rate", "50"]
 
   # E2E test runner: Rust-based assertions
   e2e_assertions:

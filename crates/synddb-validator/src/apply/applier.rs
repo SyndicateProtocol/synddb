@@ -136,6 +136,15 @@ impl ChangesetApplier {
             "Applying changeset batch"
         );
 
+        // Diagnostic logging: Check database state before applying changesets
+        if let Ok(tables) = self.get_table_row_counts() {
+            debug!(
+                sequence = message.sequence,
+                tables = ?tables,
+                "Database state before applying changeset"
+            );
+        }
+
         let tx = self.conn.transaction().map_err(|e| {
             error!(error = %e, "Failed to begin transaction");
             ValidatorError::DatabaseError(format!("Failed to begin transaction: {e}"))
@@ -191,6 +200,15 @@ impl ChangesetApplier {
         );
 
         self.restore_snapshot(&request.snapshot.data)?;
+
+        // Diagnostic logging: Check database state after restore
+        if let Ok(tables) = self.get_table_row_counts() {
+            debug!(
+                sequence = message.sequence,
+                tables = ?tables,
+                "Database state after snapshot restore"
+            );
+        }
 
         info!(
             sequence = message.sequence,
@@ -302,6 +320,30 @@ impl ChangesetApplier {
             .context("Failed to parse withdrawal request")?;
 
         Ok(Some(request))
+    }
+
+    /// Get row counts for all user tables (for diagnostic logging)
+    fn get_table_row_counts(&self) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        )?;
+        let table_names: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut counts = Vec::new();
+        for table in table_names {
+            if let Ok(count) =
+                self.conn
+                    .query_row(&format!("SELECT COUNT(*) FROM \"{}\"", table), [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+            {
+                counts.push((table, count));
+            }
+        }
+        Ok(counts)
     }
 
     /// Apply a single changeset to the database using the streaming API

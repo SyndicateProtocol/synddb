@@ -76,10 +76,7 @@ pub struct Config {
     /// Automatically create and publish a snapshot when attaching to a database
     /// that already has tables. This ensures validators can reconstruct schemas
     /// that existed before `SyndDB` was attached.
-    ///
-    /// **Warning**: This feature is experimental. Enable only after verifying
-    /// compatibility with your application's initialization order.
-    #[arg(long, env = "AUTO_SNAPSHOT_ON_ATTACH", default_value = "false")]
+    #[arg(long, env = "AUTO_SNAPSHOT_ON_ATTACH", default_value = "true")]
     pub auto_snapshot_on_attach: bool,
 
     /// Automatically create and publish a snapshot after DDL statements

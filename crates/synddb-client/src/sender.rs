@@ -82,7 +82,12 @@ impl ChangesetSender {
                 recv(changeset_rx) -> changeset => {
                     match changeset {
                         Ok(cs) => {
-                            debug!("Received changeset: seq={}, size={} bytes", cs.sequence, cs.data.len());
+                            info!(
+                                sequence = cs.sequence,
+                                bytes = cs.data.len(),
+                                buffer_count = self.buffer.len() + 1,
+                                "Received changeset"
+                            );
                             self.buffer_size += cs.data.len();
                             self.buffer.push(cs);
 
