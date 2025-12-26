@@ -478,10 +478,12 @@ The message-passing paradigm requires approximately **4x more code** for the sam
 
 ### When to Consider Message-Passing
 
-Only use message-passing when you have a **hard requirement** for:
-- On-chain execution with blockchain guarantees
-- Multi-party validation by independent validators
-- Immutable audit trail on a public ledger
-- Cross-chain message passing
+SyndDB's SQLite replication already provides multi-party validation, immutable audit trails, and on-chain guarantees. The only difference with message-passing is **explicit typed messages** vs **implicit messages via table changes**.
 
-If you're unsure whether you need these, you don't. Use SQLite.
+| SQLite Replication | Message-Passing |
+|--------------------|-----------------|
+| `INSERT INTO trades (user, market, shares) VALUES (...)` | `buyShares(market, user, shares)` |
+| Implicit intent from row changes | Explicit typed function calls |
+| Validators see changesets | Validators see typed messages |
+
+You pay 4x code complexity for that explicitness. The only reason to choose message-passing is if you need typed messages for external integrations or regulatory reasons where table changes aren't self-documenting enough.
