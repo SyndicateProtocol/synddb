@@ -30,10 +30,15 @@
 //! ```
 
 pub mod api;
+pub mod outbound;
 pub mod queue;
 
 pub use api::{
     create_messages_router, GetMessagesQuery, InboundMessageResponse, MessageApiState,
     OutboundStatusResponse, PushInboundRequest, PushInboundResponse,
+};
+pub use outbound::{
+    OutboundMonitor, OutboundMonitorConfig, OutboundMonitorHandle, OutboundStats, OutboundStatus,
+    OutboundTracker, TrackedOutboundMessage,
 };
 pub use queue::{InboundMessage, MessageQueue, OutboundMessageStatus};

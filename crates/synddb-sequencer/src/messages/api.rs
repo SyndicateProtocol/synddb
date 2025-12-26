@@ -15,18 +15,23 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
 
-use super::queue::{InboundMessage, MessageQueue, OutboundMessageStatus, QueueStats};
+use super::{
+    outbound::{OutboundMonitorHandle, OutboundStats, TrackedOutboundMessage},
+    queue::{InboundMessage, MessageQueue, QueueStats},
+};
 
 /// Shared state for message API
 #[derive(Clone)]
 pub struct MessageApiState {
     pub queue: Arc<RwLock<MessageQueue>>,
+    pub outbound: Option<OutboundMonitorHandle>,
 }
 
 impl std::fmt::Debug for MessageApiState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MessageApiState")
             .field("queue", &"<MessageQueue>")
+            .field("outbound", &self.outbound.is_some())
             .finish()
     }
 }
@@ -35,13 +40,20 @@ impl MessageApiState {
     pub fn new() -> Self {
         Self {
             queue: Arc::new(RwLock::new(MessageQueue::new())),
+            outbound: None,
         }
     }
 
     pub fn with_queue(queue: MessageQueue) -> Self {
         Self {
             queue: Arc::new(RwLock::new(queue)),
+            outbound: None,
         }
+    }
+
+    pub fn with_outbound(mut self, handle: OutboundMonitorHandle) -> Self {
+        self.outbound = Some(handle);
+        self
     }
 }
 
@@ -60,6 +72,7 @@ pub fn create_messages_router(state: MessageApiState) -> Router {
     info!("  GET  /messages/inbound/:id   - Get a specific message");
     info!("  GET  /messages/inbound/stats - Get queue statistics");
     info!("  GET  /messages/outbound/:id/status - Get outbound message status");
+    info!("  GET  /messages/outbound/stats - Get outbound message statistics");
 
     Router::new()
         .route(
@@ -70,6 +83,7 @@ pub fn create_messages_router(state: MessageApiState) -> Router {
         .route("/messages/inbound/{id}", get(get_message_by_id))
         .route("/messages/inbound/{id}/ack", post(acknowledge_message))
         .route("/messages/outbound/{id}/status", get(get_outbound_status))
+        .route("/messages/outbound/stats", get(get_outbound_stats))
         .with_state(state)
 }
 
@@ -188,6 +202,8 @@ pub struct AckResponse {
 pub struct OutboundStatusResponse {
     /// Message ID from app's message_log
     pub id: u64,
+    /// Type of message
+    pub message_type: String,
     /// Current status
     pub status: String,
     /// Transaction hash (if submitted)
@@ -196,19 +212,52 @@ pub struct OutboundStatusResponse {
     pub confirmations: Option<u64>,
     /// Error message (if failed)
     pub error: Option<String>,
+    /// When message was first seen
+    pub first_seen_at: u64,
     /// Last update timestamp
     pub updated_at: u64,
 }
 
-impl From<OutboundMessageStatus> for OutboundStatusResponse {
-    fn from(status: OutboundMessageStatus) -> Self {
+impl From<TrackedOutboundMessage> for OutboundStatusResponse {
+    fn from(msg: TrackedOutboundMessage) -> Self {
         Self {
-            id: status.id,
-            status: status.status,
-            tx_hash: status.tx_hash,
-            confirmations: status.confirmations,
-            error: status.error,
-            updated_at: status.updated_at,
+            id: msg.id,
+            message_type: msg.message_type,
+            status: msg.status.to_string(),
+            tx_hash: msg.tx_hash,
+            confirmations: msg.confirmations,
+            error: msg.error,
+            first_seen_at: msg.first_seen_at,
+            updated_at: msg.updated_at,
+        }
+    }
+}
+
+/// Response for outbound statistics
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundStatsResponse {
+    pub total: usize,
+    pub pending: usize,
+    pub queued: usize,
+    pub submitting: usize,
+    pub submitted: usize,
+    pub confirmed: usize,
+    pub failed: usize,
+    /// Whether the outbound monitor is active
+    pub monitor_active: bool,
+}
+
+impl From<OutboundStats> for OutboundStatsResponse {
+    fn from(stats: OutboundStats) -> Self {
+        Self {
+            total: stats.total,
+            pending: stats.pending,
+            queued: stats.queued,
+            submitting: stats.submitting,
+            submitted: stats.submitted,
+            confirmed: stats.confirmed,
+            failed: stats.failed,
+            monitor_active: true,
         }
     }
 }
@@ -458,26 +507,57 @@ async fn push_inbound_message(
 /// This is used by clients to track whether their messages were submitted
 /// to the blockchain.
 async fn get_outbound_status(
+    State(state): State<MessageApiState>,
     Path(id): Path<u64>,
 ) -> Result<Json<OutboundStatusResponse>, (StatusCode, String)> {
-    // TODO: This needs to query the outbound monitor's state
-    // For now, return a placeholder response
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
 
-    // In a full implementation, this would:
-    // 1. Check the OutboundMonitor's tracking state
-    // 2. Return the current status of the message
+    // Check the outbound tracker if available
+    if let Some(ref outbound) = state.outbound {
+        if let Some(msg) = outbound.get_status(id) {
+            return Ok(Json(OutboundStatusResponse::from(msg)));
+        }
+    }
 
+    // Message not found - return unknown status
     Ok(Json(OutboundStatusResponse {
         id,
+        message_type: "unknown".to_string(),
         status: "unknown".to_string(),
         tx_hash: None,
         confirmations: None,
-        error: Some("Outbound monitor not yet implemented".to_string()),
-        updated_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        error: if state.outbound.is_none() {
+            Some("Outbound monitor not configured".to_string())
+        } else {
+            Some("Message not found".to_string())
+        },
+        first_seen_at: 0,
+        updated_at: now,
     }))
+}
+
+/// Get outbound message statistics
+async fn get_outbound_stats(
+    State(state): State<MessageApiState>,
+) -> Result<Json<OutboundStatsResponse>, (StatusCode, String)> {
+    if let Some(ref outbound) = state.outbound {
+        Ok(Json(OutboundStatsResponse::from(outbound.stats())))
+    } else {
+        // Return empty stats if monitor not configured
+        Ok(Json(OutboundStatsResponse {
+            total: 0,
+            pending: 0,
+            queued: 0,
+            submitting: 0,
+            submitted: 0,
+            confirmed: 0,
+            failed: 0,
+            monitor_active: false,
+        }))
+    }
 }
 
 #[cfg(test)]

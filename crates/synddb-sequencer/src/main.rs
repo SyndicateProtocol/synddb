@@ -5,8 +5,8 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::sync::Arc;
-use tokio::{net::TcpListener, signal};
+use std::{sync::Arc, time::Duration};
+use tokio::{net::TcpListener, signal, sync::watch};
 use tracing::{error, info, warn};
 
 use synddb_sequencer::{
@@ -15,7 +15,10 @@ use synddb_sequencer::{
     config::{PublisherType, SequencerConfig},
     http_api::{create_router, AppState},
     inbox::Inbox,
-    messages::{create_messages_router, MessageApiState},
+    messages::{
+        create_messages_router, MessageApiState, OutboundMonitor, OutboundMonitorConfig,
+        OutboundMonitorHandle,
+    },
     signer::MessageSigner,
     transport::local::{LocalTransport, LocalTransportConfig},
 };
@@ -182,8 +185,44 @@ async fn main() -> Result<()> {
     // Create the HTTP router
     let mut app = create_router(state);
 
+    // Create shutdown channel for background tasks
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    // Initialize outbound message monitor if APP_DATABASE_PATH is set
+    let outbound_handle: Option<OutboundMonitorHandle> =
+        if let Some(ref db_path) = config.app_database_path {
+            info!(
+                db_path = %db_path,
+                poll_interval_ms = config.outbound_poll_interval_ms,
+                "Starting outbound message monitor"
+            );
+
+            let monitor_config = OutboundMonitorConfig {
+                db_path: db_path.clone(),
+                poll_interval: Duration::from_millis(config.outbound_poll_interval_ms),
+                batch_size: 100,
+            };
+
+            let monitor = OutboundMonitor::new(monitor_config);
+            let handle = OutboundMonitorHandle::new(monitor.tracker());
+
+            // Spawn the monitor task
+            let monitor_shutdown = shutdown_rx.clone();
+            tokio::spawn(async move {
+                monitor.run(monitor_shutdown).await;
+            });
+
+            Some(handle)
+        } else {
+            info!("Outbound message monitor disabled (APP_DATABASE_PATH not set)");
+            None
+        };
+
     // Mount messages API for inbound/outbound message passing
-    let message_state = MessageApiState::new();
+    let mut message_state = MessageApiState::new();
+    if let Some(handle) = outbound_handle {
+        message_state = message_state.with_outbound(handle);
+    }
     app = app.merge(create_messages_router(message_state));
 
     // Mount storage fetch API if local transport is configured
@@ -201,7 +240,7 @@ async fn main() -> Result<()> {
     // Run server with graceful shutdown
     let shutdown_timeout = config.shutdown_timeout;
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(batcher, shutdown_timeout))
+        .with_graceful_shutdown(shutdown_signal(batcher, shutdown_tx, shutdown_timeout))
         .await
         .map_err(|e| {
             error!(error = %e, "Server error");
@@ -214,7 +253,11 @@ async fn main() -> Result<()> {
 }
 
 /// Wait for shutdown signal and perform graceful shutdown
-async fn shutdown_signal(batcher: Option<BatcherHandle>, timeout: std::time::Duration) {
+async fn shutdown_signal(
+    batcher: Option<BatcherHandle>,
+    shutdown_tx: watch::Sender<bool>,
+    timeout: Duration,
+) {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -240,6 +283,9 @@ async fn shutdown_signal(batcher: Option<BatcherHandle>, timeout: std::time::Dur
             info!("Received SIGTERM, initiating graceful shutdown");
         }
     }
+
+    // Signal background tasks to shutdown
+    let _ = shutdown_tx.send(true);
 
     // Flush batcher before shutdown
     if let Some(batcher) = batcher {

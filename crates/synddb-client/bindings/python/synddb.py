@@ -634,7 +634,8 @@ class MessageClient:
             message_id: The message ID from your message_log table
 
         Returns:
-            Status dict with keys: id, status, tx_hash, confirmations, error, updated_at
+            Status dict with keys: id, message_type, status, tx_hash, confirmations,
+            error, first_seen_at, updated_at
         """
         url = f"{self.base_url}/messages/outbound/{message_id}/status"
 
@@ -643,6 +644,23 @@ class MessageClient:
                 return json.loads(response.read().decode('utf-8'))
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"Failed to get outbound status: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to connect to sequencer: {e.reason}")
+
+    def outbound_stats(self) -> dict:
+        """Get outbound message statistics.
+
+        Returns:
+            Stats dict with keys: total, pending, queued, submitting, submitted,
+            confirmed, failed, monitor_active
+        """
+        url = f"{self.base_url}/messages/outbound/stats"
+
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Failed to get outbound stats: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             raise RuntimeError(f"Failed to connect to sequencer: {e.reason}")
 
