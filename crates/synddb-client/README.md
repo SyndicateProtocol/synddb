@@ -96,7 +96,7 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 
 ## Sending Changesets
 
-Changesets are automatically sent every second (configurable via `flush_interval`). Use `push()` to force immediate send for low-latency or high-value changes:
+Changesets are automatically sent every second (configurable via `send_interval`). Use `push()` to force immediate send for low-latency or high-value changes:
 
 ```rust
 // After a transaction or batch of operations

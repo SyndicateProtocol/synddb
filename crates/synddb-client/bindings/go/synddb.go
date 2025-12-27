@@ -48,7 +48,7 @@ typedef enum {
 extern const char* synddb_version(void);
 extern const char* synddb_last_error(void);
 extern SyndDBError synddb_attach(const char* db_path, const char* sequencer_url, SyndDBHandle** out_handle);
-extern SyndDBError synddb_attach_with_config(const char* db_path, const char* sequencer_url, uint64_t flush_interval_ms, uint64_t snapshot_interval, SyndDBHandle** out_handle);
+extern SyndDBError synddb_attach_with_config(const char* db_path, const char* sequencer_url, uint64_t send_interval_ms, uint64_t snapshot_interval, SyndDBHandle** out_handle);
 extern SyndDBError synddb_push(SyndDBHandle* handle);
 extern SyndDBError synddb_snapshot(SyndDBHandle* handle, size_t* out_size);
 extern void synddb_detach(SyndDBHandle* handle);
@@ -72,8 +72,8 @@ type Handle struct {
 
 // Config holds configuration options for SyndDB attachment
 type Config struct {
-	// FlushIntervalMs is the milliseconds between automatic changeset flushes (default: 1000)
-	FlushIntervalMs uint64
+	// SendIntervalMs is the milliseconds between automatic changeset sends (default: 1000)
+	SendIntervalMs uint64
 	// SnapshotInterval is the number of changesets between automatic snapshots (0 = disabled)
 	SnapshotInterval uint64
 }
@@ -81,7 +81,7 @@ type Config struct {
 // DefaultConfig returns the default configuration
 func DefaultConfig() Config {
 	return Config{
-		FlushIntervalMs:  1000,
+		SendIntervalMs:  1000,
 		SnapshotInterval: 0,
 	}
 }
@@ -143,7 +143,7 @@ func Attach(dbPath, sequencerURL string) (*Handle, error) {
 // Example:
 //
 //	config := synddb.Config{
-//	    FlushIntervalMs: 500,
+//	    SendIntervalMs: 500,
 //	    SnapshotInterval: 100,
 //	}
 //	handle, err := synddb.AttachWithConfig("/tmp/app.db", "http://localhost:8433", config)
@@ -158,7 +158,7 @@ func AttachWithConfig(dbPath, sequencerURL string, config Config) (*Handle, erro
 	result := C.synddb_attach_with_config(
 		dbPathC,
 		urlC,
-		C.uint64_t(config.FlushIntervalMs),
+		C.uint64_t(config.SendIntervalMs),
 		C.uint64_t(config.SnapshotInterval),
 		&handle,
 	)

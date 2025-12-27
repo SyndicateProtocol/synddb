@@ -35,7 +35,7 @@ extern SyndDBError synddb_attach(
 extern SyndDBError synddb_attach_with_config(
     const char* db_path,
     const char* sequencer_url,
-    unsigned long long flush_interval_ms,
+    unsigned long long send_interval_ms,
     unsigned long long snapshot_interval,
     SyndDBHandle** out_handle
 );

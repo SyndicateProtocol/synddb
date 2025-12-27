@@ -84,7 +84,7 @@ lib.synddb_attach.restype = ctypes.c_int
 lib.synddb_attach_with_config.argtypes = [
     ctypes.c_char_p,  # db_path
     ctypes.c_char_p,  # sequencer_url
-    ctypes.c_ulonglong,  # flush_interval_ms
+    ctypes.c_ulonglong,  # send_interval_ms
     ctypes.c_ulonglong,  # snapshot_interval
     ctypes.POINTER(ctypes.POINTER(SyndDBHandle))  # out_handle
 ]
@@ -171,7 +171,7 @@ def main():
     result = lib.synddb_attach_with_config(
         db_path2,
         sequencer_url,
-        500,  # flush_interval_ms
+        500,  # send_interval_ms
         10,   # snapshot_interval
         ctypes.byref(handle2)
     )

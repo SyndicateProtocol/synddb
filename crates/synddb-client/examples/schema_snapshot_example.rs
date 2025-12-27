@@ -28,13 +28,13 @@ fn main() -> Result<()> {
     // Configure with high snapshot_interval to show DDL snapshots are independent
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
-        flush_interval: Duration::from_millis(300),
+        send_interval: Duration::from_millis(300),
         snapshot_interval: 100, // High interval - DDL triggers snapshots anyway
         ..Default::default()
     };
 
     println!("Config:");
-    println!("  - Flush interval: {:?}", config.flush_interval);
+    println!("  - Send interval: {:?}", config.send_interval);
     println!(
         "  - Snapshot interval: {} changesets (high on purpose)",
         config.snapshot_interval

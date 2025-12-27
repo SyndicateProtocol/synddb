@@ -54,7 +54,7 @@ from synddb import SyndDB
 synddb = SyndDB.attach_with_config(
     'app.db',
     'http://localhost:8433',
-    flush_interval_ms=500,   # Publish every 500ms
+    send_interval_ms=500,   # Send every 500ms
     snapshot_interval=100       # Snapshot every 100 changesets
 )
 ```
@@ -110,14 +110,14 @@ Attach to a SQLite database with default configuration.
 
 **Returns:** SyndDB instance
 
-### `SyndDB.attach_with_config(db_path, sequencer_url, flush_interval_ms=1000, snapshot_interval=100)`
+### `SyndDB.attach_with_config(db_path, sequencer_url, send_interval_ms=1000, snapshot_interval=100)`
 
 Attach with custom configuration.
 
 **Parameters:**
 - `db_path` (str): Path to SQLite database file
 - `sequencer_url` (str): URL of sequencer TEE
-- `flush_interval_ms` (int): Milliseconds between automatic publishes (must be > 0, default: 1000)
+- `send_interval_ms` (int): Milliseconds between automatic sends (must be > 0, default: 1000)
 - `snapshot_interval` (int): Number of changesets between snapshots (must be > 0, default: 100)
 
 **Returns:** SyndDB instance

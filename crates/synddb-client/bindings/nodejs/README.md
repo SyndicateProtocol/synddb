@@ -57,7 +57,7 @@ const synddb = SyndDB.attachWithConfig(
   'app.db',
   'http://localhost:8433',
   {
-    flushIntervalMs: 500,      // Flush every 500ms
+    sendIntervalMs: 500,      // Send every 500ms
     snapshotInterval: 100      // Snapshot every 100 changesets
   }
 );
@@ -122,7 +122,7 @@ Attach with custom configuration.
 - `dbPath` (string): Path to SQLite database file
 - `sequencerUrl` (string): URL of sequencer TEE
 - `options` (object):
-  - `flushIntervalMs` (number): Milliseconds between automatic flushes (default: 1000)
+  - `sendIntervalMs` (number): Milliseconds between automatic sends (default: 1000)
   - `snapshotInterval` (number): Number of changesets between snapshots (default: 0 = disabled)
 
 **Returns:** SyndDB instance

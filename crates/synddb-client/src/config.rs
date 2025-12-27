@@ -20,9 +20,9 @@ pub struct Config {
     pub buffer_size: usize,
 
     /// Maximum time to buffer changesets before sending (e.g., "1s")
-    #[arg(long, env = "FLUSH_INTERVAL", default_value = "1s", value_parser = humantime::parse_duration)]
+    #[arg(long, env = "SEND_INTERVAL", default_value = "1s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
-    pub flush_interval: Duration,
+    pub send_interval: Duration,
 
     /// Maximum size of a changeset batch in bytes
     #[arg(long, env = "MAX_BATCH_SIZE", default_value = "1048576")]

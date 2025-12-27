@@ -53,7 +53,7 @@
 //!
 //! # Automatic Sending
 //!
-//! Changesets are automatically sent every second (configurable via `flush_interval`).
+//! Changesets are automatically sent every second (configurable via `send_interval`).
 //! Use [`SyndDB::push()`] to force immediate send for low-latency
 //! or high-value changes.
 //!
@@ -313,7 +313,7 @@ impl SyndDB {
     ///
     /// let config = Config {
     ///     sequencer_url: "http://sequencer:8433".parse().unwrap(),
-    ///     flush_interval: Duration::from_millis(100), // Faster auto-push
+    ///     send_interval: Duration::from_millis(100), // Faster auto-send
     ///     ..Default::default()
     /// };
     /// let synddb = SyndDB::open_with_config("app.db", config)?;
@@ -612,10 +612,10 @@ impl SyndDB {
             );
         }
 
-        if config.flush_interval.is_zero() {
+        if config.send_interval.is_zero() {
             anyhow::bail!(
-                "flush_interval must be greater than 0. \
-                Use a small value (e.g., 1ms) if you want fast flushing."
+                "send_interval must be greater than 0. \
+                Use a small value (e.g., 1ms) if you want fast sending."
             );
         }
 
@@ -2918,12 +2918,12 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validation_rejects_zero_flush_interval() {
+    fn test_config_validation_rejects_zero_send_interval() {
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            flush_interval: std::time::Duration::ZERO,
+            send_interval: std::time::Duration::ZERO,
             ..Default::default()
         };
         let result = SyndDB::attach_with_config(conn, config);
@@ -2931,6 +2931,6 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("flush_interval must be greater than 0"));
+            .contains("send_interval must be greater than 0"));
     }
 }
