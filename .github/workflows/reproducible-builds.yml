@@ -1,0 +1,161 @@
+name: Reproducible Builds
+
+# Verify that Docker builds are bit-for-bit reproducible across machines.
+# This is critical for Confidential Space attestation - the image hash
+# must be verifiable by anyone rebuilding from source.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docker/reproducible/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/reproducible-builds.yml"
+
+  # Allow manual triggering for verification before releases
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build on multiple runners to verify cross-machine reproducibility
+  build:
+    name: Build (${{ matrix.runner }}, ${{ matrix.image }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, macos-13, macos-14]
+        image: [sequencer, validator]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Docker setup for macOS (not pre-installed)
+      - name: Set up Docker (macOS)
+        if: startsWith(matrix.runner, 'macos')
+        run: |
+          brew install docker colima
+          colima start --cpu 4 --memory 8 --disk 50
+          # Wait for Docker to be ready
+          for i in {1..30}; do
+            if docker info > /dev/null 2>&1; then
+              echo "Docker is ready"
+              break
+            fi
+            echo "Waiting for Docker... ($i/30)"
+            sleep 2
+          done
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (attempt 1)
+        run: |
+          docker build \
+            --no-cache \
+            --platform linux/amd64 \
+            -f docker/reproducible/${{ matrix.image }}.Dockerfile \
+            -t ${{ matrix.image }}:build1 \
+            .
+
+      - name: Build image (attempt 2)
+        run: |
+          docker build \
+            --no-cache \
+            --platform linux/amd64 \
+            -f docker/reproducible/${{ matrix.image }}.Dockerfile \
+            -t ${{ matrix.image }}:build2 \
+            .
+
+      - name: Verify same-machine reproducibility
+        run: |
+          HASH1=$(docker inspect ${{ matrix.image }}:build1 --format='{{.Id}}')
+          HASH2=$(docker inspect ${{ matrix.image }}:build2 --format='{{.Id}}')
+
+          echo "Build 1: $HASH1"
+          echo "Build 2: $HASH2"
+
+          if [ "$HASH1" != "$HASH2" ]; then
+            echo "::error::Same-machine reproducibility failed!"
+            echo "Two builds on the same machine produced different hashes."
+            exit 1
+          fi
+
+          echo "::notice::Same-machine reproducibility verified for ${{ matrix.image }} on ${{ matrix.runner }}"
+
+      - name: Save image hash
+        run: |
+          mkdir -p hashes
+          docker inspect ${{ matrix.image }}:build1 --format='{{.Id}}' > hashes/${{ matrix.image }}-${{ matrix.runner }}.txt
+          echo "Hash: $(cat hashes/${{ matrix.image }}-${{ matrix.runner }}.txt)"
+
+      - name: Upload hash artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hash-${{ matrix.image }}-${{ matrix.runner }}
+          path: hashes/
+          retention-days: 1
+
+  # Compare hashes across all runners
+  verify-cross-machine:
+    name: Verify Cross-Machine Reproducibility
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all hash artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-hashes
+          pattern: hash-*
+          merge-multiple: true
+
+      - name: Compare hashes across machines
+        run: |
+          echo "=== Collected Hashes ==="
+          for f in all-hashes/*.txt; do
+            echo "$(basename $f .txt): $(cat $f)"
+          done
+          echo ""
+
+          # Check sequencer hashes match across runners
+          echo "=== Verifying Sequencer ==="
+          SEQUENCER_HASHES=$(cat all-hashes/sequencer-*.txt | sort -u)
+          SEQUENCER_COUNT=$(echo "$SEQUENCER_HASHES" | wc -l)
+
+          if [ "$SEQUENCER_COUNT" -ne 1 ]; then
+            echo "::error::Cross-machine reproducibility failed for sequencer!"
+            echo "Different runners produced different hashes:"
+            for f in all-hashes/sequencer-*.txt; do
+              echo "  $(basename $f .txt): $(cat $f)"
+            done
+            exit 1
+          fi
+          echo "::notice::Sequencer hash verified across all runners: $SEQUENCER_HASHES"
+
+          # Check validator hashes match across runners
+          echo ""
+          echo "=== Verifying Validator ==="
+          VALIDATOR_HASHES=$(cat all-hashes/validator-*.txt | sort -u)
+          VALIDATOR_COUNT=$(echo "$VALIDATOR_HASHES" | wc -l)
+
+          if [ "$VALIDATOR_COUNT" -ne 1 ]; then
+            echo "::error::Cross-machine reproducibility failed for validator!"
+            echo "Different runners produced different hashes:"
+            for f in all-hashes/validator-*.txt; do
+              echo "  $(basename $f .txt): $(cat $f)"
+            done
+            exit 1
+          fi
+          echo "::notice::Validator hash verified across all runners: $VALIDATOR_HASHES"
+
+          echo ""
+          echo "=== All Reproducibility Checks Passed ==="
+          echo "Sequencer: $SEQUENCER_HASHES"
+          echo "Validator: $VALIDATOR_HASHES"
