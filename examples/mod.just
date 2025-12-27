@@ -9,6 +9,9 @@
 # All recipes use [no-cd] to run from the project root since they
 # depend on binaries and configuration from the root directory.
 
+# Use bash with strict mode
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
 # Shared configuration (mirrors root justfile)
 anvil_key_0 := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 sequencer_pubkey := "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5"
@@ -20,19 +23,24 @@ data_dir := "./data"
 
 # Build price oracle validator
 [no-cd]
-build-price-oracle:
+[group('price-oracle')]
+[private]
+_build-price-oracle:
     cargo build --release -p price-oracle-validator
 
 # Setup Python environment for price oracle
-setup-price-oracle:
+[group('price-oracle')]
+[private]
+_setup-price-oracle:
     cd price-oracle && python3 -m venv venv && ./venv/bin/pip install -q -r app/requirements.txt
 
 # Run price oracle example (full environment)
 [no-cd]
-price-oracle: build-price-oracle setup-price-oracle
+[group('price-oracle')]
+price-oracle: _build-price-oracle _setup-price-oracle
     just deploy
     #!/usr/bin/env bash
-    set -e
+    set -euxo pipefail
     trap 'kill $(jobs -p) 2>/dev/null' EXIT
 
     echo "Starting sequencer..."
@@ -77,15 +85,18 @@ price-oracle: build-price-oracle setup-price-oracle
 
 # Build prediction market
 [no-cd]
-build-prediction-market:
+[group('prediction-market')]
+[private]
+_build-prediction-market:
     cargo build --release -p prediction-market --features chain-monitor
 
 # Run prediction market example (CLI mode)
 [no-cd]
-prediction-market: build-prediction-market
+[group('prediction-market')]
+prediction-market: _build-prediction-market
     just deploy
     #!/usr/bin/env bash
-    set -e
+    set -euxo pipefail
     trap 'kill $(jobs -p) 2>/dev/null' EXIT
 
     echo "Starting sequencer..."
@@ -132,10 +143,11 @@ prediction-market: build-prediction-market
 
 # Run prediction market HTTP server
 [no-cd]
-prediction-market-http: build-prediction-market
+[group('prediction-market')]
+prediction-market-http: _build-prediction-market
     just deploy
     #!/usr/bin/env bash
-    set -e
+    set -euxo pipefail
     trap 'kill $(jobs -p) 2>/dev/null' EXIT
 
     echo "Starting sequencer..."
@@ -182,6 +194,8 @@ prediction-market-http: build-prediction-market
 
 # Clean example data
 [no-cd]
+[group('cleanup')]
+[confirm('This will remove all example data. Continue?')]
 clean:
     rm -rf {{data_dir}}/price-oracle
     rm -rf {{data_dir}}/prediction-market

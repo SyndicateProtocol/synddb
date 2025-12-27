@@ -8,48 +8,64 @@
 #
 # This module runs in the contracts/ directory by default.
 
+# Use bash with strict mode
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
 # Build contracts
+[group('build')]
 build:
     forge build
 
 # Run contract tests
+[group('test')]
 test:
     forge test -vvv
 
 # Run contract tests with gas report
+[group('test')]
 test-gas:
     forge test -vvv --gas-report
 
 # Format Solidity code
+[group('quality')]
 fmt:
     forge fmt
 
 # Check formatting
+[group('quality')]
 fmt-check:
     forge fmt --check
 
 # Clean build artifacts
+[group('cleanup')]
 clean:
     forge clean
 
 # Update dependencies
+[group('deps')]
 update:
     forge update
 
 # Generate gas snapshots
+[group('analysis')]
 snapshot:
     forge snapshot
 
 # Run static analysis
+[group('analysis')]
 analyze:
     forge inspect Bridge bytecode
 
 # Deploy to local Anvil (use root `just deploy` instead for full setup)
 [no-cd]
-deploy-local:
+[group('deploy')]
+[private]
+_deploy-local:
     ./scripts/deploy-local.sh
 
 # Deploy Bridge to Base Sepolia
+[group('deploy')]
+[confirm('This will deploy to Base Sepolia testnet. Continue?')]
 deploy-base-sepolia:
     forge script script/DeployBridge.s.sol:DeployBridge \
         --rpc-url base_sepolia \
@@ -60,6 +76,7 @@ deploy-base-sepolia:
         -vvv
 
 # Verify contract on Etherscan
+[group('deploy')]
 verify contract address:
     forge verify-contract {{address}} {{contract}} \
         --chain base-sepolia \

@@ -20,6 +20,20 @@
 #   just examples::prediction-market  # Run prediction market example
 
 # ============================================================================
+# Settings
+# ============================================================================
+
+# Use bash with strict mode for all recipes
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# Load .env.docker for Docker-related environment variables
+set dotenv-load
+set dotenv-filename := ".env.docker"
+
+# Export all variables as environment variables
+set export
+
+# ============================================================================
 # Modules
 # ============================================================================
 
@@ -52,27 +66,31 @@ data_dir := "./data"
 # Default & Help
 # ============================================================================
 
-# Show available commands
+# Show available commands (grouped)
 default:
-    @just --list
+    @just --list --unsorted
 
 # ============================================================================
 # Local Development
 # ============================================================================
 
 # Start full local dev environment (Anvil + contracts + sequencer)
+[group('dev')]
 dev:
     ./scripts/dev-env.sh
 
 # Start dev environment with validator
+[group('dev')]
 dev-validator:
     ./scripts/dev-env.sh --validator
 
 # Deploy contracts to local Anvil (starts Anvil if not running)
+[group('dev')]
 deploy:
     ./scripts/deploy-local.sh
 
 # Deploy with fresh Anvil (kills existing)
+[group('dev')]
 deploy-fresh:
     ./scripts/deploy-local.sh --reset
 
@@ -81,10 +99,12 @@ deploy-fresh:
 # ============================================================================
 
 # Start Anvil only
+[group('components')]
 anvil:
     anvil --port {{anvil_port}}
 
 # Run sequencer with local defaults
+[group('components')]
 sequencer:
     mkdir -p {{data_dir}}
     SIGNING_KEY={{anvil_key_0}} \
@@ -93,6 +113,7 @@ sequencer:
     cargo run -p synddb-sequencer --release
 
 # Run sequencer (release binary, faster startup)
+[group('components')]
 sequencer-release:
     mkdir -p {{data_dir}}
     SIGNING_KEY={{anvil_key_0}} \
@@ -101,6 +122,7 @@ sequencer-release:
     ./target/release/synddb-sequencer
 
 # Run validator with local defaults
+[group('components')]
 validator:
     mkdir -p {{data_dir}}
     SEQUENCER_PUBKEY={{sequencer_pubkey}} \
@@ -111,6 +133,7 @@ validator:
     cargo run -p synddb-validator --release
 
 # Run validator (release binary, faster startup)
+[group('components')]
 validator-release:
     mkdir -p {{data_dir}}
     SEQUENCER_PUBKEY={{sequencer_pubkey}} \
@@ -121,6 +144,7 @@ validator-release:
     ./target/release/synddb-validator
 
 # Run validator with bridge signer enabled
+[group('components')]
 validator-bridge:
     mkdir -p {{data_dir}}
     SEQUENCER_PUBKEY={{sequencer_pubkey}} \
@@ -139,10 +163,12 @@ validator-bridge:
 # ============================================================================
 
 # Build all crates (debug)
+[group('build')]
 build:
     cargo build --workspace
 
 # Build all crates (release)
+[group('build')]
 build-release:
     cargo build --workspace --release
 
@@ -151,18 +177,22 @@ build-release:
 # ============================================================================
 
 # Run all tests
+[group('test')]
 test:
     cargo nextest run --workspace --all-features --exclude synddb-e2e --exclude synddb-e2e-gcs
 
 # Run tests with output
+[group('test')]
 test-verbose:
     cargo nextest run --workspace --all-features --exclude synddb-e2e --exclude synddb-e2e-gcs --no-capture
 
 # Run fuzzer
+[group('test')]
 fuzz:
     cargo test -p synddb-fuzzer --release
 
 # Run E2E fuzzer
+[group('test')]
 fuzz-e2e:
     cargo test -p synddb-e2e-fuzzer --release
 
@@ -171,6 +201,7 @@ fuzz-e2e:
 # ============================================================================
 
 # Run all CI checks (non-destructive)
+[group('quality')]
 check:
     @echo "Checking TOML formatting..."
     taplo lint "**/Cargo.toml"
@@ -184,12 +215,14 @@ check:
     @echo "All checks passed!"
 
 # Fix all auto-fixable issues
+[group('quality')]
 fix:
     taplo fmt "**/Cargo.toml"
     cargo +nightly fmt --all
     cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged
 
 # Format all code (Rust, TOML, Solidity)
+[group('quality')]
 fmt:
     cargo +nightly fmt --all
     taplo fmt "**/Cargo.toml"
@@ -200,19 +233,26 @@ fmt:
 # ============================================================================
 
 # Clean build artifacts
+[group('cleanup')]
+[confirm('This will remove all build artifacts. Continue?')]
 clean:
     cargo clean
     cd contracts && forge clean
 
 # Clean local development data
+[group('cleanup')]
+[confirm('This will remove all local data in ./data and ./.synddb. Continue?')]
 clean-data:
     rm -rf ./data
     rm -rf ./.synddb
 
 # Clean everything
+[group('cleanup')]
+[confirm('This will remove ALL build artifacts and data. Continue?')]
 clean-all: clean clean-data examples::clean
 
 # Kill any running Anvil processes
+[group('cleanup')]
 kill-anvil:
     pkill -f "anvil" || true
 
@@ -221,6 +261,7 @@ kill-anvil:
 # ============================================================================
 
 # Build and open docs
+[group('docs')]
 docs:
     cargo doc --workspace --all-features --no-deps --open
 
@@ -229,13 +270,16 @@ docs:
 # ============================================================================
 
 # Run with Docker Compose
+[group('docker')]
 docker-up:
     docker compose up --build
 
 # Run with Docker Compose (detached)
+[group('docker')]
 docker-up-detached:
     docker compose up --build -d
 
 # Stop Docker Compose
+[group('docker')]
 docker-down:
     docker compose down -v
