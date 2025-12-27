@@ -27,10 +27,6 @@ updates:
       tracing:
         patterns:
           - "tracing*"
-    ignore:
-      # Ignore major version updates for stability
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
 
   # GitHub Actions
   - package-ecosystem: github-actions
