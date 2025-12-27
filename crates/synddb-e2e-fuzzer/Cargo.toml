@@ -21,7 +21,6 @@ rusqlite = { workspace = true }
 
 # Property-based testing
 proptest = "1.5"
-proptest-derive = "0.5"
 
 # Random generation
 rand = { workspace = true }
@@ -34,7 +33,6 @@ tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
 
 # Cryptography
 alloy = { workspace = true, features = ["signers"] }
-k256 = { workspace = true }
 
 # Serialization
 ciborium = { workspace = true }
@@ -46,7 +44,6 @@ tempfile = "3"
 
 # Logging
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 test-log = { version = "0.2", features = ["trace"] }
