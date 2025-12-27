@@ -334,3 +334,17 @@ jobs:
           fail_ci_if_error: false  # Don't fail if Codecov is unavailable
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  security-audit:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run security audit
+        run: cargo audit
