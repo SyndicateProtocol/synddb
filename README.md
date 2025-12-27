@@ -40,7 +40,30 @@ cd SyndDB
 cargo build --workspace --release
 ```
 
-### 2. Try the Benchmark Tool
+### 2. Local Development with Contracts
+
+Deploy contracts to a local Anvil instance:
+
+```bash
+# Start Anvil and deploy contracts (one command)
+./scripts/deploy-local.sh
+
+# Output:
+#   MockWETH:     0x5FbDB2315678afecb367f032d93F642f64180aa3
+#   Bridge:       0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
+#   PriceOracle:  0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9
+```
+
+Addresses are saved to `.synddb/local-addresses.json` and are deterministic - you can rely on them across restarts as long as Anvil starts fresh.
+
+For environment setup, copy the example file:
+```bash
+cp .env.local.example .env
+```
+
+See `scripts/anvil-addresses.sh` for all well-known addresses you can source in shell scripts.
+
+### 3. Try the Benchmark Tool (Optional)
 
 The benchmark tool simulates realistic database workload for testing:
 
@@ -57,7 +80,7 @@ cargo run --package synddb-benchmark --release -- stats
 
 See [crates/synddb-benchmark/README.md](crates/synddb-benchmark/README.md) for full documentation.
 
-### 3. Try the Client Library
+### 4. Try the Client Library
 
 ```bash
 # Run example that demonstrates client library integration
