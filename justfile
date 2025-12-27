@@ -415,3 +415,60 @@ docker-detached:
 [group('docker')]
 docker-down:
     docker compose down -v
+
+# ============================================================================
+# Reproducible Builds (for Confidential Space / TEE verification)
+# ============================================================================
+
+# Build reproducible sequencer image (distroless)
+[group('reproducible')]
+repro-sequencer:
+    docker build -f docker/reproducible/sequencer.Dockerfile \
+        --platform linux/amd64 \
+        -t synddb-sequencer:reproducible .
+
+# Build reproducible validator image (distroless)
+[group('reproducible')]
+repro-validator:
+    docker build -f docker/reproducible/validator.Dockerfile \
+        --platform linux/amd64 \
+        -t synddb-validator:reproducible .
+
+# Build debug sequencer image (has shell)
+[group('reproducible')]
+repro-sequencer-debug:
+    docker build -f docker/reproducible/sequencer.Dockerfile \
+        --platform linux/amd64 \
+        --target debug \
+        -t synddb-sequencer:debug .
+
+# Build debug validator image (has shell)
+[group('reproducible')]
+repro-validator-debug:
+    docker build -f docker/reproducible/validator.Dockerfile \
+        --platform linux/amd64 \
+        --target debug \
+        -t synddb-validator:debug .
+
+# Build all reproducible images (production)
+[group('reproducible')]
+repro-all: repro-sequencer repro-validator
+
+# Build all debug images
+[group('reproducible')]
+repro-all-debug: repro-sequencer-debug repro-validator-debug
+
+# Show image digests for verification
+[group('reproducible')]
+repro-verify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Reproducible Image Digests ==="
+    echo ""
+    echo "Sequencer:"
+    docker inspect synddb-sequencer:reproducible --format='  Image ID: {{ "{{" }}.Id{{ "}}" }}' 2>/dev/null || echo "  (not built)"
+    docker inspect synddb-sequencer:reproducible --format='  Created:  {{ "{{" }}.Created{{ "}}" }}' 2>/dev/null || true
+    echo ""
+    echo "Validator:"
+    docker inspect synddb-validator:reproducible --format='  Image ID: {{ "{{" }}.Id{{ "}}" }}' 2>/dev/null || echo "  (not built)"
+    docker inspect synddb-validator:reproducible --format='  Created:  {{ "{{" }}.Created{{ "}}" }}' 2>/dev/null || true
