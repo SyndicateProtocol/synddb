@@ -300,6 +300,25 @@ fix:
     cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged
 
 # ============================================================================
+# Git Hooks
+# ============================================================================
+
+# Install git hooks (lefthook)
+[group('hooks')]
+hooks-install:
+    lefthook install
+
+# Uninstall git hooks
+[group('hooks')]
+hooks-uninstall:
+    lefthook uninstall
+
+# Run pre-commit hooks manually
+[group('hooks')]
+hooks-run:
+    lefthook run pre-commit
+
+# ============================================================================
 # Cleanup
 # ============================================================================
 
