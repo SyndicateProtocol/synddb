@@ -31,12 +31,10 @@ target
 *.db-shm
 *.db-wal
 
-# Environment variables
+# Environment variables (create .env for local overrides - see justfile for defaults)
 .env
 .env.*
 !.env.example
-!.env.local.example
-!.env.docker
 
 # Claude
 .claude/settings.local.json
