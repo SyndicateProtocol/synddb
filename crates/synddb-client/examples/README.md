@@ -137,16 +137,35 @@ Outstanding comprehensive guide covering:
 - Memory management patterns
 - Thread safety considerations
 
-## Work-in-Progress Examples
+## Python Examples
 
-### Python Native Bindings
+### Python FFI Bindings
 
 #### [`python_example.py`](./python_example.py)
-**Status:** TODO - Native Python bindings not yet implemented
+**Complexity:** Beginner
+**Language:** Python
+**Run:**
+```bash
+# First, build the shared library
+cargo build --package synddb-client --features ffi --release
 
-This example shows the intended future API for native Python bindings. Currently non-functional.
+# Then run the example
+python3 python_example.py
+```
 
-**For Python integration today, use:** [`ffi/test.py`](./ffi/test.py) (ctypes FFI)
+Demonstrates the Python FFI bindings using the `synddb` module:
+- Loading the SyndDB library
+- Attaching to a database
+- Creating schemas and snapshots
+- Executing SQL with automatic changeset capture
+
+**Full Python API:** [`../bindings/python/synddb.py`](../bindings/python/synddb.py)
+
+The Python bindings provide:
+- `SyndDB` class for database operations
+- `MessageClient` class for message passing API
+- Context manager support (`with` statement)
+- Transaction support (`begin`, `commit`, `rollback`)
 
 ## Prerequisites
 

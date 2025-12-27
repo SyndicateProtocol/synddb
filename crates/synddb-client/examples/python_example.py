@@ -2,66 +2,90 @@
 """
 Example Python application using synddb-client
 
-⚠️  WORK IN PROGRESS - NOT FUNCTIONAL ⚠️
+This example demonstrates the Python FFI bindings for SyndDB.
 
-This example shows the INTENDED API for native Python bindings, which are
-not yet implemented. This code will run but SyndDB integration is disabled.
+Prerequisites:
+    1. Build the shared library:
+       cargo build --package synddb-client --features ffi --release
 
-For a WORKING Python example, use the FFI example:
-    examples/ffi/test.py (uses ctypes to call the C FFI)
+    2. The library will be at:
+       - macOS: target/release/libsynddb_client.dylib
+       - Linux: target/release/libsynddb_client.so
+       - Windows: target/release/synddb_client.dll
 
-This demonstrates how lightweight the integration WILL BE:
-- Single import
-- Single function call to attach
-- Rest of the code is unchanged
+Usage:
+    cd crates/synddb-client/bindings/python
+    python synddb.py  # or import from your app
+
+For the full Python API, see: crates/synddb-client/bindings/python/synddb.py
 """
 
-import sqlite3
-import time
-# from synddb import attach  # TODO: Implement Python bindings
+import sys
+import os
+
+# Add bindings directory to path
+bindings_path = os.path.join(os.path.dirname(__file__), '..', 'bindings', 'python')
+sys.path.insert(0, bindings_path)
+
+try:
+    from synddb import SyndDB, version
+    print(f"SyndDB Python bindings loaded (version {version()})")
+except ImportError as e:
+    print(f"Failed to load SyndDB bindings: {e}")
+    print("\nTo build the shared library:")
+    print("  cargo build --package synddb-client --features ffi --release")
+    sys.exit(1)
+
 
 def main():
     print("=== SyndDB Client Example (Python) ===\n")
 
-    # Open database
-    conn = sqlite3.connect('example.db')
-    cursor = conn.cursor()
+    # Example usage (requires a running sequencer)
+    sequencer_url = os.environ.get('SEQUENCER_URL', 'http://localhost:8433')
+    db_path = 'example.db'
 
-    # Create schema
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY,
-            price INTEGER,
-            quantity INTEGER,
-            timestamp INTEGER
-        )
-    ''')
-    conn.commit()
+    print(f"Database: {db_path}")
+    print(f"Sequencer: {sequencer_url}\n")
 
-    print("✓ Database opened and schema created")
+    try:
+        # Attach SyndDB to a database file
+        with SyndDB.attach(db_path, sequencer_url) as synddb:
+            print("Connected to SyndDB\n")
 
-    # INTEGRATION POINT: Single line to enable SyndDB
-    # attach(conn, sequencer_url='http://localhost:8433')
-    print("✓ SyndDB client attached to connection (TODO: implement bindings)\n")
+            # Create schema
+            synddb.execute_batch('''
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY,
+                    price INTEGER,
+                    quantity INTEGER,
+                    timestamp INTEGER
+                )
+            ''')
+            print("Schema created")
 
-    # Application code - completely unchanged from here
-    print("Executing trades...")
+            # Publish snapshot after schema changes
+            size = synddb.snapshot()
+            print(f"Snapshot published ({size} bytes)\n")
 
-    for i in range(1, 11):
-        cursor.execute(
-            "INSERT INTO trades (id, price, quantity, timestamp) VALUES (?, ?, ?, ?)",
-            (i, 100 + i, 10, int(time.time()))
-        )
-        conn.commit()
-        print(f"  Trade {i} inserted")
+            # Insert some data
+            print("Executing trades...")
+            for i in range(1, 6):
+                rows = synddb.execute(
+                    f"INSERT INTO trades (id, price, quantity, timestamp) "
+                    f"VALUES ({i}, {100 + i}, 10, strftime('%s', 'now'))"
+                )
+                print(f"  Trade {i} inserted ({rows} row)")
 
-        # Simulate some delay
-        time.sleep(0.1)
+            print("\nAll trades executed and changesets captured")
 
-    print("\n✓ All trades executed")
-    print("✓ Changesets automatically captured and sent to sequencer")
+    except RuntimeError as e:
+        print(f"Error: {e}")
+        print("\nMake sure the sequencer is running:")
+        print("  cargo run --package synddb-sequencer")
+        return 1
 
-    conn.close()
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
