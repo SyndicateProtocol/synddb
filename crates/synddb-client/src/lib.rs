@@ -313,7 +313,7 @@ impl SyndDB {
     ///
     /// let config = Config {
     ///     sequencer_url: "http://sequencer:8433".parse().unwrap(),
-    ///     flush_interval: Duration::from_millis(100), // Faster auto-publish
+    ///     flush_interval: Duration::from_millis(100), // Faster auto-push
     ///     ..Default::default()
     /// };
     /// let synddb = SyndDB::open_with_config("app.db", config)?;
@@ -1070,7 +1070,7 @@ impl Drop for SyndDB {
     fn drop(&mut self) {
         debug!("Dropping SyndDB handle");
 
-        // First, drop the monitor which will stop the publish thread.
+        // First, drop the monitor which will stop the sender thread.
         // This ensures no more changesets or snapshots are generated.
         // SessionMonitor::drop() calls extract_and_send_changeset() for
         // any pending data changes.
@@ -1215,7 +1215,7 @@ mod tests {
             tx.commit().unwrap();
             eprintln!("Batch {}: committed", batch);
 
-            // Small delay between batches to allow publish thread to run
+            // Small delay between batches to allow sender thread to run
             thread::sleep(std::time::Duration::from_millis(200));
         }
 
@@ -1269,7 +1269,7 @@ mod tests {
             tx.commit().unwrap();
             eprintln!("Batch {}: committed", batch);
 
-            // Small delay to allow publish thread
+            // Small delay to allow sender thread
             thread::sleep(std::time::Duration::from_millis(100));
         }
 
@@ -1379,7 +1379,7 @@ mod tests {
         conn.execute("INSERT INTO test VALUES (2, 'second')", [])
             .unwrap();
 
-        // Publish first batch
+        // Push first batch
         synddb.push().unwrap();
 
         // Cycle 2: Insert more rows
@@ -1388,14 +1388,14 @@ mod tests {
         conn.execute("INSERT INTO test VALUES (4, 'fourth')", [])
             .unwrap();
 
-        // Publish second batch - should NOT include rows 1-2
+        // Push second batch - should NOT include rows 1-2
         synddb.push().unwrap();
 
         // Cycle 3: Update existing rows
         conn.execute("UPDATE test SET value = 'updated' WHERE id = 1", [])
             .unwrap();
 
-        // Publish third batch - should only include the update
+        // Push third batch - should only include the update
         synddb.push().unwrap();
 
         // If session recreation is working, we should have 3 independent changesets
@@ -1484,7 +1484,7 @@ mod tests {
             tx.commit().unwrap();
         }
 
-        // Publish after batch
+        // Push after batch
         synddb.push().unwrap();
 
         // Individual balance inserts (like benchmark setup)
@@ -1496,7 +1496,7 @@ mod tests {
             .unwrap();
         }
 
-        // Publish after individual ops
+        // Push after individual ops
         synddb.push().unwrap();
 
         // More batch operations
@@ -1512,7 +1512,7 @@ mod tests {
             tx.commit().unwrap();
         }
 
-        // Final publish
+        // Final push
         synddb.push().unwrap();
 
         let user_count: i64 = conn
@@ -1527,8 +1527,8 @@ mod tests {
 
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
-    fn test_rapid_publish_cycles() {
-        // Test rapid succession of changes and publishes.
+    fn test_rapid_push_cycles() {
+        // Test rapid succession of changes and pushes.
         // This stress tests the session recreation mechanism.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
         conn.execute(
@@ -1603,8 +1603,8 @@ mod tests {
 
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
-    fn test_empty_publish_cycles() {
-        // Test that publish() with no changes doesn't cause issues.
+    fn test_empty_push_cycles() {
+        // Test that push() with no changes doesn't cause issues.
         // The session should handle empty extractions gracefully.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
         conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)", [])
@@ -1612,7 +1612,7 @@ mod tests {
 
         let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
-        // Multiple empty publishes
+        // Multiple empty pushes
         synddb.push().unwrap();
         synddb.push().unwrap();
         synddb.push().unwrap();
@@ -1621,7 +1621,7 @@ mod tests {
         conn.execute("INSERT INTO test VALUES (1)", []).unwrap();
         synddb.push().unwrap();
 
-        // More empty publishes
+        // More empty pushes
         synddb.push().unwrap();
         synddb.push().unwrap();
 
