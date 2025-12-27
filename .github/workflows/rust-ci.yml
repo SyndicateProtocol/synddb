@@ -322,7 +322,7 @@ jobs:
         uses: extractions/setup-just@v2
 
       - name: Validate justfile syntax
-        run: just --fmt --check
+        run: just --unstable --fmt --check
 
       - name: List available recipes
         run: |
