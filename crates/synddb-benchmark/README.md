@@ -519,7 +519,7 @@ This is ideal for:
 
 ## SyndDB Integration
 
-The benchmark tool supports full SyndDB integration for testing changeset capture and publishing under load.
+The benchmark tool supports full SyndDB integration for testing changeset capture and pushing under load.
 
 ### Running with SyndDB
 

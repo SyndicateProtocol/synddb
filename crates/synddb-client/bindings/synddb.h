@@ -166,7 +166,7 @@ SyndDBError synddb_rollback(SyndDBHandle* handle);
 /**
  * Detach SyndDB and free resources
  *
- * This gracefully shuts down the client, publishing any pending changesets.
+ * This gracefully shuts down the client, pushing any pending changesets.
  * The handle must not be used after this call.
  *
  * @param handle SyndDB handle from synddb_attach()

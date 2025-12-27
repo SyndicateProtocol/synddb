@@ -171,7 +171,7 @@ func AttachWithConfig(dbPath, sequencerURL string, config Config) (*Handle, erro
 
 // Detach disconnects from SyndDB and frees resources
 //
-// This gracefully shuts down the client, publishing any pending changesets.
+// This gracefully shuts down the client, pushing any pending changesets.
 // The Handle must not be used after calling Detach.
 func (h *Handle) Detach() {
 	if h.handle != nil {

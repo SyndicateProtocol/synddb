@@ -26,7 +26,7 @@
 //!
 //! // Check replication status
 //! let stats = synddb.stats();
-//! println!("Published: {} changesets", stats.published_changesets);
+//! println!("Pushed: {} changesets", stats.pushed_changesets);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
@@ -47,14 +47,14 @@
 //! tx.execute("INSERT INTO trades VALUES (1, 100)", [])?;
 //! tx.commit()?;
 //!
-//! synddb.push()?; // Optionally force immediate publish
+//! synddb.push()?; // Optionally force immediate push
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Automatic Publishing
+//! # Automatic Pushing
 //!
-//! Changesets are automatically published every second (configurable via `flush_interval`).
-//! Use [`SyndDB::push()`] to force immediate publication for low-latency
+//! Changesets are automatically pushed every second (configurable via `flush_interval`).
+//! Use [`SyndDB::push()`] to force immediate push for low-latency
 //! or high-value changes.
 //!
 //! # Transactions
@@ -87,7 +87,7 @@
 //! // Get current stats
 //! let stats = synddb.stats();
 //! println!("Pending: {}", stats.pending_changesets);
-//! println!("Published: {}", stats.published_changesets);
+//! println!("Pushed: {}", stats.pushed_changesets);
 //! println!("Healthy: {}", stats.is_healthy);
 //!
 //! // Quick health check
@@ -654,7 +654,7 @@ impl SyndDB {
     /// 1. Starts a transaction using `unchecked_transaction()` (required for `SyndDB`)
     /// 2. Calls your closure with the transaction
     /// 3. Commits on success, rolls back on error
-    /// 4. Publishes changesets after commit
+    /// 4. Pushes changesets after commit
     ///
     /// # Example
     ///
@@ -975,7 +975,7 @@ impl SyndDB {
 
     /// Get a snapshot of current replication statistics
     ///
-    /// Returns information about pending changesets, published count, and health status.
+    /// Returns information about pending changesets, pushed count, and health status.
     ///
     /// # Example
     ///
@@ -984,8 +984,8 @@ impl SyndDB {
     /// # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
     /// let stats = synddb.stats();
     /// println!("Pending: {} changesets", stats.pending_changesets);
-    /// println!("Published: {} changesets", stats.published_changesets);
-    /// println!("Failed: {} attempts", stats.failed_publishes);
+    /// println!("Pushed: {} changesets", stats.pushed_changesets);
+    /// println!("Failed: {} attempts", stats.failed_pushes);
     /// println!("Healthy: {}", stats.is_healthy);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -1014,7 +1014,7 @@ impl SyndDB {
         self.stats.is_healthy()
     }
 
-    /// Get the number of changesets waiting to be published
+    /// Get the number of changesets waiting to be pushed
     ///
     /// # Example
     ///
@@ -1031,16 +1031,16 @@ impl SyndDB {
         self.stats.pending_count()
     }
 
-    /// Get the total number of successfully published changesets
-    pub fn published_count(&self) -> u64 {
-        self.stats.published_count()
+    /// Get the total number of successfully pushed changesets
+    pub fn pushed_count(&self) -> u64 {
+        self.stats.pushed_count()
     }
 
     // =========================================================================
     // Lifecycle
     // =========================================================================
 
-    /// Gracefully shutdown the client, publishing any pending changesets and snapshots
+    /// Gracefully shutdown the client, pushing any pending changesets and snapshots
     pub fn shutdown(mut self) -> Result<()> {
         info!("Shutting down SyndDB client");
 
@@ -1121,7 +1121,7 @@ mod tests {
         conn.execute("INSERT INTO test (id, value) VALUES (1, 'test')", [])
             .unwrap();
 
-        // Wait a moment for automatic publish
+        // Wait a moment for automatic push
         thread::sleep(std::time::Duration::from_secs(2));
     }
 
@@ -2330,7 +2330,7 @@ mod tests {
 
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
-    fn test_recovery_via_manual_snapshot_publish() {
+    fn test_recovery_via_manual_snapshot() {
         // Documents the recovery process when direct DDL was used:
         // 1. Developer notices validator errors ("no such table")
         // 2. Developer calls snapshot() to capture current schema

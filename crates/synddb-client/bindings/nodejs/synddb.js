@@ -127,7 +127,7 @@ const ffi = {
 };
 
 /**
- * SyndDB client handle - automatically captures and publishes SQLite changesets
+ * SyndDB client handle - automatically captures and pushes SQLite changesets
  */
 class SyndDB {
   constructor(handle) {
@@ -380,7 +380,7 @@ class SyndDB {
   /**
    * Detach SyndDB and free resources
    *
-   * This gracefully shuts down the client, publishing any pending changesets.
+   * This gracefully shuts down the client, pushing any pending changesets.
    * The instance cannot be used after this call.
    *
    * @example

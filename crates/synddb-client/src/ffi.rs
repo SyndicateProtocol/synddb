@@ -321,7 +321,7 @@ pub unsafe extern "C" fn synddb_snapshot(
 
 /// Detach `SyndDB` and free resources
 ///
-/// This will gracefully shutdown the client, publishing any pending changesets.
+/// This will gracefully shutdown the client, pushing any pending changesets.
 ///
 /// # Arguments
 /// * `handle` - `SyndDB` handle from `synddb_attach()`

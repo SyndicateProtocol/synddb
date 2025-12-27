@@ -139,7 +139,7 @@ _lib.synddb_rollback.restype = ctypes.c_int
 
 
 class SyndDB:
-    """SyndDB client handle - automatically captures and publishes SQLite changesets"""
+    """SyndDB client handle - automatically captures and pushes SQLite changesets"""
 
     def __init__(self, handle: ctypes.POINTER(_SyndDBHandle)):
         self._handle = handle
@@ -414,7 +414,7 @@ class SyndDB:
         """
         Detach SyndDB and free resources
 
-        This gracefully shuts down the client, publishing any pending changesets.
+        This gracefully shuts down the client, pushing any pending changesets.
         The instance cannot be used after this call.
 
         Example:

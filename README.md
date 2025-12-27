@@ -74,7 +74,7 @@ See [crates/synddb-client/README.md](crates/synddb-client/README.md) for integra
 - **Language Agnostic**: Works with any language that has SQLite bindings (Python, JavaScript, Go, Rust, etc.)
 - **High Performance**: Sub-millisecond writes, 50,000-100,000+ ops/sec throughput
 - **Deterministic Replication**: Session Extension changesets for validators
-- **Automatic Publishing**: Client library automatically sends changesets to sequencer service for storage layer publishing
+- **Automatic Pushing**: Client library automatically sends changesets to sequencer service for storage layer publishing
 - **Minimal Integration**: Just import the client library and attach to your SQLite connection
 
 ## Components

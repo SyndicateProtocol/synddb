@@ -142,7 +142,7 @@ let conn = Box::leak(Box::new(Connection::open("app.db")?));
 - SQLite cleanup (closing file handles, WAL checkpoint) happens at process exit
 - This is acceptable for typical single-connection-per-process usage
 
-**Note:** `SyndDB` itself is dropped normally and performs graceful shutdown (publishing pending changesets, joining background threads).
+**Note:** `SyndDB` itself is dropped normally and performs graceful shutdown (pushing pending changesets, joining background threads).
 
 **Manual Connection cleanup:** If you need to explicitly close the Connection (e.g., to flush WAL), you can reclaim ownership after shutting down SyndDB:
 

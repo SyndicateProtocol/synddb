@@ -1,13 +1,13 @@
 //! Session Stress Test
 //!
 //! This binary stress-tests the `SyndDB` client by running continuous transactions
-//! with changeset publishing. It verifies that:
+//! with changeset pushing. It verifies that:
 //!
 //! 1. High-volume transactions work correctly
-//! 2. Changeset extraction and publishing works under load
+//! 2. Changeset extraction and pushing works under load
 //! 3. No crashes or data corruption occur
 //!
-//! The test publishes changesets after each transaction to simulate real-world usage.
+//! The test pushes changesets after each transaction to simulate real-world usage.
 //!
 //! Usage:
 //!   `SEQUENCER_URL=http://localhost:8433` session-stress-test
@@ -98,7 +98,7 @@ fn main() -> Result<()> {
     // Counters for statistics
     let transactions = Arc::new(AtomicU64::new(0));
     let rows_inserted = Arc::new(AtomicU64::new(0));
-    let changesets_published = Arc::new(AtomicU64::new(0));
+    let changesets_pushed = Arc::new(AtomicU64::new(0));
 
     let start = Instant::now();
     let duration = Duration::from_secs(args.duration);
@@ -142,7 +142,7 @@ fn main() -> Result<()> {
                 );
             }
         } else {
-            changesets_published.fetch_add(1, Ordering::Relaxed);
+            changesets_pushed.fetch_add(1, Ordering::Relaxed);
         }
 
         transactions.fetch_add(1, Ordering::Relaxed);

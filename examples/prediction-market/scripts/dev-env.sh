@@ -293,7 +293,7 @@ else
     $PM --db "$PM_DATABASE" --sequencer "$SEQUENCER_URL" status
 fi
 
-# Wait for changeset to be published
+# Wait for changeset to be pushed
 sleep 2
 
 # ============================================================================

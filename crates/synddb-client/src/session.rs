@@ -445,7 +445,7 @@ impl SessionMonitor {
         })
     }
 
-    /// Trigger changeset extraction and publishing.
+    /// Trigger changeset extraction and pushing.
     /// Call this after committing transactions to send changesets to the sequencer.
     /// Must be called from the same thread that created the `SessionMonitor`.
     pub(crate) fn publish(&self) -> Result<()> {

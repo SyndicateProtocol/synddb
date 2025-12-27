@@ -88,7 +88,7 @@ def fetch(
     """Fetch prices from all configured sources.
 
     Fetches prices for all tracked assets and stores them in the database.
-    If SyndDB is configured, changesets are published to the sequencer.
+    If SyndDB is configured, changesets are pushed to the sequencer.
     """
     db_path = ctx.obj["db_path"]
     sequencer_url = ctx.obj["sequencer_url"]

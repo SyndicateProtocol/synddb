@@ -313,7 +313,7 @@ Future protocols beyond REST:
 - ✅ `Attach()`, `AttachWithConfig()` for database connection
 - ✅ `Execute()`, `ExecuteBatch()` for SQL operations
 - ✅ Transaction support (`Begin()`, `Commit()`, `Rollback()`)
-- ✅ `Publish()`, `Snapshot()`, `Detach()`
+- ✅ `Push()`, `Snapshot()`, `Detach()`
 
 ### 9.3 Node.js Bindings ✅ Complete
 

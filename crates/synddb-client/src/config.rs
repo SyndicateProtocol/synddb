@@ -15,7 +15,7 @@ pub struct Config {
     #[arg(long, env = "SEQUENCER_URL", default_value = "http://localhost:8433", value_parser = parse_url)]
     pub sequencer_url: Url,
 
-    /// Maximum number of changesets to buffer before publishing
+    /// Maximum number of changesets to buffer before pushing
     #[arg(long, env = "BUFFER_SIZE", default_value = "100")]
     pub buffer_size: usize,
 

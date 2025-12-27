@@ -34,7 +34,7 @@ impl<'a> OrderbookSimulator<'a> {
         }
     }
 
-    /// Set the `SyndDB` handle for changeset publishing
+    /// Set the `SyndDB` handle for changeset pushing
     pub const fn with_synddb(mut self, synddb: &'a SyndDB) -> Self {
         self.synddb = Some(synddb);
         self
@@ -151,7 +151,7 @@ impl<'a> OrderbookSimulator<'a> {
                 tx.commit()?;
             }
 
-            // Publish changesets after commit (safe API pattern)
+            // Push changesets after commit (safe API pattern)
             self.try_push();
 
             // Log stats periodically
@@ -207,7 +207,7 @@ impl<'a> OrderbookSimulator<'a> {
                 }
                 tx.commit()?;
 
-                // Publish changesets after commit (safe API pattern)
+                // Push changesets after commit (safe API pattern)
                 self.try_push();
             }
 
@@ -289,7 +289,7 @@ impl<'a> OrderbookSimulator<'a> {
                     }
                     tx.commit()?;
 
-                    // Publish changesets after commit (safe API pattern)
+                    // Push changesets after commit (safe API pattern)
                     self.try_push();
                 }
 
@@ -454,7 +454,7 @@ impl<'a> OrderbookSimulator<'a> {
                 }
                 tx.commit()?;
 
-                // Publish changesets after commit (safe API pattern)
+                // Push changesets after commit (safe API pattern)
                 self.try_push();
             }
 
