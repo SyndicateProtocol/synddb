@@ -62,11 +62,13 @@ run assets
 # Step 9: Check sequencer received messages
 echo ""
 echo "Step 9: Verify sequencer received changesets"
-SEQUENCE=$(curl -sf http://localhost:8433/sequence)
+STATUS=$(curl -sf http://localhost:8433/status)
+SEQUENCE=$(echo "$STATUS" | grep -o '"current_sequence":[0-9]*' | cut -d':' -f2)
 echo "  Current sequencer sequence: $SEQUENCE"
 
-if [ "$SEQUENCE" -lt 1 ]; then
+if [ -z "$SEQUENCE" ] || [ "$SEQUENCE" -lt 1 ]; then
     echo "  ERROR: No changesets were published to sequencer"
+    echo "  Status response: $STATUS"
     exit 1
 fi
 
