@@ -13,13 +13,18 @@
 #   just test               # Run all tests
 #   just check              # Run all CI checks
 #
-# Examples:
-#   just example-price-oracle       # Run price oracle example
-#   just example-prediction-market  # Run prediction market example
+# Modules:
+#   just contracts::build   # Build Solidity contracts
+#   just contracts::test    # Run contract tests
+#   just examples::price-oracle       # Run price oracle example
+#   just examples::prediction-market  # Run prediction market example
 
-# Default recipe shows help
-default:
-    @just --list
+# ============================================================================
+# Modules
+# ============================================================================
+
+mod contracts 'contracts/mod.just'
+mod examples 'examples/mod.just'
 
 # ============================================================================
 # Shared Configuration (Single Source of Truth)
@@ -44,10 +49,18 @@ validator_port := "8080"
 data_dir := "./data"
 
 # ============================================================================
+# Default & Help
+# ============================================================================
+
+# Show available commands
+default:
+    @just --list
+
+# ============================================================================
 # Local Development
 # ============================================================================
 
-# Start full local dev environment (Anvil + contracts + sequencer + validator)
+# Start full local dev environment (Anvil + contracts + sequencer)
 dev:
     ./scripts/dev-env.sh
 
@@ -64,7 +77,7 @@ deploy-fresh:
     ./scripts/deploy-local.sh --reset
 
 # ============================================================================
-# Individual Components
+# Components
 # ============================================================================
 
 # Start Anvil only
@@ -133,10 +146,6 @@ build:
 build-release:
     cargo build --workspace --release
 
-# Build contracts
-build-contracts:
-    cd contracts && forge build
-
 # ============================================================================
 # Testing
 # ============================================================================
@@ -148,10 +157,6 @@ test:
 # Run tests with output
 test-verbose:
     cargo nextest run --workspace --all-features --exclude synddb-e2e --exclude synddb-e2e-gcs --no-capture
-
-# Run contract tests
-test-contracts:
-    cd contracts && forge test -vvv
 
 # Run fuzzer
 fuzz:
@@ -184,15 +189,11 @@ fix:
     cargo +nightly fmt --all
     cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged
 
-# Format code
+# Format all code (Rust, TOML, Solidity)
 fmt:
     cargo +nightly fmt --all
     taplo fmt "**/Cargo.toml"
     cd contracts && forge fmt
-
-# Lint contracts
-lint-contracts:
-    cd contracts && forge fmt --check
 
 # ============================================================================
 # Cleanup
@@ -209,7 +210,7 @@ clean-data:
     rm -rf ./.synddb
 
 # Clean everything
-clean-all: clean clean-data
+clean-all: clean clean-data examples::clean
 
 # Kill any running Anvil processes
 kill-anvil:
@@ -238,168 +239,3 @@ docker-up-detached:
 # Stop Docker Compose
 docker-down:
     docker compose down -v
-
-# ============================================================================
-# Examples
-# ============================================================================
-
-# --- Price Oracle Example ---
-
-# Build price oracle validator
-build-price-oracle:
-    cargo build --release -p price-oracle-validator
-
-# Setup Python environment for price oracle
-setup-price-oracle:
-    cd examples/price-oracle && python3 -m venv venv && ./venv/bin/pip install -q -r app/requirements.txt
-
-# Run price oracle example (full environment)
-example-price-oracle: build-release build-price-oracle setup-price-oracle deploy
-    #!/usr/bin/env bash
-    set -e
-    trap 'kill $(jobs -p) 2>/dev/null' EXIT
-
-    echo "Starting sequencer..."
-    SIGNING_KEY={{anvil_key_0}} \
-    BIND_ADDRESS=127.0.0.1:{{sequencer_port}} \
-    DATABASE_PATH={{data_dir}}/price-oracle/sequencer.db \
-    ./target/release/synddb-sequencer &
-    sleep 2
-
-    echo "Starting price oracle validator..."
-    mkdir -p {{data_dir}}/price-oracle
-    SEQUENCER_PUBKEY={{sequencer_pubkey}} \
-    SEQUENCER_URL=http://127.0.0.1:{{sequencer_port}} \
-    DATABASE_PATH={{data_dir}}/price-oracle/validator.db \
-    STATE_DB_PATH={{data_dir}}/price-oracle/validator_state.db \
-    BIND_ADDRESS=127.0.0.1:{{validator_port}} \
-    MAX_PRICE_DIFFERENCE_BPS=100 \
-    ./target/release/price-oracle-validator &
-    sleep 2
-
-    echo "Initializing price oracle database..."
-    cd examples/price-oracle
-    ./venv/bin/python -m app.main --db {{data_dir}}/price-oracle/prices.db init
-
-    echo "Starting price fetcher..."
-    ./venv/bin/python -m app.fetcher \
-        --db {{data_dir}}/price-oracle/prices.db \
-        --sequencer-url http://127.0.0.1:{{sequencer_port}} \
-        --interval 10 \
-        --mock \
-        -v &
-
-    echo ""
-    echo "Price Oracle Example Running"
-    echo "  Sequencer:  http://127.0.0.1:{{sequencer_port}}"
-    echo "  Validator:  http://127.0.0.1:{{validator_port}}"
-    echo "  Press Ctrl+C to stop"
-    echo ""
-    wait
-
-# --- Prediction Market Example ---
-
-# Build prediction market
-build-prediction-market:
-    cargo build --release -p prediction-market --features chain-monitor
-
-# Run prediction market example (full environment)
-example-prediction-market: build-release build-prediction-market deploy
-    #!/usr/bin/env bash
-    set -e
-    trap 'kill $(jobs -p) 2>/dev/null' EXIT
-
-    echo "Starting sequencer..."
-    mkdir -p {{data_dir}}/prediction-market
-    SIGNING_KEY={{anvil_key_0}} \
-    BIND_ADDRESS=127.0.0.1:{{sequencer_port}} \
-    DATABASE_PATH={{data_dir}}/prediction-market/sequencer.db \
-    ./target/release/synddb-sequencer &
-    sleep 2
-
-    echo "Initializing prediction market..."
-    PM="./target/release/prediction-market"
-    PM_DB="{{data_dir}}/prediction-market/market.db"
-    $PM --db "$PM_DB" --sequencer "http://127.0.0.1:{{sequencer_port}}" init
-
-    echo "Creating demo accounts and market..."
-    $PM --db "$PM_DB" --sequencer "http://127.0.0.1:{{sequencer_port}}" create-account alice
-    $PM --db "$PM_DB" --sequencer "http://127.0.0.1:{{sequencer_port}}" create-account bob
-    $PM --db "$PM_DB" --sequencer "http://127.0.0.1:{{sequencer_port}}" create-market "Will ETH hit 5k in 2025?" --resolution-time 1767225600
-
-    sleep 2
-
-    echo "Starting validator..."
-    SEQUENCER_PUBKEY={{sequencer_pubkey}} \
-    SEQUENCER_URL=http://127.0.0.1:{{sequencer_port}} \
-    DATABASE_PATH={{data_dir}}/prediction-market/validator.db \
-    STATE_DB_PATH={{data_dir}}/prediction-market/validator_state.db \
-    BIND_ADDRESS=127.0.0.1:{{validator_port}} \
-    SYNC_INTERVAL=1s \
-    ./target/release/synddb-validator &
-    sleep 2
-
-    echo ""
-    echo "Prediction Market Example Running"
-    echo "  Sequencer:  http://127.0.0.1:{{sequencer_port}}"
-    echo "  Validator:  http://127.0.0.1:{{validator_port}}"
-    echo ""
-    echo "Run commands with:"
-    echo "  $PM --db $PM_DB --sequencer http://127.0.0.1:{{sequencer_port}} status"
-    echo "  $PM --db $PM_DB --sequencer http://127.0.0.1:{{sequencer_port}} buy --account 1 --market 1 --outcome yes --shares 50"
-    echo ""
-    echo "Press Ctrl+C to stop"
-    wait
-
-# Run prediction market HTTP server
-example-prediction-market-http: build-release build-prediction-market deploy
-    #!/usr/bin/env bash
-    set -e
-    trap 'kill $(jobs -p) 2>/dev/null' EXIT
-
-    echo "Starting sequencer..."
-    mkdir -p {{data_dir}}/prediction-market
-    SIGNING_KEY={{anvil_key_0}} \
-    BIND_ADDRESS=127.0.0.1:{{sequencer_port}} \
-    DATABASE_PATH={{data_dir}}/prediction-market/sequencer.db \
-    ./target/release/synddb-sequencer &
-    sleep 2
-
-    echo "Initializing prediction market..."
-    PM="./target/release/prediction-market"
-    PM_DB="{{data_dir}}/prediction-market/market.db"
-    $PM --db "$PM_DB" --sequencer "http://127.0.0.1:{{sequencer_port}}" init
-
-    echo "Starting HTTP server on port 8081..."
-    $PM --db "$PM_DB" --sequencer "http://127.0.0.1:{{sequencer_port}}" serve --port 8081 &
-    sleep 2
-
-    echo "Starting validator..."
-    SEQUENCER_PUBKEY={{sequencer_pubkey}} \
-    SEQUENCER_URL=http://127.0.0.1:{{sequencer_port}} \
-    DATABASE_PATH={{data_dir}}/prediction-market/validator.db \
-    STATE_DB_PATH={{data_dir}}/prediction-market/validator_state.db \
-    BIND_ADDRESS=127.0.0.1:{{validator_port}} \
-    SYNC_INTERVAL=1s \
-    ./target/release/synddb-validator &
-    sleep 2
-
-    echo ""
-    echo "Prediction Market HTTP Server Running"
-    echo "  API:        http://127.0.0.1:8081"
-    echo "  Sequencer:  http://127.0.0.1:{{sequencer_port}}"
-    echo "  Validator:  http://127.0.0.1:{{validator_port}}"
-    echo ""
-    echo "API Examples:"
-    echo "  curl http://127.0.0.1:8081/status | jq ."
-    echo "  curl -X POST http://127.0.0.1:8081/accounts -H 'Content-Type: application/json' -d '{\"name\": \"charlie\"}'"
-    echo ""
-    echo "Press Ctrl+C to stop"
-    wait
-
-# Clean example data
-clean-examples:
-    rm -rf {{data_dir}}/price-oracle
-    rm -rf {{data_dir}}/prediction-market
-    rm -rf examples/price-oracle/.dev-data
-    rm -rf examples/prediction-market/.dev-data

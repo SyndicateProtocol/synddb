@@ -24,4 +24,4 @@ if ! command -v just &> /dev/null; then
     exit 1
 fi
 
-exec just example-price-oracle
+exec just examples::price-oracle

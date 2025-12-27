@@ -27,11 +27,11 @@ if ! command -v just &> /dev/null; then
 fi
 
 # Parse arguments
-RECIPE="example-prediction-market"
+RECIPE="examples::prediction-market"
 for arg in "$@"; do
     case $arg in
         --http)
-            RECIPE="example-prediction-market-http"
+            RECIPE="examples::prediction-market-http"
             ;;
     esac
 done
