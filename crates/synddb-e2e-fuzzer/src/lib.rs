@@ -12,8 +12,10 @@ pub mod faults;
 pub mod harness;
 pub mod invariants;
 pub mod property_tests;
+pub mod replay;
 pub mod scenarios;
 
 pub use harness::E2EHarness;
 pub use invariants::{InvariantChecker, InvariantViolation};
+pub use replay::{run_seeded_test, scenario_from_seed};
 pub use scenarios::{E2EAction, E2EScenario};

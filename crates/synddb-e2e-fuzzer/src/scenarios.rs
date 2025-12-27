@@ -198,6 +198,105 @@ pub fn high_volume_scenario_strategy() -> impl Strategy<Value = E2EScenario> {
     })
 }
 
+/// Strategy for stress testing with many operations and frequent syncs
+pub fn stress_scenario_strategy() -> impl Strategy<Value = E2EScenario> {
+    let table = "test_table".to_string();
+
+    prop::collection::vec(dml_operation_strategy(table.clone()), 200..500).prop_map(move |ops| {
+        let mut actions = Vec::new();
+        for (i, op) in ops.into_iter().enumerate() {
+            actions.push(E2EAction::ExecuteDml(op));
+            // Sync at varied intervals (prime numbers to avoid patterns)
+            if i % 17 == 0 || i % 23 == 0 {
+                actions.push(E2EAction::SyncValidator);
+            }
+        }
+        actions.push(E2EAction::SyncValidator);
+
+        E2EScenario {
+            schema: format!(
+                "CREATE TABLE {} (id INTEGER PRIMARY KEY, value INTEGER, name TEXT)",
+                table
+            ),
+            initial_data: (1..=100)
+                .map(|i| format!("INSERT INTO {} VALUES ({}, 0, 'user{}')", table, i, i))
+                .collect(),
+            actions,
+        }
+    })
+}
+
+/// Strategy for testing with large TEXT values (near `SQLite` limits)
+pub fn large_payload_scenario_strategy() -> impl Strategy<Value = E2EScenario> {
+    let table = "test_table".to_string();
+
+    // Generate operations with large text values
+    prop::collection::vec(
+        (1i64..50, "[a-zA-Z0-9]{500,1000}").prop_map(|(id, large_text)| DmlOperation::Update {
+            table_name: "test_table".to_string(),
+            set_column: "name".to_string(),
+            set_value: SqlValue::Text(large_text),
+            where_column: "id".to_string(),
+            where_value: SqlValue::Integer(id),
+        }),
+        10..30,
+    )
+    .prop_map(move |ops| {
+        let mut actions: Vec<E2EAction> = ops.into_iter().map(E2EAction::ExecuteDml).collect();
+        actions.push(E2EAction::SyncValidator);
+
+        E2EScenario {
+            schema: format!(
+                "CREATE TABLE {} (id INTEGER PRIMARY KEY, value INTEGER, name TEXT)",
+                table
+            ),
+            initial_data: (1..=50)
+                .map(|i| format!("INSERT INTO {} VALUES ({}, 0, 'user{}')", table, i, i))
+                .collect(),
+            actions,
+        }
+    })
+}
+
+/// Strategy for rapid insert/delete cycles (tests tombstone handling)
+pub fn churn_scenario_strategy() -> impl Strategy<Value = E2EScenario> {
+    let table = "test_table".to_string();
+
+    // Generate alternating inserts and deletes
+    prop::collection::vec(1000i64..2000, 20..50).prop_map(move |ids| {
+        let mut actions = Vec::new();
+
+        for id in ids {
+            // Insert
+            actions.push(E2EAction::ExecuteDml(DmlOperation::Insert {
+                table_name: table.clone(),
+                columns: vec!["id".to_string(), "value".to_string(), "name".to_string()],
+                values: vec![
+                    SqlValue::Integer(id),
+                    SqlValue::Integer(0),
+                    SqlValue::Text("temp".to_string()),
+                ],
+            }));
+            // Delete
+            actions.push(E2EAction::ExecuteDml(DmlOperation::Delete {
+                table_name: table.clone(),
+                where_column: "id".to_string(),
+                where_value: SqlValue::Integer(id),
+            }));
+        }
+        actions.push(E2EAction::SyncValidator);
+
+        E2EScenario {
+            schema: format!(
+                "CREATE TABLE {} (id INTEGER PRIMARY KEY, value INTEGER, name TEXT)",
+                table
+            ),
+            initial_data: vec![format!("INSERT INTO {} VALUES (1, 0, 'anchor')", table)],
+            actions,
+        }
+    })
+}
+
 /// Execute a scenario on a harness
 pub fn execute_scenario(
     harness: &mut crate::harness::E2EHarness,

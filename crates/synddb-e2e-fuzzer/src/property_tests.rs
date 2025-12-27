@@ -138,6 +138,55 @@ proptest! {
     }
 }
 
+// Stress tests - expensive, run with: cargo test -- --ignored
+#[cfg(test)]
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .map_or(3, |c: u32| c / 30), // Very few stress tests
+        max_shrink_iters: 10,
+        ..ProptestConfig::default()
+    })]
+
+    /// Stress test with 200-500 operations
+    #[test]
+    #[ignore] // Enable with: cargo test -- --ignored
+    fn prop_stress_scenario(scenario in crate::scenarios::stress_scenario_strategy()) {
+        let mut harness = E2EHarness::new().expect("Failed to create harness");
+
+        execute_scenario(&mut harness, &scenario).expect("Failed to execute scenario");
+
+        let violations = check_all_invariants(&harness);
+        prop_assert!(violations.is_empty(), "Stress test violations: {:?}", violations);
+    }
+
+    /// Test with large TEXT payloads
+    #[test]
+    #[ignore]
+    fn prop_large_payload_scenario(scenario in crate::scenarios::large_payload_scenario_strategy()) {
+        let mut harness = E2EHarness::new().expect("Failed to create harness");
+
+        execute_scenario(&mut harness, &scenario).expect("Failed to execute scenario");
+
+        let violations = ConsistencyInvariants.check(&harness);
+        prop_assert!(violations.is_empty(), "Large payload violations: {:?}", violations);
+    }
+
+    /// Test rapid insert/delete churn
+    #[test]
+    #[ignore]
+    fn prop_churn_scenario(scenario in crate::scenarios::churn_scenario_strategy()) {
+        let mut harness = E2EHarness::new().expect("Failed to create harness");
+
+        execute_scenario(&mut harness, &scenario).expect("Failed to execute scenario");
+
+        let violations = check_all_invariants(&harness);
+        prop_assert!(violations.is_empty(), "Churn scenario violations: {:?}", violations);
+    }
+}
+
 #[cfg(test)]
 mod targeted_tests {
     use super::*;
