@@ -1,7 +1,7 @@
 //! Batch metadata and utilities shared between sequencer and validator
 //!
 //! This module provides common types for working with message batches across
-//! the SyndDB system. Both the sequencer (publishing) and validator (fetching)
+//! the `SyndDB` system. Both the sequencer (publishing) and validator (fetching)
 //! use these types for consistent batch handling.
 
 use serde::{Deserialize, Serialize};

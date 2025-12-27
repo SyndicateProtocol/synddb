@@ -219,18 +219,18 @@ impl SequencerConfig {
     // =========================================================================
 
     /// Set the bind address
-    pub fn with_bind_address(mut self, addr: SocketAddr) -> Self {
+    pub const fn with_bind_address(mut self, addr: SocketAddr) -> Self {
         self.bind_address = addr;
         self
     }
 
     /// Set the publisher type
-    pub fn with_publisher_type(mut self, publisher_type: PublisherType) -> Self {
+    pub const fn with_publisher_type(mut self, publisher_type: PublisherType) -> Self {
         self.publisher_type = publisher_type;
         self
     }
 
-    /// Set the local storage path for SQLite backend
+    /// Set the local storage path for `SQLite` backend
     pub fn with_local_storage_path(mut self, path: impl Into<String>) -> Self {
         self.local_storage_path = Some(path.into());
         self
@@ -255,19 +255,19 @@ impl SequencerConfig {
     }
 
     /// Set the request timeout
-    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
         self
     }
 
     /// Enable attestation verification
-    pub fn with_verify_attestation(mut self, verify: bool) -> Self {
+    pub const fn with_verify_attestation(mut self, verify: bool) -> Self {
         self.verify_attestation = verify;
         self
     }
 
     /// Set batch configuration
-    pub fn with_batch_config(mut self, max_messages: usize, max_bytes: usize) -> Self {
+    pub const fn with_batch_config(mut self, max_messages: usize, max_bytes: usize) -> Self {
         self.batch_max_messages = max_messages;
         self.batch_max_bytes = max_bytes;
         self

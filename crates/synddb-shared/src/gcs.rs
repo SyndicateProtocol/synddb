@@ -65,7 +65,7 @@ impl GcsConfig {
     }
 
     /// Check if this config is using an emulator
-    pub fn is_emulator(&self) -> bool {
+    pub const fn is_emulator(&self) -> bool {
         self.emulator_host.is_some()
     }
 

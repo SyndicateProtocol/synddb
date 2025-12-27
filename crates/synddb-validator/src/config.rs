@@ -269,7 +269,7 @@ impl ValidatorConfig {
     }
 
     /// Set the fetcher type
-    pub fn with_fetcher_type(mut self, fetcher_type: FetcherType) -> Self {
+    pub const fn with_fetcher_type(mut self, fetcher_type: FetcherType) -> Self {
         self.fetcher_type = fetcher_type;
         self
     }
@@ -299,25 +299,25 @@ impl ValidatorConfig {
     }
 
     /// Set the bind address for HTTP API
-    pub fn with_bind_address(mut self, addr: SocketAddr) -> Self {
+    pub const fn with_bind_address(mut self, addr: SocketAddr) -> Self {
         self.bind_address = addr;
         self
     }
 
     /// Set the sync poll interval
-    pub fn with_sync_interval(mut self, interval: Duration) -> Self {
+    pub const fn with_sync_interval(mut self, interval: Duration) -> Self {
         self.sync_interval = interval;
         self
     }
 
     /// Set the start sequence number
-    pub fn with_start_sequence(mut self, sequence: u64) -> Self {
+    pub const fn with_start_sequence(mut self, sequence: u64) -> Self {
         self.start_sequence = sequence;
         self
     }
 
     /// Enable or disable batch sync mode
-    pub fn with_batch_sync_enabled(mut self, enabled: bool) -> Self {
+    pub const fn with_batch_sync_enabled(mut self, enabled: bool) -> Self {
         self.batch_sync_enabled = enabled;
         self
     }
