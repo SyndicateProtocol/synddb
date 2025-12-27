@@ -14,18 +14,8 @@ use async_trait::async_trait;
 use std::fmt::Debug;
 use synddb_shared::types::cbor::{batch::CborBatch, error::CborError, message::CborSignedMessage};
 
-/// Information about a published or available batch
-#[derive(Debug, Clone)]
-pub struct BatchInfo {
-    /// First sequence number in batch (inclusive)
-    pub start_sequence: u64,
-    /// Last sequence number in batch (inclusive)
-    pub end_sequence: u64,
-    /// Transport-specific reference (GCS path, Arweave TX ID, etc.)
-    pub reference: String,
-    /// Content hash of the batch (SHA-256)
-    pub content_hash: [u8; 32],
-}
+// Re-export BatchInfo from shared crate for backwards compatibility
+pub use synddb_shared::types::batch::BatchInfo;
 
 /// Metadata returned after successful batch publication
 #[derive(Debug, Clone)]

@@ -19,7 +19,10 @@ use crate::transport::traits::{BatchInfo, PublishMetadata, TransportError, Trans
 use async_trait::async_trait;
 use google_cloud_storage::client::Client;
 use serde::{Deserialize, Serialize};
-use synddb_shared::types::cbor::{batch::CborBatch, message::CborSignedMessage};
+use synddb_shared::types::{
+    batch::{format_batch_filename, parse_batch_filename},
+    cbor::{batch::CborBatch, message::CborSignedMessage},
+};
 use tracing::{debug, info, warn};
 
 /// Configuration for GCS transport
@@ -103,23 +106,10 @@ impl GcsTransport {
     /// Get the path for a batch file
     fn batch_path(&self, start_sequence: u64, end_sequence: u64) -> String {
         format!(
-            "{}/batches/{:012}_{:012}.cbor.zst",
-            self.config.prefix, start_sequence, end_sequence
+            "{}/batches/{}",
+            self.config.prefix,
+            format_batch_filename(start_sequence, end_sequence)
         )
-    }
-
-    /// Parse a batch filename to extract start and end sequence numbers
-    ///
-    /// Expected format: `{start:012}_{end:012}.cbor.zst`
-    pub(super) fn parse_batch_filename(filename: &str) -> Option<(u64, u64)> {
-        let without_ext = filename.strip_suffix(".cbor.zst")?;
-        let mut parts = without_ext.split('_');
-        let start = parts.next()?.parse::<u64>().ok()?;
-        let end = parts.next()?.parse::<u64>().ok()?;
-        if parts.next().is_some() {
-            return None;
-        }
-        Some((start, end))
     }
 
     /// Upload data to GCS
@@ -213,7 +203,7 @@ impl GcsTransport {
                 let mut batches = Vec::new();
                 for obj in response.items.unwrap_or_default() {
                     if let Some(filename) = obj.name.rsplit('/').next() {
-                        if let Some((start, end)) = Self::parse_batch_filename(filename) {
+                        if let Some((start, end)) = parse_batch_filename(filename) {
                             batches.push((start, end, obj.name));
                         }
                     }
@@ -324,18 +314,12 @@ impl TransportPublisher for GcsTransport {
     async fn list_batches(&self) -> Result<Vec<BatchInfo>, TransportError> {
         let batch_files = self.list_batch_files().await?;
 
-        let mut infos = Vec::with_capacity(batch_files.len());
-        for (start, end, path) in batch_files {
-            // We need to fetch each batch to get the content hash
-            // For efficiency, we could store metadata separately, but for now
-            // we just return placeholder hashes and let callers fetch if needed
-            infos.push(BatchInfo {
-                start_sequence: start,
-                end_sequence: end,
-                reference: format!("gs://{}/{}", self.config.bucket, path),
-                content_hash: [0u8; 32], // Placeholder - fetch batch to get real hash
-            });
-        }
+        let infos = batch_files
+            .into_iter()
+            .map(|(start, end, path)| {
+                BatchInfo::new(start, end, format!("gs://{}/{}", self.config.bucket, path))
+            })
+            .collect();
 
         Ok(infos)
     }
@@ -374,65 +358,4 @@ impl TransportPublisher for GcsTransport {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_batch_filename_valid() {
-        let result = GcsTransport::parse_batch_filename("000000000001_000000000050.cbor.zst");
-        assert_eq!(result, Some((1, 50)));
-
-        let result = GcsTransport::parse_batch_filename("000000001000_000000002000.cbor.zst");
-        assert_eq!(result, Some((1000, 2000)));
-
-        let result = GcsTransport::parse_batch_filename("000000000042_000000000042.cbor.zst");
-        assert_eq!(result, Some((42, 42)));
-    }
-
-    #[test]
-    fn test_parse_batch_filename_invalid() {
-        // Wrong extension
-        assert_eq!(
-            GcsTransport::parse_batch_filename("000000000001_000000000050.json"),
-            None
-        );
-
-        // Missing extension
-        assert_eq!(
-            GcsTransport::parse_batch_filename("000000000001_000000000050"),
-            None
-        );
-
-        // Extra underscore
-        assert_eq!(
-            GcsTransport::parse_batch_filename("000000000001_000000000050_extra.cbor.zst"),
-            None
-        );
-
-        // Non-numeric
-        assert_eq!(
-            GcsTransport::parse_batch_filename("abcdef_ghijkl.cbor.zst"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_batch_filename_sorting() {
-        let mut filenames = vec![
-            "000000000051_000000000100.cbor.zst",
-            "000000000001_000000000050.cbor.zst",
-            "000000000101_000000000150.cbor.zst",
-        ];
-        filenames.sort();
-
-        assert_eq!(
-            filenames,
-            vec![
-                "000000000001_000000000050.cbor.zst",
-                "000000000051_000000000100.cbor.zst",
-                "000000000101_000000000150.cbor.zst",
-            ]
-        );
-    }
-}
+// Tests for parse_batch_filename and format_batch_filename are in synddb-shared

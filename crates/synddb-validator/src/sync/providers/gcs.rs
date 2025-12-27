@@ -26,6 +26,7 @@ use crate::sync::fetcher::{BatchInfo, StorageFetcher};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use synddb_shared::types::{
+    batch::parse_batch_filename,
     cbor::batch::CborBatch,
     message::{SignedBatch, SignedMessage},
 };
@@ -88,27 +89,6 @@ impl GcsFetcher {
             bucket,
             prefix,
         })
-    }
-
-    /// Parse a batch filename to extract start and end sequence numbers
-    ///
-    /// Expected format: `{start:012}_{end:012}.cbor.zst`
-    ///
-    /// Returns `Some((start, end))` if valid, `None` otherwise
-    fn parse_batch_filename(filename: &str) -> Option<(u64, u64)> {
-        if !filename.ends_with(".cbor.zst") {
-            return None;
-        }
-
-        let without_ext = &filename[..filename.len() - 9];
-        let mut parts = without_ext.split('_');
-        let start = parts.next()?.parse::<u64>().ok()?;
-        let end = parts.next()?.parse::<u64>().ok()?;
-        // Ensure no extra parts
-        if parts.next().is_some() {
-            return None;
-        }
-        Some((start, end))
     }
 
     /// Download data from GCS
@@ -215,7 +195,7 @@ impl StorageFetcher for GcsFetcher {
                     .iter()
                     .filter_map(|obj| {
                         let filename = obj.name.rsplit('/').next()?;
-                        let (start, end) = Self::parse_batch_filename(filename)?;
+                        let (start, end) = parse_batch_filename(filename)?;
                         debug!(filename, start, end, "Parsed batch file");
                         Some(BatchInfo::new(start, end, obj.name.clone()))
                     })
@@ -294,102 +274,24 @@ impl StorageFetcher for GcsFetcher {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use synddb_shared::types::batch::format_batch_filename;
 
     #[test]
     fn test_batch_path_format() {
         let prefix = "sequencer";
-        let path = format!("{}/batches/{:012}_{:012}.cbor.zst", prefix, 1, 50);
+        let path = format!("{}/batches/{}", prefix, format_batch_filename(1, 50));
         assert_eq!(path, "sequencer/batches/000000000001_000000000050.cbor.zst");
 
-        let path = format!("{}/batches/{:012}_{:012}.cbor.zst", prefix, 0, 0);
+        let path = format!("{}/batches/{}", prefix, format_batch_filename(0, 0));
         assert_eq!(path, "sequencer/batches/000000000000_000000000000.cbor.zst");
 
         let path = format!(
-            "{}/batches/{:012}_{:012}.cbor.zst",
-            prefix, 999_999_999_999_u64, 999_999_999_999_u64
+            "{}/batches/{}",
+            prefix,
+            format_batch_filename(999_999_999_999, 999_999_999_999)
         );
         assert_eq!(path, "sequencer/batches/999999999999_999999999999.cbor.zst");
     }
-
-    #[test]
-    fn test_parse_batch_filename() {
-        let result = GcsFetcher::parse_batch_filename("000000000001_000000000050.cbor.zst");
-        assert_eq!(result, Some((1, 50)));
-
-        let result = GcsFetcher::parse_batch_filename("000000001000_000000002000.cbor.zst");
-        assert_eq!(result, Some((1000, 2000)));
-
-        // Single message batch
-        let result = GcsFetcher::parse_batch_filename("000000000042_000000000042.cbor.zst");
-        assert_eq!(result, Some((42, 42)));
-    }
-
-    #[test]
-    fn test_parse_batch_filename_invalid() {
-        // Missing extension
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050"),
-            None
-        );
-
-        // Wrong extension (legacy JSON format no longer supported)
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050.json"),
-            None
-        );
-
-        // Wrong extension
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050.txt"),
-            None
-        );
-
-        // Missing underscore
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001000000000050.cbor.zst"),
-            None
-        );
-
-        // Extra underscore
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050_extra.cbor.zst"),
-            None
-        );
-
-        // Non-numeric
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("abcdef_ghijkl.cbor.zst"),
-            None
-        );
-
-        // Empty
-        assert_eq!(GcsFetcher::parse_batch_filename(""), None);
-
-        // Just .zst (not .cbor.zst)
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050.zst"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_batch_filename_sorting() {
-        // Verify that batch filenames sort correctly lexicographically
-        let mut filenames = vec![
-            "000000000051_000000000100.cbor.zst",
-            "000000000101_000000000150.cbor.zst",
-            "000000000001_000000000050.cbor.zst",
-        ];
-        filenames.sort();
-
-        assert_eq!(
-            filenames,
-            vec![
-                "000000000001_000000000050.cbor.zst",
-                "000000000051_000000000100.cbor.zst",
-                "000000000101_000000000150.cbor.zst",
-            ]
-        );
-    }
 }
+
+// Additional tests for parse_batch_filename are in synddb-shared::types::batch
