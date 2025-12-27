@@ -448,7 +448,7 @@ impl SessionMonitor {
     /// Trigger changeset extraction and pushing.
     /// Call this after committing transactions to send changesets to the sequencer.
     /// Must be called from the same thread that created the `SessionMonitor`.
-    pub(crate) fn publish(&self) -> Result<()> {
+    pub(crate) fn push(&self) -> Result<()> {
         debug_assert_eq!(
             thread::current().id(),
             self.owner_thread,

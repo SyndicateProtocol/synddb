@@ -701,7 +701,7 @@ impl SyndDB {
         self.monitor
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Monitor already shut down"))?
-            .publish()
+            .push()
     }
 
     /// Create a local snapshot of the database (does NOT send to sequencer)
