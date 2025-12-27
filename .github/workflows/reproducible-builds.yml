@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - example-app  # TEMPORARY: Testing BuildKit v0.26.3
     paths:
       - "docker/reproducible/**"
       - "crates/**"
