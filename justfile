@@ -370,6 +370,26 @@ audit:
     cargo audit
 
 # ============================================================================
+# Release (disabled until ready for production)
+# ============================================================================
+
+# Generate changelog from conventional commits
+[group('release')]
+changelog:
+    git cliff --unreleased
+
+# Dry-run release (shows what would happen)
+[group('release')]
+release-dry version:
+    cargo release {{ version }} --no-publish --no-tag --no-push
+
+# Execute release (requires cargo-release: cargo install cargo-release)
+[confirm('This will publish to crates.io. Continue?')]
+[group('release')]
+release version:
+    cargo release {{ version }} --execute
+
+# ============================================================================
 # Docker
 # ============================================================================
 
