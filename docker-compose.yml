@@ -6,14 +6,18 @@
 # 3. Customer SQLite app (pluggable - swap target for your own app)
 #
 # Usage:
-#   docker compose up --build
-#   docker compose down -v
+#   docker compose up --build           # Or: just docker-up
+#   docker compose down -v              # Or: just docker-down
 #
 # Test endpoints:
 #   curl http://localhost:8433/health    # Sequencer health
 #   curl http://localhost:8433/status    # Sequencer status (sequence number)
 #   curl http://localhost:8080/health    # Validator health
 #   curl http://localhost:8080/status    # Validator sync status
+#
+# Configuration:
+#   Shared configuration is in .env.docker. Copy to .env to override.
+#   See also: justfile for the single source of truth on addresses/keys.
 #
 # Build optimization:
 #   All services use a single multi-stage Dockerfile (docker/Dockerfile).
@@ -27,13 +31,11 @@ services:
       dockerfile: docker/Dockerfile
       target: sequencer
     ports:
-      - "8433:8433"
+      - "${SEQUENCER_PORT:-8433}:8433"
+    env_file:
+      - .env.docker
     environment:
-      RUST_LOG: info
       BIND_ADDRESS: "0.0.0.0:8433"
-      # Anvil's default test private key (DO NOT use in production!)
-      SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-      # Use local publisher with in-memory SQLite for DA storage
       PUBLISHER_TYPE: local
       LOCAL_STORAGE_PATH: ":memory:"
     healthcheck:
@@ -49,19 +51,15 @@ services:
       dockerfile: docker/Dockerfile
       target: validator
     ports:
-      - "8080:8080"
+      - "${VALIDATOR_PORT:-8080}:8080"
+    env_file:
+      - .env.docker
     environment:
-      RUST_LOG: info
       BIND_ADDRESS: "0.0.0.0:8080"
-      # 64-byte uncompressed public key (derived from SIGNING_KEY above)
-      SEQUENCER_PUBKEY: "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5"
-      # Use HTTP fetcher to read from sequencer's local DA API
       FETCHER_TYPE: http
       SEQUENCER_URL: "http://sequencer:8433"
-      # Use in-memory databases for testing
       DATABASE_PATH: ":memory:"
       STATE_DB_PATH: ":memory:"
-      # Faster sync for testing
       SYNC_INTERVAL: "1s"
     depends_on:
       sequencer:
@@ -80,34 +78,30 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: customer-app
+    env_file:
+      - .env.docker
     environment:
-      RUST_LOG: info
-      # Sequencer URL - the benchmark automatically uses synddb-client when this is set
       SEQUENCER_URL: "http://sequencer:8433"
     volumes:
       - app_data:/data
     depends_on:
       sequencer:
         condition: service_healthy
-    # Run the benchmark in simple mode for 60 seconds
-    # SEQUENCER_URL env var enables synddb-client integration automatically
     command: ["run", "--db", "/data/orderbook.db", "--simple", "--duration", "60", "--rate", "100"]
 
   # Session stress test - verifies no SIGSEGV from Session race conditions
-  # This test runs continuous transactions with changeset pushing to verify
-  # the safe API works correctly under load.
   stress_test:
     build:
       context: .
       dockerfile: docker/Dockerfile
       target: stress-test
+    env_file:
+      - .env.docker
     environment:
-      RUST_LOG: info
       SEQUENCER_URL: "http://sequencer:8433"
     depends_on:
       sequencer:
         condition: service_healthy
-    # Run stress test for 30 seconds
     command: ["--duration", "30"]
 
 volumes:
