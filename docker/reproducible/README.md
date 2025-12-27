@@ -71,15 +71,35 @@ ENV RUSTFLAGS="--remap-path-prefix=/app=/build --remap-path-prefix=/usr/local/ca
 
 Absolute paths embedded in binaries (debug info, panic messages) are normalized to `/build` and `/cargo`, regardless of where the build actually runs.
 
-### 4. Locked Dependencies
+### 4. Frozen Dependencies
 
 ```dockerfile
-RUN cargo build --release --locked -p synddb-sequencer
+RUN cargo build --profile reproducible --frozen -p synddb-sequencer
 ```
 
-The `--locked` flag ensures `Cargo.lock` is respected exactly, preventing dependency drift.
+The `--frozen` flag is stricter than `--locked`, failing if `Cargo.lock` needs any updates.
 
-### 5. Disabled Incremental Compilation
+### 5. Sequential Compilation
+
+```dockerfile
+ENV CARGO_BUILD_JOBS=1
+```
+
+Parallel compilation can produce different orderings. Single-threaded builds are deterministic.
+
+### 6. Reproducible Cargo Profile
+
+The workspace defines a `[profile.reproducible]` in `Cargo.toml`:
+
+```toml
+[profile.reproducible]
+inherits = "release"
+codegen-units = 1  # Single codegen unit for deterministic compilation
+lto = true         # Link-time optimization in one pass
+panic = "abort"    # Simpler binary without unwinding tables
+```
+
+### 7. Disabled Incremental Compilation
 
 ```dockerfile
 ENV CARGO_INCREMENTAL=0
@@ -87,10 +107,10 @@ ENV CARGO_INCREMENTAL=0
 
 Incremental compilation can produce non-deterministic output.
 
-### 6. Stripped Binaries
+### 8. Stripped Binaries
 
 ```dockerfile
-RUN strip --strip-all /app/target/release/synddb-sequencer
+RUN strip --strip-all /app/target/reproducible/synddb-sequencer
 ```
 
 Stripping removes variable metadata (build IDs, timestamps) from the binary.

@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-22.04, ubuntu-24.04, macos-13, macos-14]
+        runner: [ubuntu-22.04, ubuntu-24.04, macos-15]
         image: [sequencer, validator]
 
     steps:
@@ -43,16 +43,19 @@ jobs:
         if: startsWith(matrix.runner, 'macos')
         run: |
           brew install docker colima
-          colima start --cpu 4 --memory 8 --disk 50
+          # Use QEMU backend for better compatibility
+          colima start --cpu 4 --memory 8 --disk 50 --vm-type qemu --arch x86_64
           # Wait for Docker to be ready
-          for i in {1..30}; do
+          for i in {1..60}; do
             if docker info > /dev/null 2>&1; then
               echo "Docker is ready"
               break
             fi
-            echo "Waiting for Docker... ($i/30)"
+            echo "Waiting for Docker... ($i/60)"
             sleep 2
           done
+          # Verify Docker is working
+          docker info
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

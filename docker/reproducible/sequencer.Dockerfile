@@ -51,6 +51,9 @@ ENV SOURCE_DATE_EPOCH=0
 # Reproducibility: Disable incremental compilation (non-deterministic)
 ENV CARGO_INCREMENTAL=0
 
+# Reproducibility: Force single-threaded compilation for deterministic order
+ENV CARGO_BUILD_JOBS=1
+
 # Reproducibility: Remap source paths to /build for consistent debug info
 ENV RUSTFLAGS="--remap-path-prefix=/app=/build --remap-path-prefix=/usr/local/cargo=/cargo"
 
@@ -70,11 +73,12 @@ COPY crates/ ./crates/
 COPY examples/ ./examples/
 COPY tests/ ./tests/
 
-# Build with locked dependencies and release optimizations
-RUN cargo build --release --locked -p synddb-sequencer
+# Build with reproducible profile (single codegen unit, LTO, panic=abort)
+# --frozen is stricter than --locked, fails if Cargo.lock needs any updates
+RUN cargo build --profile reproducible --frozen -p synddb-sequencer
 
-# Strip the binary for consistent output
-RUN strip --strip-all /app/target/release/synddb-sequencer
+# Strip the binary for consistent output (removes variable metadata)
+RUN strip --strip-all /app/target/reproducible/synddb-sequencer
 
 # =============================================================================
 # Debug Runtime - Debian with shell for troubleshooting
@@ -89,7 +93,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/synddb-sequencer /app/synddb-sequencer
+COPY --from=builder /app/target/reproducible/synddb-sequencer /app/synddb-sequencer
 
 RUN mkdir -p /data
 
@@ -107,7 +111,7 @@ FROM --platform=linux/amd64 gcr.io/distroless/cc-debian12@${DISTROLESS_IMAGE_DIG
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/synddb-sequencer /app/synddb-sequencer
+COPY --from=builder /app/target/reproducible/synddb-sequencer /app/synddb-sequencer
 
 ENV RUST_LOG=info
 ENV BIND_ADDRESS=0.0.0.0:8433

@@ -187,3 +187,25 @@ use_self = "warn"
 useless_let_if_seq = "warn"
 while_float = "warn"
 zero_sized_map_values = "warn"
+
+# =============================================================================
+# Release Profiles
+# =============================================================================
+
+[profile.release]
+# Standard release optimizations
+opt-level = 3
+debug = false
+strip = "symbols"
+
+# Reproducible build profile - use with: cargo build --profile reproducible
+# This profile prioritizes bit-for-bit reproducibility over build speed.
+# Required for Confidential Space attestation verification.
+[profile.reproducible]
+inherits = "release"
+# Single codegen unit ensures deterministic compilation order
+codegen-units = 1
+# LTO improves determinism by doing all optimization in one pass
+lto = true
+# Abort on panic simplifies the binary (no unwinding tables)
+panic = "abort"
