@@ -7,7 +7,7 @@
 //! - Background threads only receive `Vec<u8>` bytes through channels
 //! - `push()` and `snapshot()` have debug assertions verifying the calling thread
 //!
-//! # Publishing
+//! # Pushing
 //!
 //! Changesets must be pushed explicitly via `push()`. Automatic pushing via
 //! UPDATE or COMMIT hooks is not possible because `SQLite`'s session extension requires reading from
@@ -62,9 +62,9 @@ struct SessionState {
     snapshot_interval: u64,
     changesets_since_snapshot: u64,
     snapshot_tx: Option<Sender<Snapshot>>,
-    /// Flag to indicate changes have occurred since last publish
+    /// Flag to indicate changes have occurred since last push
     has_changes: bool,
-    /// Hash of `sqlite_master` to detect schema changes between publishes.
+    /// Hash of `sqlite_master` to detect schema changes between pushes.
     /// If the schema changes (DDL executed), we automatically trigger a snapshot.
     last_schema_hash: u64,
 }
@@ -291,15 +291,15 @@ impl SessionMonitor {
             return Ok(());
         }
 
-        // SCHEMA CHANGE DETECTION: Check if schema changed since last publish.
+        // SCHEMA CHANGE DETECTION: Check if schema changed since last push.
         // SQLite's update hook doesn't fire for DDL, so we detect schema changes
         // by comparing the hash of sqlite_master. If the schema changed (DDL was
-        // executed), we MUST publish a snapshot first so validators have the
+        // executed), we MUST send a snapshot first so validators have the
         // updated schema before receiving changesets that reference it.
         let current_schema_hash = SessionState::compute_schema_hash(state.conn);
         if current_schema_hash != state.last_schema_hash {
             info!(
-                "Schema change detected (hash {:016x} -> {:016x}), publishing snapshot",
+                "Schema change detected (hash {:016x} -> {:016x}), sending snapshot",
                 state.last_schema_hash, current_schema_hash
             );
 

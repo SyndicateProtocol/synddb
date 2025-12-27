@@ -1184,7 +1184,7 @@ mod tests {
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
     fn test_concurrent_transactions() {
         // This test simulates the orderbook benchmark usage pattern
-        // where transactions are run repeatedly while SyndDB is publishing
+        // where transactions are run repeatedly while SyndDB is pushing
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
         conn.execute(
             "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount INTEGER)",
@@ -1541,7 +1541,7 @@ mod tests {
 
         let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
-        // Rapid cycles of update + publish
+        // Rapid cycles of update + push
         for i in 1..=50 {
             conn.execute("UPDATE counter SET value = ?1 WHERE id = 1", [i])
                 .unwrap();
@@ -2286,7 +2286,7 @@ mod tests {
         conn.execute("UPDATE users SET name = 'Alice Updated' WHERE id = 1", [])
             .unwrap();
 
-        // Publish captures the DML, but validator will fail because it
+        // Push captures the DML, but validator will fail because it
         // doesn't have the 'users' table schema (no snapshot was published)
         synddb.push().unwrap();
 
@@ -2810,7 +2810,7 @@ mod tests {
         conn.execute("INSERT INTO t2 VALUES (1)", []).unwrap();
         conn.execute("INSERT INTO t3 VALUES (1)", []).unwrap();
 
-        // Single publish detects schema change and sends snapshot
+        // Single push detects schema change and sends snapshot
         synddb.push().unwrap();
     }
 
@@ -2867,7 +2867,7 @@ mod tests {
         // Insert into remaining table (triggers update hook)
         conn.execute("INSERT INTO t2 VALUES (1)", []).unwrap();
 
-        // Publish detects schema change
+        // Push detects schema change
         synddb.push().unwrap();
 
         // Verify t1 is gone
