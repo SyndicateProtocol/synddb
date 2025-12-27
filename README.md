@@ -40,28 +40,36 @@ cd SyndDB
 cargo build --workspace --release
 ```
 
-### 2. Local Development with Contracts
+### 2. Local Development
 
-Deploy contracts to a local Anvil instance:
+Use `just` for common tasks (install: `brew install just` or `cargo install just`):
 
 ```bash
-# Start Anvil and deploy contracts (one command)
-./scripts/deploy-local.sh
+# Start full dev environment (Anvil + contracts + sequencer)
+just dev
 
-# Output:
-#   MockWETH:     0x5FbDB2315678afecb367f032d93F642f64180aa3
-#   Bridge:       0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
-#   PriceOracle:  0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9
+# Or start components individually:
+just deploy     # Deploy contracts to Anvil
+just sequencer  # Run sequencer
+just validator  # Run validator
+
+# See all commands
+just
 ```
 
-Addresses are saved to `.synddb/local-addresses.json` and are deterministic - you can rely on them across restarts as long as Anvil starts fresh.
-
-For environment setup, copy the example file:
+**Manual approach** (without just):
 ```bash
-cp .env.local.example .env
+./scripts/deploy-local.sh          # Deploy contracts
+./scripts/dev-env.sh               # Start full environment
+./scripts/dev-env.sh --validator   # Include validator
 ```
 
-See `scripts/anvil-addresses.sh` for all well-known addresses you can source in shell scripts.
+Deployed addresses are deterministic and saved to `.synddb/local-addresses.json`:
+- Bridge: `0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512`
+- MockWETH: `0x5FbDB2315678afecb367f032d93F642f64180aa3`
+- PriceOracle: `0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9`
+
+See `.env.local.example` for ready-to-use environment configuration.
 
 ### 3. Try the Benchmark Tool (Optional)
 
