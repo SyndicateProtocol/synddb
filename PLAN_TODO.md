@@ -293,7 +293,7 @@ Future protocols beyond REST:
 
 ---
 
-## 9. Client Language Bindings [Partially Complete]
+## 9. Client Language Bindings ✅ Complete
 
 **Source**: `crates/synddb-client/bindings/`
 
@@ -306,19 +306,21 @@ Future protocols beyond REST:
 - ✅ Transaction support (`begin()`, `commit()`, `rollback()`)
 - ✅ Context manager support
 
-### 9.2 Go Bindings [P2 - Incomplete]
+### 9.2 Go Bindings ✅ Complete
 
-**Status**: Stub only - passes null pointer for SQLite handle
-
-- `crates/synddb-client/bindings/go/synddb.go:58` - "TODO: Platform-specific extraction of sqlite3*"
-- Needs CGO integration for extracting raw `sqlite3*` from `database/sql`
-- Would require driver-specific code for `github.com/mattn/go-sqlite3`
+**Implemented** in `crates/synddb-client/bindings/go/synddb.go`:
+- ✅ CGO wrapper with full FFI coverage
+- ✅ `Attach()`, `AttachWithConfig()` for database connection
+- ✅ `Execute()`, `ExecuteBatch()` for SQL operations
+- ✅ Transaction support (`Begin()`, `Commit()`, `Rollback()`)
+- ✅ `Publish()`, `Snapshot()`, `Detach()`
 
 ### 9.3 Node.js Bindings ✅ Complete
 
 **Implemented** in `crates/synddb-client/bindings/nodejs/`:
-- ✅ FFI wrapper using `ffi-napi`
+- ✅ FFI wrapper using `koffi` (no native compilation needed)
 - ✅ Async/await API
+- ✅ Disposable pattern support (Node.js 20+)
 
 ---
 
@@ -423,7 +425,6 @@ Tests marked with `#[ignore]` that need environments or manual verification:
 
 - [ ] Arweave publisher (if permanent storage needed)
 - [ ] Validator extension system (WithdrawalValidator trait)
-- [ ] Complete Go bindings (CGO sqlite3*)
 - [ ] Key rotation protocol
 - [ ] Large transaction handling (force snapshot)
 - [ ] Consistency enforcer
@@ -447,7 +448,6 @@ Quick reference of actual TODO comments found in the codebase:
 | `synddb-chain-monitor/src/config.rs` | 30 | Auto-get Bridge deployment metadata | P2 |
 | `synddb-sequencer/src/transport/arweave.rs` | 136 | Implement ArweaveTransport | P2 |
 | `synddb-sequencer/src/transport/mod.rs` | 23 | Additional DA transports | P2 |
-| `synddb-client/bindings/go/synddb.go` | 58 | Platform-specific sqlite3* extraction | P2 |
 
 ---
 

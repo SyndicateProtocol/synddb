@@ -1,5 +1,5 @@
 /**
- * SyndDB Node.js Client - Pure JavaScript FFI wrapper (no compilation needed!)
+ * SyndDB Node.js Client - Pure JavaScript FFI wrapper using koffi (no compilation needed!)
  *
  * Usage:
  *   const { SyndDB } = require('./synddb');
@@ -13,24 +13,22 @@
  *   db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
  *
  *   // Optionally force immediate publish (auto-publishes every second)
- *   synddb.publishChangeset();
+ *   synddb.publish();
  *
  *   // Create a snapshot (optional)
  *   const size = synddb.snapshot();
  *
  *   // Clean up (or let Node.js garbage collector handle it)
  *   synddb.detach();
+ *
+ * Installation:
+ *   npm install koffi
  */
 
-const ffi = require('ffi-napi');
-const ref = require('ref-napi');
+const koffi = require('koffi');
 const path = require('path');
+const fs = require('fs');
 const os = require('os');
-
-// Define types
-const VoidPtr = ref.refType(ref.types.void);
-const SizeT = ref.types.size_t;
-const SizeTPtr = ref.refType(SizeT);
 
 // Error codes (must match Rust enum)
 const SyndDBError = {
@@ -46,6 +44,7 @@ const SyndDBError = {
 // Find libsynddb shared library
 function findLibrary() {
   const platform = os.platform();
+  const arch = os.arch();
   let libName;
 
   if (platform === 'darwin') {
@@ -56,21 +55,32 @@ function findLibrary() {
     libName = 'libsynddb_client.so';
   }
 
+  // Determine platform directory for pre-built libs
+  let libDir;
+  if (platform === 'darwin') {
+    libDir = arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64';
+  } else if (platform === 'linux') {
+    libDir = 'linux-x64';
+  } else if (platform === 'win32') {
+    libDir = 'win-x64';
+  }
+
   // Try common locations
   const searchPaths = [
     // Environment variable
     process.env.LIBSYNDDB_PATH,
     // Current directory
     path.join('.', libName),
-    // Relative to this file
-    path.join(__dirname, '..', '..', 'target', 'release', libName),
-    path.join(__dirname, '..', '..', 'target', 'debug', libName),
+    // Pre-built libs directory
+    libDir ? path.join(__dirname, '..', '..', 'libs', libDir, libName) : null,
+    // Relative to this file (target/release)
+    path.join(__dirname, '..', '..', '..', '..', 'target', 'release', libName),
+    path.join(__dirname, '..', '..', '..', '..', 'target', 'debug', libName),
     // System paths
     path.join('/usr', 'local', 'lib', libName),
     path.join('/usr', 'lib', libName),
   ].filter(Boolean);
 
-  const fs = require('fs');
   for (const libPath of searchPaths) {
     if (fs.existsSync(libPath)) {
       return libPath;
@@ -83,15 +93,32 @@ function findLibrary() {
 }
 
 // Load library
-const lib = ffi.Library(findLibrary(), {
-  synddb_attach: ['int', ['string', 'string', VoidPtr]],
-  synddb_attach_with_config: ['int', ['string', 'string', 'uint64', 'uint64', VoidPtr]],
-  synddb_publish: ['int', [VoidPtr]],
-  synddb_snapshot: ['int', [VoidPtr, SizeTPtr]],
-  synddb_detach: ['void', [VoidPtr]],
-  synddb_last_error: ['string', []],
-  synddb_version: ['string', []],
-});
+const lib = koffi.load(findLibrary());
+
+// Define opaque pointer types
+const SyndDBHandle = koffi.opaque('SyndDBHandle');
+const SyndDBHandlePtr = koffi.pointer(SyndDBHandle);
+const SyndDBHandlePtrPtr = koffi.out(koffi.pointer(SyndDBHandlePtr));
+
+// Define FFI functions
+const ffi = {
+  synddb_version: lib.func('synddb_version', 'str', []),
+  synddb_last_error: lib.func('synddb_last_error', 'str', []),
+  synddb_attach: lib.func('synddb_attach', 'int', ['str', 'str', SyndDBHandlePtrPtr]),
+  synddb_attach_with_config: lib.func('synddb_attach_with_config', 'int', [
+    'str',      // db_path
+    'str',      // sequencer_url
+    'uint64',   // flush_interval_ms
+    'uint64',   // snapshot_interval
+    SyndDBHandlePtrPtr  // out_handle
+  ]),
+  synddb_publish: lib.func('synddb_publish', 'int', [SyndDBHandlePtr]),
+  synddb_snapshot: lib.func('synddb_snapshot', 'int', [
+    SyndDBHandlePtr,
+    koffi.out(koffi.pointer('size_t'))
+  ]),
+  synddb_detach: lib.func('synddb_detach', 'void', [SyndDBHandlePtr]),
+};
 
 /**
  * SyndDB client handle - automatically captures and publishes SQLite changesets
@@ -118,16 +145,15 @@ class SyndDB {
    * db.prepare("INSERT INTO users VALUES (?, ?)").run(1, 'Alice');
    */
   static attach(dbPath, sequencerUrl) {
-    const handlePtr = ref.alloc(VoidPtr);
-    const result = lib.synddb_attach(dbPath, sequencerUrl, handlePtr);
+    const handlePtr = [null];
+    const result = ffi.synddb_attach(dbPath, sequencerUrl, handlePtr);
 
     if (result !== SyndDBError.SUCCESS) {
-      const errorMsg = lib.synddb_last_error() || 'Unknown error';
+      const errorMsg = ffi.synddb_last_error() || 'Unknown error';
       throw new Error(`Failed to attach SyndDB (error ${result}): ${errorMsg}`);
     }
 
-    const handle = handlePtr.deref();
-    return new SyndDB(handle);
+    return new SyndDB(handlePtr[0]);
   }
 
   /**
@@ -154,8 +180,8 @@ class SyndDB {
     const flushIntervalMs = options.flushIntervalMs || 1000;
     const snapshotInterval = options.snapshotInterval || 0;
 
-    const handlePtr = ref.alloc(VoidPtr);
-    const result = lib.synddb_attach_with_config(
+    const handlePtr = [null];
+    const result = ffi.synddb_attach_with_config(
       dbPath,
       sequencerUrl,
       flushIntervalMs,
@@ -164,12 +190,11 @@ class SyndDB {
     );
 
     if (result !== SyndDBError.SUCCESS) {
-      const errorMsg = lib.synddb_last_error() || 'Unknown error';
+      const errorMsg = ffi.synddb_last_error() || 'Unknown error';
       throw new Error(`Failed to attach SyndDB (error ${result}): ${errorMsg}`);
     }
 
-    const handle = handlePtr.deref();
-    return new SyndDB(handle);
+    return new SyndDB(handlePtr[0]);
   }
 
   /**
@@ -181,17 +206,17 @@ class SyndDB {
    * @throws {Error} If publish fails
    *
    * @example
-   * synddb.publishChangeset();
+   * synddb.publish();
    */
-  publishChangeset() {
+  publish() {
     if (!this._handle) {
       throw new Error('SyndDB handle already detached');
     }
 
-    const result = lib.synddb_publish_changeset(this._handle);
+    const result = ffi.synddb_publish(this._handle);
 
     if (result !== SyndDBError.SUCCESS) {
-      const errorMsg = lib.synddb_last_error() || 'Unknown error';
+      const errorMsg = ffi.synddb_last_error() || 'Unknown error';
       throw new Error(`Failed to publish changeset (error ${result}): ${errorMsg}`);
     }
   }
@@ -203,10 +228,6 @@ class SyndDB {
    * to the sequencer. Use this after schema changes (CREATE TABLE, etc.)
    * since DDL is NOT captured in changesets.
    *
-   * This is consistent with publishChangeset() for changesets:
-   * - publishChangeset() - sends pending changesets to sequencer
-   * - snapshot() - creates and sends snapshot to sequencer
-   *
    * When to use:
    * - After CREATE TABLE, ALTER TABLE, or other DDL statements
    * - To create periodic recovery checkpoints
@@ -217,7 +238,7 @@ class SyndDB {
    *
    * @example
    * // After creating schema
-   * synddb.executeBatch('CREATE TABLE users (id INTEGER PRIMARY KEY)');
+   * db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY)');
    * const size = synddb.snapshot();  // Creates AND publishes
    * console.log(`Published snapshot: ${size} bytes`);
    */
@@ -226,15 +247,15 @@ class SyndDB {
       throw new Error('SyndDB handle already detached');
     }
 
-    const sizePtr = ref.alloc(SizeT);
-    const result = lib.synddb_snapshot(this._handle, sizePtr);
+    const sizePtr = [0];
+    const result = ffi.synddb_snapshot(this._handle, sizePtr);
 
     if (result !== SyndDBError.SUCCESS) {
-      const errorMsg = lib.synddb_last_error() || 'Unknown error';
+      const errorMsg = ffi.synddb_last_error() || 'Unknown error';
       throw new Error(`Failed to publish snapshot (error ${result}): ${errorMsg}`);
     }
 
-    return sizePtr.deref();
+    return sizePtr[0];
   }
 
   /**
@@ -248,7 +269,7 @@ class SyndDB {
    */
   detach() {
     if (this._handle) {
-      lib.synddb_detach(this._handle);
+      ffi.synddb_detach(this._handle);
       this._handle = null;
     }
   }
@@ -271,7 +292,7 @@ class SyndDB {
  * console.log(synddb.version());
  */
 function version() {
-  return lib.synddb_version();
+  return ffi.synddb_version();
 }
 
 /**
@@ -280,7 +301,7 @@ function version() {
  * @returns {string|null} Error message string, or null if no error
  */
 function lastError() {
-  return lib.synddb_last_error();
+  return ffi.synddb_last_error();
 }
 
 /**
