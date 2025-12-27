@@ -26,7 +26,8 @@ typedef enum {
     SYNDDB_DATABASE_ERROR = 3,
     SYNDDB_ATTACH_ERROR = 4,
     SYNDDB_PUBLISH_ERROR = 5,
-    SYNDDB_SNAPSHOT_ERROR = 6
+    SYNDDB_SNAPSHOT_ERROR = 6,
+    SYNDDB_INVALID_URL = 7
 } SyndDBError;
 
 /**
@@ -56,7 +57,7 @@ SyndDBError synddb_attach(
  * @param db_path Path to SQLite database file
  * @param sequencer_url URL of sequencer TEE
  * @param flush_interval_ms Milliseconds between sender flushes (must be > 0)
- * @param snapshot_interval Number of changesets between snapshots (must be > 0)
+ * @param snapshot_interval Number of changesets between snapshots (0 = disabled)
  * @param out_handle Output pointer to receive SyndDB handle
  * @return SYNDDB_SUCCESS on success, error code otherwise
  */
@@ -77,7 +78,7 @@ SyndDBError synddb_attach_with_config(
  * @param handle SyndDB handle from synddb_attach()
  * @return SYNDDB_SUCCESS on success, error code otherwise
  */
-SyndDBError synddb_publish(SyndDBHandle* handle);
+SyndDBError synddb_publish_changeset(SyndDBHandle* handle);
 
 /**
  * Create and publish a snapshot to the sequencer
@@ -102,7 +103,65 @@ SyndDBError synddb_publish(SyndDBHandle* handle);
  * Example:
  *   synddb_snapshot(handle, NULL);  // Creates AND publishes
  */
-SyndDBError synddb_snapshot(SyndDBHandle* handle, size_t* out_size);
+SyndDBError synddb_publish_snapshot(SyndDBHandle* handle, size_t* out_size);
+
+/**
+ * Execute a single SQL statement
+ *
+ * Changes made through this function are captured and published to the sequencer.
+ *
+ * @param handle SyndDB handle from synddb_attach()
+ * @param sql SQL statement to execute (UTF-8, null-terminated)
+ * @return Number of rows affected on success, -1 on error
+ *
+ * Example:
+ *   int64_t rows = synddb_execute(handle, "INSERT INTO users VALUES (1, 'Alice')");
+ *   if (rows < 0) {
+ *       printf("Error: %s\n", synddb_last_error());
+ *   }
+ */
+int64_t synddb_execute(SyndDBHandle* handle, const char* sql);
+
+/**
+ * Execute multiple SQL statements (batch)
+ *
+ * This is useful for executing schema creation or multiple statements at once.
+ * If DDL statements are detected, a snapshot is automatically published.
+ *
+ * @param handle SyndDB handle from synddb_attach()
+ * @param sql SQL statements to execute (UTF-8, null-terminated, semicolon-separated)
+ * @return SYNDDB_SUCCESS on success, error code otherwise
+ *
+ * Example:
+ *   synddb_execute_batch(handle,
+ *       "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT);"
+ *       "CREATE INDEX IF NOT EXISTS idx_name ON users(name);");
+ */
+SyndDBError synddb_execute_batch(SyndDBHandle* handle, const char* sql);
+
+/**
+ * Begin a transaction
+ *
+ * @param handle SyndDB handle from synddb_attach()
+ * @return SYNDDB_SUCCESS on success, error code otherwise
+ */
+SyndDBError synddb_begin(SyndDBHandle* handle);
+
+/**
+ * Commit the current transaction
+ *
+ * @param handle SyndDB handle from synddb_attach()
+ * @return SYNDDB_SUCCESS on success, error code otherwise
+ */
+SyndDBError synddb_commit(SyndDBHandle* handle);
+
+/**
+ * Rollback the current transaction
+ *
+ * @param handle SyndDB handle from synddb_attach()
+ * @return SYNDDB_SUCCESS on success, error code otherwise
+ */
+SyndDBError synddb_rollback(SyndDBHandle* handle);
 
 /**
  * Detach SyndDB and free resources

@@ -67,6 +67,7 @@ const SyndDBError = {
     ATTACH_ERROR: 4,
     PUBLISH_ERROR: 5,
     SNAPSHOT_ERROR: 6,
+    INVALID_URL: 7,
 };
 
 // Opaque pointer types
@@ -85,8 +86,8 @@ const synddb_attach_with_config = lib.func('synddb_attach_with_config', 'int', [
     'uint64',   // snapshot_interval
     SyndDBHandlePtrPtr  // out_handle
 ]);
-const synddb_publish = lib.func('synddb_publish', 'int', [SyndDBHandlePtr]);
-const synddb_snapshot = lib.func('synddb_snapshot', 'int', [
+const synddb_publish_changeset = lib.func('synddb_publish_changeset', 'int', [SyndDBHandlePtr]);
+const synddb_publish_snapshot = lib.func('synddb_publish_snapshot', 'int', [
     SyndDBHandlePtr,
     koffi.out(koffi.pointer('size_t'))
 ]);
@@ -130,8 +131,8 @@ async function main() {
         console.log('   ✓ Successfully attached to database\n');
 
         // Test 4: Manual publish
-        console.log('4. Testing synddb_publish()...');
-        result = synddb_publish(handle[0]);
+        console.log('4. Testing synddb_publish_changeset()...');
+        result = synddb_publish_changeset(handle[0]);
         if (result !== SyndDBError.SUCCESS) {
             const error = synddb_last_error();
             console.log(`   ✗ Failed to publish: ${error || '(unknown error)'}`);
@@ -141,9 +142,9 @@ async function main() {
         console.log('   ✓ Successfully published\n');
 
         // Test 5: Create snapshot
-        console.log('5. Testing synddb_snapshot()...');
+        console.log('5. Testing synddb_publish_snapshot()...');
         const size = [0];
-        result = synddb_snapshot(handle[0], size);
+        result = synddb_publish_snapshot(handle[0], size);
         if (result !== SyndDBError.SUCCESS) {
             const error = synddb_last_error();
             console.log(`   Warning: Snapshot failed: ${error || '(unknown error)'}`);

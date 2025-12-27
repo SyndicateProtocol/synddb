@@ -61,6 +61,7 @@ class SyndDBError:
     ATTACH_ERROR = 4
     PUBLISH_ERROR = 5
     SNAPSHOT_ERROR = 6
+    INVALID_URL = 7
 
 # Opaque handle type
 class SyndDBHandle(ctypes.Structure):
@@ -89,14 +90,14 @@ lib.synddb_attach_with_config.argtypes = [
 ]
 lib.synddb_attach_with_config.restype = ctypes.c_int
 
-lib.synddb_publish.argtypes = [ctypes.POINTER(SyndDBHandle)]
-lib.synddb_publish.restype = ctypes.c_int
+lib.synddb_publish_changeset.argtypes = [ctypes.POINTER(SyndDBHandle)]
+lib.synddb_publish_changeset.restype = ctypes.c_int
 
-lib.synddb_snapshot.argtypes = [
+lib.synddb_publish_snapshot.argtypes = [
     ctypes.POINTER(SyndDBHandle),
     ctypes.POINTER(ctypes.c_size_t)  # out_size
 ]
-lib.synddb_snapshot.restype = ctypes.c_int
+lib.synddb_publish_snapshot.restype = ctypes.c_int
 
 lib.synddb_detach.argtypes = [ctypes.POINTER(SyndDBHandle)]
 lib.synddb_detach.restype = None
@@ -139,8 +140,8 @@ def main():
     print("   ✓ Successfully attached to database\n")
 
     # Test 4: Manual publish
-    print("4. Testing synddb_publish()...")
-    result = lib.synddb_publish(handle)
+    print("4. Testing synddb_publish_changeset()...")
+    result = lib.synddb_publish_changeset(handle)
     if result != SyndDBError.SUCCESS:
         error = lib.synddb_last_error()
         error_str = error.decode('utf-8') if error else "(unknown error)"
@@ -150,9 +151,9 @@ def main():
     print("   ✓ Successfully published\n")
 
     # Test 5: Create snapshot
-    print("5. Testing synddb_snapshot()...")
+    print("5. Testing synddb_publish_snapshot()...")
     snapshot_size = ctypes.c_size_t()
-    result = lib.synddb_snapshot(handle, ctypes.byref(snapshot_size))
+    result = lib.synddb_publish_snapshot(handle, ctypes.byref(snapshot_size))
     if result != SyndDBError.SUCCESS:
         error = lib.synddb_last_error()
         error_str = error.decode('utf-8') if error else "(unknown error)"

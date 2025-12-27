@@ -81,6 +81,7 @@ class SyndDBError:
     ATTACH_ERROR = 4
     PUBLISH_ERROR = 5
     SNAPSHOT_ERROR = 6
+    INVALID_URL = 7
 
 # Opaque handle type
 class _SyndDBHandle(ctypes.Structure):
@@ -103,14 +104,14 @@ _lib.synddb_attach_with_config.argtypes = [
 ]
 _lib.synddb_attach_with_config.restype = ctypes.c_int
 
-_lib.synddb_publish.argtypes = [ctypes.POINTER(_SyndDBHandle)]
-_lib.synddb_publish.restype = ctypes.c_int
+_lib.synddb_publish_changeset.argtypes = [ctypes.POINTER(_SyndDBHandle)]
+_lib.synddb_publish_changeset.restype = ctypes.c_int
 
-_lib.synddb_snapshot.argtypes = [
+_lib.synddb_publish_snapshot.argtypes = [
     ctypes.POINTER(_SyndDBHandle),
     ctypes.POINTER(ctypes.c_size_t)  # out_size (optional)
 ]
-_lib.synddb_snapshot.restype = ctypes.c_int
+_lib.synddb_publish_snapshot.restype = ctypes.c_int
 
 _lib.synddb_detach.argtypes = [ctypes.POINTER(_SyndDBHandle)]
 _lib.synddb_detach.restype = None
@@ -280,7 +281,7 @@ class SyndDB:
             raise RuntimeError("SyndDB handle already detached")
 
         size = ctypes.c_size_t()
-        result = _lib.synddb_snapshot(self._handle, ctypes.byref(size))
+        result = _lib.synddb_publish_snapshot(self._handle, ctypes.byref(size))
 
         if result != SyndDBError.SUCCESS:
             error_msg = _lib.synddb_last_error()

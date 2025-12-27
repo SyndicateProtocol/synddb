@@ -39,6 +39,7 @@ const SyndDBError = {
   ATTACH_ERROR: 4,
   PUBLISH_ERROR: 5,
   SNAPSHOT_ERROR: 6,
+  INVALID_URL: 7,
 };
 
 // Find libsynddb shared library
@@ -112,12 +113,17 @@ const ffi = {
     'uint64',   // snapshot_interval
     SyndDBHandlePtrPtr  // out_handle
   ]),
-  synddb_publish: lib.func('synddb_publish', 'int', [SyndDBHandlePtr]),
-  synddb_snapshot: lib.func('synddb_snapshot', 'int', [
+  synddb_publish_changeset: lib.func('synddb_publish_changeset', 'int', [SyndDBHandlePtr]),
+  synddb_publish_snapshot: lib.func('synddb_publish_snapshot', 'int', [
     SyndDBHandlePtr,
     koffi.out(koffi.pointer('size_t'))
   ]),
   synddb_detach: lib.func('synddb_detach', 'void', [SyndDBHandlePtr]),
+  synddb_execute: lib.func('synddb_execute', 'int64', [SyndDBHandlePtr, 'str']),
+  synddb_execute_batch: lib.func('synddb_execute_batch', 'int', [SyndDBHandlePtr, 'str']),
+  synddb_begin: lib.func('synddb_begin', 'int', [SyndDBHandlePtr]),
+  synddb_commit: lib.func('synddb_commit', 'int', [SyndDBHandlePtr]),
+  synddb_rollback: lib.func('synddb_rollback', 'int', [SyndDBHandlePtr]),
 };
 
 /**
@@ -213,7 +219,7 @@ class SyndDB {
       throw new Error('SyndDB handle already detached');
     }
 
-    const result = ffi.synddb_publish(this._handle);
+    const result = ffi.synddb_publish_changeset(this._handle);
 
     if (result !== SyndDBError.SUCCESS) {
       const errorMsg = ffi.synddb_last_error() || 'Unknown error';
@@ -248,7 +254,7 @@ class SyndDB {
     }
 
     const sizePtr = [0];
-    const result = ffi.synddb_snapshot(this._handle, sizePtr);
+    const result = ffi.synddb_publish_snapshot(this._handle, sizePtr);
 
     if (result !== SyndDBError.SUCCESS) {
       const errorMsg = ffi.synddb_last_error() || 'Unknown error';
@@ -256,6 +262,119 @@ class SyndDB {
     }
 
     return sizePtr[0];
+  }
+
+  /**
+   * Execute a single SQL statement
+   *
+   * Changes made through this function are captured and published to the sequencer.
+   *
+   * @param {string} sql - SQL statement to execute
+   * @returns {number} Number of rows affected
+   * @throws {Error} If execution fails
+   *
+   * @example
+   * const rows = synddb.execute("INSERT INTO users (name) VALUES ('Alice')");
+   */
+  execute(sql) {
+    if (!this._handle) {
+      throw new Error('SyndDB handle already detached');
+    }
+
+    const rows = ffi.synddb_execute(this._handle, sql);
+    if (rows < 0) {
+      const errorMsg = ffi.synddb_last_error() || 'Unknown error';
+      throw new Error(`Failed to execute SQL: ${errorMsg}`);
+    }
+    return Number(rows);
+  }
+
+  /**
+   * Execute multiple SQL statements (batch)
+   *
+   * This is useful for executing schema creation or multiple statements at once.
+   * If DDL statements are detected, a snapshot is automatically published.
+   *
+   * @param {string} sql - SQL statements to execute (semicolon-separated)
+   * @throws {Error} If execution fails
+   *
+   * @example
+   * synddb.executeBatch(`
+   *   CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT);
+   *   CREATE INDEX IF NOT EXISTS idx_name ON users(name);
+   * `);
+   */
+  executeBatch(sql) {
+    if (!this._handle) {
+      throw new Error('SyndDB handle already detached');
+    }
+
+    const result = ffi.synddb_execute_batch(this._handle, sql);
+    if (result !== SyndDBError.SUCCESS) {
+      const errorMsg = ffi.synddb_last_error() || 'Unknown error';
+      throw new Error(`Failed to execute batch (error ${result}): ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Begin a transaction
+   *
+   * @throws {Error} If transaction start fails
+   *
+   * @example
+   * synddb.begin();
+   * try {
+   *   synddb.execute("INSERT INTO users (name) VALUES ('Alice')");
+   *   synddb.commit();
+   * } catch (e) {
+   *   synddb.rollback();
+   *   throw e;
+   * }
+   */
+  begin() {
+    if (!this._handle) {
+      throw new Error('SyndDB handle already detached');
+    }
+
+    const result = ffi.synddb_begin(this._handle);
+    if (result !== SyndDBError.SUCCESS) {
+      const errorMsg = ffi.synddb_last_error() || 'Unknown error';
+      throw new Error(`Failed to begin transaction (error ${result}): ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Commit the current transaction
+   *
+   * @throws {Error} If commit fails
+   */
+  commit() {
+    if (!this._handle) {
+      throw new Error('SyndDB handle already detached');
+    }
+
+    const result = ffi.synddb_commit(this._handle);
+    if (result !== SyndDBError.SUCCESS) {
+      const errorMsg = ffi.synddb_last_error() || 'Unknown error';
+      throw new Error(`Failed to commit transaction (error ${result}): ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Rollback the current transaction
+   *
+   * @throws {Error} If rollback fails
+   */
+  rollback() {
+    if (!this._handle) {
+      throw new Error('SyndDB handle already detached');
+    }
+
+    const result = ffi.synddb_rollback(this._handle);
+    if (result !== SyndDBError.SUCCESS) {
+      const errorMsg = ffi.synddb_last_error() || 'Unknown error';
+      throw new Error(`Failed to rollback transaction (error ${result}): ${errorMsg}`);
+    }
   }
 
   /**

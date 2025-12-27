@@ -22,6 +22,7 @@ typedef enum {
     AttachError = 4,
     PublishError = 5,
     SnapshotError = 6,
+    InvalidUrl = 7,
 } SyndDBError;
 
 // FFI function declarations
@@ -39,9 +40,9 @@ extern SyndDBError synddb_attach_with_config(
     SyndDBHandle** out_handle
 );
 
-extern SyndDBError synddb_publish(SyndDBHandle* handle);
+extern SyndDBError synddb_publish_changeset(SyndDBHandle* handle);
 
-extern SyndDBError synddb_snapshot(
+extern SyndDBError synddb_publish_snapshot(
     SyndDBHandle* handle,
     size_t* out_size
 );
@@ -88,8 +89,8 @@ int main(void) {
     printf("   ✓ Successfully attached to database\n\n");
 
     // Test 4: Manual publish (should succeed even with no data)
-    printf("4. Testing synddb_publish()...\n");
-    result = synddb_publish(handle);
+    printf("4. Testing synddb_publish_changeset()...\n");
+    result = synddb_publish_changeset(handle);
     if (result != Success) {
         const char* error = synddb_last_error();
         printf("   ✗ Failed to publish: %s\n", error ? error : "(unknown error)");
@@ -99,9 +100,9 @@ int main(void) {
     printf("   ✓ Successfully published\n\n");
 
     // Test 5: Create snapshot
-    printf("5. Testing synddb_snapshot()...\n");
+    printf("5. Testing synddb_publish_snapshot()...\n");
     size_t snapshot_size = 0;
-    result = synddb_snapshot(handle, &snapshot_size);
+    result = synddb_publish_snapshot(handle, &snapshot_size);
     if (result != Success) {
         const char* error = synddb_last_error();
         printf("   Warning: Snapshot failed: %s\n", error ? error : "(unknown error)");

@@ -249,15 +249,6 @@ pub unsafe extern "C" fn synddb_publish_changeset(handle: *mut SyndDBHandle) -> 
     }
 }
 
-/// Alias for `synddb_publish_changeset` - matches the C header declaration
-///
-/// # Safety
-/// - `handle` must be a valid handle from `synddb_attach()`
-#[no_mangle]
-pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBError {
-    synddb_publish_changeset(handle)
-}
-
 /// Create and publish a snapshot to the sequencer
 ///
 /// This creates a complete database snapshot and sends it to the sequencer.
@@ -300,7 +291,7 @@ pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBErro
 /// print(f"Published {size} byte snapshot")
 /// ```
 #[no_mangle]
-pub unsafe extern "C" fn synddb_snapshot(
+pub unsafe extern "C" fn synddb_publish_snapshot(
     handle: *mut SyndDBHandle,
     out_size: *mut usize,
 ) -> SyndDBError {
