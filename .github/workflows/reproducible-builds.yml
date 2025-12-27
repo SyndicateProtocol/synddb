@@ -43,18 +43,22 @@ jobs:
 
       - name: Build image (attempt 1)
         run: |
-          docker build \
+          docker buildx build \
             --no-cache \
+            --provenance=false \
             --platform linux/amd64 \
+            --load \
             -f docker/reproducible/${{ matrix.image }}.Dockerfile \
             -t ${{ matrix.image }}:build1 \
             .
 
       - name: Build image (attempt 2)
         run: |
-          docker build \
+          docker buildx build \
             --no-cache \
+            --provenance=false \
             --platform linux/amd64 \
+            --load \
             -f docker/reproducible/${{ matrix.image }}.Dockerfile \
             -t ${{ matrix.image }}:build2 \
             .

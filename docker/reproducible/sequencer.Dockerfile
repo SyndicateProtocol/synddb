@@ -54,8 +54,14 @@ ENV CARGO_INCREMENTAL=0
 # Reproducibility: Force single-threaded compilation for deterministic order
 ENV CARGO_BUILD_JOBS=1
 
-# Reproducibility: Remap source paths to /build for consistent debug info
-ENV RUSTFLAGS="--remap-path-prefix=/app=/build --remap-path-prefix=/usr/local/cargo=/cargo"
+# Reproducibility: Fixed cargo home for consistent paths
+ENV CARGO_HOME=/cargo
+
+# Reproducibility: Remap source paths for consistent debug info
+ENV RUSTFLAGS="--remap-path-prefix=/app=/build --remap-path-prefix=/cargo=/cargo"
+
+# Reproducibility: Use fixed hash seed
+ENV RUSTC_HASH_UNTRACKED_METADATA=1
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -73,12 +79,18 @@ COPY crates/ ./crates/
 COPY examples/ ./examples/
 COPY tests/ ./tests/
 
+# Normalize timestamps on all source files for reproducibility
+RUN find /app -type f -exec touch -d "@0" {} +
+
 # Build with reproducible profile (single codegen unit, LTO, panic=abort)
 # --locked ensures Cargo.lock is respected exactly
 RUN cargo build --profile reproducible --locked -p synddb-sequencer
 
 # Strip the binary for consistent output (removes variable metadata)
 RUN strip --strip-all /app/target/reproducible/synddb-sequencer
+
+# Normalize the binary timestamp
+RUN touch -d "@0" /app/target/reproducible/synddb-sequencer
 
 # =============================================================================
 # Debug Runtime - Debian with shell for troubleshooting
