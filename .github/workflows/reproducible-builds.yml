@@ -161,3 +161,122 @@ jobs:
           echo "=== All Reproducibility Checks Passed ==="
           echo "Sequencer: $SEQUENCER_HASHES"
           echo "Validator: $VALIDATOR_HASHES"
+
+          # Save verified hashes for publish job
+          echo "sequencer=$SEQUENCER_HASHES" >> $GITHUB_OUTPUT
+          echo "validator=$VALIDATOR_HASHES" >> $GITHUB_OUTPUT
+        id: hashes
+
+    outputs:
+      sequencer_hash: ${{ steps.hashes.outputs.sequencer }}
+      validator_hash: ${{ steps.hashes.outputs.validator }}
+
+  # Publish to Artifact Registry after verification passes
+  publish:
+    name: Publish to Artifact Registry
+    needs: verify-cross-machine
+    runs-on: ubuntu-latest
+    # Only publish from main branch, not PRs or feature branches
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      id-token: write  # Required for Workload Identity Federation
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Authenticate to Google Cloud using Workload Identity Federation
+      # This is more secure than using service account keys
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev --quiet
+
+      # Pin BuildKit version for reproducibility
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:v0.26.3
+
+      - name: Build and push sequencer
+        env:
+          SOURCE_DATE_EPOCH: 0
+        run: |
+          IMAGE="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}/synddb-sequencer"
+
+          docker buildx build \
+            --no-cache \
+            --provenance=false \
+            --sbom=false \
+            --build-arg SOURCE_DATE_EPOCH=0 \
+            --platform linux/amd64 \
+            --output type=docker,rewrite-timestamp=true \
+            -f docker/reproducible/sequencer.Dockerfile \
+            -t $IMAGE:${{ github.sha }} \
+            -t $IMAGE:latest \
+            .
+
+          # Verify the hash matches what we verified
+          BUILT_HASH=$(docker inspect $IMAGE:${{ github.sha }} --format='{{.Id}}')
+          echo "Built hash: $BUILT_HASH"
+          echo "Verified hash: ${{ needs.verify-cross-machine.outputs.sequencer_hash }}"
+
+          if [ "$BUILT_HASH" != "${{ needs.verify-cross-machine.outputs.sequencer_hash }}" ]; then
+            echo "::error::Publish build hash doesn't match verified hash!"
+            exit 1
+          fi
+
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+
+          echo "::notice::Published sequencer to $IMAGE:${{ github.sha }}"
+
+      - name: Build and push validator
+        env:
+          SOURCE_DATE_EPOCH: 0
+        run: |
+          IMAGE="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}/synddb-validator"
+
+          docker buildx build \
+            --no-cache \
+            --provenance=false \
+            --sbom=false \
+            --build-arg SOURCE_DATE_EPOCH=0 \
+            --platform linux/amd64 \
+            --output type=docker,rewrite-timestamp=true \
+            -f docker/reproducible/validator.Dockerfile \
+            -t $IMAGE:${{ github.sha }} \
+            -t $IMAGE:latest \
+            .
+
+          # Verify the hash matches what we verified
+          BUILT_HASH=$(docker inspect $IMAGE:${{ github.sha }} --format='{{.Id}}')
+          echo "Built hash: $BUILT_HASH"
+          echo "Verified hash: ${{ needs.verify-cross-machine.outputs.validator_hash }}"
+
+          if [ "$BUILT_HASH" != "${{ needs.verify-cross-machine.outputs.validator_hash }}" ]; then
+            echo "::error::Publish build hash doesn't match verified hash!"
+            exit 1
+          fi
+
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+
+          echo "::notice::Published validator to $IMAGE:${{ github.sha }}"
+
+      - name: Summary
+        run: |
+          echo "## Published Images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tag | Hash |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| synddb-sequencer | \`${{ github.sha }}\` | \`${{ needs.verify-cross-machine.outputs.sequencer_hash }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| synddb-validator | \`${{ github.sha }}\` | \`${{ needs.verify-cross-machine.outputs.validator_hash }}\` |" >> $GITHUB_STEP_SUMMARY
