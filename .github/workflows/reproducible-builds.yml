@@ -37,13 +37,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pin BuildKit version for reproducibility. Latest is v0.26.3.
-      # To upgrade: test that same-machine and cross-machine builds still match.
+      # Pin BuildKit version for reproducibility
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver-opts: |
-            image=moby/buildkit:v0.18.2
+            image=moby/buildkit:v0.26.3
 
       - name: Build image (attempt 1)
         env:

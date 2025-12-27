@@ -174,10 +174,10 @@ Pass as both an environment variable and a build argument for complete coverage.
 - uses: docker/setup-buildx-action@v3
   with:
     driver-opts: |
-      image=moby/buildkit:v0.18.2
+      image=moby/buildkit:v0.26.3
 ```
 
-Different BuildKit versions may produce different layer hashes.
+Different BuildKit versions may produce different layer hashes. Pin to a specific version.
 
 ### Complete Build Command
 
@@ -259,7 +259,7 @@ See `.github/workflows/reproducible-builds.yml` for the full CI workflow. Key fe
 - uses: docker/setup-buildx-action@v3
   with:
     driver-opts: |
-      image=moby/buildkit:v0.18.2
+      image=moby/buildkit:v0.26.3
 
 - name: Build image
   env:
