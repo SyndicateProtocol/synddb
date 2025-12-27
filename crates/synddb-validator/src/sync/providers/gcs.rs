@@ -25,55 +25,49 @@
 use crate::sync::fetcher::{BatchInfo, StorageFetcher};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use synddb_shared::types::{
-    batch::parse_batch_filename,
-    cbor::batch::CborBatch,
-    message::{SignedBatch, SignedMessage},
+use synddb_shared::{
+    gcs::GcsConfig,
+    types::{
+        batch::parse_batch_filename,
+        cbor::batch::CborBatch,
+        message::{SignedBatch, SignedMessage},
+    },
 };
 use tracing::{debug, info, warn};
 
 /// Google Cloud Storage fetcher
 pub struct GcsFetcher {
     client: google_cloud_storage::client::Client,
-    bucket: String,
-    prefix: String,
+    config: GcsConfig,
 }
 
 impl std::fmt::Debug for GcsFetcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GcsFetcher")
-            .field("bucket", &self.bucket)
-            .field("prefix", &self.prefix)
+            .field("bucket", &self.config.bucket)
+            .field("prefix", &self.config.prefix)
+            .field("emulator", &self.config.is_emulator())
             .finish()
     }
 }
 
 impl GcsFetcher {
-    /// Create a new GCS fetcher
+    /// Create a new GCS fetcher from config
     ///
     /// Uses default credentials (`GOOGLE_APPLICATION_CREDENTIALS` env var,
     /// workload identity, or metadata server).
     ///
-    /// If `emulator_host` is provided, uses anonymous authentication and
+    /// If `emulator_host` is set in config, uses anonymous authentication and
     /// connects to the specified emulator instead of real GCS.
-    pub async fn new(
-        bucket: String,
-        prefix: String,
-        emulator_host: Option<String>,
-    ) -> Result<Self> {
+    pub async fn from_config(config: GcsConfig) -> Result<Self> {
         use google_cloud_storage::client::{Client, ClientConfig};
 
-        // Normalize emulator_host: treat empty strings as None
-        let emulator_host = emulator_host.filter(|s| !s.is_empty());
-
-        let client_config = if let Some(ref emulator_host) = emulator_host {
-            // Emulator mode: use anonymous auth and custom endpoint
+        let client_config = if let Some(ref emulator_host) = config.emulator_host {
             info!(emulator_host = %emulator_host, "Using GCS emulator");
             let mut cfg = ClientConfig::default().anonymous();
             cfg.storage_endpoint = emulator_host.clone();
             cfg
         } else {
-            // Production mode: use real GCS with authentication
             ClientConfig::default()
                 .with_auth()
                 .await
@@ -82,13 +76,25 @@ impl GcsFetcher {
 
         let client = Client::new(client_config);
 
-        info!(bucket = %bucket, prefix = %prefix, "GCS fetcher initialized");
+        info!(bucket = %config.bucket, prefix = %config.prefix, "GCS fetcher initialized");
 
-        Ok(Self {
-            client,
-            bucket,
-            prefix,
-        })
+        Ok(Self { client, config })
+    }
+
+    /// Create a new GCS fetcher (convenience constructor)
+    ///
+    /// Prefer `from_config()` for more control. This method is kept for
+    /// backwards compatibility.
+    pub async fn new(
+        bucket: String,
+        prefix: String,
+        emulator_host: Option<String>,
+    ) -> Result<Self> {
+        let mut config = GcsConfig::new(bucket).with_prefix(prefix);
+        if let Some(host) = emulator_host {
+            config = config.with_emulator_host(host);
+        }
+        Self::from_config(config).await
     }
 
     /// Download data from GCS
@@ -96,7 +102,7 @@ impl GcsFetcher {
         use google_cloud_storage::http::objects::{download::Range, get::GetObjectRequest};
 
         let request = GetObjectRequest {
-            bucket: self.bucket.clone(),
+            bucket: self.config.bucket.clone(),
             object: path.to_string(),
             ..Default::default()
         };
@@ -180,9 +186,9 @@ impl StorageFetcher for GcsFetcher {
     async fn list_batches(&self) -> Result<Vec<BatchInfo>> {
         use google_cloud_storage::http::objects::list::ListObjectsRequest;
 
-        let prefix = format!("{}/batches/", self.prefix);
+        let prefix = format!("{}/batches/", self.config.prefix);
         let request = ListObjectsRequest {
-            bucket: self.bucket.clone(),
+            bucket: self.config.bucket.clone(),
             prefix: Some(prefix),
             ..Default::default()
         };
@@ -215,9 +221,9 @@ impl StorageFetcher for GcsFetcher {
         use google_cloud_storage::http::objects::list::ListObjectsRequest;
 
         // Find batch that starts with this sequence
-        let prefix = format!("{}/batches/{:012}_", self.prefix, start_sequence);
+        let prefix = format!("{}/batches/{:012}_", self.config.prefix, start_sequence);
         let request = ListObjectsRequest {
-            bucket: self.bucket.clone(),
+            bucket: self.config.bucket.clone(),
             prefix: Some(prefix),
             ..Default::default()
         };

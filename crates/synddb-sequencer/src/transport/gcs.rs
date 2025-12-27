@@ -18,49 +18,22 @@
 use crate::transport::traits::{BatchInfo, PublishMetadata, TransportError, TransportPublisher};
 use async_trait::async_trait;
 use google_cloud_storage::client::Client;
-use serde::{Deserialize, Serialize};
-use synddb_shared::types::{
-    batch::{format_batch_filename, parse_batch_filename},
-    cbor::{batch::CborBatch, message::CborSignedMessage},
+use synddb_shared::{
+    gcs::GcsConfig,
+    types::{
+        batch::{format_batch_filename, parse_batch_filename},
+        cbor::{batch::CborBatch, message::CborSignedMessage},
+    },
 };
 use tracing::{debug, info, warn};
 
-/// Configuration for GCS transport
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GcsTransportConfig {
-    /// GCS bucket name
-    pub bucket: String,
-    /// Path prefix within the bucket (default: "sequencer")
-    pub prefix: String,
-    /// GCS emulator host URL for local testing
-    pub emulator_host: Option<String>,
-}
-
-impl GcsTransportConfig {
-    pub fn new(bucket: impl Into<String>) -> Self {
-        Self {
-            bucket: bucket.into(),
-            prefix: "sequencer".to_string(),
-            emulator_host: None,
-        }
-    }
-
-    pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.prefix = prefix.into();
-        self
-    }
-
-    pub fn with_emulator_host(mut self, host: impl Into<String>) -> Self {
-        let host = host.into();
-        self.emulator_host = if host.is_empty() { None } else { Some(host) };
-        self
-    }
-}
+/// Configuration for GCS transport (re-exported from synddb-shared)
+pub type GcsTransportConfig = GcsConfig;
 
 /// Google Cloud Storage transport for CBOR batches
 pub struct GcsTransport {
     client: Client,
-    config: GcsTransportConfig,
+    config: GcsConfig,
 }
 
 impl std::fmt::Debug for GcsTransport {
@@ -68,7 +41,7 @@ impl std::fmt::Debug for GcsTransport {
         f.debug_struct("GcsTransport")
             .field("bucket", &self.config.bucket)
             .field("prefix", &self.config.prefix)
-            .field("emulator", &self.config.emulator_host.is_some())
+            .field("emulator", &self.config.is_emulator())
             .finish()
     }
 }
