@@ -117,16 +117,9 @@ struct StoredBatch {
 ///
 /// Thread-safe storage that can be shared with HTTP handlers.
 /// Supports both in-memory and `SQLite` file backends.
+#[derive(Clone)]
 pub struct LocalTransport {
     storage: Arc<StorageInner>,
-}
-
-impl Clone for LocalTransport {
-    fn clone(&self) -> Self {
-        Self {
-            storage: Arc::clone(&self.storage),
-        }
-    }
 }
 
 impl std::fmt::Debug for LocalTransport {
