@@ -38,6 +38,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # Pin BuildKit version for reproducibility
+      # Latest versions: https://github.com/moby/buildkit/releases
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
