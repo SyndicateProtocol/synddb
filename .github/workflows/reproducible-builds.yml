@@ -42,8 +42,8 @@ jobs:
       - name: Set up Docker (macOS)
         if: startsWith(matrix.runner, 'macos')
         run: |
-          brew install docker colima
-          # Use QEMU backend for better compatibility
+          brew install docker colima qemu
+          # Use QEMU backend for x86_64 builds on ARM Macs
           colima start --cpu 4 --memory 8 --disk 50 --vm-type qemu --arch x86_64
           # Wait for Docker to be ready
           for i in {1..60}; do

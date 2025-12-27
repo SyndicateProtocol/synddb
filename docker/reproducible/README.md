@@ -71,13 +71,13 @@ ENV RUSTFLAGS="--remap-path-prefix=/app=/build --remap-path-prefix=/usr/local/ca
 
 Absolute paths embedded in binaries (debug info, panic messages) are normalized to `/build` and `/cargo`, regardless of where the build actually runs.
 
-### 4. Frozen Dependencies
+### 4. Locked Dependencies
 
 ```dockerfile
-RUN cargo build --profile reproducible --frozen -p synddb-sequencer
+RUN cargo build --profile reproducible --locked -p synddb-sequencer
 ```
 
-The `--frozen` flag is stricter than `--locked`, failing if `Cargo.lock` needs any updates.
+The `--locked` flag ensures `Cargo.lock` is respected exactly, preventing any dependency drift.
 
 ### 5. Sequential Compilation
 
