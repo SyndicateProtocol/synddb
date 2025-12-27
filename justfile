@@ -7,11 +7,9 @@
 # Usage:
 #   just                    # Show available commands
 #   just dev                # Start full local environment
-#   just deploy             # Deploy contracts to Anvil
-#   just sequencer          # Run sequencer only
-#   just validator          # Run validator only
 #   just test               # Run all tests
-#   just check              # Run all CI checks
+#   just check              # Run all lints
+#   just fmt                # Format code
 #
 # Modules:
 #   just contracts::build   # Build Solidity contracts
@@ -97,14 +95,14 @@ default:
 # Local Development
 # ============================================================================
 
-# Start full local dev environment (Anvil + contracts + sequencer)
+# Start local dev environment (Anvil + contracts + sequencer)
 [group('dev')]
 dev:
     ./scripts/dev-env.sh
 
-# Start dev environment with validator
+# Start full dev environment (Anvil + contracts + sequencer + validator)
 [group('dev')]
-dev-validator:
+dev-full:
     ./scripts/dev-env.sh --validator
 
 # Deploy contracts to local Anvil (starts Anvil if not running)
@@ -135,15 +133,6 @@ sequencer:
     DATABASE_PATH={{ data_dir }}/sequencer.db \
     cargo run -p synddb-sequencer --release
 
-# Run sequencer (release binary, faster startup)
-[group('components')]
-sequencer-release:
-    mkdir -p {{ data_dir }}
-    SIGNING_KEY={{ anvil_key_0 }} \
-    BIND_ADDRESS=127.0.0.1:{{ sequencer_port }} \
-    DATABASE_PATH={{ data_dir }}/sequencer.db \
-    ./target/release/synddb-sequencer
-
 # Run validator with local defaults
 [group('components')]
 validator:
@@ -154,17 +143,6 @@ validator:
     STATE_DB_PATH={{ data_dir }}/validator_state.db \
     PENDING_CHANGESETS_DB_PATH={{ data_dir }}/pending_changesets.db \
     cargo run -p synddb-validator --release
-
-# Run validator (release binary, faster startup)
-[group('components')]
-validator-release:
-    mkdir -p {{ data_dir }}
-    SEQUENCER_PUBKEY={{ sequencer_pubkey }} \
-    SEQUENCER_URL=http://127.0.0.1:{{ sequencer_port }} \
-    DATABASE_PATH={{ data_dir }}/validator.db \
-    STATE_DB_PATH={{ data_dir }}/validator_state.db \
-    PENDING_CHANGESETS_DB_PATH={{ data_dir }}/pending_changesets.db \
-    ./target/release/synddb-validator
 
 # Run validator with bridge signer enabled
 [group('components')]
@@ -179,7 +157,7 @@ validator-bridge:
     BRIDGE_CONTRACT={{ bridge_address }} \
     BRIDGE_CHAIN_ID=31337 \
     BRIDGE_SIGNING_KEY={{ anvil_key_0 }} \
-    ./target/release/synddb-validator
+    cargo run -p synddb-validator --release
 
 # ============================================================================
 # Building
@@ -199,7 +177,7 @@ build-release:
 # Testing
 # ============================================================================
 
-# Run all tests
+# Run unit tests
 [group('test')]
 test:
     cargo nextest run --workspace --all-features --exclude synddb-e2e --exclude synddb-e2e-gcs
@@ -209,64 +187,112 @@ test:
 test-verbose:
     cargo nextest run --workspace --all-features --exclude synddb-e2e --exclude synddb-e2e-gcs --no-capture
 
-# Run fuzzer
+# Run stress test (starts sequencer automatically)
+[group('test')]
+test-stress:
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    cargo build --package synddb-benchmark --bin session-stress-test --release
+    cargo build --package synddb-sequencer --release
+    SIGNING_KEY={{ anvil_key_0 }} ./target/release/synddb-sequencer &
+    SEQUENCER_PID=$!
+    trap "kill $SEQUENCER_PID 2>/dev/null || true" EXIT
+    for i in {1..30}; do
+        if curl -s http://localhost:8433/health > /dev/null 2>&1; then
+            echo "Sequencer is healthy"
+            break
+        fi
+        echo "Waiting for sequencer... ($i/30)"
+        sleep 1
+    done
+    ./target/release/session-stress-test --duration ${STRESS_TEST_DURATION:-15}
+
+# Run client integration tests (starts sequencer automatically)
+[group('test')]
+test-integration:
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    cargo build --package synddb-sequencer --release
+    SIGNING_KEY={{ anvil_key_0 }} ./target/release/synddb-sequencer &
+    SEQUENCER_PID=$!
+    trap "kill $SEQUENCER_PID 2>/dev/null || true" EXIT
+    for i in {1..30}; do
+        if curl -s http://localhost:8433/health > /dev/null 2>&1; then
+            echo "Sequencer is healthy"
+            break
+        fi
+        echo "Waiting for sequencer... ($i/30)"
+        sleep 1
+    done
+    cargo test -p synddb-client --lib -- --ignored --skip attestation
+
+# Run SQLite fuzzer (set PROPTEST_CASES for more iterations)
 [group('test')]
 fuzz:
-    cargo test -p synddb-fuzzer --release
+    PROPTEST_CASES=${PROPTEST_CASES:-256} cargo test -p synddb-fuzzer --release
 
-# Run E2E fuzzer
+# Run E2E pipeline fuzzer (set PROPTEST_CASES for more iterations)
 [group('test')]
 fuzz-e2e:
-    cargo test -p synddb-e2e-fuzzer --release
+    PROPTEST_CASES=${PROPTEST_CASES:-100} cargo test -p synddb-e2e-fuzzer --release
+
+# Run E2E stress tests (set PROPTEST_CASES for more iterations)
+[group('test')]
+fuzz-e2e-stress:
+    PROPTEST_CASES=${PROPTEST_CASES:-10} cargo test -p synddb-e2e-fuzzer --release -- --ignored
 
 # ============================================================================
-# Code Quality (CI uses these individually, `just check` runs all)
+# Linting (CI uses these individually, `just check` runs all)
 # ============================================================================
+
+# Run Clippy lints
+[group('lint')]
+lint:
+    cargo clippy --workspace --all-targets --all-features
 
 # Check TOML formatting
-[group('quality')]
-taplo:
+[group('lint')]
+lint-toml:
     taplo lint "**/Cargo.toml"
     taplo fmt --check "**/Cargo.toml"
 
 # Check for unused dependencies
-[group('quality')]
-machete:
+[group('lint')]
+lint-deps:
     cargo machete
 
 # Check Rust formatting
-[group('quality')]
-fmt-check:
+[group('lint')]
+lint-fmt:
     cargo +nightly fmt --all --check
 
-# Run Clippy lints
-[group('quality')]
-clippy:
-    cargo clippy --workspace --all-targets --all-features
-
-# Build documentation (checks for doc warnings)
-[group('quality')]
-docs-check:
+# Check documentation builds without warnings
+[group('lint')]
+lint-docs:
     cargo doc --workspace --all-features --no-deps
 
-# Run all CI checks locally (sequential, for convenience)
-[group('quality')]
-check: taplo machete fmt-check clippy
+# Run all lints (for local development)
+[group('lint')]
+check: lint-toml lint-deps lint-fmt lint
     @echo "All checks passed!"
 
-# Fix all auto-fixable issues
-[group('quality')]
-fix:
-    taplo fmt "**/Cargo.toml"
-    cargo +nightly fmt --all
-    cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged
+# ============================================================================
+# Formatting
+# ============================================================================
 
 # Format all code (Rust, TOML, Solidity)
-[group('quality')]
+[group('format')]
 fmt:
     cargo +nightly fmt --all
     taplo fmt "**/Cargo.toml"
     cd contracts && forge fmt
+
+# Fix all auto-fixable issues
+[group('format')]
+fix:
+    taplo fmt "**/Cargo.toml"
+    cargo +nightly fmt --all
+    cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged
 
 # ============================================================================
 # Cleanup
@@ -316,64 +342,10 @@ docker-up:
 
 # Run with Docker Compose (detached)
 [group('docker')]
-docker-up-detached:
+docker-detached:
     docker compose up --build -d
 
 # Stop Docker Compose
 [group('docker')]
 docker-down:
     docker compose down -v
-
-# ============================================================================
-# CI Integration Tests (also runnable locally)
-# ============================================================================
-
-# Run stress test (starts sequencer, runs test, stops sequencer)
-[group('ci')]
-stress-test:
-    #!/usr/bin/env bash
-    set -euxo pipefail
-    cargo build --package synddb-benchmark --bin session-stress-test --release
-    cargo build --package synddb-sequencer --release
-    SIGNING_KEY={{ anvil_key_0 }} ./target/release/synddb-sequencer &
-    SEQUENCER_PID=$!
-    trap "kill $SEQUENCER_PID 2>/dev/null || true" EXIT
-    for i in {1..30}; do
-        if curl -s http://localhost:8433/health > /dev/null 2>&1; then
-            echo "Sequencer is healthy"
-            break
-        fi
-        echo "Waiting for sequencer... ($i/30)"
-        sleep 1
-    done
-    ./target/release/session-stress-test --duration ${STRESS_TEST_DURATION:-15}
-
-# Run client integration tests (starts sequencer, runs tests, stops sequencer)
-[group('ci')]
-client-integration:
-    #!/usr/bin/env bash
-    set -euxo pipefail
-    cargo build --package synddb-sequencer --release
-    SIGNING_KEY={{ anvil_key_0 }} ./target/release/synddb-sequencer &
-    SEQUENCER_PID=$!
-    trap "kill $SEQUENCER_PID 2>/dev/null || true" EXIT
-    for i in {1..30}; do
-        if curl -s http://localhost:8433/health > /dev/null 2>&1; then
-            echo "Sequencer is healthy"
-            break
-        fi
-        echo "Waiting for sequencer... ($i/30)"
-        sleep 1
-    done
-    cargo test -p synddb-client --lib -- --ignored --skip attestation
-
-# Run SQLite fuzzer (with configurable iterations)
-[group('ci')]
-fuzz-ci:
-    PROPTEST_CASES=${PROPTEST_CASES:-256} cargo test -p synddb-fuzzer --release
-
-# Run E2E fuzzer (with configurable iterations)
-[group('ci')]
-fuzz-e2e-ci:
-    PROPTEST_CASES=${PROPTEST_CASES:-100} cargo test -p synddb-e2e-fuzzer --release
-    PROPTEST_CASES=${PROPTEST_CASES_STRESS:-10} cargo test -p synddb-e2e-fuzzer --release -- --ignored

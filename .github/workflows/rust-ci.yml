@@ -28,7 +28,7 @@ env:
   RUST_VERSION: "1.91.0"
 
 jobs:
-  taplo:
+  lint-toml:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: TOML Format
     runs-on: ubuntu-latest
@@ -51,9 +51,9 @@ jobs:
           args: taplo-cli@0.9.0
 
       - name: Check TOML formatting
-        run: just taplo
+        run: just lint-toml
 
-  machete:
+  lint-deps:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Unused Dependencies
     runs-on: ubuntu-latest
@@ -76,14 +76,14 @@ jobs:
           args: cargo-machete@0.7.0
 
       - name: Check for unused dependencies
-        run: just machete
+        run: just lint-deps
 
       - name: Check for unused dependencies (tests/confidential-space)
         run: |
           cargo machete tests/confidential-space
           cargo machete tests/confidential-space/gcp-confidential-space
 
-  fmt:
+  lint-fmt:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Rust Format
     runs-on: ubuntu-latest
@@ -99,14 +99,14 @@ jobs:
           rustup component add --toolchain nightly rustfmt
 
       - name: Check Rust formatting
-        run: just fmt-check
+        run: just lint-fmt
 
       - name: Check Rust formatting (tests/confidential-space)
         run: |
           cargo +nightly fmt --all --check --manifest-path tests/confidential-space/Cargo.toml
           cargo +nightly fmt --all --check --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
 
-  clippy:
+  lint:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Clippy Lints
     runs-on: ubuntu-latest
@@ -126,7 +126,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Clippy
-        run: just clippy
+        run: just lint
 
       - name: Run Clippy (tests/confidential-space)
         run: |
@@ -134,7 +134,7 @@ jobs:
           cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
 
       - name: Check documentation builds
-        run: just docs-check
+        run: just lint-docs
         env:
           RUSTDOCFLAGS: "-D warnings"
 
@@ -170,7 +170,7 @@ jobs:
       - name: Run tests (tests/confidential-space)
         run: cargo test --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
 
-  stress-test:
+  test-stress:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Session Stress Test
     runs-on: ubuntu-latest
@@ -190,9 +190,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run stress test
-        run: just stress-test
+        run: just test-stress
 
-  client-integration:
+  test-integration:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Client Integration Tests
     runs-on: ubuntu-latest
@@ -212,9 +212,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run client integration tests
-        run: just client-integration
+        run: just test-integration
 
-  fuzzer:
+  fuzz:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: SQLite Fuzzer
     runs-on: ubuntu-latest
@@ -234,11 +234,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run fuzzer tests
-        run: just fuzz-ci
+        run: just fuzz
         env:
           PROPTEST_CASES: "256"
 
-  e2e-fuzzer:
+  fuzz-e2e:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: E2E Pipeline Fuzzer
     runs-on: ubuntu-latest
@@ -258,10 +258,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run E2E fuzzer tests
-        run: just fuzz-e2e-ci
+        run: just fuzz-e2e
         env:
           PROPTEST_CASES: "100"
-          PROPTEST_CASES_STRESS: "10"
+
+      - name: Run E2E stress tests
+        run: just fuzz-e2e-stress
+        env:
+          PROPTEST_CASES: "10"
 
   justfile-validate:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
