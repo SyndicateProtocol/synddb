@@ -1,0 +1,29 @@
+# Lefthook - Git hooks manager
+# Install: brew install lefthook OR cargo install lefthook
+# Setup: lefthook install
+#
+# https://github.com/evilmartians/lefthook
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt-check:
+      glob: "*.rs"
+      run: cargo +nightly fmt --all --check
+      fail_text: "Rust formatting check failed. Run 'just fmt' to fix."
+
+    clippy:
+      glob: "*.rs"
+      run: cargo clippy --workspace --all-targets --all-features --quiet
+      fail_text: "Clippy found issues. Run 'cargo clippy' to see details."
+
+    toml-fmt:
+      glob: "*.toml"
+      run: taplo fmt --check "**/Cargo.toml"
+      fail_text: "TOML formatting check failed. Run 'taplo fmt \"**/Cargo.toml\"' to fix."
+
+pre-push:
+  commands:
+    test:
+      run: cargo test --workspace --lib --quiet
+      fail_text: "Tests failed. Run 'just test' to see details."

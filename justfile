@@ -105,6 +105,11 @@ dev:
 dev-full:
     ./scripts/dev-env.sh --validator
 
+# Watch mode - rebuild on file changes
+[group('dev')]
+watch:
+    cargo watch -x 'check --workspace'
+
 # Deploy contracts to local Anvil (starts Anvil if not running)
 [group('dev')]
 deploy:
@@ -330,6 +335,20 @@ kill-anvil:
 [group('docs')]
 docs:
     cargo doc --workspace --all-features --no-deps --open
+
+# ============================================================================
+# Dependencies
+# ============================================================================
+
+# Show outdated dependencies
+[group('deps')]
+outdated:
+    cargo outdated -R
+
+# Run security audit
+[group('deps')]
+audit:
+    cargo audit
 
 # ============================================================================
 # Docker
