@@ -281,3 +281,25 @@ jobs:
         env:
           # Run more proptest iterations in CI
           PROPTEST_CASES: "256"
+
+  e2e-fuzzer:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: E2E Pipeline Fuzzer
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run E2E fuzzer tests
+        run: cargo test -p synddb-e2e-fuzzer --release
+        env:
+          # Run proptest iterations in CI
+          PROPTEST_CASES: "100"
