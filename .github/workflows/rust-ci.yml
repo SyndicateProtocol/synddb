@@ -309,3 +309,28 @@ jobs:
         env:
           # Fewer iterations for expensive stress tests
           PROPTEST_CASES: "10"
+
+  justfile-validate:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Justfile Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Validate justfile syntax
+        run: just --fmt --check
+
+      - name: List available recipes
+        run: |
+          echo "=== Root recipes ==="
+          just --list
+          echo ""
+          echo "=== Contracts module ==="
+          just --list contracts
+          echo ""
+          echo "=== Examples module ==="
+          just --list examples
