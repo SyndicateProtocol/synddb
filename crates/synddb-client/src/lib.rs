@@ -51,10 +51,10 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Automatic Pushing
+//! # Automatic Sending
 //!
-//! Changesets are automatically pushed every second (configurable via `flush_interval`).
-//! Use [`SyndDB::push()`] to force immediate push for low-latency
+//! Changesets are automatically sent every second (configurable via `flush_interval`).
+//! Use [`SyndDB::push()`] to force immediate send for low-latency
 //! or high-value changes.
 //!
 //! # Transactions
@@ -687,13 +687,13 @@ impl SyndDB {
     }
 
     // =========================================================================
-    // Publishing
+    // Sending
     // =========================================================================
 
-    /// Push all pending changesets to the sequencer immediately
+    /// Send all pending changesets to the sequencer immediately
     ///
-    /// Changesets are automatically pushed on a timer (default: every second).
-    /// Use this method to force immediate push for low-latency or high-value
+    /// Changesets are automatically sent on a timer (default: every second).
+    /// Use this method to force immediate send for low-latency or high-value
     /// changes that shouldn't wait for the next timer tick.
     ///
     /// Also called automatically on `Drop` for graceful shutdown.
@@ -1014,7 +1014,7 @@ impl SyndDB {
         self.stats.is_healthy()
     }
 
-    /// Get the number of changesets waiting to be pushed
+    /// Get the number of changesets waiting to be sent
     ///
     /// # Example
     ///
@@ -1031,7 +1031,7 @@ impl SyndDB {
         self.stats.pending_count()
     }
 
-    /// Get the total number of successfully pushed changesets
+    /// Get the total number of successfully sent changesets
     pub fn pushed_count(&self) -> u64 {
         self.stats.pushed_count()
     }
@@ -1040,7 +1040,7 @@ impl SyndDB {
     // Lifecycle
     // =========================================================================
 
-    /// Gracefully shutdown the client, pushing any pending changesets and snapshots
+    /// Gracefully shutdown the client, sending any pending changesets and snapshots
     pub fn shutdown(mut self) -> Result<()> {
         info!("Shutting down SyndDB client");
 

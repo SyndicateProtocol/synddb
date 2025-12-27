@@ -12,7 +12,7 @@
  *   const db = new Database('app.db');
  *   db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
  *
- *   // Optionally force immediate push (auto-pushes every second)
+ *   // Optionally force immediate send (auto-sends every second)
  *   synddb.push();
  *
  *   // Create a snapshot (optional)
@@ -127,7 +127,7 @@ const ffi = {
 };
 
 /**
- * SyndDB client handle - automatically captures and pushes SQLite changesets
+ * SyndDB client handle - automatically captures and sends SQLite changesets
  */
 class SyndDB {
   constructor(handle) {
@@ -223,7 +223,7 @@ class SyndDB {
 
     if (result !== SyndDBError.SUCCESS) {
       const errorMsg = ffi.synddb_last_error() || 'Unknown error';
-      throw new Error(`Failed to push changeset (error ${result}): ${errorMsg}`);
+      throw new Error(`Failed to send changeset (error ${result}): ${errorMsg}`);
     }
   }
 
@@ -380,7 +380,7 @@ class SyndDB {
   /**
    * Detach SyndDB and free resources
    *
-   * This gracefully shuts down the client, pushing any pending changesets.
+   * This gracefully shuts down the client, sending any pending changesets.
    * The instance cannot be used after this call.
    *
    * @example

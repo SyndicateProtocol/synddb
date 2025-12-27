@@ -1,7 +1,7 @@
 //! Example Rust application using synddb-client
 //!
 //! **Complexity:** Beginner
-//! **Features:** Basic attachment, automatic pushing, manual push
+//! **Features:** Basic attachment, automatic sending, manual push
 //! **Prerequisites:** Sequencer running on localhost:8433
 //! **Run:** `cargo run --example rust_example`
 
@@ -64,8 +64,8 @@ fn main() -> Result<()> {
     println!("✓ Changesets are automatically captured and sent to sequencer");
     println!("  (flushed every 1 second by default)");
 
-    // Wait a moment to let automatic push happen
-    println!("\nWaiting 2 seconds for automatic push...");
+    // Wait a moment to let automatic send happen
+    println!("\nWaiting 2 seconds for automatic send...");
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // You can also force immediate push for critical transactions:

@@ -39,7 +39,7 @@ conn.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER, name TEXT)")
 conn.execute("INSERT INTO users VALUES (?, ?)", (1, 'Alice'))
 conn.commit()
 
-# Changes are automatically pushed every 1 second
+# Changes are automatically sent every 1 second
 
 # Clean up when done (optional - Python GC will handle it)
 synddb.detach()
@@ -59,21 +59,21 @@ synddb = SyndDB.attach_with_config(
 )
 ```
 
-### Manual Pushing
+### Manual Sending
 
-Changesets are pushed automatically every 1 second. For critical transactions, push immediately:
+Changesets are sent automatically every 1 second. For critical transactions, send immediately:
 
 ```python
 from synddb import attach
 
 synddb = attach('app.db', 'http://localhost:8433')
 
-# Critical transaction - push immediately after commit
+# Critical transaction - send immediately after commit
 import sqlite3
 conn = sqlite3.connect('app.db')
 conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 1000000))
 conn.commit()
-synddb.push()  # Force immediate push
+synddb.push()  # Force immediate send
 ```
 
 **When to call `push()` manually:**
@@ -81,7 +81,7 @@ synddb.push()  # Force immediate push
 - Before application shutdown (handled automatically by `detach()`)
 - When you need to ensure data is sent before proceeding
 
-**When automatic pushing is sufficient:**
+**When automatic sending is sufficient:**
 - Normal application operations
 - High-throughput batch processing
 
@@ -95,7 +95,7 @@ with SyndDB.attach('app.db', 'http://localhost:8433') as synddb:
     conn = sqlite3.connect('app.db')
     conn.execute("INSERT INTO users VALUES (?, ?)", (2, 'Bob'))
     conn.commit()
-# Automatically detaches and pushes on exit
+# Automatically detaches and sends on exit
 ```
 
 ## API Reference
@@ -124,7 +124,7 @@ Attach with custom configuration.
 
 ### `synddb.push()`
 
-Force immediate push of all pending changesets.
+Force immediate send of all pending changesets.
 
 ### `synddb.snapshot()`
 
@@ -141,7 +141,7 @@ This creates a complete database snapshot (schema + data) and sends it to the se
 
 ### `synddb.detach()`
 
-Gracefully shutdown and free resources. Pushes any pending changesets.
+Gracefully shutdown and free resources. Sends any pending changesets.
 
 ### `synddb.version()`
 

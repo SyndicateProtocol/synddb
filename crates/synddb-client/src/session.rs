@@ -7,9 +7,9 @@
 //! - Background threads only receive `Vec<u8>` bytes through channels
 //! - `push()` and `snapshot()` have debug assertions verifying the calling thread
 //!
-//! # Pushing
+//! # Sending
 //!
-//! Changesets must be pushed explicitly via `push()`. Automatic pushing via
+//! Changesets must be sent explicitly via `push()`. Automatic sending via
 //! UPDATE or COMMIT hooks is not possible because `SQLite`'s session extension requires reading from
 //! the database during extraction, which is not allowed inside hook callbacks.
 
@@ -62,9 +62,9 @@ struct SessionState {
     snapshot_interval: u64,
     changesets_since_snapshot: u64,
     snapshot_tx: Option<Sender<Snapshot>>,
-    /// Flag to indicate changes have occurred since last push
+    /// Flag to indicate changes have occurred since last send
     has_changes: bool,
-    /// Hash of `sqlite_master` to detect schema changes between pushes.
+    /// Hash of `sqlite_master` to detect schema changes between sends.
     /// If the schema changes (DDL executed), we automatically trigger a snapshot.
     last_schema_hash: u64,
 }
@@ -445,7 +445,7 @@ impl SessionMonitor {
         })
     }
 
-    /// Trigger changeset extraction and pushing.
+    /// Trigger changeset extraction and sending.
     /// Call this after committing transactions to send changesets to the sequencer.
     /// Must be called from the same thread that created the `SessionMonitor`.
     pub(crate) fn push(&self) -> Result<()> {

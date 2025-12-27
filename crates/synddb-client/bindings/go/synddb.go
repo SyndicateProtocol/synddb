@@ -11,13 +11,13 @@
 //	}
 //	defer handle.Detach()
 //
-//	// Execute SQL - changes are captured and pushed
+//	// Execute SQL - changes are captured and sent
 //	rows, err := handle.Execute("INSERT INTO trades VALUES (1, 100)")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //
-//	// Push changes immediately (optional, auto-pushes on timer)
+//	// Push changes immediately (optional, auto-sends on timer)
 //	handle.Push()
 //
 //	// Create snapshot after schema changes
@@ -171,7 +171,7 @@ func AttachWithConfig(dbPath, sequencerURL string, config Config) (*Handle, erro
 
 // Detach disconnects from SyndDB and frees resources
 //
-// This gracefully shuts down the client, pushing any pending changesets.
+// This gracefully shuts down the client, sending any pending changesets.
 // The Handle must not be used after calling Detach.
 func (h *Handle) Detach() {
 	if h.handle != nil {
@@ -180,10 +180,10 @@ func (h *Handle) Detach() {
 	}
 }
 
-// Push forces immediate push of all pending changesets
+// Push forces immediate send of all pending changesets
 //
-// Changesets are automatically pushed on a timer. Use this to force
-// immediate push for low-latency or high-value changes.
+// Changesets are automatically sent on a timer. Use this to force
+// immediate send for low-latency or high-value changes.
 func (h *Handle) Push() error {
 	if h.handle == nil {
 		return errors.New("handle is nil or already detached")

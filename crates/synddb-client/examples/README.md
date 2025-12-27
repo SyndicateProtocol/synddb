@@ -17,12 +17,12 @@ cargo run --package synddb-sequencer -- --config config/default.yaml
 
 #### [`rust_example.rs`](./rust_example.rs)
 **Complexity:** Beginner
-**Features:** Basic attachment, automatic changeset pushing, manual push
+**Features:** Basic attachment, automatic changeset sending, manual push
 **Run:** `cargo run --example rust_example`
 
 The simplest example showing how to integrate SyndDB into a Rust application. Demonstrates:
 - One-line integration with `SyndDB::attach()`
-- Automatic changeset pushing
+- Automatic changeset sending
 - Manual `push()` calls
 - Realistic order book usage pattern
 

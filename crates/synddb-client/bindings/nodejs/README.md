@@ -41,7 +41,7 @@ const db = new Database('app.db');
 db.prepare('CREATE TABLE IF NOT EXISTS users (id INTEGER, name TEXT)').run();
 db.prepare('INSERT INTO users VALUES (?, ?)').run(1, 'Alice');
 
-// Changes are automatically pushed every 1 second
+// Changes are automatically sent every 1 second
 
 // Clean up when done (optional - Node.js GC will handle it)
 synddb.detach();
@@ -63,9 +63,9 @@ const synddb = SyndDB.attachWithConfig(
 );
 ```
 
-### Manual Pushing
+### Manual Sending
 
-Changesets are pushed automatically every 1 second. For critical transactions, push immediately:
+Changesets are sent automatically every 1 second. For critical transactions, send immediately:
 
 ```javascript
 const { attach } = require('./synddb');
@@ -73,10 +73,10 @@ const Database = require('better-sqlite3');
 
 const synddb = attach('app.db', 'http://localhost:8433');
 
-// Critical transaction - push immediately after commit
+// Critical transaction - send immediately after commit
 const db = new Database('app.db');
 db.prepare('INSERT INTO trades VALUES (?, ?)').run(1, 1000000);
-synddb.push();  // Force immediate push
+synddb.push();  // Force immediate send
 ```
 
 **When to call `push()` manually:**
@@ -84,7 +84,7 @@ synddb.push();  // Force immediate push
 - Before application shutdown (handled automatically by `detach()`)
 - When you need to ensure data is sent before proceeding
 
-**When automatic pushing is sufficient:**
+**When automatic sending is sufficient:**
 - Normal application operations
 - High-throughput batch processing
 
@@ -99,7 +99,7 @@ using synddb = SyndDB.attach('app.db', 'http://localhost:8433');
   const db = new Database('app.db');
   db.prepare('INSERT INTO users VALUES (?, ?)').run(2, 'Bob');
 }
-// Automatically detaches and pushes on scope exit
+// Automatically detaches and sends on scope exit
 ```
 
 ## API Reference
@@ -129,7 +129,7 @@ Attach with custom configuration.
 
 ### `synddb.push()`
 
-Force immediate push of all pending changesets.
+Force immediate send of all pending changesets.
 
 ### `synddb.snapshot()`
 
@@ -146,7 +146,7 @@ This creates a complete database snapshot (schema + data) and sends it to the se
 
 ### `synddb.detach()`
 
-Gracefully shutdown and free resources. Pushes any pending changesets.
+Gracefully shutdown and free resources. Sends any pending changesets.
 
 ### `version()`
 

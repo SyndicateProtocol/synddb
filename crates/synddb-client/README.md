@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     tx.execute("INSERT INTO trades VALUES (?1, ?2)", params![2, 200])?;
     tx.commit()?;
 
-    // Optionally force immediate push (auto-pushes every second)
+    // Optionally force immediate send (auto-sends every second)
     synddb.push()?;
 
     Ok(())
@@ -92,11 +92,11 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 2. **Captures changesets** automatically via update hooks
 3. **Background thread** sends batches to sequencer via HTTP
 4. **Automatic retries** with exponential backoff
-5. **Graceful shutdown** pushes any remaining pending changesets
+5. **Graceful shutdown** sends any remaining pending changesets
 
-## Pushing Changesets
+## Sending Changesets
 
-Changesets are automatically pushed every second (configurable via `flush_interval`). Use `push()` to force immediate push for low-latency or high-value changes:
+Changesets are automatically sent every second (configurable via `flush_interval`). Use `push()` to force immediate send for low-latency or high-value changes:
 
 ```rust
 // After a transaction or batch of operations
@@ -105,7 +105,7 @@ tx.execute("INSERT INTO orders ...", params![...])?;
 tx.execute("UPDATE balances ...", params![...])?;
 tx.commit()?;
 
-// Force immediate push (optional - auto-pushes every second)
+// Force immediate send (optional - auto-sends every second)
 synddb.push()?;
 ```
 
@@ -114,7 +114,7 @@ synddb.push()?;
 - For high-value operations where immediate confirmation is important
 - Before graceful shutdown (also called automatically on `Drop`)
 
-Changesets are also automatically pushed when `SyndDB` is dropped (graceful shutdown).
+Changesets are also automatically sent when `SyndDB` is dropped (graceful shutdown).
 
 ## What It Does NOT Do
 
@@ -142,7 +142,7 @@ let conn = Box::leak(Box::new(Connection::open("app.db")?));
 - SQLite cleanup (closing file handles, WAL checkpoint) happens at process exit
 - This is acceptable for typical single-connection-per-process usage
 
-**Note:** `SyndDB` itself is dropped normally and performs graceful shutdown (pushing pending changesets, joining background threads).
+**Note:** `SyndDB` itself is dropped normally and performs graceful shutdown (sending pending changesets, joining background threads).
 
 **Manual Connection cleanup:** If you need to explicitly close the Connection (e.g., to flush WAL), you can reclaim ownership after shutting down SyndDB:
 

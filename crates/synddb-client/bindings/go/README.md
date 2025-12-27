@@ -65,14 +65,14 @@ func main() {
         log.Fatal(err)
     }
 
-    // Insert data - changes are captured and published
+    // Insert data - changes are captured and sent
     rows, err := handle.Execute("INSERT INTO users (name) VALUES ('Alice')")
     if err != nil {
         log.Fatal(err)
     }
     log.Printf("Inserted %d row(s)", rows)
 
-    // Force immediate push for critical data
+    // Force immediate send for critical data
     err = handle.Push()
     if err != nil {
         log.Fatal(err)
@@ -152,7 +152,7 @@ Gracefully disconnect and free resources.
 
 #### `Push() error`
 
-Force immediate push of pending changesets.
+Force immediate send of pending changesets.
 
 #### `Snapshot() (int, error)`
 
