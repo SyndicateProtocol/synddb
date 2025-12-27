@@ -251,6 +251,90 @@ impl ValidatorConfig {
                 .then(|| local_defaults::BRIDGE_CONTRACT.to_string())
         })
     }
+
+    // =========================================================================
+    // Builder methods for testing
+    // =========================================================================
+
+    /// Set the database path
+    pub fn with_database_path(mut self, path: impl Into<String>) -> Self {
+        self.database_path = path.into();
+        self
+    }
+
+    /// Set the state database path
+    pub fn with_state_db_path(mut self, path: impl Into<String>) -> Self {
+        self.state_db_path = path.into();
+        self
+    }
+
+    /// Set the fetcher type
+    pub fn with_fetcher_type(mut self, fetcher_type: FetcherType) -> Self {
+        self.fetcher_type = fetcher_type;
+        self
+    }
+
+    /// Set the sequencer URL for HTTP fetcher
+    pub fn with_sequencer_url(mut self, url: impl Into<String>) -> Self {
+        self.sequencer_url = Some(url.into());
+        self
+    }
+
+    /// Set the GCS bucket for GCS fetcher
+    pub fn with_gcs_bucket(mut self, bucket: impl Into<String>) -> Self {
+        self.gcs_bucket = Some(bucket.into());
+        self
+    }
+
+    /// Set the GCS prefix
+    pub fn with_gcs_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.gcs_prefix = prefix.into();
+        self
+    }
+
+    /// Set the GCS emulator host for testing
+    pub fn with_gcs_emulator_host(mut self, host: impl Into<String>) -> Self {
+        self.gcs_storage_emulator_host = Some(host.into());
+        self
+    }
+
+    /// Set the bind address for HTTP API
+    pub fn with_bind_address(mut self, addr: SocketAddr) -> Self {
+        self.bind_address = addr;
+        self
+    }
+
+    /// Set the sync poll interval
+    pub fn with_sync_interval(mut self, interval: Duration) -> Self {
+        self.sync_interval = interval;
+        self
+    }
+
+    /// Set the start sequence number
+    pub fn with_start_sequence(mut self, sequence: u64) -> Self {
+        self.start_sequence = sequence;
+        self
+    }
+
+    /// Enable or disable batch sync mode
+    pub fn with_batch_sync_enabled(mut self, enabled: bool) -> Self {
+        self.batch_sync_enabled = enabled;
+        self
+    }
+
+    /// Configure bridge signer mode
+    pub fn with_bridge_signer(
+        mut self,
+        contract: impl Into<String>,
+        chain_id: u64,
+        signing_key: impl Into<String>,
+    ) -> Self {
+        self.bridge_signer = true;
+        self.bridge_contract = Some(contract.into());
+        self.bridge_chain_id = Some(chain_id);
+        self.bridge_signing_key = Some(signing_key.into());
+        self
+    }
 }
 
 #[cfg(test)]
