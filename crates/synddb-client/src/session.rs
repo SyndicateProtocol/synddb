@@ -345,7 +345,7 @@ impl SessionMonitor {
         state.has_changes = false;
 
         if changeset_data.is_empty() {
-            trace!("No changes to publish");
+            trace!("No changes to push");
             return Ok(());
         }
 

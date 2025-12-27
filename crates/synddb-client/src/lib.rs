@@ -2712,7 +2712,7 @@ mod tests {
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
     fn test_auto_schema_detection_create_table() {
-        // When a table is created via direct DDL, the next publish should
+        // When a table is created via direct DDL, the next push should
         // automatically detect the schema change and send a snapshot first.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
@@ -2732,7 +2732,7 @@ mod tests {
         conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
             .unwrap();
 
-        // Publish will detect schema change and send snapshot first
+        // Push will detect schema change and send snapshot first
         synddb.push().unwrap();
 
         // Verify data is correct
@@ -2773,7 +2773,7 @@ mod tests {
         conn.execute("UPDATE users SET email = 'alice@test.com' WHERE id = 1", [])
             .unwrap();
 
-        // This publish will auto-detect the schema change
+        // This push will auto-detect the schema change
         synddb.push().unwrap();
 
         // Verify
