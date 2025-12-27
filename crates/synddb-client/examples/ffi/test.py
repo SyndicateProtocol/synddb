@@ -90,8 +90,8 @@ lib.synddb_attach_with_config.argtypes = [
 ]
 lib.synddb_attach_with_config.restype = ctypes.c_int
 
-lib.synddb_publish_changeset.argtypes = [ctypes.POINTER(SyndDBHandle)]
-lib.synddb_publish_changeset.restype = ctypes.c_int
+lib.synddb_push.argtypes = [ctypes.POINTER(SyndDBHandle)]
+lib.synddb_push.restype = ctypes.c_int
 
 lib.synddb_publish_snapshot.argtypes = [
     ctypes.POINTER(SyndDBHandle),
@@ -139,16 +139,16 @@ def main():
         return 1
     print("   ✓ Successfully attached to database\n")
 
-    # Test 4: Manual publish
-    print("4. Testing synddb_publish_changeset()...")
-    result = lib.synddb_publish_changeset(handle)
+    # Test 4: Manual push
+    print("4. Testing synddb_push()...")
+    result = lib.synddb_push(handle)
     if result != SyndDBError.SUCCESS:
         error = lib.synddb_last_error()
         error_str = error.decode('utf-8') if error else "(unknown error)"
-        print(f"   ✗ Failed to publish: {error_str}")
+        print(f"   ✗ Failed to push: {error_str}")
         lib.synddb_detach(handle)
         return 1
-    print("   ✓ Successfully published\n")
+    print("   ✓ Successfully pushed\n")
 
     # Test 5: Create snapshot
     print("5. Testing synddb_publish_snapshot()...")

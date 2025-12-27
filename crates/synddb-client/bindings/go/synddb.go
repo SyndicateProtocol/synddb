@@ -11,11 +11,14 @@
 //	}
 //	defer handle.Detach()
 //
-//	// Execute SQL - changes are captured and published
+//	// Execute SQL - changes are captured and pushed
 //	rows, err := handle.Execute("INSERT INTO trades VALUES (1, 100)")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
+//
+//	// Push changes immediately (optional, auto-pushes on timer)
+//	handle.Push()
 //
 //	// Create snapshot after schema changes
 //	size, err := handle.Snapshot()
@@ -46,7 +49,7 @@ extern const char* synddb_version(void);
 extern const char* synddb_last_error(void);
 extern SyndDBError synddb_attach(const char* db_path, const char* sequencer_url, SyndDBHandle** out_handle);
 extern SyndDBError synddb_attach_with_config(const char* db_path, const char* sequencer_url, uint64_t flush_interval_ms, uint64_t snapshot_interval, SyndDBHandle** out_handle);
-extern SyndDBError synddb_publish_changeset(SyndDBHandle* handle);
+extern SyndDBError synddb_push(SyndDBHandle* handle);
 extern SyndDBError synddb_publish_snapshot(SyndDBHandle* handle, size_t* out_size);
 extern void synddb_detach(SyndDBHandle* handle);
 extern int64_t synddb_execute(SyndDBHandle* handle, const char* sql);
@@ -177,18 +180,18 @@ func (h *Handle) Detach() {
 	}
 }
 
-// Publish forces immediate publication of all pending changesets
+// Push forces immediate push of all pending changesets
 //
-// Changesets are automatically published on a timer. Use this to force
-// immediate publication for low-latency or high-value changes.
-func (h *Handle) Publish() error {
+// Changesets are automatically pushed on a timer. Use this to force
+// immediate push for low-latency or high-value changes.
+func (h *Handle) Push() error {
 	if h.handle == nil {
 		return errors.New("handle is nil or already detached")
 	}
 
-	result := C.synddb_publish_changeset(h.handle)
+	result := C.synddb_push(h.handle)
 	if result != C.SyndDBSuccess {
-		return getError(result, "failed to publish")
+		return getError(result, "failed to push")
 	}
 	return nil
 }

@@ -13,8 +13,8 @@ Usage:
     conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 100))
     conn.commit()
 
-    # Optionally force immediate publish (auto-publishes every second)
-    synddb.publish_changeset()
+    # Optionally force immediate push (auto-pushes every second)
+    synddb.push()
 
     # Create a snapshot (optional)
     synddb.snapshot()
@@ -104,8 +104,8 @@ _lib.synddb_attach_with_config.argtypes = [
 ]
 _lib.synddb_attach_with_config.restype = ctypes.c_int
 
-_lib.synddb_publish_changeset.argtypes = [ctypes.POINTER(_SyndDBHandle)]
-_lib.synddb_publish_changeset.restype = ctypes.c_int
+_lib.synddb_push.argtypes = [ctypes.POINTER(_SyndDBHandle)]
+_lib.synddb_push.restype = ctypes.c_int
 
 _lib.synddb_publish_snapshot.argtypes = [
     ctypes.POINTER(_SyndDBHandle),
@@ -225,28 +225,28 @@ class SyndDB:
 
         return cls(handle)
 
-    def publish_changeset(self):
+    def push(self):
         """
-        Publish all pending changesets to the sequencer immediately
+        Push all pending changesets to the sequencer immediately
 
-        Changesets are automatically published on a timer. Use this to force
-        immediate publication for low-latency or high-value changes.
+        Changesets are automatically pushed on a timer. Use this to force
+        immediate push for low-latency or high-value changes.
 
         Raises:
-            RuntimeError: If publish fails
+            RuntimeError: If push fails
 
         Example:
-            >>> synddb.publish_changeset()
+            >>> synddb.push()
         """
         if not self._handle:
             raise RuntimeError("SyndDB handle already detached")
 
-        result = _lib.synddb_publish_changeset(self._handle)
+        result = _lib.synddb_push(self._handle)
 
         if result != SyndDBError.SUCCESS:
             error_msg = _lib.synddb_last_error()
             error_str = error_msg.decode('utf-8') if error_msg else "Unknown error"
-            raise RuntimeError(f"Failed to publish changeset (error {result}): {error_str}")
+            raise RuntimeError(f"Failed to push changeset (error {result}): {error_str}")
 
     def snapshot(self) -> int:
         """

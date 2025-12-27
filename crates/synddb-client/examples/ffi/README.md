@@ -56,11 +56,11 @@ int synddb_attach_with_config(
     SyndDBHandle** out_handle
 );
 
-// Manually publish pending changesets
-int synddb_publish_changeset(SyndDBHandle* handle);
+// Push pending changesets to sequencer
+int synddb_push(SyndDBHandle* handle);
 
-// Create and publish a database snapshot
-int synddb_publish_snapshot(
+// Create and push a database snapshot
+int synddb_snapshot(
     SyndDBHandle* handle,
     size_t* out_size
 );
@@ -241,10 +241,10 @@ All FFI examples have been tested and verified:
 3. Testing synddb_attach()...
    ✓ Successfully attached to database
 
-4. Testing synddb_publish_changeset()...
-   ✓ Successfully published
+4. Testing synddb_push()...
+   ✓ Successfully pushed
 
-5. Testing synddb_publish_snapshot()...
+5. Testing synddb_snapshot()...
    ✓ Successfully created snapshot (4096 bytes)
 
 6. Testing synddb_detach()...
@@ -268,10 +268,10 @@ All FFI examples have been tested and verified:
 3. Testing synddb_attach()...
    ✓ Successfully attached to database
 
-4. Testing synddb_publish_changeset()...
-   ✓ Successfully published
+4. Testing synddb_push()...
+   ✓ Successfully pushed
 
-5. Testing synddb_publish_snapshot()...
+5. Testing synddb_snapshot()...
    ✓ Successfully created snapshot (4096 bytes)
 
 6. Testing synddb_attach_with_config()...
@@ -298,10 +298,10 @@ All FFI examples have been tested and verified:
 3. Testing synddb_attach()...
    ✓ Successfully attached to database
 
-4. Testing synddb_publish_changeset()...
-   ✓ Successfully published
+4. Testing synddb_push()...
+   ✓ Successfully pushed
 
-5. Testing synddb_publish_snapshot()...
+5. Testing synddb_snapshot()...
    ✓ Successfully created snapshot (4096 bytes)
 
 6. Testing synddb_attach_with_config()...
@@ -321,7 +321,7 @@ The typical workflow across all languages is:
 2. **Define function signatures** - Match the C FFI interface
 3. **Call `synddb_attach()`** - Attach to your SQLite database
 4. **Use your database normally** - Changesets are automatically captured
-5. **Optionally call `synddb_publish_changeset()`** - For critical transactions
+5. **Optionally call `synddb_push()`** - For critical transactions
 6. **Call `synddb_detach()`** - Cleanup when done
 
 ## Error Handling

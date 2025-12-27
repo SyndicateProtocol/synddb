@@ -70,7 +70,7 @@ SyndDBError synddb_attach_with_config(
 );
 
 /**
- * Publish all pending changesets to the sequencer
+ * Push all pending changesets to the sequencer
  *
  * Call this after committing transactions to send changesets to the sequencer.
  * Also called automatically on detach for graceful shutdown.
@@ -78,7 +78,7 @@ SyndDBError synddb_attach_with_config(
  * @param handle SyndDB handle from synddb_attach()
  * @return SYNDDB_SUCCESS on success, error code otherwise
  */
-SyndDBError synddb_publish_changeset(SyndDBHandle* handle);
+SyndDBError synddb_push(SyndDBHandle* handle);
 
 /**
  * Create and publish a snapshot to the sequencer

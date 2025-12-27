@@ -40,7 +40,7 @@ extern SyndDBError synddb_attach_with_config(
     SyndDBHandle** out_handle
 );
 
-extern SyndDBError synddb_publish_changeset(SyndDBHandle* handle);
+extern SyndDBError synddb_push(SyndDBHandle* handle);
 
 extern SyndDBError synddb_publish_snapshot(
     SyndDBHandle* handle,
@@ -88,16 +88,16 @@ int main(void) {
     }
     printf("   ✓ Successfully attached to database\n\n");
 
-    // Test 4: Manual publish (should succeed even with no data)
-    printf("4. Testing synddb_publish_changeset()...\n");
-    result = synddb_publish_changeset(handle);
+    // Test 4: Manual push (should succeed even with no data)
+    printf("4. Testing synddb_push()...\n");
+    result = synddb_push(handle);
     if (result != Success) {
         const char* error = synddb_last_error();
-        printf("   ✗ Failed to publish: %s\n", error ? error : "(unknown error)");
+        printf("   ✗ Failed to push: %s\n", error ? error : "(unknown error)");
         synddb_detach(handle);
         return 1;
     }
-    printf("   ✓ Successfully published\n\n");
+    printf("   ✓ Successfully pushed\n\n");
 
     // Test 5: Create snapshot
     printf("5. Testing synddb_publish_snapshot()...\n");

@@ -72,8 +72,8 @@ func main() {
     }
     log.Printf("Inserted %d row(s)", rows)
 
-    // Force immediate publish for critical data
-    err = handle.Publish()
+    // Force immediate push for critical data
+    err = handle.Push()
     if err != nil {
         log.Fatal(err)
     }
@@ -150,9 +150,9 @@ Get the last error message.
 
 Gracefully disconnect and free resources.
 
-#### `Publish() error`
+#### `Push() error`
 
-Force immediate publication of pending changesets.
+Force immediate push of pending changesets.
 
 #### `Snapshot() (int, error)`
 

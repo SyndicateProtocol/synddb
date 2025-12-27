@@ -12,8 +12,8 @@
  *   const db = new Database('app.db');
  *   db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
  *
- *   // Optionally force immediate publish (auto-publishes every second)
- *   synddb.publish();
+ *   // Optionally force immediate push (auto-pushes every second)
+ *   synddb.push();
  *
  *   // Create a snapshot (optional)
  *   const size = synddb.snapshot();
@@ -113,7 +113,7 @@ const ffi = {
     'uint64',   // snapshot_interval
     SyndDBHandlePtrPtr  // out_handle
   ]),
-  synddb_publish_changeset: lib.func('synddb_publish_changeset', 'int', [SyndDBHandlePtr]),
+  synddb_push: lib.func('synddb_push', 'int', [SyndDBHandlePtr]),
   synddb_publish_snapshot: lib.func('synddb_publish_snapshot', 'int', [
     SyndDBHandlePtr,
     koffi.out(koffi.pointer('size_t'))
@@ -204,26 +204,26 @@ class SyndDB {
   }
 
   /**
-   * Publish all pending changesets to the sequencer
+   * Push all pending changesets to the sequencer
    *
    * Call this after committing transactions to send changesets to the sequencer.
    * Also called automatically on detach for graceful shutdown.
    *
-   * @throws {Error} If publish fails
+   * @throws {Error} If push fails
    *
    * @example
-   * synddb.publish();
+   * synddb.push();
    */
-  publish() {
+  push() {
     if (!this._handle) {
       throw new Error('SyndDB handle already detached');
     }
 
-    const result = ffi.synddb_publish_changeset(this._handle);
+    const result = ffi.synddb_push(this._handle);
 
     if (result !== SyndDBError.SUCCESS) {
       const errorMsg = ffi.synddb_last_error() || 'Unknown error';
-      throw new Error(`Failed to publish changeset (error ${result}): ${errorMsg}`);
+      throw new Error(`Failed to push changeset (error ${result}): ${errorMsg}`);
     }
   }
 
