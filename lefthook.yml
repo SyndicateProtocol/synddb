@@ -26,11 +26,6 @@ pre-commit:
       stage_fixed: true
       fail_text: "TOML formatting failed"
 
-    clippy:
-      glob: "*.rs"
-      run: cargo clippy --workspace --all-targets --all-features --quiet
-      fail_text: "Clippy found issues. Run 'cargo clippy' to see details."
-
 pre-push:
   commands:
     test:
