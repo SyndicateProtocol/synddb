@@ -155,7 +155,7 @@ cargo test -p synddb-sequencer
 
 The project uses [just](https://github.com/casey/just) as a command runner for local development. The justfile is the single source of truth for all development defaults (Anvil keys, contract addresses, ports).
 
-**When to use:** Local development only. CI uses explicit commands for parallelism and caching. The justfile is validated in CI but not executed.
+**When to use:** Both local development and CI. The justfile is the single source of truth - CI jobs call the same recipes you run locally.
 
 **Quick start:**
 ```bash
@@ -170,6 +170,13 @@ just test         # Run tests
 just contracts::build    # Build Solidity contracts
 just contracts::test     # Run contract tests
 just examples::price-oracle      # Run price oracle example
+```
+
+**CI recipes:** Integration tests that start/stop services:
+```bash
+just stress-test         # Run stress test with sequencer
+just client-integration  # Run client integration tests
+just fuzz-ci             # Run fuzzer with CI iterations
 ```
 
 ### Language Features Used

@@ -220,21 +220,38 @@ fuzz-e2e:
     cargo test -p synddb-e2e-fuzzer --release
 
 # ============================================================================
-# Code Quality
+# Code Quality (CI uses these individually, `just check` runs all)
 # ============================================================================
 
-# Run all CI checks (non-destructive)
+# Check TOML formatting
 [group('quality')]
-check:
-    @echo "Checking TOML formatting..."
+taplo:
     taplo lint "**/Cargo.toml"
     taplo fmt --check "**/Cargo.toml"
-    @echo "Checking for unused dependencies..."
+
+# Check for unused dependencies
+[group('quality')]
+machete:
     cargo machete
-    @echo "Checking Rust formatting..."
+
+# Check Rust formatting
+[group('quality')]
+fmt-check:
     cargo +nightly fmt --all --check
-    @echo "Running Clippy..."
+
+# Run Clippy lints
+[group('quality')]
+clippy:
     cargo clippy --workspace --all-targets --all-features
+
+# Build documentation (checks for doc warnings)
+[group('quality')]
+docs-check:
+    cargo doc --workspace --all-features --no-deps
+
+# Run all CI checks locally (sequential, for convenience)
+[group('quality')]
+check: taplo machete fmt-check clippy
     @echo "All checks passed!"
 
 # Fix all auto-fixable issues
@@ -283,7 +300,7 @@ kill-anvil:
 # Documentation
 # ============================================================================
 
-# Build and open docs
+# Build and open docs in browser
 [group('docs')]
 docs:
     cargo doc --workspace --all-features --no-deps --open
@@ -306,3 +323,57 @@ docker-up-detached:
 [group('docker')]
 docker-down:
     docker compose down -v
+
+# ============================================================================
+# CI Integration Tests (also runnable locally)
+# ============================================================================
+
+# Run stress test (starts sequencer, runs test, stops sequencer)
+[group('ci')]
+stress-test:
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    cargo build --package synddb-benchmark --bin session-stress-test --release
+    cargo build --package synddb-sequencer --release
+    SIGNING_KEY={{ anvil_key_0 }} ./target/release/synddb-sequencer &
+    SEQUENCER_PID=$!
+    trap "kill $SEQUENCER_PID 2>/dev/null || true" EXIT
+    for i in {1..30}; do
+        if curl -s http://localhost:8433/health > /dev/null 2>&1; then
+            echo "Sequencer is healthy"
+            break
+        fi
+        echo "Waiting for sequencer... ($i/30)"
+        sleep 1
+    done
+    ./target/release/session-stress-test --duration ${STRESS_TEST_DURATION:-15}
+
+# Run client integration tests (starts sequencer, runs tests, stops sequencer)
+[group('ci')]
+client-integration:
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    cargo build --package synddb-sequencer --release
+    SIGNING_KEY={{ anvil_key_0 }} ./target/release/synddb-sequencer &
+    SEQUENCER_PID=$!
+    trap "kill $SEQUENCER_PID 2>/dev/null || true" EXIT
+    for i in {1..30}; do
+        if curl -s http://localhost:8433/health > /dev/null 2>&1; then
+            echo "Sequencer is healthy"
+            break
+        fi
+        echo "Waiting for sequencer... ($i/30)"
+        sleep 1
+    done
+    cargo test -p synddb-client --lib -- --ignored --skip attestation
+
+# Run SQLite fuzzer (with configurable iterations)
+[group('ci')]
+fuzz-ci:
+    PROPTEST_CASES=${PROPTEST_CASES:-256} cargo test -p synddb-fuzzer --release
+
+# Run E2E fuzzer (with configurable iterations)
+[group('ci')]
+fuzz-e2e-ci:
+    PROPTEST_CASES=${PROPTEST_CASES:-100} cargo test -p synddb-e2e-fuzzer --release
+    PROPTEST_CASES=${PROPTEST_CASES_STRESS:-10} cargo test -p synddb-e2e-fuzzer --release -- --ignored
