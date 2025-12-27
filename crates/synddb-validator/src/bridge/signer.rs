@@ -51,6 +51,9 @@ pub struct BridgeSigner {
 
 impl BridgeSigner {
     /// Create a new bridge signer from configuration
+    ///
+    /// When chain ID is 31337 (Anvil), uses local development defaults for the bridge contract
+    /// if not explicitly configured.
     pub fn new(config: &ValidatorConfig) -> Result<Self> {
         let signing_key = config
             .bridge_signing_key
@@ -58,9 +61,10 @@ impl BridgeSigner {
             .context("--bridge-signing-key is required")?;
 
         let bridge_contract: Address = config
-            .bridge_contract
-            .as_ref()
-            .context("--bridge-contract is required")?
+            .bridge_contract_with_local_fallback()
+            .context(
+                "--bridge-contract is required (or use --bridge-chain-id 31337 for local default)",
+            )?
             .parse()
             .context("Invalid bridge contract address")?;
 
