@@ -1361,12 +1361,12 @@ mod tests {
 
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
-    fn test_multiple_publish_cycles_independent() {
-        // Test that multiple publish cycles produce independent changesets.
+    fn test_multiple_push_cycles_independent() {
+        // Test that multiple push cycles produce independent changesets.
         // This is the core test for the session recreation fix.
         //
-        // Before the fix: Each publish would include ALL previous changes.
-        // After the fix: Each publish only includes changes since last publish.
+        // Before the fix: Each push would include ALL previous changes.
+        // After the fix: Each push only includes changes since last push.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
         conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
             .unwrap();
@@ -1441,7 +1441,7 @@ mod tests {
         conn.execute("INSERT INTO users VALUES (10, 'NewUser', 500)", [])
             .unwrap();
 
-        // Publish - this changeset should only contain the update and insert,
+        // Push - this changeset should only contain the update and insert,
         // not the original 10 users (those are in the snapshot)
         synddb.push().unwrap();
 
@@ -1457,7 +1457,7 @@ mod tests {
         // Simulates the exact orderbook benchmark pattern that revealed the bug:
         // 1. Batch insert users in a transaction
         // 2. Individual balance inserts
-        // 3. Multiple publish cycles
+        // 3. Multiple push cycles
         //
         // This pattern was causing duplicate changesets before the fix.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
@@ -1705,7 +1705,7 @@ mod tests {
             drop(tx);
         }
 
-        // Publish - should have nothing new (rollback discarded changes)
+        // Push - should have nothing new (rollback discarded changes)
         synddb.push().unwrap();
 
         // Make another committed change
@@ -2040,7 +2040,7 @@ mod tests {
     // =========================================================================
     //
     // These tests verify the marker file system for recovering from crashes
-    // that occur after direct DDL but before publish().
+    // that occur after direct DDL but before push().
 
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
@@ -2425,7 +2425,7 @@ mod tests {
             .unwrap();
         }
 
-        // Several publish cycles (changesets would fail on validators)
+        // Several push cycles (changesets would fail on validators)
         synddb.push().unwrap();
         thread::sleep(std::time::Duration::from_millis(100));
 
@@ -2702,12 +2702,12 @@ mod tests {
     // =========================================================================
     //
     // These tests verify that the client automatically detects schema changes
-    // (DDL) and publishes snapshots before changesets, even when DDL is executed
+    // (DDL) and sends snapshots before changesets, even when DDL is executed
     // directly via connection() instead of execute_ddl().
     //
     // The key insight: SQLite's update hook doesn't fire for DDL, but we can
     // still detect schema changes by comparing the hash of sqlite_master before
-    // each publish. If the hash changed, we know DDL occurred.
+    // each push. If the hash changed, we know DDL occurred.
 
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
@@ -2786,7 +2786,7 @@ mod tests {
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
     fn test_auto_schema_detection_multiple_ddl() {
-        // Multiple DDL operations before publish - only one snapshot needed
+        // Multiple DDL operations before push - only one snapshot needed
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
         let config = Config {
@@ -2832,7 +2832,7 @@ mod tests {
             .execute_ddl("CREATE TABLE test (id INTEGER PRIMARY KEY)")
             .unwrap();
 
-        // Multiple publishes with no schema changes - no extra snapshots
+        // Multiple pushes with no schema changes - no extra snapshots
         for i in 1..=10 {
             conn.execute("INSERT INTO test VALUES (?1)", [i]).unwrap();
             synddb.push().unwrap();
