@@ -65,7 +65,7 @@ const synddb = SyndDB.attachWithConfig(
 
 ### Manual Sending
 
-Changesets are sent automatically every 1 second. For critical transactions, send immediately:
+Changesets are pushed automatically every 1 second. For critical transactions, push immediately:
 
 ```javascript
 const { attach } = require('./synddb');
@@ -73,10 +73,10 @@ const Database = require('better-sqlite3');
 
 const synddb = attach('app.db', 'http://localhost:8433');
 
-// Critical transaction - send immediately after commit
+// Critical transaction - push immediately after commit
 const db = new Database('app.db');
 db.prepare('INSERT INTO trades VALUES (?, ?)').run(1, 1000000);
-synddb.push();  // Force immediate send
+synddb.push();  // Force immediate push
 ```
 
 **When to call `push()` manually:**
@@ -129,7 +129,7 @@ Attach with custom configuration.
 
 ### `synddb.push()`
 
-Force immediate send of all pending changesets.
+Force immediate push of all pending changesets.
 
 ### `synddb.snapshot()`
 

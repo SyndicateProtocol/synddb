@@ -72,7 +72,7 @@ func main() {
     }
     log.Printf("Inserted %d row(s)", rows)
 
-    // Force immediate send for critical data
+    // Force immediate push for critical data
     err = handle.Push()
     if err != nil {
         log.Fatal(err)
@@ -152,7 +152,7 @@ Gracefully disconnect and free resources.
 
 #### `Push() error`
 
-Force immediate send of pending changesets.
+Force immediate push of pending changesets.
 
 #### `Snapshot() (int, error)`
 

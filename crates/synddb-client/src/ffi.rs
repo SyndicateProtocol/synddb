@@ -216,10 +216,10 @@ pub unsafe extern "C" fn synddb_attach_with_config(
     SyndDBError::Success
 }
 
-/// Send all pending changesets to the sequencer immediately
+/// Push all pending changesets to the sequencer immediately
 ///
-/// Changesets are automatically sent on a timer. Use this to force
-/// immediate send for low-latency or high-value changes.
+/// Changesets are automatically pushed on a timer. Use this to force
+/// immediate push for low-latency or high-value changes.
 ///
 /// # Arguments
 /// * `handle` - `SyndDB` handle from `synddb_attach()`
@@ -243,7 +243,7 @@ pub unsafe extern "C" fn synddb_push(handle: *mut SyndDBHandle) -> SyndDBError {
     match synddb.push() {
         Ok(_) => SyndDBError::Success,
         Err(e) => {
-            set_last_error(format!("Failed to send changeset: {}", e));
+            set_last_error(format!("Failed to push changeset: {}", e));
             SyndDBError::PublishError
         }
     }
@@ -258,10 +258,10 @@ pub unsafe extern "C" fn synddb_push(handle: *mut SyndDBHandle) -> SyndDBError {
 /// # Behavior
 ///
 /// This function is consistent with `synddb_push()` for changesets:
-/// - `synddb_push()` - sends pending changesets to sequencer
-/// - `synddb_snapshot()` - creates database snapshot and sends to sequencer
+/// - `synddb_push()` - pushes pending changesets to sequencer
+/// - `synddb_snapshot()` - creates database snapshot and pushes to sequencer
 ///
-/// Both operations send data to the sequencer immediately (synchronous).
+/// Both operations push data to the sequencer immediately (synchronous).
 ///
 /// # When to Use
 ///

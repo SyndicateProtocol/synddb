@@ -17,13 +17,13 @@ use tokio::sync::RwLock;
 pub struct ReplicationStats {
     /// Number of changesets pending in the buffer
     pub(crate) pending_changesets: AtomicUsize,
-    /// Number of changesets successfully sent
+    /// Number of changesets successfully pushed
     pub(crate) pushed_changesets: AtomicU64,
-    /// Number of failed send attempts
+    /// Number of failed push attempts
     pub(crate) failed_pushes: AtomicU64,
     /// Whether the last health check succeeded
     pub(crate) last_health_check_ok: AtomicBool,
-    /// Time of last successful send (protected by `RwLock` for `Instant`)
+    /// Time of last successful push (protected by `RwLock` for `Instant`)
     pub(crate) last_push_time: RwLock<Option<Instant>>,
     /// Time of last successful health check
     pub(crate) last_health_check_time: RwLock<Option<Instant>>,
@@ -53,12 +53,12 @@ impl ReplicationStats {
         self.pending_changesets.load(Ordering::Relaxed)
     }
 
-    /// Get total number of successfully sent changesets
+    /// Get total number of successfully pushed changesets
     pub fn pushed_count(&self) -> u64 {
         self.pushed_changesets.load(Ordering::Relaxed)
     }
 
-    /// Get number of failed send attempts
+    /// Get number of failed push attempts
     pub fn failed_count(&self) -> u64 {
         self.failed_pushes.load(Ordering::Relaxed)
     }
@@ -78,7 +78,7 @@ impl ReplicationStats {
         self.pending_changesets.fetch_sub(n, Ordering::Relaxed);
     }
 
-    /// Record a successful send
+    /// Record a successful push
     pub(crate) async fn record_push(&self, count: usize) {
         self.pushed_changesets
             .fetch_add(count as u64, Ordering::Relaxed);
@@ -86,7 +86,7 @@ impl ReplicationStats {
         *self.last_push_time.write().await = Some(Instant::now());
     }
 
-    /// Record a failed send
+    /// Record a failed push
     pub(crate) fn record_failure(&self) {
         self.failed_pushes.fetch_add(1, Ordering::Relaxed);
     }
@@ -113,9 +113,9 @@ pub fn new_stats_handle() -> StatsHandle {
 pub struct StatsSnapshot {
     /// Number of changesets pending in buffer
     pub pending_changesets: usize,
-    /// Total changesets successfully sent
+    /// Total changesets successfully pushed
     pub pushed_changesets: u64,
-    /// Total failed send attempts
+    /// Total failed push attempts
     pub failed_pushes: u64,
     /// Whether sequencer is reachable
     pub is_healthy: bool,

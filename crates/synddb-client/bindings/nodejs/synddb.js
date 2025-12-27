@@ -12,7 +12,7 @@
  *   const db = new Database('app.db');
  *   db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
  *
- *   // Optionally force immediate send (auto-sends every second)
+ *   // Optionally force immediate push (auto-pushes every second)
  *   synddb.push();
  *
  *   // Create a snapshot (optional)
@@ -206,7 +206,7 @@ class SyndDB {
   /**
    * Push all pending changesets to the sequencer
    *
-   * Call this after committing transactions to send changesets to the sequencer.
+   * Call this after committing transactions to push changesets to the sequencer.
    * Also called automatically on detach for graceful shutdown.
    *
    * @throws {Error} If push fails
@@ -223,7 +223,7 @@ class SyndDB {
 
     if (result !== SyndDBError.SUCCESS) {
       const errorMsg = ffi.synddb_last_error() || 'Unknown error';
-      throw new Error(`Failed to send changeset (error ${result}): ${errorMsg}`);
+      throw new Error(`Failed to push changeset (error ${result}): ${errorMsg}`);
     }
   }
 

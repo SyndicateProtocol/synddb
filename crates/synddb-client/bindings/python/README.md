@@ -61,19 +61,19 @@ synddb = SyndDB.attach_with_config(
 
 ### Manual Sending
 
-Changesets are sent automatically every 1 second. For critical transactions, send immediately:
+Changesets are pushed automatically every 1 second. For critical transactions, push immediately:
 
 ```python
 from synddb import attach
 
 synddb = attach('app.db', 'http://localhost:8433')
 
-# Critical transaction - send immediately after commit
+# Critical transaction - push immediately after commit
 import sqlite3
 conn = sqlite3.connect('app.db')
 conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 1000000))
 conn.commit()
-synddb.push()  # Force immediate send
+synddb.push()  # Force immediate push
 ```
 
 **When to call `push()` manually:**
@@ -124,7 +124,7 @@ Attach with custom configuration.
 
 ### `synddb.push()`
 
-Force immediate send of all pending changesets.
+Force immediate push of all pending changesets.
 
 ### `synddb.snapshot()`
 

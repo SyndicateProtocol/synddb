@@ -687,13 +687,13 @@ impl SyndDB {
     }
 
     // =========================================================================
-    // Sending
+    // Pushing
     // =========================================================================
 
-    /// Send all pending changesets to the sequencer immediately
+    /// Push all pending changesets to the sequencer immediately
     ///
-    /// Changesets are automatically sent on a timer (default: every second).
-    /// Use this method to force immediate send for low-latency or high-value
+    /// Changesets are automatically pushed on a timer (default: every second).
+    /// Use this method to force immediate push for low-latency or high-value
     /// changes that shouldn't wait for the next timer tick.
     ///
     /// Also called automatically on `Drop` for graceful shutdown.
@@ -704,10 +704,10 @@ impl SyndDB {
             .push()
     }
 
-    /// Create a local snapshot of the database (does NOT send to sequencer)
+    /// Create a local snapshot of the database (does NOT push to sequencer)
     ///
     /// This captures the full current state of the database as a portable `SQLite` file.
-    /// The snapshot is returned but **not sent to the sequencer**. Use this when you
+    /// The snapshot is returned but **not pushed to the sequencer**. Use this when you
     /// need the snapshot data locally (e.g., for backup, testing, or manual transfer).
     ///
     /// # Important
@@ -756,10 +756,10 @@ impl SyndDB {
     /// # Behavior
     ///
     /// 1. Creates a complete database snapshot (like [`create_snapshot()`])
-    /// 2. Sends the snapshot to the sequencer via HTTP (synchronous, blocking)
+    /// 2. Pushes the snapshot to the sequencer via HTTP (synchronous, blocking)
     /// 3. Waits for sequencer acknowledgment before returning
     ///
-    /// This is consistent with [`push()`] - both methods send data
+    /// This is consistent with [`push()`] - both methods push data
     /// to the sequencer immediately.
     ///
     /// [`push()`]: Self::push

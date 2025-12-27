@@ -180,10 +180,10 @@ func (h *Handle) Detach() {
 	}
 }
 
-// Push forces immediate send of all pending changesets
+// Push forces immediate push of all pending changesets
 //
-// Changesets are automatically sent on a timer. Use this to force
-// immediate send for low-latency or high-value changes.
+// Changesets are automatically pushed on a timer. Use this to force
+// immediate push for low-latency or high-value changes.
 func (h *Handle) Push() error {
 	if h.handle == nil {
 		return errors.New("handle is nil or already detached")

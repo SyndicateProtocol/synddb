@@ -72,7 +72,7 @@ SyndDBError synddb_attach_with_config(
 /**
  * Push all pending changesets to the sequencer
  *
- * Call this after committing transactions to send changesets to the sequencer.
+ * Call this after committing transactions to push changesets to the sequencer.
  * Also called automatically on detach for graceful shutdown.
  *
  * @param handle SyndDB handle from synddb_attach()
@@ -88,8 +88,8 @@ SyndDBError synddb_push(SyndDBHandle* handle);
  * is NOT captured in changesets.
  *
  * This is consistent with synddb_push() for changesets:
- * - synddb_push() - sends pending changesets to sequencer
- * - synddb_snapshot() - creates and sends snapshot to sequencer
+ * - synddb_push() - pushes pending changesets to sequencer
+ * - synddb_snapshot() - creates and pushes snapshot to sequencer
  *
  * When to use:
  * - After CREATE TABLE, ALTER TABLE, or other DDL statements

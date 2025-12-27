@@ -13,7 +13,7 @@ Usage:
     conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 100))
     conn.commit()
 
-    # Optionally force immediate send (auto-sends every second)
+    # Optionally force immediate push (auto-pushes every second)
     synddb.push()
 
     # Create a snapshot (optional)
@@ -227,10 +227,10 @@ class SyndDB:
 
     def push(self):
         """
-        Send all pending changesets to the sequencer immediately
+        Push all pending changesets to the sequencer immediately
 
-        Changesets are automatically sent on a timer. Use this to force
-        immediate send for low-latency or high-value changes.
+        Changesets are automatically pushed on a timer. Use this to force
+        immediate push for low-latency or high-value changes.
 
         Raises:
             RuntimeError: If push fails
@@ -246,7 +246,7 @@ class SyndDB:
         if result != SyndDBError.SUCCESS:
             error_msg = _lib.synddb_last_error()
             error_str = error_msg.decode('utf-8') if error_msg else "Unknown error"
-            raise RuntimeError(f"Failed to send changeset (error {result}): {error_str}")
+            raise RuntimeError(f"Failed to push changeset (error {result}): {error_str}")
 
     def snapshot(self) -> int:
         """
@@ -257,8 +257,8 @@ class SyndDB:
         since DDL is NOT captured in changesets.
 
         This is consistent with push() for changesets:
-        - push() - sends pending changesets to sequencer
-        - snapshot() - creates and sends snapshot to sequencer
+        - push() - pushes pending changesets to sequencer
+        - snapshot() - creates and pushes snapshot to sequencer
 
         When to use:
         - After CREATE TABLE, ALTER TABLE, or other DDL statements

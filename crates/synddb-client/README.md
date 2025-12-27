@@ -1,10 +1,10 @@
 # synddb-client
 
-Lightweight client library for sending SQLite changesets to the SyndDB sequencer.
+Lightweight client library for pushing SQLite changesets to the SyndDB sequencer.
 
 ## Purpose
 
-Runs **in the application's TEE** to capture SQLite changesets and send them to the sequencer TEE (separate VM for key isolation). **Does NOT contain signing keys.**
+Runs **in the application's TEE** to capture SQLite changesets and push them to the sequencer TEE (separate VM for key isolation). **Does NOT contain signing keys.**
 
 ## Usage
 
@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     tx.execute("INSERT INTO trades VALUES (?1, ?2)", params![2, 200])?;
     tx.commit()?;
 
-    // Optionally force immediate send (auto-sends every second)
+    // Optionally force immediate push (auto-pushes every second)
     synddb.push()?;
 
     Ok(())
@@ -94,7 +94,7 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 4. **Automatic retries** with exponential backoff
 5. **Graceful shutdown** sends any remaining pending changesets
 
-## Sending Changesets
+## Pushing Changesets
 
 Changesets are automatically pushed every second (configurable via `push_interval`). Use `push()` to force immediate push for low-latency or high-value changes:
 
@@ -105,7 +105,7 @@ tx.execute("INSERT INTO orders ...", params![...])?;
 tx.execute("UPDATE balances ...", params![...])?;
 tx.commit()?;
 
-// Force immediate send (optional - auto-sends every second)
+// Force immediate push (optional - auto-pushes every second)
 synddb.push()?;
 ```
 
@@ -114,7 +114,7 @@ synddb.push()?;
 - For high-value operations where immediate confirmation is important
 - Before graceful shutdown (also called automatically on `Drop`)
 
-Changesets are also automatically sent when `SyndDB` is dropped (graceful shutdown).
+Changesets are also automatically pushed when `SyndDB` is dropped (graceful shutdown).
 
 ## What It Does NOT Do
 
