@@ -423,31 +423,55 @@ docker-down:
 # Build reproducible sequencer image (distroless)
 [group('reproducible')]
 repro-sequencer:
-    docker build -f docker/reproducible/sequencer.Dockerfile \
+    SOURCE_DATE_EPOCH=0 docker buildx build \
+        --no-cache \
+        --provenance=false \
+        --sbom=false \
+        --build-arg SOURCE_DATE_EPOCH=0 \
         --platform linux/amd64 \
+        --output type=docker,rewrite-timestamp=true \
+        -f docker/reproducible/sequencer.Dockerfile \
         -t synddb-sequencer:reproducible .
 
 # Build reproducible validator image (distroless)
 [group('reproducible')]
 repro-validator:
-    docker build -f docker/reproducible/validator.Dockerfile \
+    SOURCE_DATE_EPOCH=0 docker buildx build \
+        --no-cache \
+        --provenance=false \
+        --sbom=false \
+        --build-arg SOURCE_DATE_EPOCH=0 \
         --platform linux/amd64 \
+        --output type=docker,rewrite-timestamp=true \
+        -f docker/reproducible/validator.Dockerfile \
         -t synddb-validator:reproducible .
 
 # Build debug sequencer image (has shell)
 [group('reproducible')]
 repro-sequencer-debug:
-    docker build -f docker/reproducible/sequencer.Dockerfile \
+    SOURCE_DATE_EPOCH=0 docker buildx build \
+        --no-cache \
+        --provenance=false \
+        --sbom=false \
+        --build-arg SOURCE_DATE_EPOCH=0 \
         --platform linux/amd64 \
+        --output type=docker,rewrite-timestamp=true \
         --target debug \
+        -f docker/reproducible/sequencer.Dockerfile \
         -t synddb-sequencer:debug .
 
 # Build debug validator image (has shell)
 [group('reproducible')]
 repro-validator-debug:
-    docker build -f docker/reproducible/validator.Dockerfile \
+    SOURCE_DATE_EPOCH=0 docker buildx build \
+        --no-cache \
+        --provenance=false \
+        --sbom=false \
+        --build-arg SOURCE_DATE_EPOCH=0 \
         --platform linux/amd64 \
+        --output type=docker,rewrite-timestamp=true \
         --target debug \
+        -f docker/reproducible/validator.Dockerfile \
         -t synddb-validator:debug .
 
 # Build all reproducible images (production)

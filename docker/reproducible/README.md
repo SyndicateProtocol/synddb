@@ -115,6 +115,85 @@ RUN strip --strip-all /app/target/reproducible/synddb-sequencer
 
 Stripping removes variable metadata (build IDs, timestamps) from the binary.
 
+### 9. Fixed CARGO_HOME
+
+```dockerfile
+ENV CARGO_HOME=/cargo
+```
+
+Ensures cargo registry and caches use a consistent path across builds.
+
+### 10. Normalized File Timestamps
+
+```dockerfile
+RUN find /app -type f -exec touch -d "@0" {} +
+RUN touch -d "@0" /app/target/reproducible/synddb-sequencer
+```
+
+Normalizes all source file and binary timestamps to epoch.
+
+## BuildKit Configuration (Critical)
+
+The following BuildKit settings are **essential** for reproducibility:
+
+### 1. Disable Provenance Attestations
+
+```bash
+docker buildx build --provenance=false
+```
+
+Provenance attestations include non-reproducible metadata (build timestamps, builder info). Disable them.
+
+### 2. Disable SBOM Attestations
+
+```bash
+docker buildx build --sbom=false
+```
+
+SBOM (Software Bill of Materials) attestations may also include variable data.
+
+### 3. Rewrite Timestamps
+
+```bash
+docker buildx build --output type=docker,rewrite-timestamp=true
+```
+
+This BuildKit v0.13+ feature rewrites all file timestamps in the final image to match `SOURCE_DATE_EPOCH`.
+
+### 4. Pass SOURCE_DATE_EPOCH
+
+```bash
+SOURCE_DATE_EPOCH=0 docker buildx build --build-arg SOURCE_DATE_EPOCH=0
+```
+
+Pass as both an environment variable and a build argument for complete coverage.
+
+### 5. Pin BuildKit Version
+
+```yaml
+- uses: docker/setup-buildx-action@v3
+  with:
+    driver-opts: |
+      image=moby/buildkit:v0.18.2
+```
+
+Different BuildKit versions may produce different layer hashes.
+
+### Complete Build Command
+
+```bash
+SOURCE_DATE_EPOCH=0 docker buildx build \
+    --no-cache \
+    --provenance=false \
+    --sbom=false \
+    --build-arg SOURCE_DATE_EPOCH=0 \
+    --platform linux/amd64 \
+    --output type=docker,rewrite-timestamp=true \
+    -f docker/reproducible/sequencer.Dockerfile \
+    -t synddb-sequencer:reproducible \
+    .
+```
+
 ## Verification
 
 To verify a build is reproducible:
@@ -170,25 +249,37 @@ These declare which environment variables operators can override without changin
 
 ## CI Integration
 
-For CI verification, add a job that:
+See `.github/workflows/reproducible-builds.yml` for the full CI workflow. Key features:
 
-1. Builds the image twice (with `--no-cache`)
-2. Compares the image digests
-3. Fails if they differ
+1. **Same-machine verification**: Builds twice on the same runner, compares hashes
+2. **Cross-machine verification**: Builds on Ubuntu 22.04 and 24.04, compares hashes across runners
+3. **Uses pinned BuildKit**: Ensures consistent BuildKit version across all builds
 
 ```yaml
-- name: Verify reproducible build
+- uses: docker/setup-buildx-action@v3
+  with:
+    driver-opts: |
+      image=moby/buildkit:v0.18.2
+
+- name: Build image
+  env:
+    SOURCE_DATE_EPOCH: 0
   run: |
-    docker build --no-cache -f docker/reproducible/sequencer.Dockerfile \
-        --platform linux/amd64 -t test1 .
-    docker build --no-cache -f docker/reproducible/sequencer.Dockerfile \
-        --platform linux/amd64 -t test2 .
-
-    HASH1=$(docker inspect test1 --format='{{.Id}}')
-    HASH2=$(docker inspect test2 --format='{{.Id}}')
-
-    if [ "$HASH1" != "$HASH2" ]; then
-        echo "Build is not reproducible!"
-        exit 1
-    fi
+    docker buildx build \
+      --no-cache \
+      --provenance=false \
+      --sbom=false \
+      --build-arg SOURCE_DATE_EPOCH=0 \
+      --platform linux/amd64 \
+      --output type=docker,rewrite-timestamp=true \
+      -f docker/reproducible/sequencer.Dockerfile \
+      -t sequencer:build1 \
+      .
 ```
+
+## References
+
+- [Docker Reproducible Builds](https://docs.docker.com/build/ci/github-actions/reproducible-builds/)
+- [BuildKit Reproducibility](https://github.com/moby/buildkit/blob/master/docs/build-repro.md)
+- [Rust Reproducible Builds](https://github.com/rust-lang/cargo/issues/5505)
+- [SOURCE_DATE_EPOCH](https://reproducible-builds.org/docs/source-date-epoch/)
