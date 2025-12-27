@@ -190,14 +190,14 @@ SyndDB uses SQLite's Session Extension to capture row-level changes deterministi
 
 1. Attaches to your SQLite database via Session Extension
 2. Detects changes via SQLite update hooks
-3. Extracts changesets when `publish()` is called (automatically every 1 second, or manually)
+3. Extracts changesets when `push()` is called (automatically every 1 second, or manually)
 4. Batches changesets and sends to sequencer service via HTTP
 5. Creates periodic snapshots and snapshots on schema changes
 6. Includes TEE attestation tokens with all data
 
 The sequencer service receives changesets from clients, compresses and signs them, then publishes to configured storage layers.
 
-Applications continue using SQLite normally - the client library operates transparently in the background. For critical transactions, applications can call `publish()` immediately after committing.
+Applications continue using SQLite normally - the client library operates transparently in the background. For critical transactions, applications can call `push()` immediately after committing.
 
 ## Requirements
 

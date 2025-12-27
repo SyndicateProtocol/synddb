@@ -39,7 +39,7 @@ conn.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER, name TEXT)")
 conn.execute("INSERT INTO users VALUES (?, ?)", (1, 'Alice'))
 conn.commit()
 
-# Changes are automatically published every 1 second
+# Changes are automatically pushed every 1 second
 
 # Clean up when done (optional - Python GC will handle it)
 synddb.detach()
@@ -59,9 +59,9 @@ synddb = SyndDB.attach_with_config(
 )
 ```
 
-### Manual Publishing
+### Manual Pushing
 
-Changesets are published automatically every 1 second. For critical transactions, publish immediately:
+Changesets are pushed automatically every 1 second. For critical transactions, push immediately:
 
 ```python
 from synddb import attach
@@ -95,7 +95,7 @@ with SyndDB.attach('app.db', 'http://localhost:8433') as synddb:
     conn = sqlite3.connect('app.db')
     conn.execute("INSERT INTO users VALUES (?, ?)", (2, 'Bob'))
     conn.commit()
-# Automatically detaches and publishes on exit
+# Automatically detaches and pushes on exit
 ```
 
 ## API Reference

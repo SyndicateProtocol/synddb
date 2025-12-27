@@ -5,11 +5,11 @@
 //! The Session Extension contains raw pointers that are NOT thread-safe. To avoid races:
 //! - `SessionState` is stored in thread-local storage, accessed only from the main thread
 //! - Background threads only receive `Vec<u8>` bytes through channels
-//! - `publish()` and `snapshot()` have debug assertions verifying the calling thread
+//! - `push()` and `snapshot()` have debug assertions verifying the calling thread
 //!
 //! # Publishing
 //!
-//! Changesets must be published explicitly via `publish()`. Automatic publishing via
+//! Changesets must be pushed explicitly via `push()`. Automatic pushing via
 //! UPDATE or COMMIT hooks is not possible because `SQLite`'s session extension requires reading from
 //! the database during extraction, which is not allowed inside hook callbacks.
 
@@ -235,7 +235,7 @@ impl SessionMonitor {
     ///
     /// **Note**: Changeset extraction cannot happen inside hooks (`update_hook` or `commit_hook`)
     /// because `SQLite`'s session extension requires reading from the database, which is not
-    /// allowed during hook callbacks. Instead, call `publish()` after transactions complete.
+    /// allowed during hook callbacks. Instead, call `push()` after transactions complete.
     pub(crate) fn start(&self, conn: &Connection) -> Result<()> {
         debug!("Installing hooks for change detection");
 
@@ -452,7 +452,7 @@ impl SessionMonitor {
         debug_assert_eq!(
             thread::current().id(),
             self.owner_thread,
-            "publish() must be called from the same thread that created SyndDB"
+            "push() must be called from the same thread that created SyndDB"
         );
 
         SESSION_STATE.with(|state| {

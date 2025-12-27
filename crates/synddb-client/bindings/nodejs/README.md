@@ -41,7 +41,7 @@ const db = new Database('app.db');
 db.prepare('CREATE TABLE IF NOT EXISTS users (id INTEGER, name TEXT)').run();
 db.prepare('INSERT INTO users VALUES (?, ?)').run(1, 'Alice');
 
-// Changes are automatically published every 1 second
+// Changes are automatically pushed every 1 second
 
 // Clean up when done (optional - Node.js GC will handle it)
 synddb.detach();
@@ -63,9 +63,9 @@ const synddb = SyndDB.attachWithConfig(
 );
 ```
 
-### Manual Publishing
+### Manual Pushing
 
-Changesets are published automatically every 1 second. For critical transactions, publish immediately:
+Changesets are pushed automatically every 1 second. For critical transactions, push immediately:
 
 ```javascript
 const { attach } = require('./synddb');
@@ -73,18 +73,18 @@ const Database = require('better-sqlite3');
 
 const synddb = attach('app.db', 'http://localhost:8433');
 
-// Critical transaction - publish immediately after commit
+// Critical transaction - push immediately after commit
 const db = new Database('app.db');
 db.prepare('INSERT INTO trades VALUES (?, ?)').run(1, 1000000);
-synddb.publish();  // Force immediate publish
+synddb.push();  // Force immediate push
 ```
 
-**When to call `publish()` manually:**
+**When to call `push()` manually:**
 - After critical transactions that must be sent immediately
 - Before application shutdown (handled automatically by `detach()`)
 - When you need to ensure data is sent before proceeding
 
-**When automatic publishing is sufficient:**
+**When automatic pushing is sufficient:**
 - Normal application operations
 - High-throughput batch processing
 
@@ -99,7 +99,7 @@ using synddb = SyndDB.attach('app.db', 'http://localhost:8433');
   const db = new Database('app.db');
   db.prepare('INSERT INTO users VALUES (?, ?)').run(2, 'Bob');
 }
-// Automatically detaches and publishes on scope exit
+// Automatically detaches and pushes on scope exit
 ```
 
 ## API Reference
@@ -127,9 +127,9 @@ Attach with custom configuration.
 
 **Returns:** SyndDB instance
 
-### `synddb.publish()`
+### `synddb.push()`
 
-Force immediate publication of all pending changesets.
+Force immediate push of all pending changesets.
 
 ### `synddb.snapshot()`
 
@@ -146,7 +146,7 @@ This creates a complete database snapshot (schema + data) and sends it to the se
 
 ### `synddb.detach()`
 
-Gracefully shutdown and free resources. Publishes any pending changesets.
+Gracefully shutdown and free resources. Pushes any pending changesets.
 
 ### `version()`
 
