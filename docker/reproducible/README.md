@@ -42,142 +42,48 @@ just repro-sequencer
 just repro-sequencer-debug
 ```
 
-## Reproducibility Features
+## Reproducibility Configuration
 
-The Dockerfiles implement these reproducibility measures:
+Reproducible builds require eliminating all sources of non-determinism. This section documents every flag and why it's necessary.
 
-### 1. Pinned Base Images (by digest)
+### Rust/Cargo Configuration
 
-```dockerfile
-ARG RUST_IMAGE_DIGEST=sha256:9676d0547a...
-FROM rust@${RUST_IMAGE_DIGEST}
-```
+| Setting | Why It's Needed |
+|---------|-----------------|
+| `CARGO_BUILD_JOBS=1` | Parallel compilation produces non-deterministic ordering. Sequential builds are deterministic. |
+| `CARGO_INCREMENTAL=0` | Incremental compilation caches can vary between builds. |
+| `CARGO_HOME=/cargo` | Fixes the cargo registry path. Different paths would embed differently in debug info. |
+| `--locked` | Ensures `Cargo.lock` is respected exactly, preventing dependency drift. |
+| `--remap-path-prefix` | Normalizes absolute paths in binaries. Without this, `/home/user/project` would differ from `/app`. |
 
-Tags like `rust:1.92-bookworm` can change over time. Digests are immutable.
-
-### 2. Deterministic Timestamps
-
-```dockerfile
-ENV SOURCE_DATE_EPOCH=0
-```
-
-All timestamps in the build are set to Unix epoch (1970-01-01), eliminating time-based variation.
-
-### 3. Path Normalization
-
-```dockerfile
-ENV RUSTFLAGS="--remap-path-prefix=/app=/build --remap-path-prefix=/usr/local/cargo=/cargo"
-```
-
-Absolute paths embedded in binaries (debug info, panic messages) are normalized to `/build` and `/cargo`, regardless of where the build actually runs.
-
-### 4. Locked Dependencies
-
-```dockerfile
-RUN cargo build --profile reproducible --locked -p synddb-sequencer
-```
-
-The `--locked` flag ensures `Cargo.lock` is respected exactly, preventing any dependency drift.
-
-### 5. Sequential Compilation
-
-```dockerfile
-ENV CARGO_BUILD_JOBS=1
-```
-
-Parallel compilation can produce different orderings. Single-threaded builds are deterministic.
-
-### 6. Reproducible Cargo Profile
-
-The workspace defines a `[profile.reproducible]` in `Cargo.toml`:
-
+**Cargo Profile** (`Cargo.toml`):
 ```toml
 [profile.reproducible]
 inherits = "release"
-codegen-units = 1  # Single codegen unit for deterministic compilation
-lto = true         # Link-time optimization in one pass
-panic = "abort"    # Simpler binary without unwinding tables
+codegen-units = 1  # Parallel codegen is non-deterministic
+lto = true         # Single LTO pass is more deterministic
+panic = "abort"    # Removes unwinding tables that can vary
 ```
 
-### 7. Disabled Incremental Compilation
+### Docker/BuildKit Configuration
 
-```dockerfile
-ENV CARGO_INCREMENTAL=0
-```
+| Setting | Why It's Needed |
+|---------|-----------------|
+| `--provenance=false` | Provenance attestations embed build timestamps and machine info. **Not reproducible by design.** |
+| `--sbom=false` | SBOM attestations include variable metadata. |
+| `--no-cache` | Layer caching can reuse non-reproducible intermediate results. |
+| `rewrite-timestamp=true` | Rewrites all file timestamps in image layers to `SOURCE_DATE_EPOCH`. |
+| `SOURCE_DATE_EPOCH=0` | Standard for reproducible builds. Sets all timestamps to Unix epoch (1970-01-01). |
+| Pinned BuildKit version | Different versions may hash layers differently. Pin to `moby/buildkit:v0.26.3`. |
+| Pinned base images by digest | Tags like `rust:1.92` can change. Digests (`sha256:...`) are immutable. |
 
-Incremental compilation can produce non-deterministic output.
+### Dockerfile Steps
 
-### 8. Stripped Binaries
-
-```dockerfile
-RUN strip --strip-all /app/target/reproducible/synddb-sequencer
-```
-
-Stripping removes variable metadata (build IDs, timestamps) from the binary.
-
-### 9. Fixed CARGO_HOME
-
-```dockerfile
-ENV CARGO_HOME=/cargo
-```
-
-Ensures cargo registry and caches use a consistent path across builds.
-
-### 10. Normalized File Timestamps
-
-```dockerfile
-RUN find /app -type f -exec touch -d "@0" {} +
-RUN touch -d "@0" /app/target/reproducible/synddb-sequencer
-```
-
-Normalizes all source file and binary timestamps to epoch.
-
-## BuildKit Configuration (Critical)
-
-The following BuildKit settings are **essential** for reproducibility:
-
-### 1. Disable Provenance Attestations
-
-```bash
-docker buildx build --provenance=false
-```
-
-Provenance attestations include non-reproducible metadata (build timestamps, builder info). Disable them.
-
-### 2. Disable SBOM Attestations
-
-```bash
-docker buildx build --sbom=false
-```
-
-SBOM (Software Bill of Materials) attestations may also include variable data.
-
-### 3. Rewrite Timestamps
-
-```bash
-docker buildx build --output type=docker,rewrite-timestamp=true
-```
-
-This BuildKit v0.13+ feature rewrites all file timestamps in the final image to match `SOURCE_DATE_EPOCH`.
-
-### 4. Pass SOURCE_DATE_EPOCH
-
-```bash
-SOURCE_DATE_EPOCH=0 docker buildx build --build-arg SOURCE_DATE_EPOCH=0
-```
-
-Pass as both an environment variable and a build argument for complete coverage.
-
-### 5. Pin BuildKit Version
-
-```yaml
-- uses: docker/setup-buildx-action@v3
-  with:
-    driver-opts: |
-      image=moby/buildkit:v0.26.3
-```
-
-Different BuildKit versions may produce different layer hashes. Pin to a specific version.
+| Step | Why It's Needed |
+|------|-----------------|
+| `find /app -type f -exec touch -d "@0" {} +` | Normalizes source file timestamps before compilation. |
+| `strip --strip-all` | Removes variable metadata (build IDs, timestamps) from binaries. |
+| `touch -d "@0" <binary>` | Ensures final binary has deterministic timestamp. |
 
 ### Complete Build Command
 
