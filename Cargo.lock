@@ -4433,9 +4433,7 @@ dependencies = [
  "anyhow",
  "ciborium",
  "hex",
- "k256",
  "proptest",
- "proptest-derive",
  "rand 0.8.5",
  "rusqlite",
  "synddb-fuzzer",
@@ -4446,7 +4444,6 @@ dependencies = [
  "test-log",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "zstd",
 ]
 
