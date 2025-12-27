@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::sync::providers::mock::MockFetcher;
 use alloy::signers::local::PrivateKeySigner;
