@@ -133,6 +133,22 @@ pub struct SnapshotRequest {
 }
 
 // ============================================================================
+// HTTP response types
+// ============================================================================
+
+/// Batch list item returned by `/storage/batches` endpoint
+///
+/// This is a minimal representation of batch metadata for listing purposes.
+/// Use [`crate::types::batch::BatchInfo`] for full batch metadata including path and hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchListItem {
+    /// First sequence number in this batch (inclusive)
+    pub start_sequence: u64,
+    /// Last sequence number in this batch (inclusive)
+    pub end_sequence: u64,
+}
+
+// ============================================================================
 // CBOR serialization helpers
 // ============================================================================
 

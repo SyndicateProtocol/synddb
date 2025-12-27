@@ -30,6 +30,7 @@ use std::{
 use synddb_shared::types::{
     cbor::{batch::CborBatch, message::CborSignedMessage},
     message::SignedMessage,
+    payloads::BatchListItem,
 };
 use tracing::{debug, info};
 
@@ -498,13 +499,6 @@ impl TransportPublisher for LocalTransport {
 // ============================================================================
 // HTTP Handlers
 // ============================================================================
-
-/// Response for batch list endpoint
-#[derive(serde::Serialize)]
-struct BatchListItem {
-    start_sequence: u64,
-    end_sequence: u64,
-}
 
 /// Response for latest endpoint
 #[derive(serde::Serialize)]
