@@ -5,8 +5,10 @@ on:
     types: [opened, synchronize, reopened, ready_for_review] # Run on all non-draft PRs
     paths:
       - "crates/**"
+      - "examples/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/rust-ci.yml"
       - "tests/**"
       - "justfile"
@@ -24,8 +26,6 @@ env:
   CARGO_TERM_COLOR: always
   # Make sure CI fails on all warnings, including Clippy lints
   RUSTFLAGS: "-Dwarnings"
-  # Rust version for consistency across jobs
-  RUST_VERSION: "1.91.0"
 
 jobs:
   lint-toml:
@@ -117,10 +117,9 @@ jobs:
         uses: extractions/setup-just@v2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_VERSION }}
-          components: clippy
+          toolchain: stable  # Uses version from rust-toolchain.toml
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -151,8 +150,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -183,8 +180,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -205,8 +200,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -227,8 +220,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -251,8 +242,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -291,3 +280,57 @@ jobs:
           echo ""
           echo "=== Examples module ==="
           just --list examples
+
+  examples:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Examples Compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build crate examples
+        run: |
+          cargo build --package synddb-client --examples
+          cargo build --package synddb-chain-monitor --examples
+
+      - name: Build standalone examples
+        run: |
+          cargo build --package prediction-market
+          cargo build --package price-oracle-validator
+
+  coverage:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --workspace --all-features --exclude synddb-e2e --exclude synddb-e2e-gcs --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false  # Don't fail if Codecov is unavailable
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

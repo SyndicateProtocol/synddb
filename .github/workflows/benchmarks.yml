@@ -7,6 +7,7 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/benchmarks.yml"
 
   # Run on main pushes
@@ -22,8 +23,6 @@ env:
   CARGO_TERM_COLOR: always
   # Make sure CI fails on all warnings, including Clippy lints
   RUSTFLAGS: "-Dwarnings"
-  # Rust version for consistency across jobs
-  RUST_VERSION: "1.91.0"
   # Benchmark configuration
   BENCHMARK_SIMPLE_BATCH_SIZE: 5000
   BENCHMARK_FULL_BATCH_SIZE: 1000
@@ -42,8 +41,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
