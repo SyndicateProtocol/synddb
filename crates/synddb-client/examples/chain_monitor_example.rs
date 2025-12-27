@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
-        send_interval: Duration::from_secs(5),
+        push_interval: Duration::from_secs(5),
         chain_monitor: Some(chain_monitor_config),
         ..Default::default()
     };

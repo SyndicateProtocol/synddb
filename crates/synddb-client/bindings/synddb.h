@@ -56,7 +56,7 @@ SyndDBError synddb_attach(
  *
  * @param db_path Path to SQLite database file
  * @param sequencer_url URL of sequencer TEE
- * @param send_interval_ms Milliseconds between automatic sends (must be > 0)
+ * @param push_interval_ms Milliseconds between automatic pushes (must be > 0)
  * @param snapshot_interval Number of changesets between snapshots (0 = disabled)
  * @param out_handle Output pointer to receive SyndDB handle
  * @return SYNDDB_SUCCESS on success, error code otherwise
@@ -64,7 +64,7 @@ SyndDBError synddb_attach(
 SyndDBError synddb_attach_with_config(
     const char* db_path,
     const char* sequencer_url,
-    uint64_t send_interval_ms,
+    uint64_t push_interval_ms,
     uint64_t snapshot_interval,
     SyndDBHandle** out_handle
 );

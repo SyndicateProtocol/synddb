@@ -109,7 +109,7 @@ const ffi = {
   synddb_attach_with_config: lib.func('synddb_attach_with_config', 'int', [
     'str',      // db_path
     'str',      // sequencer_url
-    'uint64',   // send_interval_ms
+    'uint64',   // push_interval_ms
     'uint64',   // snapshot_interval
     SyndDBHandlePtrPtr  // out_handle
   ]),
@@ -168,7 +168,7 @@ class SyndDB {
    * @param {string} dbPath - Path to SQLite database file
    * @param {string} sequencerUrl - URL of sequencer TEE
    * @param {Object} options - Configuration options
-   * @param {number} options.sendIntervalMs - Milliseconds between automatic sends (default: 1000)
+   * @param {number} options.pushIntervalMs - Milliseconds between automatic pushes (default: 1000)
    * @param {number} options.snapshotInterval - Changesets between snapshots (default: 0 = disabled)
    * @returns {SyndDB} SyndDB instance
    *
@@ -177,20 +177,20 @@ class SyndDB {
    *   'app.db',
    *   'http://localhost:8433',
    *   {
-   *     sendIntervalMs: 500,   // Send every 500ms
-   *     snapshotInterval: 100   // Snapshot every 100 changesets
+   *     pushIntervalMs: 500,   // Push every 500ms
+   *     snapshotInterval: 100  // Snapshot every 100 changesets
    *   }
    * );
    */
   static attachWithConfig(dbPath, sequencerUrl, options = {}) {
-    const sendIntervalMs = options.sendIntervalMs || 1000;
+    const pushIntervalMs = options.pushIntervalMs || 1000;
     const snapshotInterval = options.snapshotInterval || 0;
 
     const handlePtr = [null];
     const result = ffi.synddb_attach_with_config(
       dbPath,
       sequencerUrl,
-      sendIntervalMs,
+      pushIntervalMs,
       snapshotInterval,
       handlePtr
     );
@@ -428,7 +428,7 @@ function lastError() {
  *
  * @param {string} dbPath - Path to SQLite database file
  * @param {string} sequencerUrl - URL of sequencer TEE
- * @param {Object} options - Optional config (sendIntervalMs, snapshotInterval)
+ * @param {Object} options - Optional config (pushIntervalMs, snapshotInterval)
  * @returns {SyndDB} SyndDB instance
  *
  * @example

@@ -52,13 +52,13 @@ synddb.detach();
 ```javascript
 const { SyndDB } = require('./synddb');
 
-// Custom publish interval and snapshots
+// Custom push interval and snapshots
 const synddb = SyndDB.attachWithConfig(
   'app.db',
   'http://localhost:8433',
   {
-    sendIntervalMs: 500,      // Send every 500ms
-    snapshotInterval: 100      // Snapshot every 100 changesets
+    pushIntervalMs: 500,      // Push every 500ms
+    snapshotInterval: 100     // Snapshot every 100 changesets
   }
 );
 ```
@@ -122,7 +122,7 @@ Attach with custom configuration.
 - `dbPath` (string): Path to SQLite database file
 - `sequencerUrl` (string): URL of sequencer TEE
 - `options` (object):
-  - `sendIntervalMs` (number): Milliseconds between automatic sends (default: 1000)
+  - `pushIntervalMs` (number): Milliseconds between automatic pushes (default: 1000)
   - `snapshotInterval` (number): Number of changesets between snapshots (default: 0 = disabled)
 
 **Returns:** SyndDB instance

@@ -51,7 +51,7 @@ int synddb_attach(
 int synddb_attach_with_config(
     const char* db_path,
     const char* sequencer_url,
-    uint64_t send_interval_ms,
+    uint64_t push_interval_ms,
     uint64_t snapshot_interval,
     SyndDBHandle** out_handle
 );

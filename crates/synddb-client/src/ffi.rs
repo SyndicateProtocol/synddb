@@ -137,7 +137,7 @@ pub unsafe extern "C" fn synddb_attach(
 /// # Arguments
 /// * `db_path` - Path to `SQLite` database file
 /// * `sequencer_url` - URL of sequencer TEE
-/// * `send_interval_ms` - Milliseconds between automatic sends (must be > 0)
+/// * `push_interval_ms` - Milliseconds between automatic pushes (must be > 0)
 /// * `snapshot_interval` - Number of changesets between automatic snapshots (must be > 0)
 /// * `out_handle` - Output pointer to receive `SyndDB` handle
 ///
@@ -152,7 +152,7 @@ pub unsafe extern "C" fn synddb_attach(
 pub unsafe extern "C" fn synddb_attach_with_config(
     db_path: *const c_char,
     sequencer_url: *const c_char,
-    send_interval_ms: u64,
+    push_interval_ms: u64,
     snapshot_interval: u64,
     out_handle: *mut *mut SyndDBHandle,
 ) -> SyndDBError {
@@ -197,7 +197,7 @@ pub unsafe extern "C" fn synddb_attach_with_config(
 
     let config = Config {
         sequencer_url,
-        send_interval: Duration::from_millis(send_interval_ms),
+        push_interval: Duration::from_millis(push_interval_ms),
         snapshot_interval,
         ..Default::default()
     };

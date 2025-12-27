@@ -98,7 +98,7 @@ _lib.synddb_attach.restype = ctypes.c_int
 _lib.synddb_attach_with_config.argtypes = [
     ctypes.c_char_p,  # db_path
     ctypes.c_char_p,  # sequencer_url
-    ctypes.c_uint64,  # send_interval_ms
+    ctypes.c_uint64,  # push_interval_ms
     ctypes.c_uint64,  # snapshot_interval
     ctypes.POINTER(ctypes.POINTER(_SyndDBHandle))  # out_handle
 ]
@@ -186,7 +186,7 @@ class SyndDB:
         cls,
         db_path: str,
         sequencer_url: str,
-        send_interval_ms: int = 1000,
+        push_interval_ms: int = 1000,
         snapshot_interval: int = 100
     ) -> 'SyndDB':
         """
@@ -195,7 +195,7 @@ class SyndDB:
         Args:
             db_path: Path to SQLite database file
             sequencer_url: URL of sequencer TEE
-            send_interval_ms: Milliseconds between automatic sends (must be > 0, default: 1000)
+            push_interval_ms: Milliseconds between automatic pushes (must be > 0, default: 1000)
             snapshot_interval: Changesets between snapshots (must be > 0, default: 100)
 
         Returns:
@@ -205,15 +205,15 @@ class SyndDB:
             >>> synddb = SyndDB.attach_with_config(
             ...     'app.db',
             ...     'http://localhost:8433',
-            ...     send_interval_ms=500,  # Send every 500ms
-            ...     snapshot_interval=100      # Snapshot every 100 changesets
+            ...     push_interval_ms=500,  # Push every 500ms
+            ...     snapshot_interval=100  # Snapshot every 100 changesets
             ... )
         """
         handle = ctypes.POINTER(_SyndDBHandle)()
         result = _lib.synddb_attach_with_config(
             db_path.encode('utf-8'),
             sequencer_url.encode('utf-8'),
-            send_interval_ms,
+            push_interval_ms,
             snapshot_interval,
             ctypes.byref(handle)
         )
@@ -472,7 +472,7 @@ def attach(db_path: str, sequencer_url: str, **kwargs) -> SyndDB:
     Args:
         db_path: Path to SQLite database file
         sequencer_url: URL of sequencer TEE
-        **kwargs: Optional config (send_interval_ms, snapshot_interval)
+        **kwargs: Optional config (push_interval_ms, snapshot_interval)
 
     Returns:
         SyndDB instance

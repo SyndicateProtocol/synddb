@@ -84,7 +84,7 @@ func main() {
 
 ```go
 config := synddb.Config{
-    SendIntervalMs:  500,  // Send every 500ms
+    PushIntervalMs:   500,  // Push every 500ms
     SnapshotInterval: 100,  // Auto-snapshot every 100 changesets
 }
 

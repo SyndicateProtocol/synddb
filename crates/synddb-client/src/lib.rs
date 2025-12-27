@@ -51,10 +51,10 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Automatic Sending
+//! # Automatic Pushing
 //!
-//! Changesets are automatically sent every second (configurable via `send_interval`).
-//! Use [`SyndDB::push()`] to force immediate send for low-latency
+//! Changesets are automatically pushed every second (configurable via `push_interval`).
+//! Use [`SyndDB::push()`] to force immediate push for low-latency
 //! or high-value changes.
 //!
 //! # Transactions
@@ -313,7 +313,7 @@ impl SyndDB {
     ///
     /// let config = Config {
     ///     sequencer_url: "http://sequencer:8433".parse().unwrap(),
-    ///     send_interval: Duration::from_millis(100), // Faster auto-send
+    ///     push_interval: Duration::from_millis(100), // Faster auto-push
     ///     ..Default::default()
     /// };
     /// let synddb = SyndDB::open_with_config("app.db", config)?;
@@ -612,10 +612,10 @@ impl SyndDB {
             );
         }
 
-        if config.send_interval.is_zero() {
+        if config.push_interval.is_zero() {
             anyhow::bail!(
-                "send_interval must be greater than 0. \
-                Use a small value (e.g., 1ms) if you want fast sending."
+                "push_interval must be greater than 0. \
+                Use a small value (e.g., 1ms) if you want fast pushing."
             );
         }
 
@@ -2918,12 +2918,12 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validation_rejects_zero_send_interval() {
+    fn test_config_validation_rejects_zero_push_interval() {
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
 
         let config = Config {
             sequencer_url: "http://localhost:8433".parse().unwrap(),
-            send_interval: std::time::Duration::ZERO,
+            push_interval: std::time::Duration::ZERO,
             ..Default::default()
         };
         let result = SyndDB::attach_with_config(conn, config);
@@ -2931,6 +2931,6 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("send_interval must be greater than 0"));
+            .contains("push_interval must be greater than 0"));
     }
 }
