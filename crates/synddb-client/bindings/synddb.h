@@ -87,8 +87,8 @@ SyndDBError synddb_push(SyndDBHandle* handle);
  * sequencer. Use this after schema changes (CREATE TABLE, etc.) since DDL
  * is NOT captured in changesets.
  *
- * This is consistent with synddb_publish() for changesets:
- * - synddb_publish() - sends pending changesets to sequencer
+ * This is consistent with synddb_push() for changesets:
+ * - synddb_push() - sends pending changesets to sequencer
  * - synddb_snapshot() - creates and sends snapshot to sequencer
  *
  * When to use:
@@ -103,7 +103,7 @@ SyndDBError synddb_push(SyndDBHandle* handle);
  * Example:
  *   synddb_snapshot(handle, NULL);  // Creates AND publishes
  */
-SyndDBError synddb_publish_snapshot(SyndDBHandle* handle, size_t* out_size);
+SyndDBError synddb_snapshot(SyndDBHandle* handle, size_t* out_size);
 
 /**
  * Execute a single SQL statement

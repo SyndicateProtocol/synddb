@@ -68,20 +68,20 @@ from synddb import attach
 
 synddb = attach('app.db', 'http://localhost:8433')
 
-# Critical transaction - publish immediately after commit
+# Critical transaction - push immediately after commit
 import sqlite3
 conn = sqlite3.connect('app.db')
 conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 1000000))
 conn.commit()
-synddb.publish_changeset()  # Force immediate publish
+synddb.push()  # Force immediate push
 ```
 
-**When to call `publish_changeset()` manually:**
+**When to call `push()` manually:**
 - After critical transactions that must be sent immediately
 - Before application shutdown (handled automatically by `detach()`)
 - When you need to ensure data is sent before proceeding
 
-**When automatic publishing is sufficient:**
+**When automatic pushing is sufficient:**
 - Normal application operations
 - High-throughput batch processing
 
@@ -122,9 +122,9 @@ Attach with custom configuration.
 
 **Returns:** SyndDB instance
 
-### `synddb.publish_changeset()`
+### `synddb.push()`
 
-Force immediate publication of all pending changesets.
+Force immediate push of all pending changesets.
 
 ### `synddb.snapshot()`
 
@@ -141,7 +141,7 @@ This creates a complete database snapshot (schema + data) and sends it to the se
 
 ### `synddb.detach()`
 
-Gracefully shutdown and free resources. Publishes any pending changesets.
+Gracefully shutdown and free resources. Pushes any pending changesets.
 
 ### `synddb.version()`
 

@@ -131,13 +131,13 @@ fn main() -> Result<()> {
 
         tx.commit()?;
 
-        // Publish changesets after commit - this is the safe pattern
-        // The main thread calls publish_changeset() when not in a transaction
-        if let Err(e) = synddb.publish_changeset() {
+        // Push changesets after commit - this is the safe pattern
+        // The main thread calls push() when not in a transaction
+        if let Err(e) = synddb.push() {
             // Log but don't fail - network errors are expected without a real sequencer
             if iteration == 0 {
                 info!(
-                    "Note: publish_changeset() returned error (expected without sequencer): {}",
+                    "Note: push() returned error (expected without sequencer): {}",
                     e
                 );
             }

@@ -42,7 +42,7 @@ extern SyndDBError synddb_attach_with_config(
 
 extern SyndDBError synddb_push(SyndDBHandle* handle);
 
-extern SyndDBError synddb_publish_snapshot(
+extern SyndDBError synddb_snapshot(
     SyndDBHandle* handle,
     size_t* out_size
 );
@@ -100,9 +100,9 @@ int main(void) {
     printf("   ✓ Successfully pushed\n\n");
 
     // Test 5: Create snapshot
-    printf("5. Testing synddb_publish_snapshot()...\n");
+    printf("5. Testing synddb_snapshot()...\n");
     size_t snapshot_size = 0;
-    result = synddb_publish_snapshot(handle, &snapshot_size);
+    result = synddb_snapshot(handle, &snapshot_size);
     if (result != Success) {
         const char* error = synddb_last_error();
         printf("   Warning: Snapshot failed: %s\n", error ? error : "(unknown error)");

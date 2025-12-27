@@ -107,11 +107,11 @@ _lib.synddb_attach_with_config.restype = ctypes.c_int
 _lib.synddb_push.argtypes = [ctypes.POINTER(_SyndDBHandle)]
 _lib.synddb_push.restype = ctypes.c_int
 
-_lib.synddb_publish_snapshot.argtypes = [
+_lib.synddb_snapshot.argtypes = [
     ctypes.POINTER(_SyndDBHandle),
     ctypes.POINTER(ctypes.c_size_t)  # out_size (optional)
 ]
-_lib.synddb_publish_snapshot.restype = ctypes.c_int
+_lib.synddb_snapshot.restype = ctypes.c_int
 
 _lib.synddb_detach.argtypes = [ctypes.POINTER(_SyndDBHandle)]
 _lib.synddb_detach.restype = None
@@ -256,8 +256,8 @@ class SyndDB:
         to the sequencer. Use this after schema changes (CREATE TABLE, etc.)
         since DDL is NOT captured in changesets.
 
-        This is consistent with publish_changeset() for changesets:
-        - publish_changeset() - sends pending changesets to sequencer
+        This is consistent with push() for changesets:
+        - push() - sends pending changesets to sequencer
         - snapshot() - creates and sends snapshot to sequencer
 
         When to use:
@@ -281,7 +281,7 @@ class SyndDB:
             raise RuntimeError("SyndDB handle already detached")
 
         size = ctypes.c_size_t()
-        result = _lib.synddb_publish_snapshot(self._handle, ctypes.byref(size))
+        result = _lib.synddb_snapshot(self._handle, ctypes.byref(size))
 
         if result != SyndDBError.SUCCESS:
             error_msg = _lib.synddb_last_error()

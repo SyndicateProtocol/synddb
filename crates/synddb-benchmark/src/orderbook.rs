@@ -40,12 +40,12 @@ impl<'a> OrderbookSimulator<'a> {
         self
     }
 
-    /// Publish changesets if `SyndDB` is attached
-    fn try_publish(&self) {
+    /// Push changesets if `SyndDB` is attached
+    fn try_push(&self) {
         if let Some(synddb) = self.synddb {
-            if let Err(e) = synddb.publish_changeset() {
+            if let Err(e) = synddb.push() {
                 // Log at trace level - network errors are expected without sequencer
-                tracing::trace!("Publish failed: {}", e);
+                tracing::trace!("Push failed: {}", e);
             }
         }
     }
@@ -152,7 +152,7 @@ impl<'a> OrderbookSimulator<'a> {
             }
 
             // Publish changesets after commit (safe API pattern)
-            self.try_publish();
+            self.try_push();
 
             // Log stats periodically
             if last_log.elapsed() >= log_interval {
@@ -208,7 +208,7 @@ impl<'a> OrderbookSimulator<'a> {
                 tx.commit()?;
 
                 // Publish changesets after commit (safe API pattern)
-                self.try_publish();
+                self.try_push();
             }
 
             let burst_duration = burst_start.elapsed();
@@ -290,7 +290,7 @@ impl<'a> OrderbookSimulator<'a> {
                     tx.commit()?;
 
                     // Publish changesets after commit (safe API pattern)
-                    self.try_publish();
+                    self.try_push();
                 }
 
                 let sample_elapsed = sample_start.elapsed();
@@ -455,7 +455,7 @@ impl<'a> OrderbookSimulator<'a> {
                 tx.commit()?;
 
                 // Publish changesets after commit (safe API pattern)
-                self.try_publish();
+                self.try_push();
             }
 
             let sample_elapsed = sample_start.elapsed();

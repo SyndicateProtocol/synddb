@@ -28,8 +28,8 @@ fn main() -> Result<()> {
     tx.execute("INSERT INTO trades VALUES (?1, ?2)", params![2, 200])?;
     tx.commit()?;
 
-    // Optionally force immediate publish (auto-publishes every second)
-    synddb.publish_changeset()?;
+    // Optionally force immediate push (auto-pushes every second)
+    synddb.push()?;
 
     Ok(())
 }
@@ -92,11 +92,11 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 2. **Captures changesets** automatically via update hooks
 3. **Background thread** sends batches to sequencer via HTTP
 4. **Automatic retries** with exponential backoff
-5. **Graceful shutdown** publishes any remaining pending changesets
+5. **Graceful shutdown** pushes any remaining pending changesets
 
-## Publishing Changesets
+## Pushing Changesets
 
-Changesets are automatically published every second (configurable via `flush_interval`). Use `publish_changeset()` to force immediate publication for low-latency or high-value changes:
+Changesets are automatically pushed every second (configurable via `flush_interval`). Use `push()` to force immediate push for low-latency or high-value changes:
 
 ```rust
 // After a transaction or batch of operations
@@ -105,16 +105,16 @@ tx.execute("INSERT INTO orders ...", params![...])?;
 tx.execute("UPDATE balances ...", params![...])?;
 tx.commit()?;
 
-// Force immediate publish (optional - auto-publishes every second)
-synddb.publish_changeset()?;
+// Force immediate push (optional - auto-pushes every second)
+synddb.push()?;
 ```
 
-**When to call `publish_changeset()`:**
+**When to call `push()`:**
 - For low-latency changes that shouldn't wait for the next timer tick
 - For high-value operations where immediate confirmation is important
 - Before graceful shutdown (also called automatically on `Drop`)
 
-Changesets are also automatically published when `SyndDB` is dropped (graceful shutdown).
+Changesets are also automatically pushed when `SyndDB` is dropped (graceful shutdown).
 
 ## What It Does NOT Do
 

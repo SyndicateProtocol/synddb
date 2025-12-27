@@ -114,7 +114,7 @@ const ffi = {
     SyndDBHandlePtrPtr  // out_handle
   ]),
   synddb_push: lib.func('synddb_push', 'int', [SyndDBHandlePtr]),
-  synddb_publish_snapshot: lib.func('synddb_publish_snapshot', 'int', [
+  synddb_snapshot: lib.func('synddb_snapshot', 'int', [
     SyndDBHandlePtr,
     koffi.out(koffi.pointer('size_t'))
   ]),
@@ -254,11 +254,11 @@ class SyndDB {
     }
 
     const sizePtr = [0];
-    const result = ffi.synddb_publish_snapshot(this._handle, sizePtr);
+    const result = ffi.synddb_snapshot(this._handle, sizePtr);
 
     if (result !== SyndDBError.SUCCESS) {
       const errorMsg = ffi.synddb_last_error() || 'Unknown error';
-      throw new Error(`Failed to publish snapshot (error ${result}): ${errorMsg}`);
+      throw new Error(`Failed to create snapshot (error ${result}): ${errorMsg}`);
     }
 
     return sizePtr[0];

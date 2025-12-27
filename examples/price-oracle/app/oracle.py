@@ -124,13 +124,13 @@ class PriceOracle:
             except Exception as e:
                 logger.error(f"Error fetching from {api.source_name}: {e}")
 
-        # Publish changesets if SyndDB is attached
+        # Push changesets if SyndDB is attached
         if self._synddb:
             try:
-                self._synddb.publish_changeset()
-                logger.debug("Published changesets to sequencer")
+                self._synddb.push()
+                logger.debug("Pushed changesets to sequencer")
             except RuntimeError as e:
-                logger.error(f"Failed to publish changesets: {e}")
+                logger.error(f"Failed to push changesets: {e}")
 
         return results
 

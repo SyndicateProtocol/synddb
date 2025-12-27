@@ -50,7 +50,7 @@ extern const char* synddb_last_error(void);
 extern SyndDBError synddb_attach(const char* db_path, const char* sequencer_url, SyndDBHandle** out_handle);
 extern SyndDBError synddb_attach_with_config(const char* db_path, const char* sequencer_url, uint64_t flush_interval_ms, uint64_t snapshot_interval, SyndDBHandle** out_handle);
 extern SyndDBError synddb_push(SyndDBHandle* handle);
-extern SyndDBError synddb_publish_snapshot(SyndDBHandle* handle, size_t* out_size);
+extern SyndDBError synddb_snapshot(SyndDBHandle* handle, size_t* out_size);
 extern void synddb_detach(SyndDBHandle* handle);
 extern int64_t synddb_execute(SyndDBHandle* handle, const char* sql);
 extern SyndDBError synddb_execute_batch(SyndDBHandle* handle, const char* sql);
@@ -209,7 +209,7 @@ func (h *Handle) Snapshot() (int, error) {
 	}
 
 	var size C.size_t
-	result := C.synddb_publish_snapshot(h.handle, &size)
+	result := C.synddb_snapshot(h.handle, &size)
 	if result != C.SyndDBSuccess {
 		return 0, getError(result, "failed to create snapshot")
 	}

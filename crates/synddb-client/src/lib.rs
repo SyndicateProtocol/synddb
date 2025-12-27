@@ -47,14 +47,14 @@
 //! tx.execute("INSERT INTO trades VALUES (1, 100)", [])?;
 //! tx.commit()?;
 //!
-//! synddb.publish_changeset()?; // Optionally force immediate publish
+//! synddb.push()?; // Optionally force immediate publish
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Automatic Publishing
 //!
 //! Changesets are automatically published every second (configurable via `flush_interval`).
-//! Use [`SyndDB::publish_changeset()`] to force immediate publication for low-latency
+//! Use [`SyndDB::push()`] to force immediate publication for low-latency
 //! or high-value changes.
 //!
 //! # Transactions
@@ -142,7 +142,7 @@
 //! synddb.connection().execute("CREATE TABLE oops (id INTEGER)", [])?;
 //!
 //! // RECOVERY: Immediately publish a snapshot to capture the schema
-//! synddb.publish_snapshot()?;
+//! synddb.snapshot()?;
 //!
 //! // Validators now have the schema and can apply subsequent changesets
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -559,7 +559,7 @@ impl SyndDB {
         // Handle DDL crash recovery: force snapshot if marker exists from previous crash
         if needs_recovery_snapshot {
             info!("Forcing snapshot for DDL crash recovery");
-            match synddb.publish_snapshot() {
+            match synddb.snapshot() {
                 Ok(_snapshot) => {
                     info!("DDL crash recovery snapshot published successfully");
                 }
@@ -581,7 +581,7 @@ impl SyndDB {
         // reconstruct schemas that existed before SyndDB was attached.
         if Self::has_existing_tables(conn) {
             info!("Database has existing tables, creating initial snapshot for validator bootstrapping");
-            if let Err(e) = synddb.publish_snapshot() {
+            if let Err(e) = synddb.snapshot() {
                 warn!(
                     "Failed to create initial snapshot on attach: {}. Continuing without it.",
                     e
@@ -682,7 +682,7 @@ impl SyndDB {
         let tx = self.conn.unchecked_transaction()?;
         let result = f(&tx)?;
         tx.commit()?;
-        self.publish_changeset()?;
+        self.push()?;
         Ok(result)
     }
 
@@ -690,14 +690,14 @@ impl SyndDB {
     // Publishing
     // =========================================================================
 
-    /// Publish all pending changesets to the sequencer immediately
+    /// Push all pending changesets to the sequencer immediately
     ///
-    /// Changesets are automatically published on a timer (default: every second).
-    /// Use this method to force immediate publication for low-latency or high-value
+    /// Changesets are automatically pushed on a timer (default: every second).
+    /// Use this method to force immediate push for low-latency or high-value
     /// changes that shouldn't wait for the next timer tick.
     ///
     /// Also called automatically on `Drop` for graceful shutdown.
-    pub fn publish_changeset(&self) -> Result<()> {
+    pub fn push(&self) -> Result<()> {
         self.monitor
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Monitor already shut down"))?
@@ -713,7 +713,7 @@ impl SyndDB {
     /// # Important
     ///
     /// This method only creates a local snapshot. To create AND publish a snapshot
-    /// to the sequencer (the typical use case), use [`publish_snapshot()`] instead.
+    /// to the sequencer (the typical use case), use [`snapshot()`] instead.
     ///
     /// # Returns
     ///
@@ -739,7 +739,7 @@ impl SyndDB {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
-    /// [`publish_snapshot()`]: Self::publish_snapshot
+    /// [`snapshot()`]: Self::snapshot
     pub fn create_snapshot(&self) -> Result<Snapshot> {
         self.monitor
             .as_ref()
@@ -759,10 +759,10 @@ impl SyndDB {
     /// 2. Sends the snapshot to the sequencer via HTTP (synchronous, blocking)
     /// 3. Waits for sequencer acknowledgment before returning
     ///
-    /// This is consistent with [`publish_changeset()`] - both methods send data
+    /// This is consistent with [`push()`] - both methods send data
     /// to the sequencer immediately.
     ///
-    /// [`publish_changeset()`]: Self::publish_changeset
+    /// [`push()`]: Self::push
     ///
     /// # When to Use
     ///
@@ -783,13 +783,13 @@ impl SyndDB {
     /// synddb.connection().execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY)")?;
     ///
     /// // Publish snapshot so validators can reconstruct the schema
-    /// let snapshot = synddb.publish_snapshot()?;
+    /// let snapshot = synddb.snapshot()?;
     /// println!("Published snapshot: {} bytes at sequence {}", snapshot.data.len(), snapshot.sequence);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// [`create_snapshot()`]: Self::create_snapshot
-    pub fn publish_snapshot(&self) -> Result<Snapshot> {
+    pub fn snapshot(&self) -> Result<Snapshot> {
         let snapshot = self.create_snapshot()?;
 
         // Clear DDL recovery marker now that we've created the snapshot locally.
@@ -890,10 +890,10 @@ impl SyndDB {
         session::with_ddl_context(|| self.conn.execute_batch(sql))?;
 
         // Create snapshot after DDL to capture the schema change.
-        // Note: publish_snapshot() clears the DDL recovery marker after creating the snapshot.
+        // Note: snapshot() clears the DDL recovery marker after creating the snapshot.
         if is_ddl {
             info!("DDL executed, creating automatic snapshot");
-            self.publish_snapshot()?;
+            self.snapshot()?;
         }
 
         Ok(())
@@ -1380,7 +1380,7 @@ mod tests {
             .unwrap();
 
         // Publish first batch
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Cycle 2: Insert more rows
         conn.execute("INSERT INTO test VALUES (3, 'third')", [])
@@ -1389,14 +1389,14 @@ mod tests {
             .unwrap();
 
         // Publish second batch - should NOT include rows 1-2
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Cycle 3: Update existing rows
         conn.execute("UPDATE test SET value = 'updated' WHERE id = 1", [])
             .unwrap();
 
         // Publish third batch - should only include the update
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // If session recreation is working, we should have 3 independent changesets
         // (The actual verification happens in E2E tests with validator)
@@ -1443,7 +1443,7 @@ mod tests {
 
         // Publish - this changeset should only contain the update and insert,
         // not the original 10 users (those are in the snapshot)
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
@@ -1485,7 +1485,7 @@ mod tests {
         }
 
         // Publish after batch
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Individual balance inserts (like benchmark setup)
         for i in 0..100 {
@@ -1497,7 +1497,7 @@ mod tests {
         }
 
         // Publish after individual ops
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // More batch operations
         {
@@ -1513,7 +1513,7 @@ mod tests {
         }
 
         // Final publish
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         let user_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
@@ -1545,7 +1545,7 @@ mod tests {
         for i in 1..=50 {
             conn.execute("UPDATE counter SET value = ?1 WHERE id = 1", [i])
                 .unwrap();
-            synddb.publish_changeset().unwrap();
+            synddb.push().unwrap();
         }
 
         // Verify final state
@@ -1578,7 +1578,7 @@ mod tests {
 
         // Insert data
         conn.execute("INSERT INTO t1 VALUES (1, 'a')", []).unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Create second table (another DDL)
         synddb
@@ -1588,7 +1588,7 @@ mod tests {
         // Insert into both tables
         conn.execute("INSERT INTO t1 VALUES (2, 'b')", []).unwrap();
         conn.execute("INSERT INTO t2 VALUES (1, 1)", []).unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Verify state
         let t1_count: i64 = conn
@@ -1613,17 +1613,17 @@ mod tests {
         let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
         // Multiple empty publishes
-        synddb.publish_changeset().unwrap();
-        synddb.publish_changeset().unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
+        synddb.push().unwrap();
+        synddb.push().unwrap();
 
         // Now make a change
         conn.execute("INSERT INTO test VALUES (1)", []).unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // More empty publishes
-        synddb.publish_changeset().unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
+        synddb.push().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
@@ -1655,7 +1655,7 @@ mod tests {
             tx.commit().unwrap();
         }
 
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Follow up with smaller batches
         for batch in 0..5 {
@@ -1669,7 +1669,7 @@ mod tests {
                 .unwrap();
             }
             tx.commit().unwrap();
-            synddb.publish_changeset().unwrap();
+            synddb.push().unwrap();
         }
 
         let count: i64 = conn
@@ -1692,7 +1692,7 @@ mod tests {
         // Insert a row and commit
         conn.execute("INSERT INTO test VALUES (1, 'committed')", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Start a transaction, make changes, then rollback
         {
@@ -1706,12 +1706,12 @@ mod tests {
         }
 
         // Publish - should have nothing new (rollback discarded changes)
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Make another committed change
         conn.execute("INSERT INTO test VALUES (3, 'after_rollback')", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Verify database state
         let count: i64 = conn
@@ -1743,16 +1743,16 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Delete some rows
         conn.execute("DELETE FROM test WHERE id IN (2, 4)", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Delete all remaining
         conn.execute("DELETE FROM test", []).unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
@@ -1782,7 +1782,7 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Use INSERT OR REPLACE to update values (like orderbook benchmark)
         for i in 1..=10 {
@@ -1792,7 +1792,7 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Verify final state
         let total: i64 = conn
@@ -1830,7 +1830,7 @@ mod tests {
         conn.execute("INSERT INTO t1 VALUES (2, 'new')", [])
             .unwrap();
         conn.execute("INSERT INTO t2 VALUES (1, 2)", []).unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Verify state
         let t1_count: i64 = conn
@@ -1865,7 +1865,7 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Update large text
         let updated_text = "y".repeat(100 * 1024);
@@ -1874,7 +1874,7 @@ mod tests {
             rusqlite::params![&updated_text],
         )
         .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM docs", [], |row| row.get(0))
@@ -1901,7 +1901,7 @@ mod tests {
             )
             .unwrap();
         }
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
@@ -1948,7 +1948,7 @@ mod tests {
             .unwrap();
             tx.commit().unwrap();
         }
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Verify all tables updated
         let user_count: i64 = conn
@@ -1985,7 +1985,7 @@ mod tests {
             .unwrap();
         conn.execute("INSERT INTO nullable VALUES (3, NULL, 42)", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Update NULL to value
         conn.execute("UPDATE nullable SET val1 = 'now_set' WHERE id = 1", [])
@@ -1993,7 +1993,7 @@ mod tests {
         // Update value to NULL
         conn.execute("UPDATE nullable SET val1 = NULL WHERE id = 2", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -2027,7 +2027,7 @@ mod tests {
         // Insert data
         conn.execute("INSERT INTO test VALUES (1, 'first')", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM test", [], |row| row.get(0))
@@ -2134,7 +2134,7 @@ mod tests {
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
     fn test_ddl_recovery_marker_cleared_on_snapshot() {
-        // Test that publish_snapshot() clears the recovery marker even when HTTP fails
+        // Test that snapshot() clears the recovery marker even when HTTP fails
 
         let temp_dir = std::env::temp_dir();
         let db_file = temp_dir.join(format!("test_ddl_clear_{}.db", std::process::id()));
@@ -2229,7 +2229,7 @@ mod tests {
             .execute_ddl("CREATE TABLE proper_ddl (id INTEGER)")
             .unwrap();
 
-        // Marker cleared by publish_snapshot() after creating snapshot locally
+        // Marker cleared by snapshot() after creating snapshot locally
         assert!(!ddl_recovery::check_marker(db_path));
 
         // Clean up
@@ -2288,7 +2288,7 @@ mod tests {
 
         // Publish captures the DML, but validator will fail because it
         // doesn't have the 'users' table schema (no snapshot was published)
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Local state is correct - developer doesn't know there's a problem
         let count: i64 = conn
@@ -2333,7 +2333,7 @@ mod tests {
     fn test_recovery_via_manual_snapshot_publish() {
         // Documents the recovery process when direct DDL was used:
         // 1. Developer notices validator errors ("no such table")
-        // 2. Developer calls publish_snapshot() to capture current schema
+        // 2. Developer calls snapshot() to capture current schema
         // 3. Validators receive snapshot and can now apply subsequent changesets
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
         let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
@@ -2348,11 +2348,11 @@ mod tests {
         // Insert some data (will fail on validators until snapshot is published)
         conn.execute("INSERT INTO accounts VALUES (1, 1000)", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // --- RECOVERY POINT ---
         // Developer notices validator errors and calls:
-        let snapshot = synddb.publish_snapshot().unwrap();
+        let snapshot = synddb.snapshot().unwrap();
 
         // Snapshot contains the schema and data
         assert!(!snapshot.data.is_empty());
@@ -2360,7 +2360,7 @@ mod tests {
         // After this point, validators have the schema and can apply changesets
         conn.execute("INSERT INTO accounts VALUES (2, 2000)", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Local verification
         let total: i64 = conn
@@ -2395,7 +2395,7 @@ mod tests {
         conn.execute("INSERT INTO t3 VALUES (1, 1)", []).unwrap();
 
         // RECOVERY: Single snapshot captures all tables and data
-        let snapshot = synddb.publish_snapshot().unwrap();
+        let snapshot = synddb.snapshot().unwrap();
         assert!(!snapshot.data.is_empty());
 
         // All tables are now available to validators
@@ -2426,17 +2426,17 @@ mod tests {
         }
 
         // Several publish cycles (changesets would fail on validators)
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
         thread::sleep(std::time::Duration::from_millis(100));
 
         // More data changes
         conn.execute("UPDATE items SET count = count + 1 WHERE id <= 10", [])
             .unwrap();
         conn.execute("DELETE FROM items WHERE id > 45", []).unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Recovery snapshot captures CURRENT state (all modifications included)
-        let snapshot = synddb.publish_snapshot().unwrap();
+        let snapshot = synddb.snapshot().unwrap();
         assert!(!snapshot.data.is_empty());
 
         // After recovery, validators start fresh from this snapshot.
@@ -2468,7 +2468,7 @@ mod tests {
         conn1
             .execute("INSERT INTO correct_table VALUES (1)", [])
             .unwrap();
-        synddb1.publish_changeset().unwrap();
+        synddb1.push().unwrap();
         // ^ Validator can apply this because it received the schema snapshot
 
         // === INCORRECT: Using connection().execute() ===
@@ -2483,11 +2483,11 @@ mod tests {
         conn2
             .execute("INSERT INTO incorrect_table VALUES (1)", [])
             .unwrap();
-        synddb2.publish_changeset().unwrap();
+        synddb2.push().unwrap();
         // ^ Validator fails: "no such table: incorrect_table"
 
         // Manual recovery required:
-        synddb2.publish_snapshot().unwrap();
+        synddb2.snapshot().unwrap();
         // Now validator can catch up
     }
 
@@ -2507,7 +2507,7 @@ mod tests {
         // Insert initial data (validators have schema)
         conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // MISTAKE: ALTER TABLE via direct connection
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT", [])
@@ -2519,10 +2519,10 @@ mod tests {
             [],
         )
         .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // RECOVERY: Publish snapshot with updated schema
-        synddb.publish_snapshot().unwrap();
+        synddb.snapshot().unwrap();
 
         // After recovery, validators have the new column
         let email: String = conn
@@ -2550,7 +2550,7 @@ mod tests {
         conn.execute("DROP TABLE t1", []).unwrap();
 
         // After recovery snapshot, validators know t1 no longer exists
-        synddb.publish_snapshot().unwrap();
+        synddb.snapshot().unwrap();
 
         // Verify t1 is gone, t2 remains
         let tables: Vec<String> = conn
@@ -2568,7 +2568,7 @@ mod tests {
     #[test]
     #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
     fn test_recovery_recommended_after_any_direct_ddl() {
-        // Best practice: If you accidentally used direct DDL, call publish_snapshot()
+        // Best practice: If you accidentally used direct DDL, call snapshot()
         // immediately. Don't wait for validator errors.
         let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
         let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
@@ -2577,11 +2577,11 @@ mod tests {
         conn.execute("CREATE TABLE oops (id INTEGER)", []).unwrap();
 
         // Best practice: Immediately publish snapshot if you realize the mistake
-        synddb.publish_snapshot().unwrap();
+        synddb.snapshot().unwrap();
 
         // Now it's safe to proceed - validators will have the schema
         conn.execute("INSERT INTO oops VALUES (1)", []).unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
     }
 
     #[test]
@@ -2597,9 +2597,9 @@ mod tests {
         conn.execute("INSERT INTO t VALUES (1, 'a')", []).unwrap();
 
         // Multiple recovery snapshots are safe
-        synddb.publish_snapshot().unwrap();
-        synddb.publish_snapshot().unwrap();
-        synddb.publish_snapshot().unwrap();
+        synddb.snapshot().unwrap();
+        synddb.snapshot().unwrap();
+        synddb.snapshot().unwrap();
 
         // Each snapshot is a complete, self-contained database state
     }
@@ -2622,7 +2622,7 @@ mod tests {
 
         conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // === MIGRATION (WRONG WAY) ===
         // Developer runs migration script directly
@@ -2647,7 +2647,7 @@ mod tests {
             .unwrap();
 
         // RECOVERY POINT
-        synddb.publish_snapshot().unwrap();
+        synddb.snapshot().unwrap();
 
         // Now validators can continue
     }
@@ -2666,7 +2666,7 @@ mod tests {
 
         conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // === MIGRATION (RIGHT WAY) ===
         // Each DDL goes through execute_ddl()
@@ -2692,7 +2692,7 @@ mod tests {
         .unwrap();
         conn.execute("INSERT INTO user_settings VALUES (1, 'dark')", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // No recovery needed - validators received snapshots for each DDL
     }
@@ -2733,7 +2733,7 @@ mod tests {
             .unwrap();
 
         // Publish will detect schema change and send snapshot first
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Verify data is correct
         let count: i64 = conn
@@ -2763,7 +2763,7 @@ mod tests {
         // Insert initial data
         conn.execute("INSERT INTO users VALUES (1, 'Alice')", [])
             .unwrap();
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // ALTER via direct DDL (will be auto-detected)
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT", [])
@@ -2774,7 +2774,7 @@ mod tests {
             .unwrap();
 
         // This publish will auto-detect the schema change
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Verify
         let email: String = conn
@@ -2811,7 +2811,7 @@ mod tests {
         conn.execute("INSERT INTO t3 VALUES (1)", []).unwrap();
 
         // Single publish detects schema change and sends snapshot
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
     }
 
     #[test]
@@ -2835,7 +2835,7 @@ mod tests {
         // Multiple publishes with no schema changes - no extra snapshots
         for i in 1..=10 {
             conn.execute("INSERT INTO test VALUES (?1)", [i]).unwrap();
-            synddb.publish_changeset().unwrap();
+            synddb.push().unwrap();
         }
 
         let count: i64 = conn
@@ -2868,7 +2868,7 @@ mod tests {
         conn.execute("INSERT INTO t2 VALUES (1)", []).unwrap();
 
         // Publish detects schema change
-        synddb.publish_changeset().unwrap();
+        synddb.push().unwrap();
 
         // Verify t1 is gone
         let tables: Vec<String> = conn

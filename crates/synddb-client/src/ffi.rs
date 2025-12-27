@@ -240,7 +240,7 @@ pub unsafe extern "C" fn synddb_push(handle: *mut SyndDBHandle) -> SyndDBError {
 
     let synddb = &*(handle as *const SyndDB);
 
-    match synddb.publish_changeset() {
+    match synddb.push() {
         Ok(_) => SyndDBError::Success,
         Err(e) => {
             set_last_error(format!("Failed to push changeset: {}", e));
@@ -257,8 +257,8 @@ pub unsafe extern "C" fn synddb_push(handle: *mut SyndDBHandle) -> SyndDBError {
 ///
 /// # Behavior
 ///
-/// This function is consistent with `synddb_publish()` for changesets:
-/// - `synddb_publish()` - extracts pending changesets and sends to sequencer
+/// This function is consistent with `synddb_push()` for changesets:
+/// - `synddb_push()` - extracts pending changesets and sends to sequencer
 /// - `synddb_snapshot()` - creates database snapshot and sends to sequencer
 ///
 /// Both operations send data to the sequencer immediately (synchronous).
@@ -291,7 +291,7 @@ pub unsafe extern "C" fn synddb_push(handle: *mut SyndDBHandle) -> SyndDBError {
 /// print(f"Published {size} byte snapshot")
 /// ```
 #[no_mangle]
-pub unsafe extern "C" fn synddb_publish_snapshot(
+pub unsafe extern "C" fn synddb_snapshot(
     handle: *mut SyndDBHandle,
     out_size: *mut usize,
 ) -> SyndDBError {
@@ -305,7 +305,7 @@ pub unsafe extern "C" fn synddb_publish_snapshot(
     let synddb = &*(handle as *const SyndDB);
 
     // Create AND publish snapshot to the sequencer (synchronous)
-    match synddb.publish_snapshot() {
+    match synddb.snapshot() {
         Ok(snapshot) => {
             if !out_size.is_null() {
                 *out_size = snapshot.data.len();
@@ -313,7 +313,7 @@ pub unsafe extern "C" fn synddb_publish_snapshot(
             SyndDBError::Success
         }
         Err(e) => {
-            set_last_error(format!("Failed to publish snapshot: {}", e));
+            set_last_error(format!("Failed to create snapshot: {}", e));
             SyndDBError::SnapshotError
         }
     }
@@ -495,7 +495,7 @@ pub unsafe extern "C" fn synddb_execute_batch(
     // Auto-snapshot after DDL (always enabled for FFI - simplest DX)
     if SyndDB::is_ddl(sql_str) {
         info!("DDL executed via FFI, creating automatic snapshot");
-        if let Err(e) = synddb.publish_snapshot() {
+        if let Err(e) = synddb.snapshot() {
             warn!("Failed to auto-snapshot after DDL: {}. Continuing.", e);
             // Don't fail the execute - the DDL succeeded, snapshot is best-effort
         }
