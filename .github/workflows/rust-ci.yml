@@ -303,3 +303,9 @@ jobs:
         env:
           # Run proptest iterations in CI
           PROPTEST_CASES: "100"
+
+      - name: Run E2E stress tests
+        run: cargo test -p synddb-e2e-fuzzer --release -- --ignored
+        env:
+          # Fewer iterations for expensive stress tests
+          PROPTEST_CASES: "10"
