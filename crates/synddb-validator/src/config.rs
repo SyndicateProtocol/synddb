@@ -257,72 +257,84 @@ impl ValidatorConfig {
     // =========================================================================
 
     /// Set the database path
+    #[must_use]
     pub fn with_database_path(mut self, path: impl Into<String>) -> Self {
         self.database_path = path.into();
         self
     }
 
     /// Set the state database path
+    #[must_use]
     pub fn with_state_db_path(mut self, path: impl Into<String>) -> Self {
         self.state_db_path = path.into();
         self
     }
 
     /// Set the fetcher type
+    #[must_use]
     pub const fn with_fetcher_type(mut self, fetcher_type: FetcherType) -> Self {
         self.fetcher_type = fetcher_type;
         self
     }
 
     /// Set the sequencer URL for HTTP fetcher
+    #[must_use]
     pub fn with_sequencer_url(mut self, url: impl Into<String>) -> Self {
         self.sequencer_url = Some(url.into());
         self
     }
 
     /// Set the GCS bucket for GCS fetcher
+    #[must_use]
     pub fn with_gcs_bucket(mut self, bucket: impl Into<String>) -> Self {
         self.gcs_bucket = Some(bucket.into());
         self
     }
 
     /// Set the GCS prefix
+    #[must_use]
     pub fn with_gcs_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.gcs_prefix = prefix.into();
         self
     }
 
     /// Set the GCS emulator host for testing
+    #[must_use]
     pub fn with_gcs_emulator_host(mut self, host: impl Into<String>) -> Self {
         self.gcs_storage_emulator_host = Some(host.into());
         self
     }
 
     /// Set the bind address for HTTP API
+    #[must_use]
     pub const fn with_bind_address(mut self, addr: SocketAddr) -> Self {
         self.bind_address = addr;
         self
     }
 
     /// Set the sync poll interval
+    #[must_use]
     pub const fn with_sync_interval(mut self, interval: Duration) -> Self {
         self.sync_interval = interval;
         self
     }
 
     /// Set the start sequence number
+    #[must_use]
     pub const fn with_start_sequence(mut self, sequence: u64) -> Self {
         self.start_sequence = sequence;
         self
     }
 
     /// Enable or disable batch sync mode
+    #[must_use]
     pub const fn with_batch_sync_enabled(mut self, enabled: bool) -> Self {
         self.batch_sync_enabled = enabled;
         self
     }
 
     /// Configure bridge signer mode
+    #[must_use]
     pub fn with_bridge_signer(
         mut self,
         contract: impl Into<String>,

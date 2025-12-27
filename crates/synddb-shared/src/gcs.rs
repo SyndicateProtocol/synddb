@@ -50,6 +50,7 @@ impl GcsConfig {
     }
 
     /// Set the path prefix within the bucket
+    #[must_use]
     pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.prefix = prefix.into();
         self
@@ -58,6 +59,7 @@ impl GcsConfig {
     /// Set the emulator host URL for local testing
     ///
     /// Pass an empty string to disable emulator mode.
+    #[must_use]
     pub fn with_emulator_host(mut self, host: impl Into<String>) -> Self {
         let host = host.into();
         self.emulator_host = if host.is_empty() { None } else { Some(host) };
