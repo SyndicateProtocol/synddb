@@ -208,7 +208,8 @@ jobs:
 
       # Generate image tags based on trigger type
       # - Release tags (v*): version tag + latest
-      # - Main branch: sha-xxx + edge
+      # - Branch push: sha-xxx + edge
+      # - Manual run (workflow_dispatch): sha-xxx only (no edge to avoid overwriting)
       - name: Generate image tags
         id: tags
         run: |
@@ -216,16 +217,29 @@ jobs:
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
 
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            # Release tag: use version + latest
+            # Release tag
             VERSION=${GITHUB_REF#refs/tags/}
-            echo "sequencer_tags=$REGISTRY/synddb-sequencer:$VERSION,$REGISTRY/synddb-sequencer:latest" >> $GITHUB_OUTPUT
-            echo "validator_tags=$REGISTRY/synddb-validator:$VERSION,$REGISTRY/synddb-validator:latest" >> $GITHUB_OUTPUT
+            if [[ "${{ github.event_name }}" == "push" ]]; then
+              # Push event: version + latest
+              echo "sequencer_tags=$REGISTRY/synddb-sequencer:$VERSION,$REGISTRY/synddb-sequencer:latest" >> $GITHUB_OUTPUT
+              echo "validator_tags=$REGISTRY/synddb-validator:$VERSION,$REGISTRY/synddb-validator:latest" >> $GITHUB_OUTPUT
+            else
+              # Manual run: version only, no latest to avoid overwriting
+              echo "sequencer_tags=$REGISTRY/synddb-sequencer:$VERSION" >> $GITHUB_OUTPUT
+              echo "validator_tags=$REGISTRY/synddb-validator:$VERSION" >> $GITHUB_OUTPUT
+            fi
             echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
-          else
-            # Branch push: use sha + edge
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            # Branch push: sha + edge (edge = latest on main)
             echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA,$REGISTRY/synddb-sequencer:edge" >> $GITHUB_OUTPUT
             echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA,$REGISTRY/synddb-validator:edge" >> $GITHUB_OUTPUT
+            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          else
+            # Manual run (workflow_dispatch): sha only, no edge to avoid overwriting latest
+            echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
           fi
