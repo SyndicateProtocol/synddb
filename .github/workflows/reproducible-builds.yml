@@ -176,8 +176,6 @@ jobs:
     name: Publish to Artifact Registry
     needs: verify-cross-machine
     runs-on: ubuntu-latest
-    # Only publish from main branch, not PRs or feature branches
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: read
       id-token: write  # Required for Workload Identity Federation
