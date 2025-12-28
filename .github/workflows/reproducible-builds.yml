@@ -164,9 +164,9 @@ jobs:
           echo "Sequencer: $SEQUENCER_HASHES"
           echo "Validator: $VALIDATOR_HASHES"
 
-          # Save verified hashes for publish job
-          echo "sequencer=$SEQUENCER_HASHES" >> $GITHUB_OUTPUT
-          echo "validator=$VALIDATOR_HASHES" >> $GITHUB_OUTPUT
+          # Save verified hashes for publish job (trim whitespace)
+          echo "sequencer=$(echo "$SEQUENCER_HASHES" | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+          echo "validator=$(echo "$VALIDATOR_HASHES" | tr -d '[:space:]')" >> $GITHUB_OUTPUT
         id: hashes
 
     outputs:
@@ -252,13 +252,24 @@ jobs:
 
           # Verify the hash matches what we verified
           BUILT_HASH=$(docker inspect $IMAGE:$PRIMARY_TAG --format='{{.Id}}')
-          echo "Built hash: $BUILT_HASH"
-          echo "Verified hash: ${{ needs.verify-cross-machine.outputs.sequencer_hash }}"
+          VERIFIED_HASH="${{ needs.verify-cross-machine.outputs.sequencer_hash }}"
 
-          if [ "$BUILT_HASH" != "${{ needs.verify-cross-machine.outputs.sequencer_hash }}" ]; then
-            echo "::error::Publish build hash doesn't match verified hash!"
+          echo "Built hash:    $BUILT_HASH"
+          echo "Verified hash: $VERIFIED_HASH"
+
+          # Fail if verified hash is empty (indicates upstream issue)
+          if [ -z "$VERIFIED_HASH" ]; then
+            echo "::error::Verified hash is empty! Check verify-cross-machine job."
             exit 1
           fi
+
+          if [ "$BUILT_HASH" != "$VERIFIED_HASH" ]; then
+            echo "::error::Publish build hash doesn't match verified hash!"
+            echo "This indicates a reproducibility failure on the publish runner."
+            exit 1
+          fi
+
+          echo "::notice::Hash verification passed for sequencer"
 
           # Tag and push all configured tags
           IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.sequencer_tags }}"
@@ -290,13 +301,24 @@ jobs:
 
           # Verify the hash matches what we verified
           BUILT_HASH=$(docker inspect $IMAGE:$PRIMARY_TAG --format='{{.Id}}')
-          echo "Built hash: $BUILT_HASH"
-          echo "Verified hash: ${{ needs.verify-cross-machine.outputs.validator_hash }}"
+          VERIFIED_HASH="${{ needs.verify-cross-machine.outputs.validator_hash }}"
 
-          if [ "$BUILT_HASH" != "${{ needs.verify-cross-machine.outputs.validator_hash }}" ]; then
-            echo "::error::Publish build hash doesn't match verified hash!"
+          echo "Built hash:    $BUILT_HASH"
+          echo "Verified hash: $VERIFIED_HASH"
+
+          # Fail if verified hash is empty (indicates upstream issue)
+          if [ -z "$VERIFIED_HASH" ]; then
+            echo "::error::Verified hash is empty! Check verify-cross-machine job."
             exit 1
           fi
+
+          if [ "$BUILT_HASH" != "$VERIFIED_HASH" ]; then
+            echo "::error::Publish build hash doesn't match verified hash!"
+            echo "This indicates a reproducibility failure on the publish runner."
+            exit 1
+          fi
+
+          echo "::notice::Hash verification passed for validator"
 
           # Tag and push all configured tags
           IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.validator_tags }}"
