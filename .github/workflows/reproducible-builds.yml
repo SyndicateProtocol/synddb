@@ -207,7 +207,7 @@ jobs:
 
       # Install cosign for keyless image signing
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.0.0
 
       # Generate image tags based on trigger type
       # - Release tags (v*): version tag + latest
