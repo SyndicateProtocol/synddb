@@ -8,7 +8,9 @@ on:
   push:
     branches:
       - main
-      - example-app  # TEMPORARY: Testing BuildKit v0.26.3
+      - example-app  # TEMPORARY: Testing tagging logic
+    tags:
+      - 'v*'  # Release tags (e.g., v1.0.0)
     paths:
       - "docker/reproducible/**"
       - "crates/**"
@@ -204,12 +206,39 @@ jobs:
           driver-opts: |
             image=moby/buildkit:v0.26.3
 
+      # Generate image tags based on trigger type
+      # - Release tags (v*): version tag + latest
+      # - Main branch: sha-xxx + edge
+      - name: Generate image tags
+        id: tags
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # Release tag: use version + latest
+            VERSION=${GITHUB_REF#refs/tags/}
+            echo "sequencer_tags=$REGISTRY/synddb-sequencer:$VERSION,$REGISTRY/synddb-sequencer:latest" >> $GITHUB_OUTPUT
+            echo "validator_tags=$REGISTRY/synddb-validator:$VERSION,$REGISTRY/synddb-validator:latest" >> $GITHUB_OUTPUT
+            echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            # Branch push: use sha + edge
+            echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA,$REGISTRY/synddb-sequencer:edge" >> $GITHUB_OUTPUT
+            echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA,$REGISTRY/synddb-validator:edge" >> $GITHUB_OUTPUT
+            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build and push sequencer
         env:
           SOURCE_DATE_EPOCH: 0
         run: |
-          IMAGE="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}/synddb-sequencer"
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/synddb-sequencer"
+          PRIMARY_TAG="${{ steps.tags.outputs.primary_tag }}"
 
+          # Build with primary tag for hash verification
           docker buildx build \
             --no-cache \
             --provenance=false \
@@ -218,12 +247,11 @@ jobs:
             --platform linux/amd64 \
             --output type=docker,rewrite-timestamp=true \
             -f docker/reproducible/sequencer.Dockerfile \
-            -t $IMAGE:${{ github.sha }} \
-            -t $IMAGE:latest \
+            -t $IMAGE:$PRIMARY_TAG \
             .
 
           # Verify the hash matches what we verified
-          BUILT_HASH=$(docker inspect $IMAGE:${{ github.sha }} --format='{{.Id}}')
+          BUILT_HASH=$(docker inspect $IMAGE:$PRIMARY_TAG --format='{{.Id}}')
           echo "Built hash: $BUILT_HASH"
           echo "Verified hash: ${{ needs.verify-cross-machine.outputs.sequencer_hash }}"
 
@@ -232,17 +260,23 @@ jobs:
             exit 1
           fi
 
-          docker push $IMAGE:${{ github.sha }}
-          docker push $IMAGE:latest
-
-          echo "::notice::Published sequencer to $IMAGE:${{ github.sha }}"
+          # Tag and push all configured tags
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.sequencer_tags }}"
+          for TAG in "${TAGS[@]}"; do
+            docker tag $IMAGE:$PRIMARY_TAG $TAG
+            docker push $TAG
+            echo "::notice::Pushed $TAG"
+          done
 
       - name: Build and push validator
         env:
           SOURCE_DATE_EPOCH: 0
         run: |
-          IMAGE="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}/synddb-validator"
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/synddb-validator"
+          PRIMARY_TAG="${{ steps.tags.outputs.primary_tag }}"
 
+          # Build with primary tag for hash verification
           docker buildx build \
             --no-cache \
             --provenance=false \
@@ -251,12 +285,11 @@ jobs:
             --platform linux/amd64 \
             --output type=docker,rewrite-timestamp=true \
             -f docker/reproducible/validator.Dockerfile \
-            -t $IMAGE:${{ github.sha }} \
-            -t $IMAGE:latest \
+            -t $IMAGE:$PRIMARY_TAG \
             .
 
           # Verify the hash matches what we verified
-          BUILT_HASH=$(docker inspect $IMAGE:${{ github.sha }} --format='{{.Id}}')
+          BUILT_HASH=$(docker inspect $IMAGE:$PRIMARY_TAG --format='{{.Id}}')
           echo "Built hash: $BUILT_HASH"
           echo "Verified hash: ${{ needs.verify-cross-machine.outputs.validator_hash }}"
 
@@ -265,16 +298,25 @@ jobs:
             exit 1
           fi
 
-          docker push $IMAGE:${{ github.sha }}
-          docker push $IMAGE:latest
-
-          echo "::notice::Published validator to $IMAGE:${{ github.sha }}"
+          # Tag and push all configured tags
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.validator_tags }}"
+          for TAG in "${TAGS[@]}"; do
+            docker tag $IMAGE:$PRIMARY_TAG $TAG
+            docker push $TAG
+            echo "::notice::Pushed $TAG"
+          done
 
       - name: Summary
         run: |
           echo "## Published Images" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | Tag | Hash |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-----|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| synddb-sequencer | \`${{ github.sha }}\` | \`${{ needs.verify-cross-machine.outputs.sequencer_hash }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| synddb-validator | \`${{ github.sha }}\` | \`${{ needs.verify-cross-machine.outputs.validator_hash }}\` |" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.tags.outputs.is_release }}" == "true" ]]; then
+            echo "**Release:** \`${{ steps.tags.outputs.primary_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Edge build:** \`${{ steps.tags.outputs.primary_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tags | Hash |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| synddb-sequencer | \`${{ steps.tags.outputs.sequencer_tags }}\` | \`${{ needs.verify-cross-machine.outputs.sequencer_hash }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| synddb-validator | \`${{ steps.tags.outputs.validator_tags }}\` | \`${{ needs.verify-cross-machine.outputs.validator_hash }}\` |" >> $GITHUB_STEP_SUMMARY
