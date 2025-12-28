@@ -205,6 +205,10 @@ jobs:
           driver-opts: |
             image=moby/buildkit:v0.26.3
 
+      # Install cosign for keyless image signing
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
       # Generate image tags based on trigger type
       # - Release tags (v*): version tag + latest
       # - Branch push: sha-xxx + edge
@@ -292,6 +296,16 @@ jobs:
             echo "::notice::Pushed $TAG"
           done
 
+      # Sign sequencer images with cosign (keyless)
+      # Signatures are stored in the registry alongside the images
+      - name: Sign sequencer images
+        run: |
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.sequencer_tags }}"
+          for TAG in "${TAGS[@]}"; do
+            cosign sign --yes "$TAG"
+            echo "::notice::Signed $TAG"
+          done
+
       - name: Build and push validator
         env:
           SOURCE_DATE_EPOCH: 0
@@ -341,8 +355,19 @@ jobs:
             echo "::notice::Pushed $TAG"
           done
 
+      # Sign validator images with cosign (keyless)
+      - name: Sign validator images
+        run: |
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.validator_tags }}"
+          for TAG in "${TAGS[@]}"; do
+            cosign sign --yes "$TAG"
+            echo "::notice::Signed $TAG"
+          done
+
       - name: Summary
         run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+
           echo "## Published Images" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [[ "${{ steps.tags.outputs.is_release }}" == "true" ]]; then
@@ -355,3 +380,11 @@ jobs:
           echo "|-------|------|------|" >> $GITHUB_STEP_SUMMARY
           echo "| synddb-sequencer | \`${{ steps.tags.outputs.sequencer_tags }}\` | \`${{ needs.verify-cross-machine.outputs.sequencer_hash }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| synddb-validator | \`${{ steps.tags.outputs.validator_tags }}\` | \`${{ needs.verify-cross-machine.outputs.validator_hash }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Verify Signatures" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "cosign verify $REGISTRY/synddb-sequencer:${{ steps.tags.outputs.primary_tag }} \\\\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-identity-regexp='https://github.com/SyndicateProtocol/synddb/.*' \\\\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-oidc-issuer='https://token.actions.githubusercontent.com'" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

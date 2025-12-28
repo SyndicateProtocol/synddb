@@ -496,3 +496,84 @@ repro-verify:
     echo "Validator:"
     docker inspect synddb-validator:reproducible --format='  Image ID: {{ "{{" }}.Id{{ "}}" }}' 2>/dev/null || echo "  (not built)"
     docker inspect synddb-validator:reproducible --format='  Created:  {{ "{{" }}.Created{{ "}}" }}' 2>/dev/null || true
+
+# Artifact Registry configuration
+ar_registry := "us-central1-docker.pkg.dev/synddb-infra/synddb"
+
+# Verify local builds match published images
+[group('reproducible')]
+verify-build tag="edge":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== Building Reproducible Images Locally ==="
+    echo ""
+    just repro-all
+
+    echo ""
+    echo "=== Fetching Published Images ==="
+    echo ""
+    docker pull {{ ar_registry }}/synddb-sequencer:{{ tag }}
+    docker pull {{ ar_registry }}/synddb-validator:{{ tag }}
+
+    echo ""
+    echo "=== Comparing Image Hashes ==="
+    echo ""
+
+    LOCAL_SEQ=$(docker inspect synddb-sequencer:reproducible --format='{{ "{{" }}.Id{{ "}}" }}')
+    LOCAL_VAL=$(docker inspect synddb-validator:reproducible --format='{{ "{{" }}.Id{{ "}}" }}')
+    REMOTE_SEQ=$(docker inspect {{ ar_registry }}/synddb-sequencer:{{ tag }} --format='{{ "{{" }}.Id{{ "}}" }}')
+    REMOTE_VAL=$(docker inspect {{ ar_registry }}/synddb-validator:{{ tag }} --format='{{ "{{" }}.Id{{ "}}" }}')
+
+    echo "Sequencer:"
+    echo "  Local:  $LOCAL_SEQ"
+    echo "  Remote: $REMOTE_SEQ"
+    if [ "$LOCAL_SEQ" = "$REMOTE_SEQ" ]; then
+        echo "  ✓ MATCH"
+    else
+        echo "  ✗ MISMATCH"
+        FAILED=1
+    fi
+
+    echo ""
+    echo "Validator:"
+    echo "  Local:  $LOCAL_VAL"
+    echo "  Remote: $REMOTE_VAL"
+    if [ "$LOCAL_VAL" = "$REMOTE_VAL" ]; then
+        echo "  ✓ MATCH"
+    else
+        echo "  ✗ MISMATCH"
+        FAILED=1
+    fi
+
+    echo ""
+    if [ "${FAILED:-0}" = "1" ]; then
+        echo "=== VERIFICATION FAILED ==="
+        exit 1
+    else
+        echo "=== All Images Verified! ==="
+    fi
+
+# Verify cosign signatures on published images
+[group('reproducible')]
+verify-signatures tag="edge":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== Verifying Cosign Signatures ==="
+    echo ""
+    echo "Sequencer:"
+    cosign verify {{ ar_registry }}/synddb-sequencer:{{ tag }} \
+        --certificate-identity-regexp='https://github.com/SyndicateProtocol/synddb/.*' \
+        --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+        | head -20
+
+    echo ""
+    echo "Validator:"
+    cosign verify {{ ar_registry }}/synddb-validator:{{ tag }} \
+        --certificate-identity-regexp='https://github.com/SyndicateProtocol/synddb/.*' \
+        --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+        | head -20
+
+    echo ""
+    echo "=== All Signatures Verified! ==="
