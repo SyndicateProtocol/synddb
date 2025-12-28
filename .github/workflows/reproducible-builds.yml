@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - example-app  # TEMPORARY: Testing cosign signing
     tags:
       - 'v*'  # Release tags (e.g., v1.0.0)
     paths:
