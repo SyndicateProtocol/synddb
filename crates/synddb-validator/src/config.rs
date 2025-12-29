@@ -357,6 +357,15 @@ mod tests {
     // ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
     const TEST_PUBKEY: &str = "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5";
 
+    /// Clear all bridge-related env vars that might be set by .env.defaults
+    fn clear_bridge_env_vars() {
+        std::env::remove_var("BRIDGE_SIGNER");
+        std::env::remove_var("BRIDGE_CONTRACT");
+        std::env::remove_var("BRIDGE_CHAIN_ID");
+        std::env::remove_var("BRIDGE_SIGNING_KEY");
+        std::env::remove_var("BRIDGE_SIGNATURE_ENDPOINT");
+    }
+
     #[test]
     fn test_config_defaults() {
         let config =
@@ -424,6 +433,9 @@ mod tests {
 
     #[test]
     fn test_bridge_signer_validation_missing_contract() {
+        // Clear env vars that might be set by .env.defaults
+        clear_bridge_env_vars();
+
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
             "--sequencer-pubkey",
@@ -485,8 +497,8 @@ mod tests {
 
     #[test]
     fn test_bridge_contract_local_fallback_non_anvil() {
-        // Clear env var that might be set by .env.defaults
-        std::env::remove_var("BRIDGE_CONTRACT");
+        // Clear env vars that might be set by .env.defaults
+        clear_bridge_env_vars();
 
         // When chain ID is NOT 31337, bridge contract should NOT use local default
         let config = ValidatorConfig::parse_from([
