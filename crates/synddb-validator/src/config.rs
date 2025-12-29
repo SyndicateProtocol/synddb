@@ -485,6 +485,9 @@ mod tests {
 
     #[test]
     fn test_bridge_contract_local_fallback_non_anvil() {
+        // Clear env var that might be set by .env.defaults
+        std::env::remove_var("BRIDGE_CONTRACT");
+
         // When chain ID is NOT 31337, bridge contract should NOT use local default
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
