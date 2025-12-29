@@ -19,7 +19,7 @@
 # =============================================================================
 # Builder Stage - Compiles all workspace binaries
 # =============================================================================
-FROM rust:1.92-bookworm AS builder
+FROM rust:1.92-trixie AS builder
 
 # Install clang for libsqlite3-sys bindgen
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -43,7 +43,7 @@ RUN cargo build --release --workspace
 # =============================================================================
 # Runtime Base - Common runtime dependencies
 # =============================================================================
-FROM debian:bookworm-slim AS runtime-base
+FROM debian:trixie-slim AS runtime-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

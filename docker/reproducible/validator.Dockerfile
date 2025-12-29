@@ -32,13 +32,13 @@
 # Build Arguments - Update these when upgrading base images
 # =============================================================================
 # To get current digests:
-#   docker pull rust:1.92-bookworm && docker inspect rust:1.92-bookworm --format='{{index .RepoDigests 0}}'
-#   docker pull debian:bookworm-slim && docker inspect debian:bookworm-slim --format='{{index .RepoDigests 0}}'
-#   docker pull gcr.io/distroless/cc-debian12 && docker inspect gcr.io/distroless/cc-debian12 --format='{{index .RepoDigests 0}}'
+#   docker pull rust:1.92-trixie && docker inspect rust:1.92-trixie --format='{{index .RepoDigests 0}}'
+#   docker pull debian:trixie-slim && docker inspect debian:trixie-slim --format='{{index .RepoDigests 0}}'
+#   docker pull gcr.io/distroless/cc-debian13 && docker inspect gcr.io/distroless/cc-debian13 --format='{{index .RepoDigests 0}}'
 
-ARG RUST_IMAGE_DIGEST=sha256:9676d0547a259997add8f5924eb6b959c589ed39055338e23b99aba7958d6d31
-ARG DEBIAN_IMAGE_DIGEST=sha256:e899040a73d36e2b36fa33216943539d9957cba8172b858097c2cabcdb20a3e2
-ARG DISTROLESS_IMAGE_DIGEST=sha256:0c8eac8ea42a167255d03c3ba6dfad2989c15427ed93d16c53ef9706ea4691df
+ARG RUST_IMAGE_DIGEST=sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4
+ARG DEBIAN_IMAGE_DIGEST=sha256:e711a7b30ec1261130d0a121050b4ed81d7fb28aeabcf4ea0c7876d4e9f5aca2
+ARG DISTROLESS_IMAGE_DIGEST=sha256:43fc7a7004c4cdb27aac60b3e95c87130cf47823f72d25d42ed0f9b503f1d184
 
 # =============================================================================
 # Builder Stage
@@ -122,7 +122,7 @@ ENTRYPOINT ["/app/synddb-validator"]
 # =============================================================================
 # Release Runtime - Distroless for production/TEE
 # =============================================================================
-FROM --platform=linux/amd64 gcr.io/distroless/cc-debian12@${DISTROLESS_IMAGE_DIGEST} AS release
+FROM --platform=linux/amd64 gcr.io/distroless/cc-debian13@${DISTROLESS_IMAGE_DIGEST} AS release
 
 WORKDIR /app
 

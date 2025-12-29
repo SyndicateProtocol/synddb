@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - example-app  # TEMPORARY: Testing Debian 13 Trixie upgrade
     tags:
       - 'v*'  # Release tags (e.g., v1.0.0)
     paths:
