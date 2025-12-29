@@ -19,7 +19,7 @@
 # =============================================================================
 # Builder Stage - Compiles all workspace binaries
 # =============================================================================
-FROM rust:1.91-bookworm AS builder
+FROM rust:1.92-bookworm AS builder
 
 # Install clang for libsqlite3-sys bindgen
 RUN apt-get update && apt-get install -y --no-install-recommends \
