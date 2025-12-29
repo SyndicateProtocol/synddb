@@ -31,8 +31,8 @@ Each Dockerfile provides two targets:
 
 | Target | Base Image | Use Case |
 |--------|------------|----------|
-| `release` (default) | `gcr.io/distroless/cc-debian12` | Production / TEE deployment |
-| `debug` | `debian:bookworm-slim` | Local debugging (has shell) |
+| `release` (default) | `gcr.io/distroless/cc-debian13` | Production / TEE deployment |
+| `debug` | `debian:trixie-slim` | Local debugging (has shell) |
 
 ```bash
 # Production (distroless, no shell)
@@ -124,14 +124,14 @@ When Rust or Debian releases updates, you'll need to update the pinned digests:
 
 ```bash
 # Get the new digest
-docker pull rust:1.92-bookworm
-docker inspect rust:1.92-bookworm --format='{{index .RepoDigests 0}}'
+docker pull rust:1.92-trixie
+docker inspect rust:1.92-trixie --format='{{index .RepoDigests 0}}'
 
-docker pull debian:bookworm-slim
-docker inspect debian:bookworm-slim --format='{{index .RepoDigests 0}}'
+docker pull debian:trixie-slim
+docker inspect debian:trixie-slim --format='{{index .RepoDigests 0}}'
 
-docker pull gcr.io/distroless/cc-debian12
-docker inspect gcr.io/distroless/cc-debian12 --format='{{index .RepoDigests 0}}'
+docker pull gcr.io/distroless/cc-debian13
+docker inspect gcr.io/distroless/cc-debian13 --format='{{index .RepoDigests 0}}'
 ```
 
 Then update the `ARG` values in the Dockerfiles.

@@ -1,5 +1,5 @@
 # Build stage - explicitly target linux/amd64 for Confidential Space VMs
-FROM --platform=linux/amd64 rust:1.91-bookworm AS builder
+FROM --platform=linux/amd64 rust:1.92-trixie AS builder
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ RUN cargo build --release --features gcs
 
 # Runtime stage - use distroless for minimal attack surface
 # Note: Using root variant because the attestation socket requires root access
-FROM --platform=linux/amd64 gcr.io/distroless/cc-debian12
+FROM --platform=linux/amd64 gcr.io/distroless/cc-debian13
 
 WORKDIR /app
 
