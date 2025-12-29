@@ -111,11 +111,14 @@ impl MessageHandler for DepositHandler {
         let block_number = log.block_number.unwrap_or(0);
         let log_index = log.log_index;
 
-        // Convert amount from U256 to i64 (assuming reasonable values)
-        let amount: i64 = deposit.amount.try_into().unwrap_or_else(|_| {
-            warn!("Deposit amount too large, capping at i64::MAX");
-            i64::MAX
-        });
+        // Convert amount from U256 to i64
+        // Financial amounts must fit in i64 - reject if too large rather than silently truncating
+        let amount: i64 = deposit.amount.try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "Deposit amount {} exceeds i64::MAX - this indicates a data integrity issue",
+                deposit.amount
+            )
+        })?;
 
         // Validate
         if amount == 0 {
@@ -216,10 +219,13 @@ impl MessageHandler for WithdrawalHandler {
         let block_number = log.block_number.unwrap_or(0);
 
         // Convert amount from U256 to i64
-        let amount: i64 = withdrawal.amount.try_into().unwrap_or_else(|_| {
-            warn!("Withdrawal amount too large, capping at i64::MAX");
-            i64::MAX
-        });
+        // Financial amounts must fit in i64 - reject if too large rather than silently truncating
+        let amount: i64 = withdrawal.amount.try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "Withdrawal amount {} exceeds i64::MAX - this indicates a data integrity issue",
+                withdrawal.amount
+            )
+        })?;
 
         info!(
             tx_hash = %tx_hash,
@@ -293,6 +299,13 @@ pub fn insert_deposit(conn: &rusqlite::Connection, deposit: &DepositData) -> Res
 /// Confirm a withdrawal in the database
 ///
 /// Called by the main thread after receiving confirmation from the handler.
+///
+/// # SQLite-Specific Syntax
+///
+/// This function uses `ORDER BY ... LIMIT` in an `UPDATE` statement, which is
+/// SQLite-specific syntax (enabled via `SQLITE_ENABLE_UPDATE_DELETE_LIMIT`).
+/// This is not standard SQL and would need to be rewritten for other databases
+/// (e.g., using a subquery to select the row ID first).
 pub fn confirm_withdrawal(
     conn: &rusqlite::Connection,
     confirmation: &WithdrawalConfirmation,
@@ -302,6 +315,7 @@ pub fn confirm_withdrawal(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
+    // SQLite-specific: ORDER BY and LIMIT in UPDATE require SQLITE_ENABLE_UPDATE_DELETE_LIMIT
     let rows = conn.execute(
         "UPDATE outbound_withdrawals
          SET status = 'confirmed', l1_tx_hash = ?1, confirmed_at = ?2
@@ -372,10 +386,13 @@ impl MessageHandler for BridgeEventHandler {
             let block_number = log.block_number.unwrap_or(0);
             let log_index = log.log_index;
 
-            let amount: i64 = deposit.amount.try_into().unwrap_or_else(|_| {
-                warn!("Deposit amount too large, capping at i64::MAX");
-                i64::MAX
-            });
+            // Financial amounts must fit in i64 - reject if too large
+            let amount: i64 = deposit.amount.try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "Deposit amount {} exceeds i64::MAX - this indicates a data integrity issue",
+                    deposit.amount
+                )
+            })?;
 
             if amount == 0 {
                 warn!(tx_hash = %tx_hash, "Deposit with zero amount - skipping");
@@ -416,10 +433,13 @@ impl MessageHandler for BridgeEventHandler {
                 .unwrap_or_default();
             let block_number = log.block_number.unwrap_or(0);
 
-            let amount: i64 = withdrawal.amount.try_into().unwrap_or_else(|_| {
-                warn!("Withdrawal amount too large, capping at i64::MAX");
-                i64::MAX
-            });
+            // Financial amounts must fit in i64 - reject if too large
+            let amount: i64 = withdrawal.amount.try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "Withdrawal amount {} exceeds i64::MAX - this indicates a data integrity issue",
+                    withdrawal.amount
+                )
+            })?;
 
             info!(
                 tx_hash = %tx_hash,

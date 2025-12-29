@@ -59,6 +59,18 @@ impl PredictionMarket {
     /// If `sequencer_url` is provided, uses `SyndDB::open()` which handles
     /// all the connection management internally. Schema creation is done via
     /// `execute_ddl()` which automatically publishes a snapshot.
+    ///
+    /// # Connection Lifetime (standalone mode)
+    ///
+    /// When running without replication (`sequencer_url` is `None`), the database
+    /// connection is intentionally leaked via `Box::leak` to create a `'static`
+    /// lifetime. This means:
+    /// - The connection remains open for the entire process lifetime
+    /// - `SQLite` cleanup (WAL checkpoint, file handle release) happens at process exit
+    /// - This is acceptable for long-running server processes
+    ///
+    /// For short-lived processes or tests requiring explicit cleanup, use
+    /// `in_memory()` or consider a connection pool in production.
     pub fn new(db_path: &str, sequencer_url: Option<&str>) -> Result<Self> {
         if let Some(url) = sequencer_url {
             // Use SyndDB::open() - it handles connection management internally
@@ -81,8 +93,11 @@ impl PredictionMarket {
             })
         } else {
             // No replication - manage connection ourselves
-            let conn: &'static Connection = Box::leak(Box::new(Connection::open(db_path)?));
-            schema::initialize_schema(conn)?;
+            // Open and initialize BEFORE leaking so failures don't leak resources
+            let conn = Connection::open(db_path)?;
+            schema::initialize_schema(&conn)?;
+            // Only leak after successful initialization
+            let conn: &'static Connection = Box::leak(Box::new(conn));
             Ok(Self {
                 synddb: None,
                 standalone_conn: Some(conn),
@@ -91,6 +106,8 @@ impl PredictionMarket {
     }
 
     /// Create an in-memory instance (for testing)
+    ///
+    /// See [`Self::new`] for connection lifetime notes in standalone mode.
     pub fn in_memory(sequencer_url: Option<&str>) -> Result<Self> {
         if let Some(url) = sequencer_url {
             let synddb = SyndDB::open_in_memory(url)?;
@@ -109,8 +126,11 @@ impl PredictionMarket {
                 standalone_conn: None,
             })
         } else {
-            let conn: &'static Connection = Box::leak(Box::new(Connection::open_in_memory()?));
-            schema::initialize_schema(conn)?;
+            // Open and initialize BEFORE leaking so failures don't leak resources
+            let conn = Connection::open_in_memory()?;
+            schema::initialize_schema(&conn)?;
+            // Only leak after successful initialization
+            let conn: &'static Connection = Box::leak(Box::new(conn));
             Ok(Self {
                 synddb: None,
                 standalone_conn: Some(conn),
