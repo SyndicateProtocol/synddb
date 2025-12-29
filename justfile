@@ -419,8 +419,8 @@ docker-down:
 # ============================================================================
 # Reproducible Builds (for Confidential Space / TEE verification)
 # ============================================================================
-
 # BuildKit version pinned for reproducibility (shared with CI via docker/reproducible/buildkit.version)
+
 buildkit_version := "moby/buildkit:" + trim(read("docker/reproducible/buildkit.version"))
 buildkit_builder := "synddb-repro"
 
@@ -519,6 +519,7 @@ repro-verify:
     docker inspect synddb-validator:reproducible --format='  Created:  {{ "{{" }}.Created{{ "}}" }}' 2>/dev/null || true
 
 # Artifact Registry configuration
+
 ar_registry := "us-central1-docker.pkg.dev/synddb-infra/synddb"
 
 # Verify local builds match published images
