@@ -31,10 +31,12 @@ target
 *.db-shm
 *.db-wal
 
-# Environment variables (create .env for local overrides - see justfile for defaults)
+# Environment variables
+# - .env.defaults: checked in, contains safe local dev values
+# - .env: gitignored, for your local overrides
 .env
 .env.*
-!.env.example
+!.env.defaults
 
 # Claude
 .claude/settings.local.json

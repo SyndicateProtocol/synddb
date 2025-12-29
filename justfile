@@ -23,9 +23,12 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Load .env if present (for optional local overrides)
+# Load .env.defaults for local development configuration
+# To override values, create .env (gitignored) and source it before running just,
+# or use direnv with .envrc
 
 set dotenv-load := true
+set dotenv-filename := ".env.defaults"
 
 # Export all variables as environment variables
 
@@ -39,49 +42,27 @@ mod contracts 'contracts/mod.just'
 mod examples 'examples/mod.just'
 
 # ============================================================================
-# Shared Configuration (Single Source of Truth)
+# Configuration from .env.defaults
 # ============================================================================
+# All values are loaded from .env.defaults. To override, set environment
+# variables before running just, or create .env and source it.
 #
-# All local development defaults are defined here. No .env file needed!
-# To override any value, create a .env file (gitignored) with your custom values.
-#
-# ============================================================================
-# Well-known Anvil addresses and keys (DO NOT USE IN PRODUCTION)
-# These are deterministic test accounts - safe to commit
+# These variables reference the dotenv values for use in recipes:
 
-anvil_key_0 := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-anvil_key_1 := "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
-anvil_address_0 := "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-anvil_address_1 := "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
-
-# Sequencer public key (derived from anvil_key_0)
-
-sequencer_pubkey := "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5"
-
-# Deterministic contract addresses (from deploy-local.sh with Anvil account 0)
-
-bridge_address := "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
-weth_address := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
-price_oracle_address := "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
-
-# Network configuration
-
-anvil_rpc_url := "http://127.0.0.1:8545"
-anvil_chain_id := "31337"
-
-# Default ports
-
-anvil_port := "8545"
-sequencer_port := "8433"
-validator_port := "8080"
-
-# Data directories
-
-data_dir := "./data"
-
-# Logging (can override with RUST_LOG env var)
-
-rust_log := "info"
+anvil_key_0 := env_var('ANVIL_KEY_0')
+anvil_key_1 := env_var('ANVIL_KEY_1')
+anvil_address_0 := env_var('ANVIL_ADDRESS_0')
+anvil_address_1 := env_var('ANVIL_ADDRESS_1')
+sequencer_pubkey := env_var('SEQUENCER_PUBKEY')
+bridge_address := env_var('BRIDGE_ADDRESS')
+weth_address := env_var('WETH_ADDRESS')
+price_oracle_address := env_var('PRICE_ORACLE_ADDRESS')
+anvil_rpc_url := env_var('ANVIL_RPC_URL')
+anvil_chain_id := env_var('ANVIL_CHAIN_ID')
+anvil_port := env_var('ANVIL_PORT')
+sequencer_port := env_var('SEQUENCER_PORT')
+validator_port := env_var('VALIDATOR_PORT')
+data_dir := env_var('DATA_DIR')
 
 # ============================================================================
 # Default & Help
