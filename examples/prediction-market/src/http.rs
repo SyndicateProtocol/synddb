@@ -576,22 +576,26 @@ async fn get_status(State(config): State<AppState>) -> Result<Json<StatusRespons
 mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use std::sync::atomic::{AtomicU64, Ordering};
     use tower::ServiceExt;
 
-    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
-
     fn test_router() -> Router {
-        // Use a unique temp file for each test to avoid conflicts
-        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        // Use high-precision timestamp + process ID for guaranteed uniqueness across
+        // concurrent test processes (even in containerized environments with PID reuse)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards");
+        let ts_nanos = now.as_nanos();
         let db_path = format!(
             "/tmp/prediction_market_test_{}_{}.db",
             std::process::id(),
-            counter
+            ts_nanos
         );
-        // Remove any existing file
+        // Remove any existing file (unlikely but handles edge cases)
         let _ = std::fs::remove_file(&db_path);
         // Initialize schema
+        // Note: PredictionMarket uses Box::leak, so connections remain open for process
+        // lifetime. Temp files accumulate in /tmp but are cleaned by the OS on reboot.
+        // For production test suites, consider using in-memory databases instead.
         let _ = PredictionMarket::new(&db_path, None).unwrap();
         create_router(db_path, None)
     }

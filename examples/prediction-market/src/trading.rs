@@ -121,13 +121,16 @@ pub fn sell_shares(
     }
 
     // Check position exists with enough shares
-    let current_shares: i64 = conn
-        .query_row(
-            "SELECT shares FROM positions WHERE account_id = ?1 AND market_id = ?2 AND outcome = ?3",
-            params![account_id, market_id, outcome],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
+    // Distinguish between "no position" (0 shares) and actual database errors
+    let current_shares: i64 = match conn.query_row(
+        "SELECT shares FROM positions WHERE account_id = ?1 AND market_id = ?2 AND outcome = ?3",
+        params![account_id, market_id, outcome],
+        |row| row.get(0),
+    ) {
+        Ok(shares) => shares,
+        Err(rusqlite::Error::QueryReturnedNoRows) => 0,
+        Err(e) => return Err(e.into()),
+    };
 
     if current_shares < shares {
         bail!(
