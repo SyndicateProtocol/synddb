@@ -599,3 +599,91 @@ verify-signatures tag="edge":
 
     echo ""
     echo "=== All Signatures Verified! ==="
+
+# Base images for reproducible builds (update version tags here when upgrading)
+
+repro_rust_image := "rust:1.92-trixie"
+repro_debian_image := "debian:trixie-slim"
+repro_distroless_image := "gcr.io/distroless/cc-debian13"
+
+# Check for newer base image digests
+[group('reproducible')]
+check-digests:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== Checking Base Image Digests ==="
+    echo ""
+    echo "Fetching latest digests from registries..."
+    echo ""
+
+    RUST_LATEST=$(docker manifest inspect {{ repro_rust_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest' 2>/dev/null || echo "failed to fetch")
+    DEBIAN_LATEST=$(docker manifest inspect {{ repro_debian_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest' 2>/dev/null || echo "failed to fetch")
+    DISTROLESS_LATEST=$(docker manifest inspect {{ repro_distroless_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest' 2>/dev/null || echo "failed to fetch")
+
+    echo "{{ repro_rust_image }}"
+    echo "  Latest: $RUST_LATEST"
+    CURRENT=$(grep 'ARG RUST_IMAGE_DIGEST=' docker/reproducible/sequencer.Dockerfile | head -1 | cut -d= -f2)
+    echo "  Current: $CURRENT"
+    [ "$RUST_LATEST" = "$CURRENT" ] && echo "  ✓ Up to date" || echo "  ⚠ Update available"
+    echo ""
+
+    echo "{{ repro_debian_image }}"
+    echo "  Latest: $DEBIAN_LATEST"
+    CURRENT=$(grep 'ARG DEBIAN_IMAGE_DIGEST=' docker/reproducible/sequencer.Dockerfile | head -1 | cut -d= -f2)
+    echo "  Current: $CURRENT"
+    [ "$DEBIAN_LATEST" = "$CURRENT" ] && echo "  ✓ Up to date" || echo "  ⚠ Update available"
+    echo ""
+
+    echo "{{ repro_distroless_image }}"
+    echo "  Latest: $DISTROLESS_LATEST"
+    CURRENT=$(grep 'ARG DISTROLESS_IMAGE_DIGEST=' docker/reproducible/sequencer.Dockerfile | head -1 | cut -d= -f2)
+    echo "  Current: $CURRENT"
+    [ "$DISTROLESS_LATEST" = "$CURRENT" ] && echo "  ✓ Up to date" || echo "  ⚠ Update available"
+
+# Update base image digests in reproducible Dockerfiles
+[confirm("Update all digest pins in reproducible Dockerfiles?")]
+[group('reproducible')]
+update-digests:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== Updating Base Image Digests ==="
+    echo ""
+
+    RUST=$(docker manifest inspect {{ repro_rust_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest')
+    DEBIAN=$(docker manifest inspect {{ repro_debian_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest')
+    DISTROLESS=$(docker manifest inspect {{ repro_distroless_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest')
+
+    if [ -z "$RUST" ] || [ -z "$DEBIAN" ] || [ -z "$DISTROLESS" ]; then
+        echo "Error: Failed to fetch one or more digests"
+        exit 1
+    fi
+
+    echo "New digests:"
+    echo "  Rust:       $RUST"
+    echo "  Debian:     $DEBIAN"
+    echo "  Distroless: $DISTROLESS"
+    echo ""
+
+    # Detect OS for sed compatibility
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        SED_INPLACE="sed -i ''"
+    else
+        SED_INPLACE="sed -i"
+    fi
+
+    for f in docker/reproducible/*.Dockerfile; do
+        echo "Updating $f..."
+        $SED_INPLACE "s|ARG RUST_IMAGE_DIGEST=.*|ARG RUST_IMAGE_DIGEST=${RUST}|" "$f"
+        $SED_INPLACE "s|ARG DEBIAN_IMAGE_DIGEST=.*|ARG DEBIAN_IMAGE_DIGEST=${DEBIAN}|" "$f"
+        $SED_INPLACE "s|ARG DISTROLESS_IMAGE_DIGEST=.*|ARG DISTROLESS_IMAGE_DIGEST=${DISTROLESS}|" "$f"
+    done
+
+    echo ""
+    echo "=== Digests Updated ==="
+    echo ""
+    echo "Next steps:"
+    echo "  1. Review changes: git diff docker/reproducible/"
+    echo "  2. Build and test: just repro-all"
+    echo "  3. Commit: git add docker/reproducible/ && git commit -m 'chore: update base image digests'"
