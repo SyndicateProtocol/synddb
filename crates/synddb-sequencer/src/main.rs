@@ -96,47 +96,38 @@ async fn main() -> Result<()> {
                 (Some(batcher), Some(transport))
             }
             PublisherType::Gcs => {
-                #[cfg(feature = "gcs")]
-                {
-                    use synddb_sequencer::transport::gcs::{GcsTransport, GcsTransportConfig};
+                use synddb_sequencer::transport::gcs::{GcsTransport, GcsTransportConfig};
 
-                    let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
-                    })?;
+                let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
+                })?;
 
-                    let mut transport_config =
-                        GcsTransportConfig::new(bucket).with_prefix(&config.gcs_prefix);
-                    if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
-                        transport_config = transport_config.with_emulator_host(emulator_host);
-                    }
-
-                    let transport = GcsTransport::new(transport_config)
-                        .await
-                        .context("Failed to initialize GCS transport")?;
-
-                    let batch_config = config.batch_config();
-                    info!(
-                        max_messages = batch_config.max_messages,
-                        max_bytes = batch_config.max_batch_bytes,
-                        flush_interval_ms = batch_config.flush_interval.as_millis(),
-                        "Initializing CBOR batcher with GCS transport"
-                    );
-
-                    (
-                        Some(Batcher::spawn(
-                            batch_config,
-                            Arc::new(transport),
-                            Arc::clone(&signer),
-                        )),
-                        None,
-                    )
+                let mut transport_config =
+                    GcsTransportConfig::new(bucket).with_prefix(&config.gcs_prefix);
+                if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
+                    transport_config = transport_config.with_emulator_host(emulator_host);
                 }
-                #[cfg(not(feature = "gcs"))]
-                {
-                    anyhow::bail!(
-                        "publisher_type=gcs requires the 'gcs' feature. Compile with --features gcs"
-                    );
-                }
+
+                let transport = GcsTransport::new(transport_config)
+                    .await
+                    .context("Failed to initialize GCS transport")?;
+
+                let batch_config = config.batch_config();
+                info!(
+                    max_messages = batch_config.max_messages,
+                    max_bytes = batch_config.max_batch_bytes,
+                    flush_interval_ms = batch_config.flush_interval.as_millis(),
+                    "Initializing CBOR batcher with GCS transport"
+                );
+
+                (
+                    Some(Batcher::spawn(
+                        batch_config,
+                        Arc::new(transport),
+                        Arc::clone(&signer),
+                    )),
+                    None,
+                )
             }
         };
 

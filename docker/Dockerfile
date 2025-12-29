@@ -10,12 +10,11 @@
 #     target: sequencer
 #
 # Available targets:
-#   - sequencer     : SyndDB sequencer service
-#   - sequencer-gcs : SyndDB sequencer with GCS support (--features gcs)
-#   - validator     : SyndDB validator service
-#   - customer-app  : Orderbook benchmark (example customer application)
-#   - e2e           : E2E test runner
-#   - stress-test   : Session stress test
+#   - sequencer    : SyndDB sequencer service (includes all transports)
+#   - validator    : SyndDB validator service
+#   - customer-app : Orderbook benchmark (example customer application)
+#   - e2e          : E2E test runner
+#   - stress-test  : Session stress test
 
 # =============================================================================
 # Builder Stage - Compiles all workspace binaries
@@ -42,14 +41,6 @@ COPY tests/ ./tests/
 RUN cargo build --release --workspace
 
 # =============================================================================
-# Builder Stage (GCS) - Compiles sequencer with GCS feature
-# =============================================================================
-FROM builder AS builder-gcs
-
-# Build sequencer with GCS feature enabled
-RUN cargo build --release -p synddb-sequencer --features gcs
-
-# =============================================================================
 # Runtime Base - Common runtime dependencies
 # =============================================================================
 FROM debian:bookworm-slim AS runtime-base
@@ -70,26 +61,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/synddb-sequencer /app/synddb-sequencer
-
-RUN mkdir -p /data
-
-ENV RUST_LOG=info
-ENV BIND_ADDRESS=0.0.0.0:8433
-
-EXPOSE 8433
-
-ENTRYPOINT ["/app/synddb-sequencer"]
-
-# =============================================================================
-# Sequencer Service (with GCS support)
-# =============================================================================
-FROM runtime-base AS sequencer-gcs
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder-gcs /app/target/release/synddb-sequencer /app/synddb-sequencer
 
 RUN mkdir -p /data
 
