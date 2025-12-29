@@ -74,7 +74,7 @@ panic = "abort"    # Removes unwinding tables that can vary
 | `--no-cache` | Layer caching can reuse non-reproducible intermediate results. |
 | `rewrite-timestamp=true` | Rewrites all file timestamps in image layers to `SOURCE_DATE_EPOCH`. |
 | `SOURCE_DATE_EPOCH=0` | Standard for reproducible builds. Sets all timestamps to Unix epoch (1970-01-01). |
-| Pinned BuildKit version | Different versions may hash layers differently. Pin to `moby/buildkit:v0.26.3`. |
+| Pinned BuildKit version | Different versions may hash layers differently. Version is defined in `buildkit.version` (shared between CI and local builds). |
 | Pinned base images by digest | Tags like `rust:1.92` can change. Digests (`sha256:...`) are immutable. |
 
 ### Dockerfile Steps
@@ -159,13 +159,18 @@ See `.github/workflows/reproducible-builds.yml` for the full CI workflow. Key fe
 
 1. **Same-machine verification**: Builds twice on the same runner, compares hashes
 2. **Cross-machine verification**: Builds on Ubuntu 22.04 and 24.04, compares hashes across runners
-3. **Uses pinned BuildKit**: Ensures consistent BuildKit version across all builds
+3. **Uses pinned BuildKit**: Reads version from `buildkit.version` to ensure consistency with local builds
+4. **Cosign signing**: Signs images with keyless OIDC for supply chain security
 
 ```yaml
+# Read version from shared file
+- run: echo "version=$(cat docker/reproducible/buildkit.version)" >> $GITHUB_OUTPUT
+  id: buildkit
+
 - uses: docker/setup-buildx-action@v3
   with:
     driver-opts: |
-      image=moby/buildkit:v0.26.3
+      image=moby/buildkit:${{ steps.buildkit.outputs.version }}
 
 - name: Build image
   env:

@@ -420,10 +420,28 @@ docker-down:
 # Reproducible Builds (for Confidential Space / TEE verification)
 # ============================================================================
 
+# BuildKit version pinned for reproducibility (shared with CI via docker/reproducible/buildkit.version)
+buildkit_version := "moby/buildkit:" + trim(read("docker/reproducible/buildkit.version"))
+buildkit_builder := "synddb-repro"
+
+# Set up BuildKit builder with pinned version for reproducible builds
+[group('reproducible')]
+repro-setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if docker buildx inspect {{ buildkit_builder }} >/dev/null 2>&1; then
+        echo "Builder '{{ buildkit_builder }}' already exists"
+    else
+        echo "Creating builder '{{ buildkit_builder }}' with {{ buildkit_version }}"
+        docker buildx create --name {{ buildkit_builder }} --driver docker-container --driver-opt image={{ buildkit_version }}
+    fi
+    docker buildx inspect {{ buildkit_builder }} --bootstrap
+
 # Build reproducible sequencer image (distroless)
 [group('reproducible')]
-repro-sequencer:
+repro-sequencer: repro-setup
     SOURCE_DATE_EPOCH=0 docker buildx build \
+        --builder {{ buildkit_builder }} \
         --no-cache \
         --provenance=false \
         --sbom=false \
@@ -435,8 +453,9 @@ repro-sequencer:
 
 # Build reproducible validator image (distroless)
 [group('reproducible')]
-repro-validator:
+repro-validator: repro-setup
     SOURCE_DATE_EPOCH=0 docker buildx build \
+        --builder {{ buildkit_builder }} \
         --no-cache \
         --provenance=false \
         --sbom=false \
@@ -448,8 +467,9 @@ repro-validator:
 
 # Build debug sequencer image (has shell)
 [group('reproducible')]
-repro-sequencer-debug:
+repro-sequencer-debug: repro-setup
     SOURCE_DATE_EPOCH=0 docker buildx build \
+        --builder {{ buildkit_builder }} \
         --no-cache \
         --provenance=false \
         --sbom=false \
@@ -462,8 +482,9 @@ repro-sequencer-debug:
 
 # Build debug validator image (has shell)
 [group('reproducible')]
-repro-validator-debug:
+repro-validator-debug: repro-setup
     SOURCE_DATE_EPOCH=0 docker buildx build \
+        --builder {{ buildkit_builder }} \
         --no-cache \
         --provenance=false \
         --sbom=false \
