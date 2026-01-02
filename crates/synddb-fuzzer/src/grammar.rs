@@ -6,6 +6,7 @@
 
 use crate::operations::*;
 use rand::prelude::*;
+use rand::Rng;
 
 /// Configuration for grammar-based SQL generation
 #[derive(Debug, Clone)]
@@ -60,7 +61,7 @@ impl SqlGrammar<ThreadRng> {
     pub fn new(config: GrammarConfig) -> Self {
         Self {
             config,
-            rng: thread_rng(),
+            rng: rand::rng(),
             table_counter: 0,
             column_counter: 0,
         }
@@ -82,7 +83,7 @@ impl<R: Rng> SqlGrammar<R> {
 
     /// Generate a column type
     fn gen_column_type(&mut self) -> ColumnType {
-        match self.rng.gen_range(0..5) {
+        match self.rng.random_range(0..5) {
             0 => ColumnType::Integer,
             1 => ColumnType::Real,
             2 => ColumnType::Text,
@@ -94,11 +95,11 @@ impl<R: Rng> SqlGrammar<R> {
 
     /// Generate a SQL value, optionally favoring edge cases
     fn gen_value(&mut self, favor_edge_cases: bool) -> SqlValue {
-        let is_edge_case = favor_edge_cases && self.rng.gen_bool(self.config.edge_case_probability);
+        let is_edge_case = favor_edge_cases && self.rng.random_bool(self.config.edge_case_probability);
 
         if is_edge_case {
             // Edge case values that often cause bugs
-            match self.rng.gen_range(0..12) {
+            match self.rng.random_range(0..12) {
                 0 => SqlValue::Null,
                 1 => SqlValue::Integer(0),
                 2 => SqlValue::Integer(-1),
@@ -114,26 +115,26 @@ impl<R: Rng> SqlGrammar<R> {
                 _ => unreachable!(),
             }
         } else {
-            match self.rng.gen_range(0..5) {
+            match self.rng.random_range(0..5) {
                 0 => SqlValue::Null,
-                1 => SqlValue::Integer(self.rng.gen()),
+                1 => SqlValue::Integer(self.rng.random()),
                 2 => {
-                    let val: f64 = self.rng.gen_range(-1e10..1e10);
+                    let val: f64 = self.rng.random_range(-1e10..1e10);
                     SqlValue::Real(val)
                 }
                 3 => {
-                    let len = self.rng.gen_range(0..50);
+                    let len = self.rng.random_range(0..50);
                     let text: String = (0..len)
                         .map(|_| {
-                            let c: char = self.rng.gen_range(b'a'..=b'z') as char;
+                            let c: char = self.rng.random_range(b'a'..=b'z') as char;
                             c
                         })
                         .collect();
                     SqlValue::Text(text)
                 }
                 4 => {
-                    let len = self.rng.gen_range(0..50);
-                    let blob: Vec<u8> = (0..len).map(|_| self.rng.gen()).collect();
+                    let len = self.rng.random_range(0..50);
+                    let blob: Vec<u8> = (0..len).map(|_| self.rng.random()).collect();
                     SqlValue::Blob(blob)
                 }
                 _ => unreachable!(),
@@ -143,25 +144,25 @@ impl<R: Rng> SqlGrammar<R> {
 
     /// Generate a non-NULL value (for primary keys)
     fn gen_non_null_value(&mut self) -> SqlValue {
-        match self.rng.gen_range(0..4) {
-            0 => SqlValue::Integer(self.rng.gen()),
+        match self.rng.random_range(0..4) {
+            0 => SqlValue::Integer(self.rng.random()),
             1 => {
-                let val: f64 = self.rng.gen_range(-1e10..1e10);
+                let val: f64 = self.rng.random_range(-1e10..1e10);
                 SqlValue::Real(val)
             }
             2 => {
-                let len = self.rng.gen_range(1..50);
+                let len = self.rng.random_range(1..50);
                 let text: String = (0..len)
                     .map(|_| {
-                        let c: char = self.rng.gen_range(b'a'..=b'z') as char;
+                        let c: char = self.rng.random_range(b'a'..=b'z') as char;
                         c
                     })
                     .collect();
                 SqlValue::Text(text)
             }
             3 => {
-                let len = self.rng.gen_range(1..50);
-                let blob: Vec<u8> = (0..len).map(|_| self.rng.gen()).collect();
+                let len = self.rng.random_range(1..50);
+                let blob: Vec<u8> = (0..len).map(|_| self.rng.random()).collect();
                 SqlValue::Blob(blob)
             }
             _ => unreachable!(),
@@ -177,7 +178,7 @@ impl<R: Rng> SqlGrammar<R> {
         } else {
             self.gen_column_type()
         };
-        let nullable = !is_primary_key && self.rng.gen_bool(0.7);
+        let nullable = !is_primary_key && self.rng.random_bool(0.7);
 
         ColumnDef {
             name,
@@ -190,7 +191,7 @@ impl<R: Rng> SqlGrammar<R> {
     /// Generate a CREATE TABLE operation
     pub fn gen_create_table(&mut self) -> DdlOperation {
         let table_name = self.gen_table_name();
-        let num_columns = self.rng.gen_range(1..=self.config.max_columns);
+        let num_columns = self.rng.random_range(1..=self.config.max_columns);
 
         let mut columns = Vec::with_capacity(num_columns);
 
@@ -205,7 +206,7 @@ impl<R: Rng> SqlGrammar<R> {
         DdlOperation::CreateTable {
             table_name,
             columns,
-            if_not_exists: self.rng.gen_bool(0.5),
+            if_not_exists: self.rng.random_bool(0.5),
         }
     }
 
@@ -218,7 +219,7 @@ impl<R: Rng> SqlGrammar<R> {
                 if col.primary_key || !col.nullable {
                     // Generate unique integer for primary key
                     if col.primary_key {
-                        SqlValue::Integer(self.rng.gen())
+                        SqlValue::Integer(self.rng.random())
                     } else {
                         self.gen_non_null_value()
                     }
@@ -237,8 +238,8 @@ impl<R: Rng> SqlGrammar<R> {
 
     /// Generate an UPDATE operation for a given table schema
     pub fn gen_update(&mut self, table_name: &str, columns: &[ColumnDef]) -> DmlOperation {
-        let set_col = &columns[self.rng.gen_range(0..columns.len())];
-        let where_col = &columns[self.rng.gen_range(0..columns.len())];
+        let set_col = &columns[self.rng.random_range(0..columns.len())];
+        let where_col = &columns[self.rng.random_range(0..columns.len())];
 
         DmlOperation::Update {
             table_name: table_name.to_string(),
@@ -251,7 +252,7 @@ impl<R: Rng> SqlGrammar<R> {
 
     /// Generate a DELETE operation for a given table schema
     pub fn gen_delete(&mut self, table_name: &str, columns: &[ColumnDef]) -> DmlOperation {
-        let where_col = &columns[self.rng.gen_range(0..columns.len())];
+        let where_col = &columns[self.rng.random_range(0..columns.len())];
 
         DmlOperation::Delete {
             table_name: table_name.to_string(),
@@ -263,7 +264,7 @@ impl<R: Rng> SqlGrammar<R> {
     /// Generate a DML operation for a given table schema
     pub fn gen_dml_operation(&mut self, table_name: &str, columns: &[ColumnDef]) -> DmlOperation {
         // Weight towards INSERT operations
-        match self.rng.gen_range(0..10) {
+        match self.rng.random_range(0..10) {
             0..=5 => self.gen_insert(table_name, columns),
             6..=7 => self.gen_update(table_name, columns),
             8..=9 => self.gen_delete(table_name, columns),
@@ -283,7 +284,7 @@ impl<R: Rng> SqlGrammar<R> {
             _ => unreachable!(),
         };
 
-        let num_ops = self.rng.gen_range(0..=self.config.max_operations);
+        let num_ops = self.rng.random_range(0..=self.config.max_operations);
         let operations: Vec<DmlOperation> = (0..num_ops)
             .map(|_| self.gen_dml_operation(&table_name, &columns))
             .collect();
@@ -312,10 +313,10 @@ impl<R: Rng> SqlGrammar<R> {
             schema.push(create_table);
         }
 
-        let num_ops = self.rng.gen_range(0..=self.config.max_operations);
+        let num_ops = self.rng.random_range(0..=self.config.max_operations);
         let operations: Vec<DmlOperation> = (0..num_ops)
             .map(|_| {
-                let (table_name, columns) = &tables[self.rng.gen_range(0..tables.len())];
+                let (table_name, columns) = &tables[self.rng.random_range(0..tables.len())];
                 self.gen_dml_operation(table_name, columns)
             })
             .collect();

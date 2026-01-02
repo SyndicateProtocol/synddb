@@ -26,4 +26,4 @@ tracing = "0.1"
 axum = { version = "0.8", features = ["json"] }
 
 # Database
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { workspace = true }
