@@ -531,14 +531,23 @@ impl Validator {
             "Fetched message"
         );
 
-        // 2. Verify signature
+        // 2. Validate sequence matches what we requested (defensive check)
+        if message.sequence != sequence {
+            return Err(ValidatorError::SequenceGap {
+                expected: sequence,
+                actual: message.sequence,
+            }
+            .into());
+        }
+
+        // 3. Verify signature
         self.verifier
             .verify(&message)
             .map_err(|e| ValidatorError::SignatureVerification(e.to_string()))?;
 
         debug!(sequence, "Signature verified");
 
-        // 3. Check for withdrawal and call callback
+        // 4. Check for withdrawal and call callback
         if let Some(withdrawal) = ChangesetApplier::extract_withdrawal(&message)? {
             debug!(
                 sequence,
@@ -550,7 +559,7 @@ impl Validator {
             on_withdrawal(&withdrawal);
         }
 
-        // 4. Apply to database with audit trail handling
+        // 5. Apply to database with audit trail handling
         let apply_result = self.apply_message_with_audit(&message)?;
 
         match apply_result {
@@ -562,8 +571,8 @@ impl Validator {
             }
         }
 
-        // 5. Update state (even if stored as pending - we've processed this sequence)
-        self.state.record_sync(sequence)?;
+        // 6. Update state (even if stored as pending - we've processed this sequence)
+        self.state.record_sync(message.sequence)?;
 
         info!(sequence, "Synced message");
 
@@ -585,9 +594,9 @@ impl Validator {
                     // Caught up to head
                     break;
                 }
-                //TODO CLAUDE: make sure that "out of sequence" errors are caught here, because data may be unavailable.
-                // Re-derivation should quit
                 Err(e) => {
+                    // Errors (including sequence mismatches and unavailable data) stop sync.
+                    // This is correct behavior - re-derivation should halt on any error.
                     warn!(sequence = next_sequence, error = %e, "Sync error, stopping");
                     break;
                 }
