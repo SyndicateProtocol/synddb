@@ -390,6 +390,7 @@ impl Validator {
                                     gap_size,
                                     "Sequence gap detected"
                                 );
+                                crate::metrics::record_gap_detected();
 
                                 if !gap_skip_on_failure {
                                     error!(
@@ -519,11 +520,15 @@ impl Validator {
     where
         F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
     {
+        let sync_start = std::time::Instant::now();
+
         // 1. Fetch message
+        let fetch_start = std::time::Instant::now();
         let message = match self.fetcher.get(sequence).await? {
             Some(msg) => msg,
             None => return Ok(false),
         };
+        crate::metrics::record_fetch_duration(fetch_start.elapsed().as_secs_f64());
 
         debug!(
             sequence,
@@ -541,9 +546,11 @@ impl Validator {
         }
 
         // 3. Verify signature
+        let verify_start = std::time::Instant::now();
         self.verifier
             .verify(&message)
             .map_err(|e| ValidatorError::SignatureVerification(e.to_string()))?;
+        crate::metrics::record_verify_duration(verify_start.elapsed().as_secs_f64());
 
         debug!(sequence, "Signature verified");
 
@@ -557,10 +564,21 @@ impl Validator {
                 "Processing withdrawal message"
             );
             on_withdrawal(&withdrawal);
+            crate::metrics::record_withdrawal_processed();
         }
 
         // 5. Apply to database with audit trail handling
+        let apply_start = std::time::Instant::now();
         let apply_result = self.apply_message_with_audit(&message)?;
+        let message_type_str = match message.message_type {
+            MessageType::Changeset => "changeset",
+            MessageType::Withdrawal => "withdrawal",
+            MessageType::Snapshot => "snapshot",
+        };
+        crate::metrics::record_apply_duration(
+            message_type_str,
+            apply_start.elapsed().as_secs_f64(),
+        );
 
         match apply_result {
             ApplyResult::Applied => {
@@ -568,11 +586,18 @@ impl Validator {
             }
             ApplyResult::StoredAsPending => {
                 debug!(sequence, "Message stored as pending (schema mismatch)");
+                if let Ok(count) = self.pending_changeset_count() {
+                    crate::metrics::update_pending_changesets(count);
+                }
             }
         }
 
         // 6. Update state (even if stored as pending - we've processed this sequence)
         self.state.record_sync(message.sequence)?;
+
+        // Record metrics
+        crate::metrics::record_message_synced(message_type_str, message.sequence);
+        crate::metrics::record_sync_duration(sync_start.elapsed().as_secs_f64());
 
         info!(sequence, "Synced message");
 

@@ -144,11 +144,15 @@ struct StatusResponse {
 
 /// Create the HTTP router
 pub fn create_router(state: AppState) -> Router {
+    // Initialize metrics on router creation
+    crate::metrics::init();
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/healthz", get(health_handler))
         .route("/status", get(status_handler))
         .route("/ready", get(ready_handler))
+        .route("/metrics", get(synddb_shared::metrics::metrics_handler))
         .with_state(state)
 }
 
