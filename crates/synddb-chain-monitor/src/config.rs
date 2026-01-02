@@ -229,10 +229,10 @@ mod tests {
         config.event_store_path = "/data/events.db".to_string();
 
         // Serialize to YAML
-        let yaml = serde_yaml::to_string(&config).unwrap();
+        let yaml = serde_saphyr::to_string(&config).unwrap();
 
         // Deserialize back
-        let deserialized: ChainMonitorConfig = serde_yaml::from_str(&yaml).unwrap();
+        let deserialized: ChainMonitorConfig = serde_saphyr::from_str(&yaml).unwrap();
 
         assert_eq!(config.contract_address, deserialized.contract_address);
         assert_eq!(config.start_block, deserialized.start_block);
