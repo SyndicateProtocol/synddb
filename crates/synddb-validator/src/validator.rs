@@ -538,6 +538,7 @@ impl Validator {
 
         // 2. Validate sequence matches what we requested (defensive check)
         if message.sequence != sequence {
+            crate::metrics::record_error("sequence_mismatch");
             return Err(ValidatorError::SequenceGap {
                 expected: sequence,
                 actual: message.sequence,
@@ -547,9 +548,10 @@ impl Validator {
 
         // 3. Verify signature
         let verify_start = std::time::Instant::now();
-        self.verifier
-            .verify(&message)
-            .map_err(|e| ValidatorError::SignatureVerification(e.to_string()))?;
+        self.verifier.verify(&message).map_err(|e| {
+            crate::metrics::record_error("signature_verification");
+            ValidatorError::SignatureVerification(e.to_string())
+        })?;
         crate::metrics::record_verify_duration(verify_start.elapsed().as_secs_f64());
 
         debug!(sequence, "Signature verified");

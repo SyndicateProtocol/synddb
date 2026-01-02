@@ -320,12 +320,14 @@ async fn receive_changesets(
                     .await
                     .map_err(|e| {
                         error!(batch_id = %request.batch_id, error = %e, "Attestation verification failed");
+                        crate::metrics::record_error("attestation_verification");
                         SequencerError::from(e)
                     })?;
                 info!(batch_id = %request.batch_id, "Attestation token verified");
             }
             None => {
                 error!(batch_id = %request.batch_id, "Missing attestation token");
+                crate::metrics::record_error("missing_attestation_token");
                 return Err(SequencerError::MissingAttestationToken.into());
             }
         }
@@ -334,6 +336,7 @@ async fn receive_changesets(
     // Serialize the batch as CBOR payload
     let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize changeset batch: {}", e);
+        crate::metrics::record_error("cbor_serialization");
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
@@ -355,6 +358,7 @@ async fn receive_changesets(
                 error = %e,
                 "Failed to add to batcher (sequencing succeeded)"
             );
+            crate::metrics::record_error("batcher_add");
         }
     }
 
@@ -386,6 +390,7 @@ async fn receive_withdrawal(
             .chars()
             .all(|c| c.is_ascii_hexdigit())
     {
+        crate::metrics::record_error("invalid_recipient_address");
         return Err(SequencerError::InvalidRecipientAddress.into());
     }
 
@@ -394,17 +399,20 @@ async fn receive_withdrawal(
         || !request.amount.chars().all(|c| c.is_ascii_digit())
         || (request.amount.len() > 1 && request.amount.starts_with('0'))
     {
+        crate::metrics::record_error("invalid_amount");
         return Err(SequencerError::InvalidAmount.into());
     }
 
     // Validate request_id is not empty
     if request.request_id.is_empty() {
+        crate::metrics::record_error("empty_request_id");
         return Err(SequencerError::EmptyRequestId.into());
     }
 
     // Serialize the request as CBOR payload
     let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize withdrawal request: {}", e);
+        crate::metrics::record_error("cbor_serialization");
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
@@ -426,6 +434,7 @@ async fn receive_withdrawal(
                 error = %e,
                 "Failed to add to batcher (sequencing succeeded)"
             );
+            crate::metrics::record_error("batcher_add");
         }
     }
 
@@ -459,12 +468,14 @@ async fn receive_snapshot(
                     .await
                     .map_err(|e| {
                         error!(message_id = %request.message_id, error = %e, "Attestation verification failed");
+                        crate::metrics::record_error("attestation_verification");
                         SequencerError::from(e)
                     })?;
                 info!(message_id = %request.message_id, "Attestation token verified");
             }
             None => {
                 error!(message_id = %request.message_id, "Missing attestation token");
+                crate::metrics::record_error("missing_attestation_token");
                 return Err(SequencerError::MissingAttestationToken.into());
             }
         }
@@ -473,6 +484,7 @@ async fn receive_snapshot(
     // Serialize the snapshot request as CBOR payload
     let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize snapshot: {}", e);
+        crate::metrics::record_error("cbor_serialization");
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
@@ -494,6 +506,7 @@ async fn receive_snapshot(
                 error = %e,
                 "Failed to add to batcher (sequencing succeeded)"
             );
+            crate::metrics::record_error("batcher_add");
         }
     }
 
