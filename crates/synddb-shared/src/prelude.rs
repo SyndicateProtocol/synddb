@@ -9,6 +9,9 @@
 //!
 //! # Included Types
 //!
+//! ## Key Management
+//! - [`EvmKeyManager`] - Secure secp256k1 key generation for EVM signing
+//!
 //! ## Message Types
 //! - [`SignedMessage`] - A signed message from the sequencer
 //! - [`SignedBatch`] - A batch of signed messages
@@ -23,6 +26,9 @@
 //! - [`SnapshotData`] - Snapshot data from client
 //! - [`SnapshotRequest`] - Snapshot request from client
 //! - [`BatchListItem`] - Batch list response item
+
+// Key management
+pub use crate::keys::EvmKeyManager;
 
 // Message types
 pub use crate::types::message::{MessageType, SignedBatch, SignedMessage};

@@ -19,10 +19,9 @@ use synddb_sequencer::{
         create_messages_router, MessageApiState, OutboundMonitor, OutboundMonitorConfig,
         OutboundMonitorHandle,
     },
-    signer::MessageSigner,
     transport::local::{LocalTransport, LocalTransportConfig},
 };
-use synddb_shared::runtime;
+use synddb_shared::{keys::EvmKeyManager, runtime};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,19 +39,17 @@ async fn main() -> Result<()> {
 
     info!(bind_address = %config.bind_address, "Configuration loaded");
 
-    // Initialize the message signer
-    let signer = MessageSigner::new(&config.signing_key)
-        .context("Failed to initialize signer from SIGNING_KEY")?;
+    // Generate a fresh signing key inside the TEE
+    // The key is never logged or exposed outside the enclave
+    let key_manager = Arc::new(EvmKeyManager::generate());
 
-    // Log both address (for human readability) and public key (for verification)
-    let pubkey_hex = format!("0x{}", hex::encode(signer.public_key()));
+    // Log only the public key and address (safe to expose)
+    let pubkey_hex = format!("0x{}", hex::encode(key_manager.public_key()));
     info!(
-        address = %signer.address(),
+        address = %key_manager.address(),
         public_key = %pubkey_hex,
-        "Signer initialized"
+        "TEE signing key generated"
     );
-
-    let signer = Arc::new(signer);
 
     // Initialize CBOR batcher based on publisher_type
     let (batcher, local_transport): (Option<BatcherHandle>, Option<Arc<LocalTransport>>) =
@@ -91,7 +88,7 @@ async fn main() -> Result<()> {
                 let batcher = Batcher::spawn(
                     batch_config,
                     Arc::clone(&transport) as Arc<dyn TransportPublisher>,
-                    Arc::clone(&signer),
+                    Arc::clone(&key_manager),
                 );
                 (Some(batcher), Some(transport))
             }
@@ -124,7 +121,7 @@ async fn main() -> Result<()> {
                     Some(Batcher::spawn(
                         batch_config,
                         Arc::new(transport),
-                        Arc::clone(&signer),
+                        Arc::clone(&key_manager),
                     )),
                     None,
                 )
@@ -145,9 +142,9 @@ async fn main() -> Result<()> {
         )
     });
 
-    // Create the inbox (shares signer with publisher)
-    let inbox = Arc::new(Inbox::with_start_sequence_arc(
-        Arc::clone(&signer),
+    // Create the inbox (shares key manager with batcher)
+    let inbox = Arc::new(Inbox::with_start_sequence(
+        Arc::clone(&key_manager),
         start_sequence,
     ));
 

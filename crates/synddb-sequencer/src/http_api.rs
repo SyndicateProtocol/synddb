@@ -615,21 +615,20 @@ async fn batch_flush(State(state): State<AppState>) -> Result<Json<BatchFlushRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signer::MessageSigner;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
         response::Response,
     };
-    use synddb_shared::types::payloads::{ChangesetData, SnapshotData};
+    use synddb_shared::{
+        keys::EvmKeyManager,
+        types::payloads::{ChangesetData, SnapshotData},
+    };
     use tower::ServiceExt;
 
-    const TEST_PRIVATE_KEY: &str =
-        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-
     fn test_app() -> Router {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
+        let key_manager = Arc::new(EvmKeyManager::generate());
+        let inbox = Arc::new(Inbox::new(key_manager));
         let state = AppState {
             inbox,
             attestation_verifier: None,
@@ -758,8 +757,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sequence_increments() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
+        let key_manager = Arc::new(EvmKeyManager::generate());
+        let inbox = Arc::new(Inbox::new(key_manager));
         let state = AppState {
             inbox: inbox.clone(),
             attestation_verifier: None,
@@ -974,8 +973,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_sequence_independence() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
+        let key_manager = Arc::new(EvmKeyManager::generate());
+        let inbox = Arc::new(Inbox::new(key_manager));
         let state = AppState {
             inbox: inbox.clone(),
             attestation_verifier: None,

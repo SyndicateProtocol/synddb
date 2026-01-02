@@ -7,6 +7,7 @@
 //! 64-byte secp256k1 ECDSA signatures (r || s format, no recovery ID).
 
 use alloy::primitives::{keccak256, Address};
+use k256::ecdsa::Signature;
 use std::{
     io::Write,
     sync::{
@@ -15,15 +16,15 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use thiserror::Error;
-
-use crate::signer::MessageSigner;
-use k256::ecdsa::Signature;
-use synddb_shared::types::cbor::{
-    error::CborError,
-    message::{CborMessageType, CborSignedMessage},
-    verify::{signature_from_bytes, verifying_key_from_bytes},
+use synddb_shared::{
+    keys::EvmKeyManager,
+    types::cbor::{
+        error::CborError,
+        message::{CborMessageType, CborSignedMessage},
+        verify::{signature_from_bytes, verifying_key_from_bytes},
+    },
 };
+use thiserror::Error;
 
 /// Errors from inbox operations
 #[derive(Debug, Error)]
@@ -71,39 +72,34 @@ fn compress_payload(data: &[u8]) -> Vec<u8> {
 pub struct Inbox {
     /// Current sequence counter (atomic for thread safety)
     sequence: AtomicU64,
-    /// Message signer
-    signer: Arc<MessageSigner>,
+    /// TEE key manager for signing
+    key_manager: Arc<EvmKeyManager>,
 }
 
 impl Inbox {
-    /// Create a new inbox with the given signer, starting from sequence 0
-    pub fn new(signer: MessageSigner) -> Self {
-        Self::with_start_sequence(signer, 0)
+    /// Create a new inbox with a shared key manager, starting from sequence 0
+    pub fn new(key_manager: Arc<EvmKeyManager>) -> Self {
+        Self::with_start_sequence(key_manager, 0)
     }
 
-    /// Create a new inbox starting from a specific sequence number (for recovery)
-    pub fn with_start_sequence(signer: MessageSigner, start_sequence: u64) -> Self {
-        Self::with_start_sequence_arc(Arc::new(signer), start_sequence)
-    }
-
-    /// Create a new inbox with a shared signer, starting from a specific sequence
+    /// Create a new inbox with a shared key manager, starting from a specific sequence
     ///
-    /// Use this when the signer is shared with other components (e.g., publishers).
-    pub const fn with_start_sequence_arc(signer: Arc<MessageSigner>, start_sequence: u64) -> Self {
+    /// Use this when the key manager is shared with other components (e.g., batcher).
+    pub fn with_start_sequence(key_manager: Arc<EvmKeyManager>, start_sequence: u64) -> Self {
         Self {
             sequence: AtomicU64::new(start_sequence),
-            signer,
+            key_manager,
         }
     }
 
     /// Get the signer's address
     pub fn signer_address(&self) -> Address {
-        self.signer.address()
+        self.key_manager.address()
     }
 
-    /// Get a reference to the signer (for sharing with publishers)
-    pub fn signer(&self) -> Arc<MessageSigner> {
-        Arc::clone(&self.signer)
+    /// Get a reference to the key manager (for sharing with batcher)
+    pub fn key_manager(&self) -> Arc<EvmKeyManager> {
+        Arc::clone(&self.key_manager)
     }
 
     /// Get the current sequence number (next to be assigned)
@@ -140,7 +136,7 @@ impl Inbox {
         let message_hash = keccak256(&compressed_payload);
 
         // Get signer's public key as `VerifyingKey`
-        let pubkey_bytes = self.signer.public_key();
+        let pubkey_bytes = self.key_manager.public_key();
         let verifying_key = verifying_key_from_bytes(&pubkey_bytes)
             .map_err(|e| InboxError::InvalidPublicKey(e.to_string()))?;
 
@@ -175,7 +171,7 @@ impl Inbox {
     fn sign_cose(&self, data: &[u8]) -> Result<Signature, CborError> {
         let hash = keccak256(data);
         let alloy_sig = self
-            .signer
+            .key_manager
             .sign_raw_sync(&hash.0)
             .map_err(|e| CborError::Signing(e.to_string()))?;
 
@@ -202,30 +198,27 @@ pub fn verify_receipt_signer(receipt: &SequenceReceipt, expected_pubkey: &[u8; 6
 mod tests {
     use super::*;
 
-    const TEST_PRIVATE_KEY: &str =
-        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-
-    fn test_signer() -> MessageSigner {
-        MessageSigner::new(TEST_PRIVATE_KEY).unwrap()
+    fn test_key_manager() -> Arc<EvmKeyManager> {
+        Arc::new(EvmKeyManager::generate())
     }
 
     #[test]
     fn test_inbox_creation() {
-        let inbox = Inbox::new(test_signer());
+        let inbox = Inbox::new(test_key_manager());
         assert_eq!(inbox.current_sequence(), 0);
     }
 
     #[test]
     fn test_inbox_with_start_sequence() {
-        let inbox = Inbox::with_start_sequence(test_signer(), 100);
+        let inbox = Inbox::with_start_sequence(test_key_manager(), 100);
         assert_eq!(inbox.current_sequence(), 100);
     }
 
     #[test]
     fn test_sequence_message() {
-        let signer = test_signer();
-        let pubkey = signer.public_key();
-        let inbox = Inbox::new(signer);
+        let key_manager = test_key_manager();
+        let pubkey = key_manager.public_key();
+        let inbox = Inbox::new(key_manager);
         let payload = b"test payload".to_vec();
 
         let (cbor_msg, receipt) = inbox
@@ -247,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_sequence_monotonic() {
-        let inbox = Inbox::new(test_signer());
+        let inbox = Inbox::new(test_key_manager());
 
         let (_, receipt1) = inbox
             .sequence_message(CborMessageType::Changeset, b"msg1".to_vec())
@@ -269,9 +262,9 @@ mod tests {
 
     #[test]
     fn test_receipt_signature_is_valid_cose() {
-        let signer = test_signer();
-        let pubkey_bytes = signer.public_key();
-        let inbox = Inbox::new(signer);
+        let key_manager = test_key_manager();
+        let pubkey_bytes = key_manager.public_key();
+        let inbox = Inbox::new(key_manager);
 
         let (cbor_msg, receipt) = inbox
             .sequence_message(CborMessageType::Changeset, b"test".to_vec())
@@ -292,9 +285,9 @@ mod tests {
 
     #[test]
     fn test_verify_receipt_signer() {
-        let signer = test_signer();
-        let expected_pubkey = signer.public_key();
-        let inbox = Inbox::new(signer);
+        let key_manager = test_key_manager();
+        let expected_pubkey = key_manager.public_key();
+        let inbox = Inbox::new(key_manager);
 
         let (_, receipt) = inbox
             .sequence_message(CborMessageType::Changeset, b"test".to_vec())

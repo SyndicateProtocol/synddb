@@ -158,10 +158,6 @@ pub struct ValidatorConfig {
     #[arg(long, env = "BRIDGE_CHAIN_ID")]
     pub bridge_chain_id: Option<u64>,
 
-    /// Signing key for bridge operations (hex private key, required if --bridge-signer)
-    #[arg(long, env = "BRIDGE_SIGNING_KEY")]
-    pub bridge_signing_key: Option<String>,
-
     /// Endpoint to serve signatures for relayers
     #[arg(
         long,
@@ -220,6 +216,7 @@ impl ValidatorConfig {
     ///
     /// Returns an error if bridge signer is enabled but required fields are missing.
     /// When chain ID is 31337 (Anvil), uses local development defaults for missing values.
+    /// Note: signing key is generated automatically inside the TEE, not provided via config.
     pub fn validate_bridge_config(&self) -> Result<(), String> {
         if !self.bridge_signer {
             return Ok(());
@@ -233,10 +230,6 @@ impl ValidatorConfig {
 
         if self.bridge_chain_id.is_none() {
             return Err("--bridge-chain-id is required when --bridge-signer is enabled".into());
-        }
-
-        if self.bridge_signing_key.is_none() {
-            return Err("--bridge-signing-key is required when --bridge-signer is enabled".into());
         }
 
         Ok(())
@@ -334,17 +327,13 @@ impl ValidatorConfig {
     }
 
     /// Configure bridge signer mode
+    ///
+    /// Note: signing key is generated automatically inside the TEE.
     #[must_use]
-    pub fn with_bridge_signer(
-        mut self,
-        contract: impl Into<String>,
-        chain_id: u64,
-        signing_key: impl Into<String>,
-    ) -> Self {
+    pub fn with_bridge_signer(mut self, contract: impl Into<String>, chain_id: u64) -> Self {
         self.bridge_signer = true;
         self.bridge_contract = Some(contract.into());
         self.bridge_chain_id = Some(chain_id);
-        self.bridge_signing_key = Some(signing_key.into());
         self
     }
 }
@@ -362,7 +351,6 @@ mod tests {
         std::env::remove_var("BRIDGE_SIGNER");
         std::env::remove_var("BRIDGE_CONTRACT");
         std::env::remove_var("BRIDGE_CHAIN_ID");
-        std::env::remove_var("BRIDGE_SIGNING_KEY");
         std::env::remove_var("BRIDGE_SIGNATURE_ENDPOINT");
     }
 
@@ -417,8 +405,6 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678",
             "--bridge-chain-id",
             "1",
-            "--bridge-signing-key",
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         ]);
 
         assert!(config.bridge_signer);
@@ -427,7 +413,6 @@ mod tests {
             Some("0x1234567890abcdef1234567890abcdef12345678".to_string())
         );
         assert_eq!(config.bridge_chain_id, Some(1));
-        assert!(config.bridge_signing_key.is_some());
         assert!(config.validate_bridge_config().is_ok());
     }
 
@@ -483,8 +468,6 @@ mod tests {
             "--bridge-signer",
             "--bridge-chain-id",
             "31337",
-            "--bridge-signing-key",
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         ]);
 
         assert_eq!(
@@ -508,8 +491,6 @@ mod tests {
             "--bridge-signer",
             "--bridge-chain-id",
             "1", // Mainnet
-            "--bridge-signing-key",
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         ]);
 
         assert_eq!(config.bridge_contract_with_local_fallback(), None);
@@ -529,8 +510,6 @@ mod tests {
             "31337",
             "--bridge-contract",
             "0x1111111111111111111111111111111111111111",
-            "--bridge-signing-key",
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         ]);
 
         assert_eq!(

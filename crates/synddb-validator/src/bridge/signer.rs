@@ -2,13 +2,18 @@
 //!
 //! Signs messages in the format expected by the bridge contract's
 //! `signMessageWithSignature()` function.
+//!
+//! # Security Model
+//!
+//! The signing key is generated fresh at startup inside the TEE using secure
+//! OS-level randomness. The private key material never leaves the enclave and
+//! is never logged. Only the public key and derived address are exposed for
+//! external verification.
 
-use alloy::{
-    primitives::{keccak256, Address, B256},
-    signers::{local::PrivateKeySigner, Signer, SignerSync},
-};
+use alloy::primitives::{keccak256, Address, B256};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use synddb_shared::keys::EvmKeyManager;
 use tracing::{debug, info};
 
 use crate::config::ValidatorConfig;
@@ -39,8 +44,10 @@ pub struct MessageSignature {
 ///
 /// Uses EIP-191 personal sign format which the bridge contract expects:
 /// `sign(keccak256("\x19Ethereum Signed Message:\n32" + messageId))`
+///
+/// The signing key is generated fresh at startup inside the TEE.
 pub struct BridgeSigner {
-    signer: PrivateKeySigner,
+    key_manager: EvmKeyManager,
     bridge_contract: Address,
     chain_id: u64,
     /// Pre-formatted signer address (checksummed hex with 0x prefix)
@@ -50,16 +57,12 @@ pub struct BridgeSigner {
 }
 
 impl BridgeSigner {
-    /// Create a new bridge signer from configuration
+    /// Create a new bridge signer with a fresh generated key
     ///
+    /// The signing key is generated inside the TEE using secure OS-level randomness.
     /// When chain ID is 31337 (Anvil), uses local development defaults for the bridge contract
     /// if not explicitly configured.
     pub fn new(config: &ValidatorConfig) -> Result<Self> {
-        let signing_key = config
-            .bridge_signing_key
-            .as_ref()
-            .context("--bridge-signing-key is required")?;
-
         let bridge_contract: Address = config
             .bridge_contract_with_local_fallback()
             .context(
@@ -72,22 +75,21 @@ impl BridgeSigner {
             .bridge_chain_id
             .context("--bridge-chain-id is required")?;
 
-        // Parse the private key (strip 0x prefix if present)
-        let key_hex = signing_key.strip_prefix("0x").unwrap_or(signing_key);
-        let signer: PrivateKeySigner = key_hex.parse().context("Invalid private key")?;
+        // Generate a fresh key inside the TEE
+        let key_manager = EvmKeyManager::generate();
 
-        let address_formatted = format!("{:#x}", signer.address());
+        let address_formatted = format!("{:#x}", key_manager.address());
         let bridge_contract_formatted = format!("{:#x}", bridge_contract);
 
         info!(
             signer = %address_formatted,
             bridge = %bridge_contract_formatted,
             chain_id = chain_id,
-            "Bridge signer initialized"
+            "Bridge signer initialized with TEE-generated key"
         );
 
         Ok(Self {
-            signer,
+            key_manager,
             bridge_contract,
             chain_id,
             address_formatted,
@@ -96,9 +98,8 @@ impl BridgeSigner {
     }
 
     /// Get the signer's address
-    #[allow(clippy::missing_const_for_fn)] // PrivateKeySigner::address() is not const
     pub fn address(&self) -> Address {
-        self.signer.address()
+        self.key_manager.address()
     }
 
     /// Get the signer's address as a formatted hex string (checksummed, with 0x prefix)
@@ -132,14 +133,14 @@ impl BridgeSigner {
     pub async fn sign_message(&self, message_id: B256) -> Result<MessageSignature> {
         let eth_signed_hash = Self::eth_signed_message_hash(message_id);
         let signature = self
-            .signer
+            .key_manager
             .sign_hash(&eth_signed_hash)
             .await
             .context("Failed to sign message")?;
 
         debug!(
             message_id = %message_id,
-            signer = %self.signer.address(),
+            signer = %self.key_manager.address(),
             "Signed bridge message"
         );
 
@@ -150,13 +151,13 @@ impl BridgeSigner {
     pub fn sign_message_sync(&self, message_id: B256) -> Result<MessageSignature> {
         let eth_signed_hash = Self::eth_signed_message_hash(message_id);
         let signature = self
-            .signer
+            .key_manager
             .sign_hash_sync(&eth_signed_hash)
             .context("Failed to sign message")?;
 
         debug!(
             message_id = %message_id,
-            signer = %self.signer.address(),
+            signer = %self.key_manager.address(),
             "Signed bridge message (sync)"
         );
 
@@ -179,7 +180,7 @@ impl BridgeSigner {
         MessageSignature {
             message_id: format!("{message_id:#x}"),
             signature: sig_bytes,
-            signer: self.signer.address(),
+            signer: self.key_manager.address(),
             signed_at: current_timestamp(),
         }
     }
@@ -200,11 +201,12 @@ impl BridgeSigner {
 
 impl std::fmt::Debug for BridgeSigner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // NEVER include private key in debug output
         f.debug_struct("BridgeSigner")
-            .field("address", &self.signer.address())
+            .field("address", &self.key_manager.address())
             .field("bridge_contract", &self.bridge_contract)
             .field("chain_id", &self.chain_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -235,11 +237,7 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    // Test private key (Foundry's default first account)
-    // Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-    const TEST_PRIVATE_KEY: &str =
-        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-    // 64-byte uncompressed public key corresponding to TEST_PRIVATE_KEY
+    // 64-byte uncompressed public key corresponding to test private key
     const TEST_PUBKEY: &str = "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5";
 
     fn test_config() -> ValidatorConfig {
@@ -252,8 +250,6 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678",
             "--bridge-chain-id",
             "1",
-            "--bridge-signing-key",
-            TEST_PRIVATE_KEY,
         ])
     }
 
@@ -262,10 +258,19 @@ mod tests {
         let config = test_config();
         let signer = BridgeSigner::new(&config).unwrap();
 
-        let expected_address: Address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-            .parse()
-            .unwrap();
-        assert_eq!(signer.address(), expected_address);
+        // Address should be valid (20 bytes)
+        assert!(!signer.address().is_zero());
+        assert_eq!(signer.chain_id(), 1);
+    }
+
+    #[test]
+    fn test_bridge_signer_unique_keys() {
+        let config = test_config();
+        let signer1 = BridgeSigner::new(&config).unwrap();
+        let signer2 = BridgeSigner::new(&config).unwrap();
+
+        // Each creation should generate a unique key
+        assert_ne!(signer1.address(), signer2.address());
     }
 
     #[test]
