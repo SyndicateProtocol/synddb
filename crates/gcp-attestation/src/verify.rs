@@ -1,7 +1,10 @@
 //! GCP Confidential Space attestation verification
 
 use crate::jwt::{decode_base64url, parse_jwt, JwkKey, ParsedJwt};
-use alloc::{format, string::String};
+use alloc::{
+    format,
+    string::{String, ToString},
+};
 use rsa::{
     pkcs1v15::{Signature, VerifyingKey},
     signature::Verifier,
