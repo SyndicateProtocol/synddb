@@ -29,6 +29,8 @@ sol! {
         address tee_signing_key;
         // Whether secure boot was enabled
         bool secboot;
+        // Whether debug mode is disabled (dbgstat == "disabled")
+        bool dbgstat_disabled;
         // Audience hash (keccak256 of audience string)
         bytes32 audience_hash;
     }

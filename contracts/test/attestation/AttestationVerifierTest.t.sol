@@ -56,6 +56,7 @@ contract AttestationVerifierTest is Test {
             image_digest_hash: IMAGE_DIGEST_HASH,
             tee_signing_key: TEE_SIGNING_KEY,
             secboot: true,
+            dbgstat_disabled: true,
             audience_hash: keccak256("https://synddb-sequencer.example.com")
         });
     }
@@ -223,6 +224,19 @@ contract AttestationVerifierTest is Test {
         bytes memory proof = hex"";
 
         vm.expectRevert(AttestationVerifier.SecureBootRequired.selector);
+        verifier.verifyAttestationProof(publicValues, proof);
+    }
+
+    function test_VerifyAttestationProof_RevertsOnDebugModeEnabled() public {
+        verifier.addTrustedJwkHash(TRUSTED_JWK_HASH);
+
+        PublicValuesStruct memory values = createValidPublicValues();
+        values.dbgstat_disabled = false;
+
+        bytes memory publicValues = abi.encode(values);
+        bytes memory proof = hex"";
+
+        vm.expectRevert(AttestationVerifier.DebugModeNotAllowed.selector);
         verifier.verifyAttestationProof(publicValues, proof);
     }
 

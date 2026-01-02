@@ -36,6 +36,7 @@ pub fn main() {
         image_digest_hash: keccak256(result.image_digest.as_bytes()),
         tee_signing_key: alloy::primitives::Address::ZERO, // GCP CS doesn't embed a signing key
         secboot: result.secboot,
+        dbgstat_disabled: result.dbgstat == "disabled", // Reject debug mode VMs
         audience_hash: keccak256(result.audience.as_bytes()),
     });
 

@@ -14,6 +14,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * @param image_digest_hash Hash of the container image digest (keccak256 of the sha256:... string)
  * @param tee_signing_key Address derived from TEE public key (currently unused for GCP CS)
  * @param secboot Whether secure boot was enabled in the TEE
+ * @param dbgstat_disabled True if dbgstat claim is "disabled" (production mode)
  * @param audience_hash Hash of the audience string (keccak256 of audience claim)
  */
 struct PublicValuesStruct {
@@ -23,6 +24,7 @@ struct PublicValuesStruct {
     bytes32 image_digest_hash;
     address tee_signing_key;
     bool secboot;
+    bool dbgstat_disabled;
     bytes32 audience_hash;
 }
 
@@ -52,6 +54,7 @@ contract AttestationVerifier is IAttestationVerifier, Ownable {
     error ValidityWindowNotStarted(uint64 start, uint64 current);
     error ValidityWindowExpired(uint64 end, uint64 current);
     error SecureBootRequired();
+    error DebugModeNotAllowed();
     error ImageDigestMismatch(bytes32 expected, bytes32 actual);
 
     /**
@@ -108,6 +111,10 @@ contract AttestationVerifier is IAttestationVerifier, Ownable {
 
         if (!values.secboot) {
             revert SecureBootRequired();
+        }
+
+        if (!values.dbgstat_disabled) {
+            revert DebugModeNotAllowed();
         }
 
         if (values.image_digest_hash != expectedImageDigestHash) {
