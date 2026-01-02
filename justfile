@@ -99,20 +99,53 @@ info:
     echo "  Sequencer:  http://127.0.0.1:{{ sequencer_port }}"
     echo "  Validator:  http://127.0.0.1:{{ validator_port }}"
 
-# Fetch live status from running sequencer (includes public key)
+# Fetch live status from a service (sequencer, validator, or validator-signer)
+
+# Usage: just service-status <service>
 [group('info')]
-info-sequencer:
+service-status service:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "=== Sequencer Status ==="
-    if ! curl -s http://127.0.0.1:{{ sequencer_port }}/status > /tmp/seq_status.json 2>/dev/null; then
-        echo "Error: Sequencer not running at http://127.0.0.1:{{ sequencer_port }}"
+    case "{{ service }}" in
+        sequencer)
+            URL="http://127.0.0.1:{{ sequencer_port }}/status"
+            echo "=== Sequencer Status ==="
+            ;;
+        validator)
+            URL="http://127.0.0.1:{{ validator_port }}/status"
+            echo "=== Validator Status ==="
+            ;;
+        validator-signer)
+            URL="http://127.0.0.1:8081/info"
+            echo "=== Validator Signer Info ==="
+            ;;
+        *)
+            echo "Unknown service: {{ service }}"
+            echo "Valid services: sequencer, validator, validator-signer"
+            exit 1
+            ;;
+    esac
+    if ! curl -s "$URL" > /tmp/service_status.json 2>/dev/null; then
+        echo "Error: Service not running at $URL"
         exit 1
     fi
-    echo "Public Key: $(jq -r '.signer_pubkey // "not available"' /tmp/seq_status.json)"
-    echo "Sequence:   $(jq -r '.current_sequence // "not available"' /tmp/seq_status.json)"
-    jq '.' /tmp/seq_status.json
-    rm -f /tmp/seq_status.json
+    jq '.' /tmp/service_status.json
+    rm -f /tmp/service_status.json
+
+# Alias: Fetch sequencer status
+[group('info')]
+info-sequencer:
+    @just service-status sequencer
+
+# Alias: Fetch validator status
+[group('info')]
+info-validator:
+    @just service-status validator
+
+# Alias: Fetch validator signer info (bridge mode)
+[group('info')]
+info-validator-signer:
+    @just service-status validator-signer
 
 # ============================================================================
 # Local Development
@@ -167,17 +200,33 @@ fund-wallet address amount="1":
     BALANCE=$(cast balance --rpc-url {{ anvil_rpc_url }} "{{ address }}" --ether)
     echo "Done. New balance: $BALANCE ETH"
 
-# Fund the sequencer's dynamically generated wallet from Anvil
+# Fund a service's dynamically generated wallet from Anvil
+# Usage: just fund-service <service> [amount_eth]
 
-# Usage: just fund-sequencer [amount_eth] [sequencer_url]
+# Services: sequencer (uses /status.signer_address), validator-signer (uses /info.signer)
 [group('components')]
-fund-sequencer amount="1" url="http://127.0.0.1:8433":
+fund-service service amount="1":
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Fetching sequencer address from {{ url }}/status..."
-    SIGNER_ADDRESS=$(curl -s "{{ url }}/status" | jq -r '.signer_address')
+    case "{{ service }}" in
+        sequencer)
+            URL="http://127.0.0.1:{{ sequencer_port }}/status"
+            JQ_PATH=".signer_address"
+            ;;
+        validator-signer)
+            URL="http://127.0.0.1:8081/info"
+            JQ_PATH=".signer"
+            ;;
+        *)
+            echo "Unknown service: {{ service }}"
+            echo "Valid services: sequencer, validator-signer"
+            exit 1
+            ;;
+    esac
+    echo "Fetching {{ service }} address from $URL..."
+    SIGNER_ADDRESS=$(curl -s "$URL" | jq -r "$JQ_PATH")
     if [ -z "$SIGNER_ADDRESS" ] || [ "$SIGNER_ADDRESS" = "null" ]; then
-        echo "Error: Could not fetch signer_address from sequencer"
+        echo "Error: Could not fetch signer address from {{ service }}"
         exit 1
     fi
     echo "Funding $SIGNER_ADDRESS with {{ amount }} ETH..."
@@ -187,6 +236,16 @@ fund-sequencer amount="1" url="http://127.0.0.1:8433":
         --value "{{ amount }}ether"
     BALANCE=$(cast balance --rpc-url {{ anvil_rpc_url }} "$SIGNER_ADDRESS" --ether)
     echo "Done. New balance: $BALANCE ETH"
+
+# Alias: Fund the sequencer's dynamically generated wallet
+[group('components')]
+fund-sequencer amount="1":
+    @just fund-service sequencer "{{ amount }}"
+
+# Alias: Fund the validator's bridge signer wallet
+[group('components')]
+fund-validator amount="1":
+    @just fund-service validator-signer "{{ amount }}"
 
 # Run sequencer (key is generated at startup)
 [group('components')]
