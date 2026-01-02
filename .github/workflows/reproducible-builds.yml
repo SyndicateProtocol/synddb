@@ -8,7 +8,10 @@ on:
   push:
     branches:
       - main
-      - example-app  # TEMPORARY: Remove after development
+      # TEMPORARY: Remove example-app after development, then clean up tags:
+      #   gcloud artifacts docker tags delete $REGION-docker.pkg.dev/$PROJECT/$REPO/synddb-sequencer:example-app-edge
+      #   gcloud artifacts docker tags delete $REGION-docker.pkg.dev/$PROJECT/$REPO/synddb-validator:example-app-edge
+      - example-app
     tags:
       - 'v*'  # Release tags (e.g., v1.0.0)
     paths:
