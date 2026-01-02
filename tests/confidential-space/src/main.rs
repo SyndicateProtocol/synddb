@@ -600,8 +600,11 @@ async fn capture_attestation(audience: &str, nonces: Vec<String>) -> Result<Atte
 }
 
 async fn fetch_attestation_token(audience: &str, nonces: Vec<String>) -> Result<String> {
-    use hyper::{Body, Client, Request};
-    use hyperlocal::{UnixClientExt, UnixConnector, Uri};
+    use http_body_util::{BodyExt, Full};
+    use hyper::body::Bytes;
+    use hyper::Request;
+    use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+    use hyperlocal::{UnixConnector, Uri};
 
     let request_body = AttestationRequest {
         audience: audience.to_string(),
@@ -620,7 +623,8 @@ async fn fetch_attestation_token(audience: &str, nonces: Vec<String>) -> Result<
     );
 
     let url = Uri::new(ATTESTATION_SOCKET_PATH, "/v1/token");
-    let client: Client<UnixConnector> = Client::unix();
+    let client: Client<UnixConnector, Full<Bytes>> =
+        Client::builder(TokioExecutor::new()).build(UnixConnector);
 
     debug!("Creating HTTP request to Unix socket");
 
@@ -628,7 +632,7 @@ async fn fetch_attestation_token(audience: &str, nonces: Vec<String>) -> Result<
         .method("POST")
         .uri(url)
         .header("Content-Type", "application/json")
-        .body(Body::from(body_json.clone()))
+        .body(Full::new(Bytes::from(body_json.clone())))
         .context("Failed to build HTTP request")?;
 
     debug!("Sending request to attestation service...");
@@ -668,9 +672,11 @@ async fn fetch_attestation_token(audience: &str, nonces: Vec<String>) -> Result<
 
     if !status.is_success() {
         // Try to read error body for more details
-        let error_body = hyper::body::to_bytes(response.into_body())
+        let error_body = response
+            .into_body()
+            .collect()
             .await
-            .map(|b| String::from_utf8_lossy(&b).to_string())
+            .map(|b| String::from_utf8_lossy(&b.to_bytes()).to_string())
             .unwrap_or_else(|_| "<failed to read error body>".to_string());
 
         error!(
@@ -689,9 +695,12 @@ async fn fetch_attestation_token(audience: &str, nonces: Vec<String>) -> Result<
         );
     }
 
-    let body_bytes = hyper::body::to_bytes(response.into_body())
+    let body_bytes = response
+        .into_body()
+        .collect()
         .await
-        .context("Failed to read response body from attestation service")?;
+        .context("Failed to read response body from attestation service")?
+        .to_bytes();
 
     debug!(response_len = body_bytes.len(), "Read response body");
 

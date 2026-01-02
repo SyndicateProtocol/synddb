@@ -193,12 +193,16 @@ impl AttestationClient {
         // Make request to attestation service via Unix domain socket
         #[cfg(unix)]
         let attestation_response = {
-            use hyper::{Body, Client, Request};
-            use hyperlocal::{UnixClientExt, UnixConnector, Uri};
+            use http_body_util::{BodyExt, Full};
+            use hyper::body::Bytes;
+            use hyper::Request;
+            use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+            use hyperlocal::{UnixConnector, Uri};
 
             let url = Uri::new(ATTESTATION_SOCKET_PATH, "/v1/token");
 
-            let client: Client<UnixConnector> = Client::unix();
+            let client: Client<UnixConnector, Full<Bytes>> =
+                Client::builder(TokioExecutor::new()).build(UnixConnector);
 
             let body_json = serde_json::to_string(&request)
                 .context("Failed to serialize attestation request")?;
@@ -207,7 +211,7 @@ impl AttestationClient {
                 .method("POST")
                 .uri(url)
                 .header("Content-Type", "application/json")
-                .body(Body::from(body_json))
+                .body(Full::new(Bytes::from(body_json)))
                 .context("Failed to build attestation request")?;
 
             let response = client
@@ -222,9 +226,12 @@ impl AttestationClient {
                 ));
             }
 
-            let body_bytes = hyper::body::to_bytes(response.into_body())
+            let body_bytes = response
+                .into_body()
+                .collect()
                 .await
-                .context("Failed to read attestation response body")?;
+                .context("Failed to read attestation response body")?
+                .to_bytes();
 
             serde_json::from_slice::<AttestationResponse>(&body_bytes)
                 .context("Failed to parse attestation response")?

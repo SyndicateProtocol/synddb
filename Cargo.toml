@@ -56,10 +56,10 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "request-id"] }
 
 # Unix domain socket support
-# TODO: Update hyper to 1.x when hyperlocal supports it (or switch to hyper-util)
-# hyperlocal 0.8 depends on hyper 0.14
-hyperlocal = "0.8"
-hyper = { version = "0.14", features = ["client", "http1"] }
+hyperlocal = "0.9"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
 
 # Channels and concurrency
 crossbeam-channel = "0.5"
