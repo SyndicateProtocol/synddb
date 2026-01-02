@@ -104,8 +104,8 @@ _lib.synddb_attach_with_config.argtypes = [
 ]
 _lib.synddb_attach_with_config.restype = ctypes.c_int
 
-_lib.synddb_push.argtypes = [ctypes.POINTER(_SyndDBHandle)]
-_lib.synddb_push.restype = ctypes.c_int
+_lib.synddb_publish.argtypes = [ctypes.POINTER(_SyndDBHandle)]
+_lib.synddb_publish.restype = ctypes.c_int
 
 _lib.synddb_snapshot.argtypes = [
     ctypes.POINTER(_SyndDBHandle),
@@ -241,7 +241,7 @@ class SyndDB:
         if not self._handle:
             raise RuntimeError("SyndDB handle already detached")
 
-        result = _lib.synddb_push(self._handle)
+        result = _lib.synddb_publish(self._handle)
 
         if result != SyndDBError.SUCCESS:
             error_msg = _lib.synddb_last_error()

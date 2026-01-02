@@ -28,7 +28,7 @@ from app.bridge import (
 )
 
 # Import MessageClient from SDK
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'crates', 'synddb-client', 'bindings', 'python'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'crates', 'synddb-client', 'bindings', 'python'))
 from synddb import MessageClient
 
 
