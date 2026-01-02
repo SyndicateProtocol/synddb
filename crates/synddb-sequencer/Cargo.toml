@@ -51,6 +51,9 @@ strum = { workspace = true }
 # HTTP client (for attestation verification)
 reqwest = { workspace = true }
 
+# RSA signature verification (for JWT attestation tokens)
+rsa = { workspace = true }
+
 # Compression
 zstd = { workspace = true }
 

@@ -71,6 +71,7 @@ base64 = "0.22"
 zstd = "0.13"
 sha2 = "0.10"
 sha3 = "0.10"
+rsa = { version = "0.9", features = ["sha2"] }
 
 # CBOR/COSE serialization
 ciborium = "0.2"

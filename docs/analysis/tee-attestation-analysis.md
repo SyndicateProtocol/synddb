@@ -12,8 +12,8 @@ The SyndDB TEE attestation system uses SP1 zkVM proofs for on-chain verification
 
 | Finding | Severity | Status |
 |---------|----------|--------|
-| Debug mode (`dbgstat`) not verified | High | Not implemented |
-| Sequencer JWT signatures not verified | High | Not implemented |
+| Debug mode (`dbgstat`) not verified | High | ✅ FIXED |
+| Sequencer JWT signatures not verified | High | ✅ FIXED |
 | JWKS key rotation is manual | Medium | Manual process |
 | `tee_signing_key` always zero for GCP CS | Medium | Known limitation |
 | Replay protection is time-based only | Low | Acceptable |
@@ -311,7 +311,7 @@ Consider nonce verification if:
 
 ### 7. Missing Claims in Public Values
 
-#### Current PublicValuesStruct
+#### Current PublicValuesStruct (UPDATED)
 
 ```solidity
 struct PublicValuesStruct {
@@ -321,6 +321,7 @@ struct PublicValuesStruct {
     bytes32 image_digest_hash;
     address tee_signing_key;
     bool secboot;
+    bool dbgstat_disabled;  // NEW: blocks debug mode VMs
     bytes32 audience_hash;
 }
 ```
@@ -329,14 +330,14 @@ struct PublicValuesStruct {
 
 | Claim | Purpose | Risk if Missing |
 |-------|---------|-----------------|
-| `dbgstat` | Debug mode | Debug VMs accepted |
+| ~~`dbgstat`~~ | ~~Debug mode~~ | ✅ IMPLEMENTED |
 | `hwmodel` | Hardware model | Non-TEE hardware accepted |
 | `swversion` | Software version | Outdated versions accepted |
 | `oemid` | OEM identifier | Different TEE providers mixed |
 
 #### Recommendation
 
-At minimum, add `dbgstat`. Consider `hwmodel` for hardware verification.
+Consider `hwmodel` for hardware verification.
 
 ---
 
@@ -349,6 +350,7 @@ At minimum, add `dbgstat`. Consider `hwmodel` for hardware verification.
 | Test | Coverage |
 |------|----------|
 | `test_VerifyAttestationProof_RevertsOnSecureBootDisabled` | secboot=false rejection |
+| `test_VerifyAttestationProof_RevertsOnDebugModeEnabled` | dbgstat_disabled=false rejection ✅ NEW |
 | `test_VerifyAttestationProof_RevertsOnImageDigestMismatch` | Image validation |
 | `test_VerifyAttestationProof_RevertsOnValidityWindowExpired` | Time bounds |
 | `test_VerifyAttestationProof_RevertsOnUntrustedJwkHash` | JWK validation |
@@ -356,7 +358,6 @@ At minimum, add `dbgstat`. Consider `hwmodel` for hardware verification.
 
 ### Missing Tests
 
-- Debug status (`dbgstat`) verification
 - Hardware model verification
 - Multiple concurrent key registrations
 - Key revocation timing
@@ -366,17 +367,18 @@ At minimum, add `dbgstat`. Consider `hwmodel` for hardware verification.
 
 ## Recommendations Summary
 
-### Priority 1 (High)
+### Priority 1 (High) - IMPLEMENTED
 
-1. **Add `dbgstat` verification**
-   - Update SP1 program to include `dbgstat` in public values
-   - Update contract to reject `dbgstat != "disabled"`
-   - Add contract tests
+1. **Add `dbgstat` verification** ✅ DONE
+   - Updated SP1 program to include `dbgstat_disabled` in public values
+   - Updated contract to reject when `dbgstat_disabled == false`
+   - Added contract test `test_VerifyAttestationProof_RevertsOnDebugModeEnabled`
 
-2. **Implement sequencer JWT signature verification**
-   - Integrate `gcp-confidential-space` library
-   - Fetch and cache JWKS from Google
-   - Verify RS256 signatures
+2. **Implement sequencer JWT signature verification** ✅ DONE
+   - Full RS256 signature verification using `rsa` crate
+   - JWKS fetching from Google's OIDC discovery endpoint
+   - 1-hour JWKS cache to avoid repeated fetches
+   - `dbgstat` and `secboot` verification when `verify_tee_claims` enabled
 
 ### Priority 2 (Medium)
 
