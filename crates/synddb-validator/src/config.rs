@@ -5,6 +5,23 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, time::Duration};
 use strum::{EnumIter, IntoEnumIterator};
 
+/// Response from the sequencer's `/status` endpoint
+#[derive(Debug, Deserialize)]
+struct SequencerStatus {
+    #[allow(dead_code)]
+    current_sequence: u64,
+    #[allow(dead_code)]
+    signer_address: String,
+    signer_pubkey: String,
+}
+
+/// Fetch the sequencer's public key from its `/status` endpoint
+async fn fetch_sequencer_pubkey(sequencer_url: &str) -> Result<String, reqwest::Error> {
+    let url = format!("{}/status", sequencer_url.trim_end_matches('/'));
+    let response: SequencerStatus = reqwest::get(&url).await?.json().await?;
+    Ok(response.signer_pubkey)
+}
+
 /// Well-known addresses for local Anvil development.
 ///
 /// These addresses are deterministic when deploying with `./scripts/deploy-local.sh`.
@@ -21,9 +38,6 @@ pub mod local_defaults {
 
     /// `PriceOracle` address (deployed at nonce 3 from Anvil account 0)
     pub const PRICE_ORACLE: &str = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9";
-
-    /// Sequencer public key (corresponds to Anvil account 0 private key)
-    pub const SEQUENCER_PUBKEY: &str = "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5";
 }
 
 /// Available fetcher types for retrieving messages from the storage layer
@@ -90,9 +104,12 @@ pub struct ValidatorConfig {
     /// Expected sequencer public key (for signature verification)
     ///
     /// This should be the 64-byte uncompressed public key in hex format (128 hex chars),
-    /// with optional "0x" prefix. The sequencer logs its public key at startup.
+    /// with optional "0x" prefix.
+    ///
+    /// If not provided, the validator will fetch the public key from the sequencer's
+    /// `/status` endpoint at startup (requires `--sequencer-url` to be set).
     #[arg(long, env = "SEQUENCER_PUBKEY")]
-    pub sequencer_pubkey: String,
+    pub sequencer_pubkey: Option<String>,
 
     /// Fetcher type for retrieving messages from storage layer
     #[arg(long, env = "FETCHER_TYPE", value_enum, default_value = "http")]
@@ -205,6 +222,24 @@ impl ValidatorConfig {
             "--pending-changesets-db-path",
             ":memory:",
         ])
+    }
+
+    /// Get the sequencer public key, either from config or by fetching from sequencer
+    ///
+    /// Returns an error if neither `sequencer_pubkey` nor `sequencer_url` is set.
+    pub async fn resolve_sequencer_pubkey(&self) -> Result<String, String> {
+        if let Some(ref pubkey) = self.sequencer_pubkey {
+            return Ok(pubkey.clone());
+        }
+
+        // Fetch from sequencer
+        let url = self.sequencer_url.as_ref().ok_or(
+            "Either --sequencer-pubkey or --sequencer-url must be set for pubkey discovery",
+        )?;
+
+        fetch_sequencer_pubkey(url)
+            .await
+            .map_err(|e| format!("Failed to fetch public key from sequencer: {e}"))
     }
 
     /// Check if bridge signer mode is enabled
@@ -390,7 +425,7 @@ mod tests {
     fn test_config_test_helper() {
         let config = ValidatorConfig::with_sequencer_pubkey(TEST_PUBKEY);
 
-        assert_eq!(config.sequencer_pubkey, TEST_PUBKEY);
+        assert_eq!(config.sequencer_pubkey, Some(TEST_PUBKEY.to_string()));
         assert_eq!(config.database_path, ":memory:");
     }
 

@@ -45,24 +45,32 @@ pub struct PriceOracleConfig {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = PriceOracleConfig::parse();
+    let mut config = PriceOracleConfig::parse();
 
     // Initialize logging
     synddb_shared::runtime::init_logging(config.base.log_json);
-
-    info!(
-        expected_sequencer_pubkey = %config.base.sequencer_pubkey,
-        database = %config.base.database_path,
-        state_db = %config.base.state_db_path,
-        max_price_difference_bps = config.max_price_difference_bps,
-        "Price Oracle Validator starting"
-    );
 
     // Log supported fetcher types
     info!(
         supported = %FetcherType::supported_types().join(", "),
         selected = %config.base.fetcher_type,
         "Fetcher types"
+    );
+
+    // Resolve sequencer public key (fetch from sequencer if not provided)
+    let sequencer_pubkey = config
+        .base
+        .resolve_sequencer_pubkey()
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    config.base.sequencer_pubkey = Some(sequencer_pubkey.clone());
+
+    info!(
+        sequencer_pubkey = %sequencer_pubkey,
+        database = %config.base.database_path,
+        state_db = %config.base.state_db_path,
+        max_price_difference_bps = config.max_price_difference_bps,
+        "Price Oracle Validator starting"
     );
 
     // Setup shutdown channel

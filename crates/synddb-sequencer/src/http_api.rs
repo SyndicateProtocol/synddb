@@ -163,8 +163,13 @@ impl From<SequenceReceipt> for SequenceResponse {
 pub struct StatusResponse {
     /// Current sequence number (next to be assigned)
     pub current_sequence: u64,
-    /// Sequencer's Ethereum address
+    /// Sequencer's Ethereum address (checksummed, with 0x prefix)
     pub signer_address: String,
+    /// Sequencer's 64-byte public key (hex encoded with 0x prefix)
+    ///
+    /// This is the uncompressed secp256k1 public key used for signature verification.
+    /// Validators use this to verify COSE signatures on messages.
+    pub signer_pubkey: String,
 }
 
 /// Individual health check result
@@ -555,9 +560,11 @@ async fn readiness_check(
 
 /// Status endpoint - returns current sequence and signer info
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
+    let pubkey = state.inbox.key_manager().public_key();
     Json(StatusResponse {
         current_sequence: state.inbox.current_sequence(),
         signer_address: format!("{:?}", state.inbox.signer_address()),
+        signer_pubkey: format!("0x{}", hex::encode(pubkey)),
     })
 }
 
@@ -693,6 +700,9 @@ mod tests {
 
         assert_eq!(status.current_sequence, 0);
         assert!(status.signer_address.starts_with("0x"));
+        // Public key should be 64 bytes (128 hex chars + 0x prefix)
+        assert!(status.signer_pubkey.starts_with("0x"));
+        assert_eq!(status.signer_pubkey.len(), 130);
     }
 
     #[tokio::test]
