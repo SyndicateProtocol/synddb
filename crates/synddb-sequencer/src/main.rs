@@ -21,12 +21,16 @@ use synddb_sequencer::{
     },
     transport::local::{LocalTransport, LocalTransportConfig},
 };
-use synddb_shared::{keys::EvmKeyManager, runtime};
+use synddb_shared::{keys::EvmKeyManager, telemetry};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = SequencerConfig::parse();
-    runtime::init_logging(config.log_json);
+
+    // Initialize tracing with optional OpenTelemetry export
+    let _tracing_guard =
+        telemetry::init_tracing("synddb-sequencer", config.log_json, config.otel_enabled)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {e}"))?;
 
     info!("SyndDB Sequencer starting...");
 

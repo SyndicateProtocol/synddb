@@ -8,6 +8,7 @@
 //! - [`parse`]: CLI argument parsing helpers
 //! - [`prelude`]: Convenient re-exports of common types
 //! - [`runtime`]: Tokio runtime utilities
+//! - [`telemetry`]: OpenTelemetry distributed tracing (with `otel` feature)
 //! - [`types`]: Wire format types (messages, batches, payloads)
 //!
 //! # Quick Start
@@ -24,4 +25,5 @@ pub mod metrics;
 pub mod parse;
 pub mod prelude;
 pub mod runtime;
+pub mod telemetry;
 pub mod types;

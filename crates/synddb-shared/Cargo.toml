@@ -32,8 +32,15 @@ k256 = { workspace = true, features = ["ecdsa"] }
 sha3 = { workspace = true }
 
 # Logging and signal handling (for runtime utilities)
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 tokio = { workspace = true, features = ["signal"] }
+
+# OpenTelemetry / Distributed Tracing (optional for Cloud Trace integration)
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -41,6 +48,15 @@ thiserror = { workspace = true }
 # Metrics
 prometheus = { workspace = true }
 axum = { workspace = true }
+
+[features]
+default = []
+otel = [
+  "opentelemetry",
+  "opentelemetry_sdk",
+  "opentelemetry-otlp",
+  "tracing-opentelemetry",
+]
 
 [dev-dependencies]
 # For signing in tests

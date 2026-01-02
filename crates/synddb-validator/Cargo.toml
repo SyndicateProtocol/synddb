@@ -62,6 +62,12 @@ reqwest = { workspace = true }
 # Google Cloud Storage
 google-cloud-storage = { workspace = true }
 
+[features]
+default = []
+
+# OpenTelemetry distributed tracing for Cloud Trace
+otel = ["synddb-shared/otel"]
+
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 k256 = { workspace = true }

@@ -142,6 +142,13 @@ pub struct SequencerConfig {
     #[arg(long, env = "RUST_LOG_JSON", default_value = "false")]
     pub log_json: bool,
 
+    /// Enable OpenTelemetry distributed tracing (requires otel feature)
+    ///
+    /// When enabled, traces are exported to the OTLP endpoint specified by
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://localhost:4317`).
+    #[arg(long, env = "OTEL_ENABLED", default_value = "false")]
+    pub otel_enabled: bool,
+
     /// Attestation service URL for TEE token verification
     #[arg(long, env = "ATTESTATION_SERVICE_URL")]
     pub attestation_service_url: Option<String>,

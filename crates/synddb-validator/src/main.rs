@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use synddb_shared::runtime;
+use synddb_shared::{runtime, telemetry};
 use synddb_validator::{
     bridge::{signature_store::SignatureStore, signer::BridgeSigner},
     config::{FetcherType, ValidatorConfig},
@@ -22,7 +22,11 @@ use synddb_validator::{
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut config = ValidatorConfig::parse();
-    runtime::init_logging(config.log_json);
+
+    // Initialize tracing with optional OpenTelemetry export
+    let _tracing_guard =
+        telemetry::init_tracing("synddb-validator", config.log_json, config.otel_enabled)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {e}"))?;
 
     // Log supported fetcher types
     info!(

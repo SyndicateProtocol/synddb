@@ -67,6 +67,9 @@ google-cloud-storage = { workspace = true }
 [features]
 default = []
 
+# OpenTelemetry distributed tracing for Cloud Trace
+otel = ["synddb-shared/otel"]
+
 # TODO: Implement additional DA layer transports
 # When implemented, dependencies should be non-optional for runtime selection.
 # See PLAN_TODO.md for tracking and crates/synddb-sequencer/src/transport/
