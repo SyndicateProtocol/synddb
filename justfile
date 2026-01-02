@@ -53,7 +53,6 @@ anvil_key_0 := env_var('ANVIL_KEY_0')
 anvil_key_1 := env_var('ANVIL_KEY_1')
 anvil_address_0 := env_var('ANVIL_ADDRESS_0')
 anvil_address_1 := env_var('ANVIL_ADDRESS_1')
-sequencer_pubkey := env_var('SEQUENCER_PUBKEY')
 bridge_address := env_var('BRIDGE_ADDRESS')
 weth_address := env_var('WETH_ADDRESS')
 price_oracle_address := env_var('PRICE_ORACLE_ADDRESS')
@@ -119,22 +118,20 @@ sequencer:
     DATABASE_PATH={{ data_dir }}/sequencer.db \
     cargo run -p synddb-sequencer --release
 
-# Run validator with local defaults
+# Run validator with local defaults (fetches pubkey from sequencer)
 [group('components')]
 validator:
     mkdir -p {{ data_dir }}
-    SEQUENCER_PUBKEY={{ sequencer_pubkey }} \
     SEQUENCER_URL=http://127.0.0.1:{{ sequencer_port }} \
     DATABASE_PATH={{ data_dir }}/validator.db \
     STATE_DB_PATH={{ data_dir }}/validator_state.db \
     PENDING_CHANGESETS_DB_PATH={{ data_dir }}/pending_changesets.db \
     cargo run -p synddb-validator --release
 
-# Run validator with bridge signer enabled
+# Run validator with bridge signer enabled (fetches pubkey from sequencer)
 [group('components')]
 validator-bridge:
     mkdir -p {{ data_dir }}
-    SEQUENCER_PUBKEY={{ sequencer_pubkey }} \
     SEQUENCER_URL=http://127.0.0.1:{{ sequencer_port }} \
     DATABASE_PATH={{ data_dir }}/validator.db \
     STATE_DB_PATH={{ data_dir }}/validator_state.db \
