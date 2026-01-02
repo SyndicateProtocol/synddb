@@ -3,10 +3,6 @@
 //! Provides seed-based scenario generation for reproducible test cases.
 
 use crate::scenarios::{E2EAction, E2EScenario};
-use proptest::{
-    strategy::{Strategy, ValueTree},
-    test_runner::TestRunner,
-};
 use rand::prelude::*;
 use synddb_fuzzer::{DmlOperation, SqlValue};
 
@@ -82,19 +78,6 @@ pub fn scenario_from_seed(seed: u64) -> E2EScenario {
             .collect(),
         actions,
     }
-}
-
-/// Generate a scenario using proptest's deterministic generation
-///
-/// Note: This uses proptest's internal runner which provides additional shrinking.
-#[allow(dead_code)]
-pub fn proptest_scenario_from_seed(_seed: u64) -> Option<E2EScenario> {
-    // Use deterministic runner (proptest manages its own seeding)
-    let mut runner = TestRunner::deterministic();
-
-    let strategy = crate::scenarios::simple_scenario_strategy();
-    let tree = strategy.new_tree(&mut runner).ok()?;
-    Some(tree.current())
 }
 
 /// Get the current seed from environment variable
