@@ -78,14 +78,14 @@ pub struct Inbox {
 
 impl Inbox {
     /// Create a new inbox with a shared key manager, starting from sequence 0
-    pub fn new(key_manager: Arc<EvmKeyManager>) -> Self {
+    pub const fn new(key_manager: Arc<EvmKeyManager>) -> Self {
         Self::with_start_sequence(key_manager, 0)
     }
 
     /// Create a new inbox with a shared key manager, starting from a specific sequence
     ///
     /// Use this when the key manager is shared with other components (e.g., batcher).
-    pub fn with_start_sequence(key_manager: Arc<EvmKeyManager>, start_sequence: u64) -> Self {
+    pub const fn with_start_sequence(key_manager: Arc<EvmKeyManager>, start_sequence: u64) -> Self {
         Self {
             sequence: AtomicU64::new(start_sequence),
             key_manager,

@@ -60,7 +60,7 @@ impl EvmKeyManager {
 
     /// Get the Ethereum address derived from the signing key
     #[must_use]
-    pub fn address(&self) -> Address {
+    pub const fn address(&self) -> Address {
         self.signer.address()
     }
 

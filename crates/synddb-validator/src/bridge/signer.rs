@@ -98,7 +98,7 @@ impl BridgeSigner {
     }
 
     /// Get the signer's address
-    pub fn address(&self) -> Address {
+    pub const fn address(&self) -> Address {
         self.key_manager.address()
     }
 
