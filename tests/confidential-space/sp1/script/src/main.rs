@@ -3,7 +3,7 @@
 //! This script reads attestation samples and generates ZK proofs that can be
 //! verified on-chain.
 
-use alloy::primitives::keccak256;
+use alloy::{primitives::keccak256, sol_types::SolValue};
 use clap::Parser;
 use gcp_confidential_space::{
     extract_kid_from_jwt, verify_attestation, JwkKey, PublicValuesStruct,
