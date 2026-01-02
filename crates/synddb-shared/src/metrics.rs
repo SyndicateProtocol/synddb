@@ -1,7 +1,7 @@
-//! Shared metrics utilities for SyndDB services.
+//! Shared metrics utilities for `SyndDB` services.
 //!
 //! This module provides common patterns for Prometheus metrics collection
-//! across all SyndDB services. It includes:
+//! across all `SyndDB` services. It includes:
 //!
 //! - Standard histogram buckets for common use cases
 //! - A metrics handler for Axum HTTP APIs
