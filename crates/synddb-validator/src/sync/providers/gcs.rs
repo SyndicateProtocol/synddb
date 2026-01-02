@@ -178,43 +178,54 @@ impl StorageFetcher for GcsFetcher {
         Ok(max_seq)
     }
 
-    //TODO: GCS returns max 1000 objects per request. This implementation does not
-    // handle pagination, so batches beyond the first 1000 will be silently missed.
-    // At scale (~50k+ messages), consider either:
-    // 1. Implementing pagination via `next_page_token`
-    // 2. A smarter sync strategy that checkpoints batch boundaries locally
     async fn list_batches(&self) -> Result<Vec<BatchInfo>> {
         use google_cloud_storage::http::objects::list::ListObjectsRequest;
 
         let prefix = format!("{}/batches/", self.config.prefix);
-        let request = ListObjectsRequest {
-            bucket: self.config.bucket.clone(),
-            prefix: Some(prefix),
-            ..Default::default()
-        };
+        let mut batches = Vec::new();
+        let mut page_token: Option<String> = None;
 
-        match self.client.list_objects(&request).await {
-            Ok(response) => {
-                let mut batches: Vec<BatchInfo> = response
-                    .items
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|obj| {
-                        let filename = obj.name.rsplit('/').next()?;
-                        let (start, end) = parse_batch_filename(filename)?;
-                        debug!(filename, start, end, "Parsed batch file");
-                        Some(BatchInfo::new(start, end, obj.name.clone()))
-                    })
-                    .collect();
+        loop {
+            let request = ListObjectsRequest {
+                bucket: self.config.bucket.clone(),
+                prefix: Some(prefix.clone()),
+                page_token: page_token.clone(),
+                ..Default::default()
+            };
 
-                // Sort by start sequence
-                batches.sort_by_key(|b| b.start_sequence);
+            let response = self
+                .client
+                .list_objects(&request)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to list batch objects: {e}"))?;
 
-                info!(count = batches.len(), "Listed batches from GCS");
-                Ok(batches)
+            // Parse batch info from object names
+            if let Some(items) = response.items {
+                for obj in items {
+                    if let Some(filename) = obj.name.rsplit('/').next() {
+                        if let Some((start, end)) = parse_batch_filename(filename) {
+                            debug!(filename, start, end, "Parsed batch file");
+                            batches.push(BatchInfo::new(start, end, obj.name.clone()));
+                        }
+                    }
+                }
             }
-            Err(e) => Err(anyhow::anyhow!("Failed to list batch objects: {e}")),
+
+            // Check for more pages
+            match response.next_page_token {
+                Some(token) if !token.is_empty() => {
+                    debug!(token = %token, "Fetching next page of batches");
+                    page_token = Some(token);
+                }
+                _ => break,
+            }
         }
+
+        // Sort by start sequence
+        batches.sort_by_key(|b| b.start_sequence);
+
+        info!(count = batches.len(), "Listed batches from GCS");
+        Ok(batches)
     }
 
     async fn get_batch(&self, start_sequence: u64) -> Result<Option<SignedBatch>> {
