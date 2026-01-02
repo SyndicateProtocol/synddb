@@ -10,8 +10,7 @@
 sp1_zkvm::entrypoint!(main);
 
 use alloy::{primitives::keccak256, sol_types::SolType};
-use gcp_confidential_space::attestation::{verify_gcp_cs_attestation, PublicValuesStruct};
-use gcp_confidential_space::jwt::JwkKey;
+use gcp_confidential_space::{verify_attestation, JwkKey, PublicValuesStruct};
 
 pub fn main() {
     // Read inputs from the prover
@@ -20,7 +19,7 @@ pub fn main() {
     let expected_audience: String = sp1_zkvm::io::read();
 
     // Verify the attestation (skip time validation inside zkVM)
-    let result = verify_gcp_cs_attestation(
+    let result = verify_attestation(
         &jwt_bytes,
         &jwk,
         Some(&expected_audience),

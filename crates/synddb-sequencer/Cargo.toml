@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 # Workspace crates
 synddb-shared = { path = "../synddb-shared" }
+gcp-attestation = { path = "../gcp-attestation" }
 
 # Core async and CLI
 tokio = { workspace = true, features = ["full"] }
@@ -50,9 +51,6 @@ strum = { workspace = true }
 
 # HTTP client (for attestation verification)
 reqwest = { workspace = true }
-
-# RSA signature verification (for JWT attestation tokens)
-rsa = { workspace = true }
 
 # Compression
 zstd = { workspace = true }
