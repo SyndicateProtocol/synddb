@@ -72,6 +72,49 @@ default:
     @just --list --unsorted
 
 # ============================================================================
+# Info
+# ============================================================================
+
+# Show configured addresses and keys
+[group('info')]
+info:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Anvil Accounts ==="
+    echo "Account 0 (admin/deployer):"
+    echo "  Address: {{ anvil_address_0 }}"
+    echo "  Key:     {{ anvil_key_0 }}"
+    echo ""
+    echo "Account 1 (sequencer):"
+    echo "  Address: {{ anvil_address_1 }}"
+    echo "  Key:     {{ anvil_key_1 }}"
+    echo ""
+    echo "=== Contract Addresses ==="
+    echo "  WETH:         {{ weth_address }}"
+    echo "  Bridge:       {{ bridge_address }}"
+    echo "  Price Oracle: {{ price_oracle_address }}"
+    echo ""
+    echo "=== Service URLs ==="
+    echo "  Anvil RPC:  {{ anvil_rpc_url }}"
+    echo "  Sequencer:  http://127.0.0.1:{{ sequencer_port }}"
+    echo "  Validator:  http://127.0.0.1:{{ validator_port }}"
+
+# Fetch live status from running sequencer (includes public key)
+[group('info')]
+info-sequencer:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Sequencer Status ==="
+    if ! curl -s http://127.0.0.1:{{ sequencer_port }}/status > /tmp/seq_status.json 2>/dev/null; then
+        echo "Error: Sequencer not running at http://127.0.0.1:{{ sequencer_port }}"
+        exit 1
+    fi
+    echo "Public Key: $(jq -r '.signer_pubkey // "not available"' /tmp/seq_status.json)"
+    echo "Sequence:   $(jq -r '.current_sequence // "not available"' /tmp/seq_status.json)"
+    jq '.' /tmp/seq_status.json
+    rm -f /tmp/seq_status.json
+
+# ============================================================================
 # Local Development
 # ============================================================================
 
