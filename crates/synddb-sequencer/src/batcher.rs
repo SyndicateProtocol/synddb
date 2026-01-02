@@ -280,6 +280,9 @@ impl Batcher {
             "Message added to batch"
         );
 
+        // Update pending metrics
+        crate::metrics::update_pending(self.pending.len(), self.pending_bytes);
+
         // Check if we need to flush
         let should_flush = self.pending.len() >= self.config.max_messages
             || self.pending_bytes >= self.config.max_batch_bytes;
@@ -307,6 +310,8 @@ impl Batcher {
         if self.pending.is_empty() {
             return Ok(None);
         }
+
+        let flush_start = Instant::now();
 
         let messages: Vec<CborSignedMessage> =
             self.pending.drain(..).map(|pm| pm.message).collect();
@@ -362,6 +367,14 @@ impl Batcher {
         self.stats.bytes_uncompressed += metadata.uncompressed_bytes as u64;
         self.stats.last_flush_timestamp = created_at;
         self.last_flush = Instant::now();
+
+        // Record metrics
+        crate::metrics::record_batch_published(
+            metadata.compressed_bytes,
+            metadata.uncompressed_bytes,
+            flush_start.elapsed().as_secs_f64(),
+        );
+        crate::metrics::update_pending(self.pending.len(), self.pending_bytes);
 
         Ok(Some(metadata))
     }

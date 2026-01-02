@@ -105,6 +105,9 @@ impl std::fmt::Debug for AppState {
 
 /// Create the HTTP router with all endpoints
 pub fn create_router(state: AppState) -> Router {
+    // Initialize metrics on router creation
+    crate::metrics::init();
+
     info!("Endpoints:");
     info!("  POST /changesets       - Submit changeset batch");
     info!("  POST /withdrawals      - Submit withdrawal request");
@@ -114,6 +117,7 @@ pub fn create_router(state: AppState) -> Router {
     info!("  GET  /status           - Sequencer status");
     info!("  GET  /batch/stats      - CBOR batch statistics");
     info!("  POST /batch/flush      - Force flush pending batch");
+    info!("  GET  /metrics          - Prometheus metrics");
 
     Router::new()
         .route("/changesets", post(receive_changesets))
@@ -124,6 +128,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/status", get(status))
         .route("/batch/stats", get(batch_stats))
         .route("/batch/flush", post(batch_flush))
+        .route("/metrics", get(synddb_shared::metrics::metrics_handler))
         .with_state(state)
 }
 
@@ -332,6 +337,7 @@ async fn receive_changesets(
         .sequence_message(CborMessageType::Changeset, payload)
         .map_err(|e| {
             error!("Failed to sequence message: {}", e);
+            crate::metrics::record_error("sequence_changeset");
             SequencerError::from(e)
         })?;
 
@@ -402,6 +408,7 @@ async fn receive_withdrawal(
         .sequence_message(CborMessageType::Withdrawal, payload)
         .map_err(|e| {
             error!("Failed to sequence withdrawal: {}", e);
+            crate::metrics::record_error("sequence_withdrawal");
             SequencerError::from(e)
         })?;
 
@@ -469,6 +476,7 @@ async fn receive_snapshot(
         .sequence_message(CborMessageType::Snapshot, payload)
         .map_err(|e| {
             error!("Failed to sequence snapshot: {}", e);
+            crate::metrics::record_error("sequence_snapshot");
             SequencerError::from(e)
         })?;
 
