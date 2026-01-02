@@ -92,6 +92,9 @@ async-trait = "0.1"
 # Google Cloud
 google-cloud-storage = "0.22"
 
+# Metrics
+prometheus = "0.14"
+
 [workspace.lints.rust]
 # TEMPORARY allowances, remove before prod
 missing_docs = "allow"

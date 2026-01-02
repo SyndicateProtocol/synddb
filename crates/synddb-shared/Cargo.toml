@@ -38,6 +38,10 @@ tokio = { workspace = true, features = ["signal"] }
 # Error handling
 thiserror = { workspace = true }
 
+# Metrics
+prometheus = { workspace = true }
+axum = { workspace = true }
+
 [dev-dependencies]
 # For signing in tests
 alloy = { workspace = true, features = ["signers", "signer-local"] }

@@ -54,6 +54,9 @@ reqwest = { workspace = true }
 # Compression
 zstd = { workspace = true }
 
+# Metrics
+prometheus = { workspace = true }
+
 # Local SQLite storage
 rusqlite = { workspace = true }
 
