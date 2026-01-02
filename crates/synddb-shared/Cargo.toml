@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.cargo-machete]
+# metrics is a facade crate - we install its recorder but macros are used by consumers
+ignored = ["metrics"]
+
 [lints]
 workspace = true
 
@@ -46,8 +50,8 @@ tracing-opentelemetry = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 # Metrics
-prometheus = { workspace = true }
-axum = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 
 [features]
 default = []

@@ -1,59 +1,71 @@
 //! Shared metrics utilities for `SyndDB` services.
 //!
-//! This module provides common patterns for Prometheus metrics collection
-//! across all `SyndDB` services. It includes:
+//! This module provides common patterns for metrics collection using the
+//! `metrics` crate facade with a Prometheus exporter. This design allows:
 //!
-//! - Standard histogram buckets for common use cases
-//! - A metrics handler for Axum HTTP APIs
-//! - Helper macros and utilities
+//! - Simple, ergonomic API: `counter!("name").increment(1)`
+//! - Backend flexibility: can add other exporters without changing code
+//! - Ecosystem consistency: same pattern as `tracing` for logs
 //!
 //! # Google Cloud Integration
 //!
-//! These metrics are designed for scraping by Google Cloud Monitoring's
-//! Prometheus endpoint. Services expose metrics at `/metrics` in the
-//! standard Prometheus text format.
+//! Metrics are exported in Prometheus text format at `/metrics` for scraping
+//! by Google Cloud Managed Service for Prometheus.
 //!
 //! # Usage
 //!
-//! Each service defines its own metrics in a dedicated module and uses
-//! the shared utilities from here:
+//! ```rust,ignore
+//! use metrics::{counter, gauge, histogram};
+//!
+//! // Counters - monotonically increasing
+//! counter!("requests_total", "endpoint" => "/api").increment(1);
+//!
+//! // Gauges - can go up or down
+//! gauge!("connections_active").set(42.0);
+//!
+//! // Histograms - for latency/size distributions
+//! histogram!("request_duration_seconds").record(0.025);
+//! ```
+//!
+//! # Initialization
+//!
+//! Call [`init_metrics`] once at startup before recording any metrics:
 //!
 //! ```rust,ignore
-//! use synddb_shared::metrics::{LATENCY_BUCKETS_MS, metrics_handler};
-//! use prometheus::{Histogram, HistogramOpts, register_histogram};
+//! use synddb_shared::metrics::init_metrics;
 //!
-//! let latency = register_histogram!(
-//!     "my_operation_duration_seconds",
-//!     "Duration of my operation",
-//!     LATENCY_BUCKETS_SECONDS.to_vec()
-//! ).unwrap();
+//! #[tokio::main]
+//! async fn main() {
+//!     let handle = init_metrics();
+//!     // ... your app ...
+//! }
 //! ```
 
-use axum::{http::StatusCode, response::IntoResponse};
-use prometheus::{Encoder, TextEncoder};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use std::sync::OnceLock;
+
+/// Global handle to the Prometheus recorder, initialized once.
+static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 
 /// Standard histogram buckets for latency measurements in seconds.
 ///
 /// Covers a range from 1ms to 60s, suitable for most network operations.
-/// Buckets: 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s, 30s, 60s
-pub const LATENCY_BUCKETS_SECONDS: [f64; 14] = [
+pub const LATENCY_BUCKETS_SECONDS: &[f64] = &[
     0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
 ];
 
-/// Standard histogram buckets for small latency measurements in seconds.
+/// Standard histogram buckets for fast operations in seconds.
 ///
-/// Covers a range from 100µs to 1s, suitable for fast operations like
-/// database queries or in-memory processing.
-/// Buckets: 100µs, 250µs, 500µs, 1ms, 2.5ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s
-pub const LATENCY_BUCKETS_FAST: [f64; 13] = [
+/// Covers a range from 100µs to 1s, suitable for database queries
+/// or in-memory processing.
+pub const LATENCY_BUCKETS_FAST: &[f64] = &[
     0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
 ];
 
 /// Standard histogram buckets for byte sizes.
 ///
-/// Covers a range from 100 bytes to 100MB, suitable for message and batch sizes.
-/// Buckets: 100B, 1KB, 10KB, 100KB, 1MB, 10MB, 100MB
-pub const SIZE_BUCKETS_BYTES: [f64; 7] = [
+/// Covers a range from 100 bytes to 100MB.
+pub const SIZE_BUCKETS_BYTES: &[f64] = &[
     100.0,
     1_024.0,
     10_240.0,
@@ -63,93 +75,55 @@ pub const SIZE_BUCKETS_BYTES: [f64; 7] = [
     104_857_600.0,
 ];
 
-/// Axum handler that returns Prometheus metrics in text format.
+/// Initialize the Prometheus metrics exporter.
 ///
-/// Add this to your router:
-/// ```rust,ignore
-/// use synddb_shared::metrics::metrics_handler;
-/// Router::new().route("/metrics", get(metrics_handler))
-/// ```
-pub async fn metrics_handler() -> impl IntoResponse {
-    let encoder = TextEncoder::new();
-    let metric_families = prometheus::gather();
-
-    let mut buffer = Vec::new();
-    match encoder.encode(&metric_families, &mut buffer) {
-        Ok(()) => (
-            StatusCode::OK,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                encoder.format_type().to_string(),
-            )],
-            buffer,
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to encode metrics: {e}"),
-        )
-            .into_response(),
-    }
+/// Returns a handle that can be used to render metrics. This function is
+/// idempotent - calling it multiple times returns the same handle.
+///
+/// # Panics
+///
+/// Panics if the initial installation of the recorder fails.
+pub fn init_metrics() -> PrometheusHandle {
+    METRICS_HANDLE
+        .get_or_init(|| {
+            PrometheusBuilder::new()
+                .set_buckets_for_metric(
+                    metrics_exporter_prometheus::Matcher::Suffix("_duration_seconds".to_string()),
+                    LATENCY_BUCKETS_SECONDS,
+                )
+                .expect("Failed to set duration buckets")
+                .set_buckets_for_metric(
+                    metrics_exporter_prometheus::Matcher::Suffix("_size_bytes".to_string()),
+                    SIZE_BUCKETS_BYTES,
+                )
+                .expect("Failed to set size buckets")
+                .install_recorder()
+                .expect("Failed to install Prometheus recorder")
+        })
+        .clone()
 }
 
-/// A guard that records the duration of an operation when dropped.
+/// Create an Axum handler that renders Prometheus metrics.
 ///
-/// Useful for timing operations that may return early or have complex
-/// control flow:
+/// Use with the handle returned from [`init_metrics`]:
 ///
 /// ```rust,ignore
-/// use synddb_shared::metrics::HistogramTimer;
+/// use axum::{Router, routing::get};
+/// use synddb_shared::metrics::{init_metrics, metrics_endpoint};
 ///
-/// fn do_work(histogram: &Histogram) -> Result<()> {
-///     let _timer = HistogramTimer::new(histogram);
-///     // ... work happens here ...
-///     // Timer records duration when dropped
-/// }
+/// let handle = init_metrics();
+/// let app = Router::new()
+///     .route("/metrics", get(metrics_endpoint(handle)));
 /// ```
-#[derive(Debug)]
-pub struct HistogramTimer<'a> {
-    histogram: &'a prometheus::Histogram,
-    start: std::time::Instant,
-}
-
-impl<'a> HistogramTimer<'a> {
-    /// Create a new timer that will record to the given histogram.
-    pub fn new(histogram: &'a prometheus::Histogram) -> Self {
-        Self {
-            histogram,
-            start: std::time::Instant::now(),
-        }
-    }
-}
-
-impl Drop for HistogramTimer<'_> {
-    fn drop(&mut self) {
-        let duration = self.start.elapsed();
-        self.histogram.observe(duration.as_secs_f64());
-    }
+pub fn metrics_endpoint(
+    handle: PrometheusHandle,
+) -> impl Fn() -> std::future::Ready<String> + Clone + Send + 'static {
+    move || std::future::ready(handle.render())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prometheus::{register_histogram, Histogram};
-
-    #[test]
-    fn test_histogram_timer() {
-        let histogram: Histogram =
-            register_histogram!("test_timer_duration_seconds", "Test timer").unwrap();
-
-        {
-            let _timer = HistogramTimer::new(&histogram);
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-
-        // Should have recorded one observation
-        assert_eq!(histogram.get_sample_count(), 1);
-        // Should be at least 10ms
-        assert!(histogram.get_sample_sum() >= 0.01);
-    }
 
     #[test]
     fn test_latency_buckets() {

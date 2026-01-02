@@ -53,8 +53,10 @@ zstd = { workspace = true }
 async-trait = { workspace = true }
 strum = { workspace = true }
 
-# Metrics
-prometheus = { workspace = true }
+# Metrics (using metrics facade with Prometheus exporter)
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+axum-prometheus = { workspace = true }
 
 # HTTP client (for HttpFetcher)
 reqwest = { workspace = true }

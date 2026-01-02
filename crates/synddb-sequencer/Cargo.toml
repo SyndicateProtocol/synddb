@@ -55,8 +55,10 @@ reqwest = { workspace = true }
 # Compression
 zstd = { workspace = true }
 
-# Metrics
-prometheus = { workspace = true }
+# Metrics (using metrics facade with Prometheus exporter)
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+axum-prometheus = { workspace = true }
 
 # Local SQLite storage
 rusqlite = { workspace = true }

@@ -194,8 +194,7 @@ impl AttestationClient {
         #[cfg(unix)]
         let attestation_response = {
             use http_body_util::{BodyExt, Full};
-            use hyper::body::Bytes;
-            use hyper::Request;
+            use hyper::{body::Bytes, Request};
             use hyper_util::{client::legacy::Client, rt::TokioExecutor};
             use hyperlocal::{UnixConnector, Uri};
 

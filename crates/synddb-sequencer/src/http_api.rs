@@ -66,6 +66,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use axum_prometheus::PrometheusMetricLayer;
+use metrics_exporter_prometheus::PrometheusHandle;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
@@ -105,10 +107,7 @@ impl std::fmt::Debug for AppState {
 }
 
 /// Create the HTTP router with all endpoints
-pub fn create_router(state: AppState) -> Router {
-    // Initialize metrics on router creation
-    crate::metrics::init();
-
+pub fn create_router(state: AppState, metrics_handle: PrometheusHandle) -> Router {
     info!("Endpoints:");
     info!("  POST /changesets       - Submit changeset batch");
     info!("  POST /withdrawals      - Submit withdrawal request");
@@ -120,6 +119,12 @@ pub fn create_router(state: AppState) -> Router {
     info!("  POST /batch/flush      - Force flush pending batch");
     info!("  GET  /metrics          - Prometheus metrics");
 
+    // Create HTTP metrics layer (uses existing global recorder from init_metrics)
+    let prometheus_layer = PrometheusMetricLayer::new();
+
+    // Create metrics endpoint handler
+    let metrics_endpoint = synddb_shared::metrics::metrics_endpoint(metrics_handle);
+
     Router::new()
         .route("/changesets", post(receive_changesets))
         .route("/withdrawals", post(receive_withdrawal))
@@ -129,7 +134,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/status", get(status))
         .route("/batch/stats", get(batch_stats))
         .route("/batch/flush", post(batch_flush))
-        .route("/metrics", get(synddb_shared::metrics::metrics_handler))
+        .route("/metrics", get(metrics_endpoint))
+        .layer(prometheus_layer)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
@@ -668,7 +674,8 @@ mod tests {
             attestation_verifier: None,
             batcher: None,
         };
-        create_router(state)
+        let metrics_handle = synddb_shared::metrics::init_metrics();
+        create_router(state, metrics_handle)
     }
 
     /// Send a CBOR-serialized request to the server
@@ -801,7 +808,8 @@ mod tests {
             attestation_verifier: None,
             batcher: None,
         };
-        let app = create_router(state);
+        let metrics_handle = synddb_shared::metrics::init_metrics();
+        let app = create_router(state, metrics_handle);
 
         // First request
         let request1 = ChangesetBatchRequest {
@@ -1017,7 +1025,8 @@ mod tests {
             attestation_verifier: None,
             batcher: None,
         };
-        let app = create_router(state);
+        let metrics_handle = synddb_shared::metrics::init_metrics();
+        let app = create_router(state, metrics_handle);
 
         // Send a snapshot with client sequence 100
         let request1 = SnapshotRequest {

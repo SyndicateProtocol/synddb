@@ -5,8 +5,7 @@
 //! testing by systematically exploring different SQL patterns.
 
 use crate::operations::*;
-use rand::prelude::*;
-use rand::Rng;
+use rand::{prelude::*, Rng};
 
 /// Configuration for grammar-based SQL generation
 #[derive(Debug, Clone)]
@@ -95,7 +94,8 @@ impl<R: Rng> SqlGrammar<R> {
 
     /// Generate a SQL value, optionally favoring edge cases
     fn gen_value(&mut self, favor_edge_cases: bool) -> SqlValue {
-        let is_edge_case = favor_edge_cases && self.rng.random_bool(self.config.edge_case_probability);
+        let is_edge_case =
+            favor_edge_cases && self.rng.random_bool(self.config.edge_case_probability);
 
         if is_edge_case {
             // Edge case values that often cause bugs

@@ -34,11 +34,9 @@
 //! ```
 
 #[cfg(feature = "otel")]
-use opentelemetry::trace::TracerProvider;
+use opentelemetry::trace::TracerProvider as _;
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::WithExportConfig;
-#[cfg(feature = "otel")]
-use opentelemetry_sdk::runtime::Tokio;
 use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
 
 /// Guard that ensures OpenTelemetry shutdown on drop
@@ -48,15 +46,15 @@ use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
 #[derive(Debug)]
 pub struct TracingGuard {
     #[cfg(feature = "otel")]
-    _provider: Option<opentelemetry_sdk::trace::TracerProvider>,
+    _provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
 }
 
 impl Drop for TracingGuard {
     fn drop(&mut self) {
         #[cfg(feature = "otel")]
-        if let Some(provider) = self._provider.take() {
+        if let Some(ref provider) = self._provider {
             if let Err(e) = provider.shutdown() {
-                eprintln!("Error shutting down tracer provider: {e}");
+                eprintln!("Error shutting down tracer provider: {e:?}");
             }
         }
     }
@@ -100,12 +98,14 @@ pub fn init_tracing(
             )
             .build()?;
 
-        // Build tracer provider
-        let provider = opentelemetry_sdk::trace::TracerProvider::builder()
-            .with_batch_exporter(exporter, Tokio)
-            .with_resource(opentelemetry_sdk::Resource::new(vec![
-                opentelemetry::KeyValue::new("service.name", service_name.to_string()),
-            ]))
+        // Build tracer provider with service name resource
+        let resource = opentelemetry_sdk::Resource::builder()
+            .with_service_name(service_name.to_string())
+            .build();
+
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(resource)
             .build();
 
         // Create tracer from provider
