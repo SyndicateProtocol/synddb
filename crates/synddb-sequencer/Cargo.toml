@@ -45,7 +45,6 @@ k256 = { workspace = true }
 hex = { workspace = true }
 
 # Utilities
-base64 = { workspace = true }
 async-trait = { workspace = true }
 strum = { workspace = true }
 
@@ -54,9 +53,6 @@ reqwest = { workspace = true }
 
 # Compression
 zstd = { workspace = true }
-
-# Hashing
-sha2 = { workspace = true }
 
 # Local SQLite storage
 rusqlite = { workspace = true }
