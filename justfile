@@ -99,38 +99,45 @@ info:
     echo "  Sequencer:  http://127.0.0.1:{{ sequencer_port }}"
     echo "  Validator:  http://127.0.0.1:{{ validator_port }}"
 
-# Fetch live status from a service (sequencer, validator, or validator-signer)
+# Fetch live status from services (sequencer, validator, validator-signer, or all)
 
-# Usage: just service-status <service>
+# Usage: just service-status [service]  (default: all)
 [group('info')]
-service-status service:
+service-status service="all":
     #!/usr/bin/env bash
     set -euo pipefail
+    fetch_status() {
+        local name="$1" url="$2"
+        echo "=== $name ==="
+        if curl -s "$url" > /tmp/service_status.json 2>/dev/null; then
+            jq '.' /tmp/service_status.json
+            rm -f /tmp/service_status.json
+        else
+            echo "(not running)"
+        fi
+        echo ""
+    }
     case "{{ service }}" in
+        all)
+            fetch_status "Sequencer Status" "http://127.0.0.1:{{ sequencer_port }}/status"
+            fetch_status "Validator Status" "http://127.0.0.1:{{ validator_port }}/status"
+            fetch_status "Validator Signer Info" "http://127.0.0.1:8081/info"
+            ;;
         sequencer)
-            URL="http://127.0.0.1:{{ sequencer_port }}/status"
-            echo "=== Sequencer Status ==="
+            fetch_status "Sequencer Status" "http://127.0.0.1:{{ sequencer_port }}/status"
             ;;
         validator)
-            URL="http://127.0.0.1:{{ validator_port }}/status"
-            echo "=== Validator Status ==="
+            fetch_status "Validator Status" "http://127.0.0.1:{{ validator_port }}/status"
             ;;
         validator-signer)
-            URL="http://127.0.0.1:8081/info"
-            echo "=== Validator Signer Info ==="
+            fetch_status "Validator Signer Info" "http://127.0.0.1:8081/info"
             ;;
         *)
             echo "Unknown service: {{ service }}"
-            echo "Valid services: sequencer, validator, validator-signer"
+            echo "Valid services: all, sequencer, validator, validator-signer"
             exit 1
             ;;
     esac
-    if ! curl -s "$URL" > /tmp/service_status.json 2>/dev/null; then
-        echo "Error: Service not running at $URL"
-        exit 1
-    fi
-    jq '.' /tmp/service_status.json
-    rm -f /tmp/service_status.json
 
 # Alias: Fetch sequencer status
 [group('info')]
@@ -200,42 +207,54 @@ fund-wallet address amount="1":
     BALANCE=$(cast balance --rpc-url {{ anvil_rpc_url }} "{{ address }}" --ether)
     echo "Done. New balance: $BALANCE ETH"
 
-# Fund a service's dynamically generated wallet from Anvil
-# Usage: just fund-service <service> [amount_eth]
+# Fund service wallets from Anvil (sequencer, validator-signer, or all)
 
-# Services: sequencer (uses /status.signer_address), validator-signer (uses /info.signer)
+# Usage: just fund-service [service] [amount_eth]  (default: all, 1 ETH)
 [group('components')]
-fund-service service amount="1":
+fund-service service="all" amount="1":
     #!/usr/bin/env bash
     set -euo pipefail
+    fund_one() {
+        local name="$1" url="$2" jq_path="$3"
+        echo "=== Funding $name ==="
+        RESPONSE=$(curl -s "$url" 2>/dev/null) || true
+        if [ -z "$RESPONSE" ]; then
+            echo "(not running)"
+            echo ""
+            return 0
+        fi
+        SIGNER_ADDRESS=$(echo "$RESPONSE" | jq -r "$jq_path" 2>/dev/null) || true
+        if [ -z "$SIGNER_ADDRESS" ] || [ "$SIGNER_ADDRESS" = "null" ]; then
+            echo "(no signer address available)"
+            echo ""
+            return 0
+        fi
+        echo "Address: $SIGNER_ADDRESS"
+        cast send --rpc-url {{ anvil_rpc_url }} \
+            --private-key {{ anvil_key_0 }} \
+            "$SIGNER_ADDRESS" \
+            --value "{{ amount }}ether" > /dev/null
+        BALANCE=$(cast balance --rpc-url {{ anvil_rpc_url }} "$SIGNER_ADDRESS" --ether)
+        echo "Funded {{ amount }} ETH. New balance: $BALANCE ETH"
+        echo ""
+    }
     case "{{ service }}" in
+        all)
+            fund_one "Sequencer" "http://127.0.0.1:{{ sequencer_port }}/status" ".signer_address"
+            fund_one "Validator Signer" "http://127.0.0.1:8081/info" ".signer"
+            ;;
         sequencer)
-            URL="http://127.0.0.1:{{ sequencer_port }}/status"
-            JQ_PATH=".signer_address"
+            fund_one "Sequencer" "http://127.0.0.1:{{ sequencer_port }}/status" ".signer_address"
             ;;
         validator-signer)
-            URL="http://127.0.0.1:8081/info"
-            JQ_PATH=".signer"
+            fund_one "Validator Signer" "http://127.0.0.1:8081/info" ".signer"
             ;;
         *)
             echo "Unknown service: {{ service }}"
-            echo "Valid services: sequencer, validator-signer"
+            echo "Valid services: all, sequencer, validator-signer"
             exit 1
             ;;
     esac
-    echo "Fetching {{ service }} address from $URL..."
-    SIGNER_ADDRESS=$(curl -s "$URL" | jq -r "$JQ_PATH")
-    if [ -z "$SIGNER_ADDRESS" ] || [ "$SIGNER_ADDRESS" = "null" ]; then
-        echo "Error: Could not fetch signer address from {{ service }}"
-        exit 1
-    fi
-    echo "Funding $SIGNER_ADDRESS with {{ amount }} ETH..."
-    cast send --rpc-url {{ anvil_rpc_url }} \
-        --private-key {{ anvil_key_0 }} \
-        "$SIGNER_ADDRESS" \
-        --value "{{ amount }}ether"
-    BALANCE=$(cast balance --rpc-url {{ anvil_rpc_url }} "$SIGNER_ADDRESS" --ether)
-    echo "Done. New balance: $BALANCE ETH"
 
 # Alias: Fund the sequencer's dynamically generated wallet
 [group('components')]
