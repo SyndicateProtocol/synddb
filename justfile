@@ -152,11 +152,46 @@ deploy-fresh:
 anvil:
     anvil --port {{ anvil_port }}
 
-# Run sequencer with local defaults
+# Fund a dynamically generated wallet from Anvil
+
+# Usage: just fund-wallet <address> [amount_eth]
+[group('components')]
+fund-wallet address amount="1":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Funding {{ address }} with {{ amount }} ETH..."
+    cast send --rpc-url {{ anvil_rpc_url }} \
+        --private-key {{ anvil_key_0 }} \
+        "{{ address }}" \
+        --value "{{ amount }}ether"
+    BALANCE=$(cast balance --rpc-url {{ anvil_rpc_url }} "{{ address }}" --ether)
+    echo "Done. New balance: $BALANCE ETH"
+
+# Fund the sequencer's dynamically generated wallet from Anvil
+
+# Usage: just fund-sequencer [amount_eth] [sequencer_url]
+[group('components')]
+fund-sequencer amount="1" url="http://127.0.0.1:8433":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Fetching sequencer address from {{ url }}/status..."
+    SIGNER_ADDRESS=$(curl -s "{{ url }}/status" | jq -r '.signer_address')
+    if [ -z "$SIGNER_ADDRESS" ] || [ "$SIGNER_ADDRESS" = "null" ]; then
+        echo "Error: Could not fetch signer_address from sequencer"
+        exit 1
+    fi
+    echo "Funding $SIGNER_ADDRESS with {{ amount }} ETH..."
+    cast send --rpc-url {{ anvil_rpc_url }} \
+        --private-key {{ anvil_key_0 }} \
+        "$SIGNER_ADDRESS" \
+        --value "{{ amount }}ether"
+    BALANCE=$(cast balance --rpc-url {{ anvil_rpc_url }} "$SIGNER_ADDRESS" --ether)
+    echo "Done. New balance: $BALANCE ETH"
+
+# Run sequencer (key is generated at startup)
 [group('components')]
 sequencer:
     mkdir -p {{ data_dir }}
-    SIGNING_KEY={{ anvil_key_0 }} \
     BIND_ADDRESS=127.0.0.1:{{ sequencer_port }} \
     DATABASE_PATH={{ data_dir }}/sequencer.db \
     cargo run -p synddb-sequencer --release
@@ -171,7 +206,9 @@ validator:
     PENDING_CHANGESETS_DB_PATH={{ data_dir }}/pending_changesets.db \
     cargo run -p synddb-validator --release
 
-# Run validator with bridge signer enabled (fetches pubkey from sequencer)
+# Run validator with bridge signer enabled (key generated at startup, fetches pubkey from sequencer)
+
+# Note: If on-chain operations are needed, run `just fund-sequencer` after startup
 [group('components')]
 validator-bridge:
     mkdir -p {{ data_dir }}
@@ -182,7 +219,6 @@ validator-bridge:
     BRIDGE_SIGNER=true \
     BRIDGE_CONTRACT={{ bridge_address }} \
     BRIDGE_CHAIN_ID=31337 \
-    BRIDGE_SIGNING_KEY={{ anvil_key_0 }} \
     cargo run -p synddb-validator --release
 
 # ============================================================================

@@ -4507,7 +4507,6 @@ dependencies = [
 name = "synddb-e2e-fuzzer"
 version = "0.1.0"
 dependencies = [
- "alloy",
  "anyhow",
  "ciborium",
  "hex",
@@ -4554,7 +4553,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "base64 0.22.1",
  "ciborium",
  "clap",
  "gcp-attestation",
@@ -4567,7 +4565,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2",
  "strum 0.26.3",
  "synddb-shared",
  "tempfile",
