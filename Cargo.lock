@@ -4607,6 +4607,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tower",
+ "tower-http",
  "tracing",
  "zstd",
 ]
@@ -4661,6 +4662,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tower",
+ "tower-http",
  "tracing",
  "zstd",
 ]
@@ -5012,6 +5014,8 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

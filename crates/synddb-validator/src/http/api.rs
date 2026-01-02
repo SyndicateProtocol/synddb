@@ -34,6 +34,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 /// Shared application state for HTTP handlers
 ///
@@ -153,6 +155,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/status", get(status_handler))
         .route("/ready", get(ready_handler))
         .route("/metrics", get(synddb_shared::metrics::metrics_handler))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
         .with_state(state)
 }
 

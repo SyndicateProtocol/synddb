@@ -68,7 +68,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::{error, info, warn, Level};
 
 use crate::{
     attestation::AttestationVerifier,
@@ -129,6 +130,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/batch/stats", get(batch_stats))
         .route("/batch/flush", post(batch_flush))
         .route("/metrics", get(synddb_shared::metrics::metrics_handler))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
         .with_state(state)
 }
 
