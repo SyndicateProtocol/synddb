@@ -3,13 +3,14 @@
 //! This script reads attestation samples and generates ZK proofs that can be
 //! verified on-chain.
 
-use alloy::{primitives::keccak256, sol_types::SolType};
+use alloy::primitives::keccak256;
 use clap::Parser;
-use gcp_confidential_space::attestation::{verify_gcp_cs_attestation, PublicValuesStruct};
+use gcp_confidential_space::{
+    extract_kid_from_jwt, verify_attestation, JwkKey, PublicValuesStruct,
+};
 use serde::Deserialize;
 use sp1_sdk::{include_elf, ProverClient, SP1Stdin};
 use std::fs;
-use gcp_confidential_space::jwt::JwkKey;
 
 /// The ELF file for the GCP CS attestation verification program
 pub const GCP_CS_ATTESTATION_ELF: &[u8] = include_elf!("gcp-cs-attestation-sp1-program");
@@ -81,7 +82,7 @@ fn main() {
     println!("Using sample {} with audience: {}", args.index, sample.audience);
 
     // Find the JWK for this token (extract kid from JWT header)
-    let kid = gcp_confidential_space::attestation::extract_kid_from_jwt(sample.raw_token.as_bytes())
+    let kid = extract_kid_from_jwt(sample.raw_token.as_bytes())
         .expect("Failed to extract kid from JWT");
     println!("Token signed with key ID: {}", kid);
 
@@ -126,7 +127,7 @@ fn main() {
         println!("audience_hash: 0x{}", hex::encode(public_values.audience_hash));
 
         // Verify against local verification
-        let expected = verify_gcp_cs_attestation(
+        let expected = verify_attestation(
             sample.raw_token.as_bytes(),
             &jwk,
             Some(&sample.audience),
