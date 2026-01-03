@@ -116,12 +116,7 @@ impl GcsFetcher {
         Self::from_config(config).await
     }
 
-    /// Get the bucket name for read/write operations
-    fn bucket_name(&self) -> &str {
-        &self.config.bucket
-    }
-
-    /// Get the bucket path for list operations (requires projects/_/buckets/ prefix)
+    /// Get the bucket path in the format required by the Google Cloud Storage SDK
     fn bucket_path(&self) -> String {
         format!("projects/_/buckets/{}", self.config.bucket)
     }
@@ -130,7 +125,7 @@ impl GcsFetcher {
     async fn download(&self, path: &str) -> Result<Option<Vec<u8>>> {
         let mut reader = match self
             .storage
-            .read_object(self.bucket_name(), path)
+            .read_object(self.bucket_path(), path)
             .send()
             .await
         {

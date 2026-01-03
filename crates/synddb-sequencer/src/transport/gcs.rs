@@ -101,12 +101,7 @@ impl GcsTransport {
         )
     }
 
-    /// Get the bucket name for read/write operations
-    fn bucket_name(&self) -> &str {
-        &self.config.bucket
-    }
-
-    /// Get the bucket path for list operations (requires projects/_/buckets/ prefix)
+    /// Get the bucket path in the format required by the Google Cloud Storage SDK
     fn bucket_path(&self) -> String {
         format!("projects/_/buckets/{}", self.config.bucket)
     }
@@ -120,7 +115,7 @@ impl GcsTransport {
     ) -> Result<(), TransportError> {
         use bytes::Bytes;
         self.storage
-            .write_object(self.bucket_name(), path, Bytes::from(data))
+            .write_object(self.bucket_path(), path, Bytes::from(data))
             .send_buffered()
             .await
             .map_err(|e| TransportError::Storage(format!("Failed to upload to GCS: {e}")))?;
@@ -132,7 +127,7 @@ impl GcsTransport {
     async fn download(&self, path: &str) -> Result<Option<Vec<u8>>, TransportError> {
         let mut reader = match self
             .storage
-            .read_object(self.bucket_name(), path)
+            .read_object(self.bucket_path(), path)
             .send()
             .await
         {
