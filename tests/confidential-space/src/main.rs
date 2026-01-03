@@ -601,8 +601,7 @@ async fn capture_attestation(audience: &str, nonces: Vec<String>) -> Result<Atte
 
 async fn fetch_attestation_token(audience: &str, nonces: Vec<String>) -> Result<String> {
     use http_body_util::{BodyExt, Full};
-    use hyper::body::Bytes;
-    use hyper::Request;
+    use hyper::{body::Bytes, Request};
     use hyper_util::{client::legacy::Client, rt::TokioExecutor};
     use hyperlocal::{UnixConnector, Uri};
 
