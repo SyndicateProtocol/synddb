@@ -421,15 +421,13 @@ jobs:
 
     steps:
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: endersonmenezes/free-disk-space@v3
         with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false  # Keep - removes LLVM which Rust may need
-          docker-images: true
-          swap-storage: false
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: false
+          remove_swap: false
 
       - uses: actions/checkout@v4
 
