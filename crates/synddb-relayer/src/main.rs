@@ -2,6 +2,10 @@
 //!
 //! This service handles key registration and funding for TEE keys that
 //! don't have gas to submit their own transactions.
+//!
+//! Supports two configuration modes:
+//! 1. Multi-tenant via TOML config file (set `RELAYER_CONFIG_PATH`)
+//! 2. Single-application via environment variables (fallback)
 
 mod config;
 mod handlers;
@@ -18,7 +22,6 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, Level};
@@ -36,20 +39,29 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // Parse configuration
-    let config = RelayerConfig::parse();
-    config.validate()?;
+    // Load configuration
+    let config = RelayerConfig::load()?;
 
     info!(
         listen_addr = %config.listen_addr,
-        treasury_address = %config.treasury_address,
         key_manager_address = %config.key_manager_address,
+        application_count = config.applications.len(),
         "Starting relayer"
     );
 
+    for (audience_hash, app) in &config.applications {
+        info!(
+            audience_hash = %audience_hash,
+            treasury_address = %app.treasury_address,
+            allowed_digests = app.allowed_image_digests.len(),
+            "Configured application"
+        );
+    }
+
     // Initialize components
     let submitter = Arc::new(RelayerSubmitter::from_config(&config)?);
-    let tracker = Arc::new(RwLock::new(FundingTracker::new(&config)));
+    let tracker = Arc::new(RwLock::new(FundingTracker::new()));
+    let config = Arc::new(config);
 
     // Build router
     let app = Router::new()

@@ -13,7 +13,7 @@ use tracing::{info, warn};
 /// Request for key registration and funding
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RegisterAndFundRequest {
+pub(crate) struct RegisterAndFundRequest {
     /// Hex-encoded public values from attestation
     pub public_values: String,
     /// Hex-encoded SP1 proof bytes
@@ -31,7 +31,7 @@ pub struct RegisterAndFundRequest {
 /// Response for key registration and funding
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RegisterAndFundResponse {
+pub(crate) struct RegisterAndFundResponse {
     /// Transaction hash for key registration (if submitted)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registration_tx_hash: Option<String>,
@@ -44,21 +44,21 @@ pub struct RegisterAndFundResponse {
 }
 
 /// Health check endpoint
-pub async fn health() -> &'static str {
+pub(crate) async fn health() -> &'static str {
     "ok"
 }
 
 /// Register a TEE key and fund it
 ///
 /// Security checks:
-/// 1. Parse `public_values` to extract `image_digest_hash`
-/// 2. Verify `image_digest` is in allowlist
-/// 3. Check per-digest daily funding cap
-/// 4. Check per-address funding cap
+/// 1. Parse `public_values` to extract `image_digest_hash` and `audience_hash`
+/// 2. Look up application config by `audience_hash`
+/// 3. Verify `image_digest` is in that application's allowlist
+/// 4. Check per-application funding caps (per-digest daily, per-address)
 /// 5. Submit `addKeyWithSignature` (relayer pays gas)
-/// 6. Submit `fundKeyWithSignature` (relayer pays gas)
-pub async fn register_and_fund(
-    Extension(config): Extension<RelayerConfig>,
+/// 6. Submit `fundKeyWithSignature` to application's treasury (relayer pays gas)
+pub(crate) async fn register_and_fund(
+    Extension(config): Extension<Arc<RelayerConfig>>,
     Extension(submitter): Extension<Arc<RelayerSubmitter>>,
     Extension(tracker): Extension<Arc<RwLock<FundingTracker>>>,
     Json(request): Json<RegisterAndFundRequest>,
@@ -78,7 +78,7 @@ pub async fn register_and_fund(
         }
     };
 
-    // Parse public values and extract image digest
+    // Parse public values
     let public_values_bytes = match hex::decode(request.public_values.trim_start_matches("0x")) {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -93,42 +93,65 @@ pub async fn register_and_fund(
         }
     };
 
-    // Extract image digest from public values
-    // The image_digest_hash is at bytes 64-96 in the public values struct
-    // (after jwk_key_hash: 32, validity_window_start: 8, validity_window_end: 8, padding: 16)
-    let image_digest = match extract_image_digest(&public_values_bytes) {
-        Some(digest) => digest,
+    // Extract attestation fields from public values
+    let attestation = match extract_attestation_fields(&public_values_bytes) {
+        Some(a) => a,
         None => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(RegisterAndFundResponse {
                     registration_tx_hash: None,
                     funding_tx_hash: None,
-                    error: Some("Could not extract image_digest from public_values".into()),
+                    error: Some("Could not extract attestation fields from public_values".into()),
                 }),
             );
         }
     };
 
-    // Check image digest is in allowlist
-    let allowed_digests = config.parse_allowed_digests();
-    if !allowed_digests.contains(&image_digest) {
+    // Look up application by audience_hash
+    let app_config = match config.get_application(&attestation.audience_hash) {
+        Some(app) => app,
+        None => {
+            warn!(
+                audience_hash = %attestation.audience_hash,
+                "Rejected: unknown application (audience_hash not configured)"
+            );
+            return (
+                StatusCode::FORBIDDEN,
+                Json(RegisterAndFundResponse {
+                    registration_tx_hash: None,
+                    funding_tx_hash: None,
+                    error: Some("Unknown application: audience_hash not configured".into()),
+                }),
+            );
+        }
+    };
+
+    // Check image digest is in application's allowlist
+    if !app_config
+        .allowed_image_digests
+        .contains(&attestation.image_digest)
+    {
         warn!(
-            image_digest = %image_digest,
-            "Rejected: image digest not in allowlist"
+            image_digest = %attestation.image_digest,
+            audience_hash = %attestation.audience_hash,
+            "Rejected: image digest not in application's allowlist"
         );
         return (
             StatusCode::FORBIDDEN,
             Json(RegisterAndFundResponse {
                 registration_tx_hash: None,
                 funding_tx_hash: None,
-                error: Some("Image digest not in allowlist".into()),
+                error: Some("Image digest not in allowlist for this application".into()),
             }),
         );
     }
 
-    // Get funding amount from treasury
-    let funding_amount = match submitter.get_funding_amount().await {
+    // Get funding amount from application's treasury
+    let funding_amount = match submitter
+        .get_funding_amount(app_config.treasury_address)
+        .await
+    {
         Ok(amount) => amount,
         Err(e) => {
             return (
@@ -142,13 +165,20 @@ pub async fn register_and_fund(
         }
     };
 
-    // Check funding caps
+    // Check per-application funding caps
     {
         let mut tracker_guard = tracker.write().await;
-        if let Err(e) = tracker_guard.check_allowed(image_digest, tee_key, funding_amount) {
+        if let Err(e) = tracker_guard.check_allowed(
+            &attestation.audience_hash,
+            &attestation.image_digest,
+            tee_key,
+            funding_amount,
+            app_config,
+        ) {
             warn!(
                 tee_key = %tee_key,
-                image_digest = %image_digest,
+                image_digest = %attestation.image_digest,
+                audience_hash = %attestation.audience_hash,
                 reason = %e,
                 "Rejected: funding cap exceeded"
             );
@@ -165,7 +195,9 @@ pub async fn register_and_fund(
 
     info!(
         tee_key = %tee_key,
-        image_digest = %image_digest,
+        image_digest = %attestation.image_digest,
+        audience_hash = %attestation.audience_hash,
+        treasury = %app_config.treasury_address,
         "Processing registration and funding request"
     );
 
@@ -267,9 +299,14 @@ pub async fn register_and_fund(
         }
     }
 
-    // Submit funding
+    // Submit funding to application's treasury
     let funding_tx_hash = match submitter
-        .fund_key_with_signature(tee_key, request.deadline, Bytes::from(funding_signature))
+        .fund_key_with_signature(
+            app_config.treasury_address,
+            tee_key,
+            request.deadline,
+            Bytes::from(funding_signature),
+        )
         .await
     {
         Ok(tx_hash) => tx_hash,
@@ -300,13 +337,19 @@ pub async fn register_and_fund(
     // Record successful funding
     {
         let mut tracker_guard = tracker.write().await;
-        tracker_guard.record_funding(image_digest, tee_key, funding_amount);
+        tracker_guard.record_funding(
+            &attestation.audience_hash,
+            &attestation.image_digest,
+            tee_key,
+            funding_amount,
+        );
     }
 
     info!(
         tee_key = %tee_key,
         funding_tx = %funding_tx_hash,
         amount = funding_amount,
+        treasury = %app_config.treasury_address,
         "Successfully registered and funded key"
     );
 
@@ -320,26 +363,36 @@ pub async fn register_and_fund(
     )
 }
 
-/// Extract image_digest_hash from public values
+/// Extracted attestation fields from public values
+struct AttestationFields {
+    image_digest: B256,
+    audience_hash: B256,
+}
+
+/// Extract attestation fields from public values
 ///
 /// The public values struct layout:
-/// - bytes 0-31: jwk_key_hash (32 bytes)
-/// - bytes 32-39: validity_window_start (8 bytes, packed)
-/// - bytes 40-47: validity_window_end (8 bytes, packed)
-/// - bytes 48-79: image_digest_hash (32 bytes)
-/// - bytes 80-99: tee_signing_key (20 bytes)
+/// - bytes 0-31: `jwk_key_hash` (32 bytes)
+/// - bytes 32-39: `validity_window_start` (8 bytes, packed)
+/// - bytes 40-47: `validity_window_end` (8 bytes, packed)
+/// - bytes 48-79: `image_digest_hash` (32 bytes)
+/// - bytes 80-99: `tee_signing_key` (20 bytes)
 /// - byte 100: secboot (1 byte)
-/// - byte 101: dbgstat_disabled (1 byte)
-/// - bytes 102-133: audience_hash (32 bytes)
-fn extract_image_digest(public_values: &[u8]) -> Option<B256> {
-    // The struct is ABI encoded, so offsets may differ
-    // For now, assume a simple packed layout with image_digest at bytes 48-80
-    if public_values.len() < 80 {
+/// - byte 101: `dbgstat_disabled` (1 byte)
+/// - bytes 102-133: `audience_hash` (32 bytes)
+fn extract_attestation_fields(public_values: &[u8]) -> Option<AttestationFields> {
+    // Need at least 134 bytes for the full struct
+    if public_values.len() < 134 {
         return None;
     }
 
-    let digest_bytes: [u8; 32] = public_values[48..80].try_into().ok()?;
-    Some(B256::from(digest_bytes))
+    let image_digest: [u8; 32] = public_values[48..80].try_into().ok()?;
+    let audience_hash: [u8; 32] = public_values[102..134].try_into().ok()?;
+
+    Some(AttestationFields {
+        image_digest: B256::from(image_digest),
+        audience_hash: B256::from(audience_hash),
+    })
 }
 
 #[cfg(test)]
@@ -347,22 +400,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_image_digest() {
-        // Create mock public values with a known digest at position 48-80
+    fn test_extract_attestation_fields() {
+        // Create mock public values with known values
         let mut public_values = vec![0u8; 134];
 
         // Set image digest at bytes 48-80
         let expected_digest = B256::from([0xAB; 32]);
         public_values[48..80].copy_from_slice(expected_digest.as_slice());
 
-        let extracted = extract_image_digest(&public_values);
-        assert_eq!(extracted, Some(expected_digest));
+        // Set audience hash at bytes 102-134
+        let expected_audience = B256::from([0xCD; 32]);
+        public_values[102..134].copy_from_slice(expected_audience.as_slice());
+
+        let extracted = extract_attestation_fields(&public_values);
+        assert!(extracted.is_some());
+
+        let fields = extracted.unwrap();
+        assert_eq!(fields.image_digest, expected_digest);
+        assert_eq!(fields.audience_hash, expected_audience);
     }
 
     #[test]
-    fn test_extract_image_digest_too_short() {
-        let public_values = vec![0u8; 50]; // Too short
-        let extracted = extract_image_digest(&public_values);
-        assert_eq!(extracted, None);
+    fn test_extract_attestation_fields_too_short() {
+        let public_values = vec![0u8; 100]; // Too short
+        let extracted = extract_attestation_fields(&public_values);
+        assert!(extracted.is_none());
     }
 }

@@ -40,10 +40,9 @@ sol! {
 }
 
 /// Submitter for relayer transactions
-pub struct RelayerSubmitter {
+pub(crate) struct RelayerSubmitter {
     rpc_url: String,
     key_manager_address: Address,
-    treasury_address: Address,
     signer: PrivateKeySigner,
 }
 
@@ -52,7 +51,6 @@ impl std::fmt::Debug for RelayerSubmitter {
         f.debug_struct("RelayerSubmitter")
             .field("rpc_url", &self.rpc_url)
             .field("key_manager_address", &self.key_manager_address)
-            .field("treasury_address", &self.treasury_address)
             .field("relayer_address", &self.signer.address())
             .finish()
     }
@@ -60,27 +58,26 @@ impl std::fmt::Debug for RelayerSubmitter {
 
 impl RelayerSubmitter {
     /// Create from config
-    pub fn from_config(config: &RelayerConfig) -> anyhow::Result<Self> {
+    pub(crate) fn from_config(config: &RelayerConfig) -> anyhow::Result<Self> {
         let key_bytes = hex::decode(config.private_key.trim_start_matches("0x"))?;
         let signer = PrivateKeySigner::from_slice(&key_bytes)?;
 
         Ok(Self {
             rpc_url: config.rpc_url.clone(),
             key_manager_address: config.key_manager_address,
-            treasury_address: config.treasury_address,
             signer,
         })
     }
 
     /// Get the relayer's address
-    pub fn relayer_address(&self) -> Address {
+    pub(crate) const fn relayer_address(&self) -> Address {
         self.signer.address()
     }
 
-    /// Submit addKeyWithSignature to TeeKeyManager
+    /// Submit addKeyWithSignature to `TeeKeyManager`
     ///
     /// Returns the transaction hash.
-    pub async fn add_key_with_signature(
+    pub(crate) async fn add_key_with_signature(
         &self,
         public_values: Bytes,
         proof_bytes: Bytes,
@@ -115,11 +112,12 @@ impl RelayerSubmitter {
         Ok(tx_hash)
     }
 
-    /// Submit fundKeyWithSignature to GasTreasury
+    /// Submit fundKeyWithSignature to a specific `GasTreasury`
     ///
     /// Returns the transaction hash.
-    pub async fn fund_key_with_signature(
+    pub(crate) async fn fund_key_with_signature(
         &self,
+        treasury_address: Address,
         tee_key: Address,
         deadline: u64,
         signature: Bytes,
@@ -129,13 +127,13 @@ impl RelayerSubmitter {
         let provider = ProviderBuilder::new().wallet(wallet).connect_http(url);
 
         info!(
-            contract = %self.treasury_address,
+            contract = %treasury_address,
             tee_key = %tee_key,
             deadline = deadline,
             "Submitting fundKeyWithSignature"
         );
 
-        let contract = IGasTreasury::new(self.treasury_address, &provider);
+        let contract = IGasTreasury::new(treasury_address, &provider);
 
         let tx = contract.fundKeyWithSignature(
             tee_key,
@@ -150,19 +148,22 @@ impl RelayerSubmitter {
         Ok(tx_hash)
     }
 
-    /// Get the funding amount from treasury
-    pub async fn get_funding_amount(&self) -> anyhow::Result<u128> {
+    /// Get the funding amount from a specific treasury
+    pub(crate) async fn get_funding_amount(
+        &self,
+        treasury_address: Address,
+    ) -> anyhow::Result<u128> {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
-        let contract = IGasTreasury::new(self.treasury_address, &provider);
+        let contract = IGasTreasury::new(treasury_address, &provider);
         let amount = contract.fundingAmount().call().await?;
 
         Ok(amount.to::<u128>())
     }
 
     /// Check if a key is already registered
-    pub async fn is_key_valid(&self, address: Address) -> anyhow::Result<bool> {
+    pub(crate) async fn is_key_valid(&self, address: Address) -> anyhow::Result<bool> {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
@@ -182,7 +183,7 @@ impl RelayerSubmitter {
     }
 
     /// Wait for transaction confirmation
-    pub async fn wait_for_confirmation(&self, tx_hash: B256) -> anyhow::Result<()> {
+    pub(crate) async fn wait_for_confirmation(&self, tx_hash: B256) -> anyhow::Result<()> {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
