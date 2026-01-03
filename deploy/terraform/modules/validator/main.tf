@@ -14,28 +14,22 @@ locals {
   env_vars = merge(
     {
       # Core configuration
-      BIND_ADDRESS = "0.0.0.0:8080"
+      BIND_ADDRESS  = "0.0.0.0:8080"
+      SEQUENCER_URL = var.sequencer_url
 
       # Fetcher configuration
-      FETCHER_TYPE = var.fetcher_type
+      FETCHER_TYPE = "gcs"
       GCS_BUCKET   = var.gcs_bucket
-      GCS_PREFIX   = var.gcs_prefix
+      GCS_PREFIX   = "sequencer"
 
       # Sync configuration
-      SYNC_INTERVAL      = var.sync_interval
-      BATCH_SYNC_ENABLED = tostring(var.batch_sync_enabled)
+      SYNC_INTERVAL      = "1s"
+      BATCH_SYNC_ENABLED = "true"
 
       # Logging
-      LOG_JSON = tostring(var.log_json)
+      LOG_JSON = "true"
       RUST_LOG = var.rust_log
     },
-    # Sequencer connection
-    var.sequencer_url != "" ? {
-      SEQUENCER_URL = var.sequencer_url
-    } : {},
-    var.sequencer_pubkey != "" ? {
-      SEQUENCER_PUBKEY = var.sequencer_pubkey
-    } : {},
     # Bridge signer configuration (if enabled)
     var.enable_bridge_signer ? {
       BRIDGE_SIGNER           = "true"

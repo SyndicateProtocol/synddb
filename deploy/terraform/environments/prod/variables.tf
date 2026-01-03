@@ -37,12 +37,6 @@ variable "gcs_bucket_name" {
   type        = string
 }
 
-variable "gcs_prefix" {
-  description = "GCS path prefix"
-  type        = string
-  default     = "sequencer"
-}
-
 # Instance configuration
 variable "sequencer_machine_type" {
   description = "Machine type for sequencer"

@@ -34,7 +34,7 @@ variable "validator_image" {
 }
 
 variable "proof_service_image" {
-  description = "Proof service container image URI (optional)"
+  description = "Proof service container image URI (required when TEE bootstrap is enabled)"
   type        = string
   default     = ""
 }
@@ -45,28 +45,21 @@ variable "gcs_bucket_name" {
   type        = string
 }
 
-variable "gcs_prefix" {
-  description = "Path prefix within the bucket"
-  type        = string
-  default     = "sequencer"
-}
-
-# Machine types
-variable "sequencer_machine_type" {
-  description = "Machine type for sequencer VM"
+# Machine type (used for both sequencer and validator)
+variable "machine_type" {
+  description = "Machine type for VMs (must be n2d-* for AMD SEV)"
   type        = string
   default     = "n2d-standard-2"
-}
 
-variable "validator_machine_type" {
-  description = "Machine type for validator VM"
-  type        = string
-  default     = "n2d-standard-2"
+  validation {
+    condition     = can(regex("^n2d-", var.machine_type))
+    error_message = "Machine type must be n2d-* for Confidential Space (AMD SEV)."
+  }
 }
 
 # TEE Bootstrap
 variable "enable_key_bootstrap" {
-  description = "Enable TEE key bootstrapping"
+  description = "Enable TEE key bootstrapping (automatically deploys proof service)"
   type        = bool
   default     = false
 }
@@ -93,13 +86,6 @@ variable "attestation_audience" {
   description = "Expected audience for attestation tokens"
   type        = string
   default     = ""
-}
-
-# Proof service
-variable "deploy_proof_service" {
-  description = "Deploy GPU proof service (requires GPU quota)"
-  type        = bool
-  default     = false
 }
 
 # Logging

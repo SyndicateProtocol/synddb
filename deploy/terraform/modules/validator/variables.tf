@@ -42,38 +42,14 @@ variable "container_image" {
 
 # Sequencer connection
 variable "sequencer_url" {
-  description = "Sequencer URL for pubkey discovery (optional)"
+  description = "Sequencer URL for pubkey discovery"
   type        = string
-  default     = ""
 }
 
-variable "sequencer_pubkey" {
-  description = "Sequencer public key in hex (if not fetching from URL)"
-  type        = string
-  default     = ""
-}
-
-# Fetcher configuration
-variable "fetcher_type" {
-  description = "Fetcher type: http or gcs"
-  type        = string
-  default     = "gcs"
-
-  validation {
-    condition     = contains(["http", "gcs"], var.fetcher_type)
-    error_message = "Fetcher type must be 'http' or 'gcs'."
-  }
-}
-
+# GCS Configuration
 variable "gcs_bucket" {
   description = "GCS bucket for batch fetching"
   type        = string
-}
-
-variable "gcs_prefix" {
-  description = "GCS path prefix"
-  type        = string
-  default     = "sequencer"
 }
 
 # Instance Configuration
@@ -81,19 +57,6 @@ variable "machine_type" {
   description = "Machine type"
   type        = string
   default     = "n2d-standard-2"
-}
-
-# Sync Configuration
-variable "sync_interval" {
-  description = "Sync poll interval"
-  type        = string
-  default     = "1s"
-}
-
-variable "batch_sync_enabled" {
-  description = "Enable batch sync mode"
-  type        = bool
-  default     = true
 }
 
 # Bridge Signer Configuration
@@ -153,12 +116,6 @@ variable "attestation_audience" {
 }
 
 # Logging
-variable "log_json" {
-  description = "Enable JSON logging"
-  type        = bool
-  default     = true
-}
-
 variable "rust_log" {
   description = "Rust log level (e.g., info, debug, warn, error, or module-specific like synddb_validator=debug)"
   type        = string

@@ -143,7 +143,7 @@ resource "google_service_account" "validator" {
 }
 
 resource "google_service_account" "proof_service" {
-  count        = var.deploy_proof_service ? 1 : 0
+  count        = var.enable_key_bootstrap ? 1 : 0
   project      = var.project_id
   account_id   = "${local.name_prefix}-proof"
   display_name = "SyndDB Proof Service (${local.name_prefix})"
@@ -205,7 +205,7 @@ resource "google_storage_bucket_iam_member" "validator_storage" {
 
 resource "google_compute_instance" "sequencer" {
   name         = "${local.name_prefix}-sequencer"
-  machine_type = var.sequencer_machine_type
+  machine_type = var.machine_type
   zone         = var.zone
   project      = var.project_id
 
@@ -247,12 +247,12 @@ resource "google_compute_instance" "sequencer" {
       "tee-image-reference"        = var.sequencer_image
       "tee-restart-policy"         = "OnFailure"
       "tee-container-log-redirect" = "true"
-      "tee-env-BIND_ADDRESS"       = "0.0.0.0:8433"
-      "tee-env-PUBLISHER_TYPE"     = "gcs"
-      "tee-env-GCS_BUCKET"         = google_storage_bucket.synddb.name
-      "tee-env-GCS_PREFIX"         = var.gcs_prefix
-      "tee-env-LOG_JSON"           = "true"
-      "tee-env-RUST_LOG"           = var.rust_log
+      "tee-env-BIND_ADDRESS"   = "0.0.0.0:8433"
+      "tee-env-PUBLISHER_TYPE" = "gcs"
+      "tee-env-GCS_BUCKET"     = google_storage_bucket.synddb.name
+      "tee-env-GCS_PREFIX"     = "sequencer"
+      "tee-env-LOG_JSON"       = "true"
+      "tee-env-RUST_LOG"       = var.rust_log
     },
     var.enable_key_bootstrap ? {
       "tee-env-ENABLE_KEY_BOOTSTRAP"             = "true"
@@ -260,7 +260,7 @@ resource "google_compute_instance" "sequencer" {
       "tee-env-BOOTSTRAP_RPC_URL"                = var.bootstrap_rpc_url
       "tee-env-BOOTSTRAP_CHAIN_ID"               = tostring(var.bootstrap_chain_id)
       "tee-env-ATTESTATION_AUDIENCE"             = var.attestation_audience
-      "tee-env-PROOF_SERVICE_URL"                = var.deploy_proof_service ? google_cloud_run_v2_service.proof_service[0].uri : ""
+      "tee-env-PROOF_SERVICE_URL"                = google_cloud_run_v2_service.proof_service[0].uri
     } : {}
   )
 
@@ -282,7 +282,7 @@ resource "google_compute_instance" "sequencer" {
 
 resource "google_compute_instance" "validator" {
   name         = "${local.name_prefix}-validator"
-  machine_type = var.validator_machine_type
+  machine_type = var.machine_type
   zone         = var.zone
   project      = var.project_id
 
@@ -324,13 +324,13 @@ resource "google_compute_instance" "validator" {
       "tee-image-reference"        = var.validator_image
       "tee-restart-policy"         = "OnFailure"
       "tee-container-log-redirect" = "true"
-      "tee-env-BIND_ADDRESS"       = "0.0.0.0:8080"
-      "tee-env-FETCHER_TYPE"       = "gcs"
-      "tee-env-GCS_BUCKET"         = google_storage_bucket.synddb.name
-      "tee-env-GCS_PREFIX"         = var.gcs_prefix
-      "tee-env-SEQUENCER_URL"      = "http://${google_compute_instance.sequencer.network_interface[0].network_ip}:8433"
-      "tee-env-LOG_JSON"           = "true"
-      "tee-env-RUST_LOG"           = var.rust_log
+      "tee-env-BIND_ADDRESS"  = "0.0.0.0:8080"
+      "tee-env-FETCHER_TYPE"  = "gcs"
+      "tee-env-GCS_BUCKET"    = google_storage_bucket.synddb.name
+      "tee-env-GCS_PREFIX"    = "sequencer"
+      "tee-env-SEQUENCER_URL" = "http://${google_compute_instance.sequencer.network_interface[0].network_ip}:8433"
+      "tee-env-LOG_JSON"      = "true"
+      "tee-env-RUST_LOG"      = var.rust_log
     },
     var.enable_key_bootstrap ? {
       "tee-env-ENABLE_KEY_BOOTSTRAP"             = "true"
@@ -338,7 +338,7 @@ resource "google_compute_instance" "validator" {
       "tee-env-BOOTSTRAP_RPC_URL"                = var.bootstrap_rpc_url
       "tee-env-BOOTSTRAP_CHAIN_ID"               = tostring(var.bootstrap_chain_id)
       "tee-env-ATTESTATION_AUDIENCE"             = var.attestation_audience
-      "tee-env-PROOF_SERVICE_URL"                = var.deploy_proof_service ? google_cloud_run_v2_service.proof_service[0].uri : ""
+      "tee-env-PROOF_SERVICE_URL"                = google_cloud_run_v2_service.proof_service[0].uri
     } : {}
   )
 
@@ -355,11 +355,11 @@ resource "google_compute_instance" "validator" {
 }
 
 # ============================================================================
-# Proof Service (Optional)
+# Proof Service (deployed when TEE bootstrap is enabled)
 # ============================================================================
 
 resource "google_cloud_run_v2_service" "proof_service" {
-  count    = var.deploy_proof_service ? 1 : 0
+  count    = var.enable_key_bootstrap ? 1 : 0
   provider = google-beta
   name     = "${local.name_prefix}-proof"
   location = var.region

@@ -15,7 +15,6 @@ proof_service_image = "us-central1-docker.pkg.dev/your-project/synddb/proof-serv
 
 # Storage
 gcs_bucket_name = "your-project-synddb-prod"
-gcs_prefix      = "sequencer"
 
 # Instance configuration (production sizing)
 sequencer_machine_type = "n2d-standard-4"

@@ -114,7 +114,6 @@ module "sequencer" {
   service_account_email = module.iam.sequencer_service_account_email
   container_image       = var.sequencer_image
   gcs_bucket            = module.storage.bucket_name
-  gcs_prefix            = var.gcs_prefix
   machine_type          = var.sequencer_machine_type
   batch_max_messages    = var.batch_max_messages
   batch_flush_interval  = var.batch_flush_interval
@@ -143,7 +142,6 @@ module "validator" {
   service_account_email = module.iam.validator_service_account_email
   container_image       = var.validator_image
   gcs_bucket            = module.storage.bucket_name
-  gcs_prefix            = var.gcs_prefix
   sequencer_url         = "http://${module.sequencer.internal_ip}:8433"
   machine_type          = var.validator_machine_type
   enable_bridge_signer  = var.enable_bridge_signer

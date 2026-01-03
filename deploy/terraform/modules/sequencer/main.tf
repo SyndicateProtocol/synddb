@@ -12,10 +12,10 @@ locals {
   env_vars = merge(
     {
       # Core configuration
-      BIND_ADDRESS  = "0.0.0.0:8433"
+      BIND_ADDRESS   = "0.0.0.0:8433"
       PUBLISHER_TYPE = "gcs"
-      GCS_BUCKET    = var.gcs_bucket
-      GCS_PREFIX    = var.gcs_prefix
+      GCS_BUCKET     = var.gcs_bucket
+      GCS_PREFIX     = "sequencer"
 
       # Batching
       BATCH_MAX_MESSAGES   = tostring(var.batch_max_messages)
@@ -23,7 +23,7 @@ locals {
       BATCH_FLUSH_INTERVAL = var.batch_flush_interval
 
       # Logging
-      LOG_JSON = tostring(var.log_json)
+      LOG_JSON = "true"
       RUST_LOG = var.rust_log
     },
     # TEE bootstrap configuration (if enabled)

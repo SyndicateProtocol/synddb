@@ -40,12 +40,6 @@ variable "gcs_bucket" {
   type        = string
 }
 
-variable "gcs_prefix" {
-  description = "GCS path prefix"
-  type        = string
-  default     = "sequencer"
-}
-
 # Instance Configuration
 variable "machine_type" {
   description = "Machine type"
@@ -110,12 +104,6 @@ variable "batch_flush_interval" {
 }
 
 # Logging
-variable "log_json" {
-  description = "Enable JSON logging"
-  type        = bool
-  default     = true
-}
-
 variable "rust_log" {
   description = "Rust log level (e.g., info, debug, warn, error, or module-specific like synddb_sequencer=debug)"
   type        = string
