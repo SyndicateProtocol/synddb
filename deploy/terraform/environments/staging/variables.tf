@@ -41,13 +41,13 @@ variable "gcs_bucket_name" {
 variable "sequencer_machine_type" {
   description = "Machine type for sequencer"
   type        = string
-  default     = "n2d-standard-4"
+  default     = "n2d-standard-2"
 }
 
 variable "validator_machine_type" {
   description = "Machine type for validator"
   type        = string
-  default     = "n2d-standard-4"
+  default     = "n2d-standard-2"
 }
 
 # Artifact Registry

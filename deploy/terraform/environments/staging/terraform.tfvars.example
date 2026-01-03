@@ -19,9 +19,9 @@ proof_service_image = "us-central1-docker.pkg.dev/your-project/synddb/proof-serv
 # Storage
 gcs_bucket_name = "your-project-synddb-staging"
 
-# Instance configuration (production-like sizing)
-sequencer_machine_type = "n2d-standard-4"
-validator_machine_type = "n2d-standard-4"
+# Instance configuration (smaller than prod to reduce costs)
+sequencer_machine_type = "n2d-standard-2"
+validator_machine_type = "n2d-standard-2"
 
 # Artifact Registry
 artifact_registry_location   = "us-central1"
