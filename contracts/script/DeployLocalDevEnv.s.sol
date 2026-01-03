@@ -72,25 +72,25 @@ contract DeployLocalDevEnv is Script {
         weth = new MockWETH();
         console.log("MockWETH deployed:", address(weth));
 
-        // 2. Deploy Bridge with admin and WETH
-        bridge = new Bridge(admin, address(weth));
-        console.log("Bridge deployed:", address(bridge));
-
-        // 3. Grant MESSAGE_INITIALIZER_ROLE to sequencer
-        bridge.grantRole(MESSAGE_INITIALIZER_ROLE, sequencer);
-        console.log("Granted MESSAGE_INITIALIZER_ROLE to sequencer");
-
-        // 4. Deploy PriceOracle with admin and bridge
-        oracle = new PriceOracle(admin, address(bridge));
-        console.log("PriceOracle deployed:", address(oracle));
-
-        // 5. Deploy MockAttestationVerifier (for TEE key registration without real proofs)
+        // 2. Deploy MockAttestationVerifier (for TEE key registration without real proofs)
         attestationVerifier = new MockAttestationVerifier();
         console.log("MockAttestationVerifier deployed:", address(attestationVerifier));
 
-        // 6. Deploy TeeKeyManager with mock verifier
+        // 3. Deploy TeeKeyManager with mock verifier
         keyManager = new TeeKeyManager(attestationVerifier);
         console.log("TeeKeyManager deployed:", address(keyManager));
+
+        // 4. Deploy Bridge with admin, WETH, and TeeKeyManager
+        bridge = new Bridge(admin, address(weth), address(keyManager));
+        console.log("Bridge deployed:", address(bridge));
+
+        // 5. Grant MESSAGE_INITIALIZER_ROLE to sequencer (for relayer pattern)
+        bridge.grantRole(MESSAGE_INITIALIZER_ROLE, sequencer);
+        console.log("Granted MESSAGE_INITIALIZER_ROLE to sequencer");
+
+        // 6. Deploy PriceOracle with admin and bridge
+        oracle = new PriceOracle(admin, address(bridge));
+        console.log("PriceOracle deployed:", address(oracle));
 
         vm.stopBroadcast();
 

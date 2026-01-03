@@ -5,6 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {Bridge} from "src/Bridge.sol";
 import {MessageOrderingModule} from "src/modules/MessageOrderingModule.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
+import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {WETH9} from "test/use-cases/mocks/WETH9.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
@@ -23,9 +25,12 @@ contract UseCase6_MessageOrdering is Test {
     WETH9 public weth;
     MessageOrderingModule public orderingModule;
     ValidatorSignatureThresholdModule public validatorModule;
+    TeeKeyManager public teeKeyManager;
+    MockAttestationVerifier public attestationVerifier;
 
     address public admin;
     address public sequencer;
+    uint256 public sequencerPrivateKey = 0xA11CE;
     address public user1;
     address public user2;
     address public receiver;
@@ -36,14 +41,23 @@ contract UseCase6_MessageOrdering is Test {
 
     function setUp() public {
         admin = address(this);
-        sequencer = makeAddr("sequencer");
+        sequencer = vm.addr(sequencerPrivateKey);
         user1 = makeAddr("user1");
         user2 = makeAddr("user2");
         receiver = makeAddr("receiver");
 
         // Deploy infrastructure
         weth = new WETH9();
-        bridge = new Bridge(admin, address(weth));
+
+        // Deploy attestation infrastructure
+        attestationVerifier = new MockAttestationVerifier();
+        teeKeyManager = new TeeKeyManager(attestationVerifier);
+
+        // Register sequencer as a valid TEE key
+        bytes memory publicValues = abi.encode(sequencer);
+        teeKeyManager.addKey(publicValues, "");
+
+        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
 
         // Setup validators
         setupValidators(3);
@@ -78,6 +92,21 @@ contract UseCase6_MessageOrdering is Test {
         bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageId);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(validatorPrivateKey, ethSignedMessageHash);
         return abi.encodePacked(r, s, v);
+    }
+
+    /// @notice Create a sequencer signature for a message
+    function createSequencerSignature(
+        bytes32 messageId,
+        address targetAddress,
+        bytes memory payload,
+        uint256 nativeTokenAmount
+    ) internal view returns (SequencerSignature memory) {
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount)
+        );
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
+        return SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
     }
 
     function submitValidatorSignatures(bytes32 messageId) internal {
