@@ -6,9 +6,8 @@
 
 use alloy::sol;
 
-/// Public values committed by the SP1 program for on-chain verification.
-///
-/// Must match the Solidity definition in the verifier contract.
+// Public values committed by the SP1 program for on-chain verification.
+// Must match the Solidity definition in the verifier contract.
 sol! {
     struct PublicValuesStruct {
         /// Hash of the JWKS key that signed this token (keccak256 of kid)

@@ -116,9 +116,14 @@ impl GcsFetcher {
         Self::from_config(config).await
     }
 
-    /// Get the bucket name
+    /// Get the bucket name for read/write operations
     fn bucket_name(&self) -> &str {
         &self.config.bucket
+    }
+
+    /// Get the bucket path for list operations (requires projects/_/buckets/ prefix)
+    fn bucket_path(&self) -> String {
+        format!("projects/_/buckets/{}", self.config.bucket)
     }
 
     /// Download data from GCS
@@ -215,7 +220,7 @@ impl StorageFetcher for GcsFetcher {
             let mut request = self
                 .control
                 .list_objects()
-                .set_parent(self.bucket_name())
+                .set_parent(&self.bucket_path())
                 .set_prefix(&prefix);
 
             if let Some(ref token) = page_token {
@@ -259,7 +264,7 @@ impl StorageFetcher for GcsFetcher {
         let response = self
             .control
             .list_objects()
-            .set_parent(self.bucket_name())
+            .set_parent(&self.bucket_path())
             .set_prefix(&prefix)
             .send()
             .await

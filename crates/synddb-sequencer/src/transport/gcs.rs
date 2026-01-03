@@ -101,9 +101,14 @@ impl GcsTransport {
         )
     }
 
-    /// Get the bucket name in the format expected by the SDK
+    /// Get the bucket name for read/write operations
     fn bucket_name(&self) -> &str {
         &self.config.bucket
+    }
+
+    /// Get the bucket path for list operations (requires projects/_/buckets/ prefix)
+    fn bucket_path(&self) -> String {
+        format!("projects/_/buckets/{}", self.config.bucket)
     }
 
     /// Upload data to GCS
@@ -191,7 +196,7 @@ impl GcsTransport {
             let mut request = self
                 .control
                 .list_objects()
-                .set_parent(self.bucket_name())
+                .set_parent(&self.bucket_path())
                 .set_prefix(&prefix);
 
             if let Some(ref token) = page_token {
