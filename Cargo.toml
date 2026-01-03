@@ -6,6 +6,7 @@ members = [
   "crates/synddb-bootstrap",
   "crates/synddb-relayer",
   "crates/synddb-sequencer",
+  "crates/synddb-storage",
   "crates/synddb-validator",
   "crates/synddb-client",
   "crates/synddb-chain-monitor",
