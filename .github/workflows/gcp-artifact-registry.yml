@@ -527,6 +527,9 @@ jobs:
           tags: ${{ steps.tags.outputs.relayer_tags }}
           cache-from: type=gha,scope=relayer
           cache-to: type=gha,mode=max,scope=relayer
+          # SLSA provenance attestation - proves this image was built by this workflow
+          provenance: mode=max
+          sbom: true
 
       - name: Build and push proof-service
         if: steps.changes.outputs.proof-service == 'true'
@@ -539,6 +542,9 @@ jobs:
           tags: ${{ steps.tags.outputs.proof_service_tags }}
           cache-from: type=gha,scope=proof-service
           cache-to: type=gha,mode=max,scope=proof-service
+          # SLSA provenance attestation - proves this image was built by this workflow
+          provenance: mode=max
+          sbom: true
 
       - name: Summary
         if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
