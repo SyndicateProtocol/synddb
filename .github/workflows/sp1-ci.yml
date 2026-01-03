@@ -4,6 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - "crates/synddb-bootstrap/sp1/**"
       - "tests/confidential-space/sp1/**"
       - "tests/confidential-space/gcp-confidential-space/**"
       - ".github/workflows/sp1-ci.yml"
@@ -12,6 +13,7 @@ on:
     branches:
       - main
     paths:
+      - "crates/synddb-bootstrap/sp1/**"
       - "tests/confidential-space/sp1/**"
       - "tests/confidential-space/gcp-confidential-space/**"
 
@@ -44,6 +46,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
+            crates/synddb-bootstrap/sp1/program
             tests/confidential-space/sp1/script
             tests/confidential-space/gcp-confidential-space
 
@@ -64,7 +67,7 @@ jobs:
 
       - name: Build SP1 program
         run: |
-          cd tests/confidential-space/sp1/program
+          cd crates/synddb-bootstrap/sp1/program
           ~/.sp1/bin/cargo-prove prove build
 
       - name: Build SP1 script
