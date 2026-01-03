@@ -201,13 +201,121 @@ For test environments, consider automatic cleanup of old batches:
 | `STATE_DB_PATH` | No | Sync progress database (default: `:memory:`) |
 | `SYNC_INTERVAL` | No | Polling interval (default: `1s`) |
 
-## Service Re-Attestation
+## TEE Key Bootstrap
 
-Both sequencers and validators generate ephemeral signing keys at startup. When a service restarts:
+Both sequencers and validators generate ephemeral signing keys at startup. When a service restarts with `ENABLE_KEY_BOOTSTRAP=true`:
 
 1. New signing key is generated inside the TEE
 2. TEE attestation token is obtained from GCP Confidential Space
-3. SP1 zkVM generates a proof verifying the attestation
-4. Proof is submitted to the bridge contract, registering the new public key on-chain
+3. SP1 proof is generated via the GPU proof service
+4. Proof is submitted to `TeeKeyManager` contract, registering the new public key on-chain
 
 This is the intended model - keys are bound to TEE instances and verified via on-chain attestation proofs, not externally managed via secrets.
+
+### Bootstrap Prerequisites
+
+#### 1. Deploy Smart Contracts
+
+The contracts are in `contracts/src/attestation/`:
+
+```bash
+# Required environment variables
+export SP1_VERIFIER_ADDRESS=<deployed SP1 verifier address>
+export ATTESTATION_VERIFIER_VKEY=<from SP1 program compilation>
+export EXPECTED_IMAGE_DIGEST_HASH=$(cast keccak "sha256:<your-image-digest>")
+export EXPIRATION_TOLERANCE=3600  # 1 hour
+
+# Deploy AttestationVerifier and TeeKeyManager
+forge script script/DeployAttestationVerifier.s.sol \
+  --rpc-url $RPC_URL \
+  --broadcast \
+  --verify
+
+# Post-deployment: Add Google's trusted JWK hashes
+# Get current JWK kids from: https://confidentialcomputing.googleapis.com/.well-known/openid-configuration
+cast send $ATTESTATION_VERIFIER "addTrustedJwkHash(bytes32)" $(cast keccak "<jwk_kid>")
+```
+
+#### 2. Deploy Proof Service
+
+The GPU proof service generates SP1 proofs from attestation tokens:
+
+```bash
+cd services/proof-service
+
+# Build container
+docker build -t gcr.io/$PROJECT_ID/proof-service .
+
+# Push to registry
+docker push gcr.io/$PROJECT_ID/proof-service
+
+# Deploy to Cloud Run with GPU
+gcloud run services replace deploy/cloud-run.yaml --region=us-central1
+```
+
+See `services/proof-service/README.md` for detailed configuration.
+
+#### 3. Build TEE Services with Bootstrap
+
+```bash
+# Build with TEE feature enabled
+cargo build --release --features tee -p synddb-sequencer
+cargo build --release --features tee -p synddb-validator
+```
+
+### Bootstrap Configuration
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ENABLE_KEY_BOOTSTRAP` | Yes | Set to `true` to enable |
+| `TEE_KEY_MANAGER_ADDRESS` | Yes | Deployed TeeKeyManager contract |
+| `BOOTSTRAP_RPC_URL` | Yes | Ethereum RPC endpoint |
+| `BOOTSTRAP_CHAIN_ID` | Yes | Chain ID for transactions |
+| `PROOF_SERVICE_URL` | Yes | URL of GPU proof service |
+| `ATTESTATION_AUDIENCE` | Yes | Expected audience claim |
+| `PROOF_TIMEOUT` | No | Proof generation timeout (default: 10m) |
+| `BOOTSTRAP_TIMEOUT` | No | Total bootstrap timeout (default: 15m) |
+| `MIN_BOOTSTRAP_BALANCE` | No | Minimum gas balance in wei (default: 0.1 ETH) |
+
+### Bootstrap Flow
+
+```
+Service starts in TEE
+       │
+       ▼
+Generate ephemeral key
+       │
+       ▼
+Log TEE address ──────────► Operator funds address with ETH
+       │
+       ▼
+Wait for balance (polls every 5s)
+       │
+       ▼
+Fetch attestation token from /run/container_launcher/teeserver.sock
+       │
+       ▼
+Call proof service (2-10 min with GPU)
+       │
+       ▼
+Submit addKey(publicValues, proof) to TeeKeyManager
+       │
+       ▼
+Wait for tx confirmation
+       │
+       ▼
+Verify isKeyValid(address) == true
+       │
+       ▼
+Bootstrap complete, start main service
+```
+
+### Pre-funding TEE Keys
+
+Since TEE keys are ephemeral and pay their own gas:
+
+1. On first boot, service logs: `TEE address: 0x... - fund this address before bootstrap can complete`
+2. Operator sends ETH to this address (minimum 0.1 ETH by default)
+3. Bootstrap waits until balance is sufficient, then proceeds
+
+For testnet deployments, consider a faucet mechanism or pre-funding a pool of addresses.
