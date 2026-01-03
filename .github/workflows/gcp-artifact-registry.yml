@@ -1,4 +1,4 @@
-name: Artifact Registry
+name: GCP Artifact Registry
 
 # Build and publish Docker images to Artifact Registry.
 #
@@ -21,7 +21,7 @@ on:
       - "services/**"
       - "Cargo.toml"
       - "Cargo.lock"
-      - ".github/workflows/artifact-registry.yml"
+      - ".github/workflows/gcp-artifact-registry.yml"
 
   # Allow manual triggering for verification before releases
   workflow_dispatch:
