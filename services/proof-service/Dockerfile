@@ -4,7 +4,7 @@
 # Run:   docker run --gpus all -p 8080:8080 proof-service
 
 # Build stage
-FROM rust:1.83-bookworm AS builder
+FROM rust:1.92-bookworm AS builder
 
 # Install SP1 toolchain dependencies
 RUN apt-get update && apt-get install -y \
