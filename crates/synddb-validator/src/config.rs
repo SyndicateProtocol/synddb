@@ -35,7 +35,7 @@ pub mod local_defaults {
     pub const WETH: &str = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 
     /// `PriceOracle` address (deployed at nonce 5 from Anvil account 0)
-    pub const PRICE_ORACLE: &str = "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9";
+    pub const PRICE_ORACLE: &str = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707";
 }
 
 /// Available fetcher types for retrieving messages from the storage layer
