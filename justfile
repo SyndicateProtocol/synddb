@@ -888,3 +888,48 @@ update-digests:
     echo "  1. Review changes: git diff docker/reproducible/"
     echo "  2. Build and test: just repro-all"
     echo "  3. Commit: git add docker/reproducible/ && git commit -m 'chore: update base image digests'"
+
+# ============================================================================
+# Terraform (Infrastructure)
+# ============================================================================
+
+# Initialize Terraform for an environment
+[group('terraform')]
+tf-init env="dev":
+    cd deploy/terraform/environments/{{ env }} && terraform init
+
+# Plan Terraform changes for an environment
+[group('terraform')]
+tf-plan env="dev":
+    cd deploy/terraform/environments/{{ env }} && terraform plan
+
+# Apply Terraform changes for an environment
+[group('terraform')]
+tf-apply env="dev":
+    cd deploy/terraform/environments/{{ env }} && terraform apply
+
+# Destroy Terraform resources for an environment
+[confirm('This will DESTROY all resources in {{ env }}. Are you sure?')]
+[group('terraform')]
+tf-destroy env="dev":
+    cd deploy/terraform/environments/{{ env }} && terraform destroy
+
+# Show Terraform outputs for an environment
+[group('terraform')]
+tf-output env="dev":
+    cd deploy/terraform/environments/{{ env }} && terraform output
+
+# Format all Terraform files
+[group('terraform')]
+tf-fmt:
+    terraform fmt -recursive deploy/terraform/
+
+# Validate Terraform configuration
+[group('terraform')]
+tf-validate env="dev":
+    cd deploy/terraform/environments/{{ env }} && terraform validate
+
+# Initialize and plan Marketplace package
+[group('terraform')]
+tf-marketplace-plan:
+    cd deploy/terraform/marketplace && terraform init && terraform plan -var="goog_cm_deployment_name=test"
