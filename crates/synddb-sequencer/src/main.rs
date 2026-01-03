@@ -9,6 +9,9 @@ use std::{sync::Arc, time::Duration};
 use tokio::{net::TcpListener, signal, sync::watch};
 use tracing::{error, info, warn};
 
+#[cfg(feature = "tee")]
+use synddb_bootstrap::{BootstrapConfig, BootstrapStateMachine, ProverMode};
+
 use synddb_sequencer::{
     attestation::{AttestationConfig, AttestationVerifier},
     batcher::{Batcher, BatcherHandle},
@@ -50,16 +53,77 @@ async fn main() -> Result<()> {
 
     info!(bind_address = %config.bind_address, "Configuration loaded");
 
-    // Generate a fresh signing key inside the TEE
-    // The key is never logged or exposed outside the enclave
-    let key_manager = Arc::new(EvmKeyManager::generate());
+    // Generate signing key - either via bootstrap or directly
+    let key_manager: Arc<EvmKeyManager> = {
+        #[cfg(feature = "tee")]
+        if config.enable_key_bootstrap {
+            config
+                .validate_bootstrap_config()
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+            info!("Starting TEE key bootstrap...");
+
+            let bootstrap_config = BootstrapConfig {
+                enable_key_bootstrap: true,
+                tee_key_manager_address: config.tee_key_manager_address.clone(),
+                rpc_url: config.bootstrap_rpc_url.clone(),
+                chain_id: config.bootstrap_chain_id,
+                proof_service_url: config.proof_service_url.clone(),
+                attestation_audience: config.attestation_audience.clone(),
+                proof_timeout: config.proof_timeout,
+                bootstrap_timeout: config.bootstrap_timeout,
+                min_gas_balance: config.min_bootstrap_balance,
+                prover_mode: ProverMode::Service,
+                ..Default::default()
+            };
+
+            let mut bootstrap = BootstrapStateMachine::new();
+
+            // Run bootstrap with timeout - returns the registered key
+            match tokio::time::timeout(config.bootstrap_timeout, bootstrap.run(&bootstrap_config))
+                .await
+            {
+                Ok(Ok(key)) => {
+                    info!(
+                        address = %key.address(),
+                        "TEE key bootstrap completed successfully"
+                    );
+                    key
+                }
+                Ok(Err(e)) => {
+                    error!(error = %e, "TEE key bootstrap failed");
+                    return Err(anyhow::anyhow!("Bootstrap failed: {}", e));
+                }
+                Err(_) => {
+                    error!("TEE key bootstrap timed out");
+                    return Err(anyhow::anyhow!(
+                        "Bootstrap timed out after {:?}",
+                        config.bootstrap_timeout
+                    ));
+                }
+            }
+        } else {
+            // Generate key without bootstrap
+            Arc::new(EvmKeyManager::generate())
+        }
+
+        #[cfg(not(feature = "tee"))]
+        {
+            if config.enable_key_bootstrap {
+                return Err(anyhow::anyhow!(
+                    "TEE key bootstrap requires the 'tee' feature to be enabled"
+                ));
+            }
+            Arc::new(EvmKeyManager::generate())
+        }
+    };
 
     // Log only the public key and address (safe to expose)
     let pubkey_hex = format!("0x{}", hex::encode(key_manager.public_key()));
     info!(
         address = %key_manager.address(),
         public_key = %pubkey_hex,
-        "TEE signing key generated"
+        "TEE signing key ready"
     );
 
     // Initialize CBOR batcher based on publisher_type
