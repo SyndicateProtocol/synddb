@@ -4,7 +4,7 @@ use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use gcp_attestation::{extract_kid_from_jwt, JwkKey};
 use gcp_cs_attestation_sp1_program::PublicValuesStruct;
-use sp1_sdk::{include_elf, ProverClient, SP1ProofWithPublicValues, SP1Stdin};
+use sp1_sdk::{EnvProver, Prover, ProverClient, SP1ProofWithPublicValues, SP1Stdin, include_elf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -14,16 +14,16 @@ pub const GCP_CS_ATTESTATION_ELF: &[u8] = include_elf!("gcp-cs-attestation-sp1-p
 
 /// Wrapper around SP1 prover for attestation proofs
 pub struct AttestationProver {
-    client: ProverClient,
+    client: EnvProver,
 }
 
 impl AttestationProver {
     /// Create a new prover using environment configuration
     ///
     /// The SP1_PROVER environment variable controls which prover backend to use:
-    /// - Not set or "local": Use local CPU prover
+    /// - Not set or "cpu": Use local CPU prover
     /// - "cuda": Use local GPU prover (requires CUDA)
-    /// - "network": Use SP1 Network Prover (requires SP1_PRIVATE_KEY)
+    /// - "network": Use SP1 Network Prover (requires NETWORK_PRIVATE_KEY)
     pub fn new() -> Self {
         info!("Initializing SP1 prover from environment");
         Self {
@@ -58,11 +58,12 @@ impl AttestationProver {
         debug!("Setting up proving keys");
         let (pk, vk) = self.client.setup(GCP_CS_ATTESTATION_ELF);
 
-        // Generate proof
-        info!("Generating ZK proof (this may take several minutes)");
+        // Generate Groth16 proof for on-chain verification
+        info!("Generating Groth16 ZK proof (this may take several minutes)");
         let proof = self
             .client
             .prove(&pk, &stdin)
+            .groth16()
             .run()
             .context("Proof generation failed")?;
 
