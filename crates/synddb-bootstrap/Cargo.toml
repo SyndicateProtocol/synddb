@@ -10,21 +10,23 @@ description = "Key bootstrapping for SyndDB TEE services"
 [lints]
 workspace = true
 
+# humantime-serde is used via #[serde(with = "humantime_serde")] attribute
+# which cargo-machete doesn't detect
+[package.metadata.cargo-machete]
+ignored = ["humantime-serde"]
+
 [dependencies]
 # SyndDB crates
 synddb-shared = { path = "../synddb-shared" }
-gcp-attestation = { path = "../gcp-attestation" }
 
 # Async runtime
 tokio = { workspace = true }
-async-trait = { workspace = true }
 
 # HTTP client for proof service
 reqwest = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
-serde_json = { workspace = true }
 hex = { workspace = true }
 
 # Blockchain / Contract interaction
@@ -41,7 +43,6 @@ humantime-serde = { workspace = true }
 humantime = { workspace = true }
 
 # Error handling
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 
 # Logging
