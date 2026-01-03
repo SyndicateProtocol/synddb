@@ -201,12 +201,13 @@ For test environments, consider automatic cleanup of old batches:
 | `STATE_DB_PATH` | No | Sync progress database (default: `:memory:`) |
 | `SYNC_INTERVAL` | No | Polling interval (default: `1s`) |
 
-## Validator Re-Bootstrap
+## Service Re-Attestation
 
-When the sequencer restarts, it generates a new signing key. Validators must be re-bootstrapped:
+Both sequencers and validators generate ephemeral signing keys at startup. When a service restarts:
 
-1. Get new sequencer public key from `/status` endpoint
-2. Update validator `SEQUENCER_PUBKEY` environment variable
-3. Restart validator (optionally with fresh state)
+1. New signing key is generated inside the TEE
+2. TEE attestation token is obtained from GCP Confidential Space
+3. SP1 zkVM generates a proof verifying the attestation
+4. Proof is submitted to the bridge contract, registering the new public key on-chain
 
-This is the intended model - keys are bound to TEE instances, not externally managed.
+This is the intended model - keys are bound to TEE instances and verified via on-chain attestation proofs, not externally managed via secrets.

@@ -243,10 +243,10 @@ let mut validator = Validator::new(&config, fetcher.clone(), shutdown_rx.clone()
 ## Security Model
 
 ### Signing Key Management
-The sequencer generates ephemeral signing keys at startup. This is intentional for TEE isolation:
+Both sequencers and validators generate ephemeral signing keys at startup. This is intentional for TEE isolation:
 
 - **Do NOT** manage signing keys via GCP Secret Manager or environment variables
-- **Do NOT** persist keys between sequencer restarts
+- **Do NOT** persist keys between service restarts
 - Keys are generated fresh inside the TEE on each startup
 
-When the sequencer key changes, validators must be re-bootstrapped to learn the new public key. This is the intended deployment model - the key is bound to the TEE instance, not externally managed.
+When a service restarts with a new key, a new TEE attestation proof must be generated via the SP1 zkVM and submitted to the bridge contract. This registers the new public key on-chain, allowing the bridge to verify signatures from the new instance. This is the intended deployment model - keys are bound to TEE instances, not externally managed.
