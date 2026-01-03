@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use synddb_client::{AttestationClient, TokenType};
 use synddb_shared::keys::EvmKeyManager;
 use tracing::{debug, info, warn};
 
@@ -243,25 +244,29 @@ impl BootstrapStateMachine {
         &self,
         config: &BootstrapConfig,
     ) -> Result<String, BootstrapError> {
-        // For now, return a placeholder - actual implementation would use
-        // synddb_client::attestation::AttestationClient
-        // TODO: Integrate with actual attestation client
-
         let audience = config
             .attestation_audience
             .clone()
             .unwrap_or_else(|| format!("https://tee-key-manager.{}", config.chain_id.unwrap_or(1)));
 
-        warn!(
-            audience = %audience,
-            "Attestation fetching not yet implemented - using placeholder"
-        );
+        info!(audience = %audience, "Fetching attestation token from Confidential Space");
 
-        // In real implementation:
-        // let client = AttestationClient::new(audience)?;
-        // client.get_token().await
+        // Create attestation client - this validates we're running in a TEE
+        let client = AttestationClient::new(&audience, TokenType::Oidc).map_err(|e| {
+            BootstrapError::AttestationFetchFailed(format!(
+                "Failed to create attestation client (not running in Confidential Space?): {}",
+                e
+            ))
+        })?;
 
-        Ok("placeholder-jwt-token".into())
+        // Fetch the token
+        let token: String = client
+            .get_token()
+            .await
+            .map_err(|e: anyhow::Error| BootstrapError::AttestationFetchFailed(e.to_string()))?;
+
+        info!("Successfully fetched attestation token");
+        Ok(token)
     }
 
     /// Generate proof with retry

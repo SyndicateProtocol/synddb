@@ -18,6 +18,7 @@ ignored = ["humantime-serde"]
 [dependencies]
 # SyndDB crates
 synddb-shared = { path = "../synddb-shared" }
+synddb-client = { path = "../synddb-client" }
 
 # Async runtime
 tokio = { workspace = true }
@@ -44,6 +45,7 @@ humantime = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
+anyhow = { workspace = true }
 
 # Logging
 tracing = { workspace = true }

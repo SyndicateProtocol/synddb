@@ -12,7 +12,7 @@ pub struct BootstrapConfig {
     pub enable_key_bootstrap: bool,
 
     /// `TeeKeyManager` contract address
-    #[arg(long, env = "TEE_KEY_MANAGER_ADDRESS")]
+    #[arg(long, env = "TEE_KEY_MANAGER_CONTRACT_ADDRESS")]
     pub tee_key_manager_address: Option<String>,
 
     /// RPC endpoint for submitting transactions
@@ -86,7 +86,7 @@ impl BootstrapConfig {
 
         if self.tee_key_manager_address.is_none() {
             return Err(crate::BootstrapError::Config(
-                "TEE_KEY_MANAGER_ADDRESS is required when bootstrap is enabled".into(),
+                "TEE_KEY_MANAGER_CONTRACT_ADDRESS is required when bootstrap is enabled".into(),
             ));
         }
 

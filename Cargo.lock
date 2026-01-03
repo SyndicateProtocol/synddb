@@ -4956,12 +4956,14 @@ name = "synddb-bootstrap"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "anyhow",
  "clap",
  "hex",
  "humantime",
  "humantime-serde",
  "reqwest",
  "serde",
+ "synddb-client",
  "synddb-shared",
  "thiserror 2.0.17",
  "tokio",

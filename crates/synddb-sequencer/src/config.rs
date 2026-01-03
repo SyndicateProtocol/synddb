@@ -210,7 +210,7 @@ pub struct SequencerConfig {
     pub enable_key_bootstrap: bool,
 
     /// TeeKeyManager contract address for key registration
-    #[arg(long, env = "TEE_KEY_MANAGER_ADDRESS")]
+    #[arg(long, env = "TEE_KEY_MANAGER_CONTRACT_ADDRESS")]
     pub tee_key_manager_address: Option<String>,
 
     /// RPC URL for submitting bootstrap transactions
@@ -259,7 +259,8 @@ impl SequencerConfig {
 
         if self.tee_key_manager_address.is_none() {
             return Err(
-                "TEE_KEY_MANAGER_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true".into(),
+                "TEE_KEY_MANAGER_CONTRACT_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true"
+                    .into(),
             );
         }
         if self.bootstrap_rpc_url.is_none() {

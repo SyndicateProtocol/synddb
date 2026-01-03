@@ -96,7 +96,7 @@ The validator can optionally sign withdrawal attestations for the bridge contrac
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `BRIDGE_SIGNER` | No | `false` | Enable bridge signer mode |
-| `BRIDGE_CONTRACT` | Conditional | - | Bridge contract address |
+| `BRIDGE_CONTRACT_ADDRESS` | Conditional | - | Bridge contract address |
 | `BRIDGE_CHAIN_ID` | Conditional | - | Chain ID for the bridge contract |
 | `BRIDGE_SIGNING_KEY` | Conditional | - | Hex-encoded private key for signing |
 | `BRIDGE_SIGNATURE_ENDPOINT` | No | `0.0.0.0:8081` | Endpoint for relayers to fetch signatures |

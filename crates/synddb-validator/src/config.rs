@@ -180,7 +180,7 @@ pub struct ValidatorConfig {
     pub bridge_signer: bool,
 
     /// Bridge contract address (required if --bridge-signer)
-    #[arg(long, env = "BRIDGE_CONTRACT")]
+    #[arg(long, env = "BRIDGE_CONTRACT_ADDRESS")]
     pub bridge_contract: Option<String>,
 
     /// Chain ID for the bridge contract (required if --bridge-signer)
@@ -234,7 +234,7 @@ pub struct ValidatorConfig {
     pub enable_key_bootstrap: bool,
 
     /// TeeKeyManager contract address for key registration
-    #[arg(long, env = "TEE_KEY_MANAGER_ADDRESS")]
+    #[arg(long, env = "TEE_KEY_MANAGER_CONTRACT_ADDRESS")]
     pub tee_key_manager_address: Option<String>,
 
     /// RPC URL for submitting bootstrap transactions
@@ -283,7 +283,8 @@ impl ValidatorConfig {
 
         if self.tee_key_manager_address.is_none() {
             return Err(
-                "TEE_KEY_MANAGER_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true".into(),
+                "TEE_KEY_MANAGER_CONTRACT_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true"
+                    .into(),
             );
         }
         if self.bootstrap_rpc_url.is_none() {
@@ -477,7 +478,7 @@ mod tests {
     /// Clear all bridge-related env vars that might be set by .env.defaults
     fn clear_bridge_env_vars() {
         std::env::remove_var("BRIDGE_SIGNER");
-        std::env::remove_var("BRIDGE_CONTRACT");
+        std::env::remove_var("BRIDGE_CONTRACT_ADDRESS");
         std::env::remove_var("BRIDGE_CHAIN_ID");
         std::env::remove_var("BRIDGE_SIGNATURE_ENDPOINT");
     }

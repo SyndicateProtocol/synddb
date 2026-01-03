@@ -40,7 +40,9 @@ impl ContractSubmitter {
         let key_manager_address: Address = config
             .tee_key_manager_address
             .as_ref()
-            .ok_or_else(|| BootstrapError::Config("TEE_KEY_MANAGER_ADDRESS is required".into()))?
+            .ok_or_else(|| {
+                BootstrapError::Config("TEE_KEY_MANAGER_CONTRACT_ADDRESS is required".into())
+            })?
             .parse()
             .map_err(|e| BootstrapError::Config(format!("Invalid contract address: {e}")))?;
 
