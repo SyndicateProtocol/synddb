@@ -50,18 +50,6 @@ variable "environment_variables" {
   default     = {}
 }
 
-variable "use_debug_image" {
-  description = "Use debug image with SSH access (for development)"
-  type        = bool
-  default     = false
-}
-
-variable "use_spot_instance" {
-  description = "Use spot/preemptible instance (cheaper but may be preempted)"
-  type        = bool
-  default     = false
-}
-
 variable "boot_disk_size_gb" {
   description = "Size of the boot disk in GB"
   type        = number
@@ -86,7 +74,7 @@ variable "restart_policy" {
 }
 
 variable "enable_external_ip" {
-  description = "Assign external IP (required for debug SSH, optional otherwise)"
+  description = "Assign external IP to the instance"
   type        = bool
   default     = false
 }

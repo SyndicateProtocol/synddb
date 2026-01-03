@@ -20,9 +20,6 @@ locals {
 
   # Combine base and environment metadata
   all_metadata = merge(local.base_metadata, local.env_metadata)
-
-  # Confidential Space image family
-  cs_image_family = var.use_debug_image ? "confidential-space-debug" : "confidential-space"
 }
 
 resource "google_compute_instance" "confidential_vm" {
@@ -47,20 +44,14 @@ resource "google_compute_instance" "confidential_vm" {
   # Scheduling configuration
   scheduling {
     on_host_maintenance = "TERMINATE"
-    provisioning_model  = var.use_spot_instance ? "SPOT" : "STANDARD"
-    automatic_restart   = var.use_spot_instance ? false : true
-
-    # Spot instance termination action
-    dynamic "instance_termination_action" {
-      for_each = var.use_spot_instance ? [1] : []
-      content {}
-    }
+    provisioning_model  = "STANDARD"
+    automatic_restart   = true
   }
 
-  # Boot disk with Confidential Space image
+  # Boot disk with Confidential Space image (production only - no debug/SSH access)
   boot_disk {
     initialize_params {
-      image = "projects/confidential-space-images/global/images/family/${local.cs_image_family}"
+      image = "projects/confidential-space-images/global/images/family/confidential-space"
       size  = var.boot_disk_size_gb
       type  = var.boot_disk_type
     }
@@ -71,9 +62,9 @@ resource "google_compute_instance" "confidential_vm" {
     network    = var.network_self_link
     subnetwork = var.subnet_self_link
 
-    # External IP (for debug SSH or if explicitly requested)
+    # External IP if explicitly requested
     dynamic "access_config" {
-      for_each = var.use_debug_image || var.enable_external_ip ? [1] : []
+      for_each = var.enable_external_ip ? [1] : []
       content {
         # Ephemeral IP
       }

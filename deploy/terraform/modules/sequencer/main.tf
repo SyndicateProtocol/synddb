@@ -49,8 +49,6 @@ module "confidential_vm" {
   service_account_email = var.service_account_email
   container_image       = var.container_image
   environment_variables = local.env_vars
-  use_debug_image       = var.use_debug_image
-  use_spot_instance     = var.use_spot_instance
   labels                = var.labels
   tags                  = ["${var.name_prefix}-sequencer"]
 }

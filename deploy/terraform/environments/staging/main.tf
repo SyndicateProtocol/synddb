@@ -115,8 +115,6 @@ module "sequencer" {
   gcs_bucket            = module.storage.bucket_name
   gcs_prefix            = var.gcs_prefix
   machine_type          = var.sequencer_machine_type
-  use_debug_image       = false  # Production-like: no debug
-  use_spot_instance     = false  # Production-like: stable instances
   batch_max_messages    = var.batch_max_messages
   batch_flush_interval  = var.batch_flush_interval
   enable_key_bootstrap  = var.enable_key_bootstrap
@@ -145,8 +143,6 @@ module "validator" {
   gcs_prefix            = var.gcs_prefix
   sequencer_url         = "http://${module.sequencer.internal_ip}:8433"
   machine_type          = var.validator_machine_type
-  use_debug_image       = false
-  use_spot_instance     = false
   enable_bridge_signer  = var.enable_bridge_signer
   bridge_contract_address = var.bridge_contract_address
   bridge_chain_id       = var.bridge_chain_id

@@ -83,18 +83,6 @@ variable "machine_type" {
   default     = "n2d-standard-2"
 }
 
-variable "use_debug_image" {
-  description = "Use debug image with SSH access"
-  type        = bool
-  default     = false
-}
-
-variable "use_spot_instance" {
-  description = "Use spot instance"
-  type        = bool
-  default     = false
-}
-
 # Sync Configuration
 variable "sync_interval" {
   description = "Sync poll interval"
