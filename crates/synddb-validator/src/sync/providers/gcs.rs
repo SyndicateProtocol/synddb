@@ -63,15 +63,23 @@ impl GcsFetcher {
     pub async fn from_config(config: GcsConfig) -> Result<Self> {
         let (storage, control) = if let Some(ref emulator_host) = config.emulator_host {
             info!(emulator_host = %emulator_host, "Using GCS emulator");
-            // Set the STORAGE_EMULATOR_HOST environment variable for the SDK
-            std::env::set_var("STORAGE_EMULATOR_HOST", emulator_host);
+
+            // For emulator mode, we need:
+            // 1. Custom endpoint pointing to the emulator
+            // 2. Anonymous credentials (no authentication)
+            use google_cloud_auth::credentials::anonymous;
+            let anonymous_creds = anonymous::Builder::default().build();
 
             let storage = Storage::builder()
+                .with_endpoint(emulator_host)
+                .with_credentials(anonymous_creds.clone())
                 .build()
                 .await
                 .context("Failed to create Storage client for emulator")?;
 
             let control = StorageControl::builder()
+                .with_endpoint(emulator_host)
+                .with_credentials(anonymous_creds)
                 .build()
                 .await
                 .context("Failed to create StorageControl client for emulator")?;

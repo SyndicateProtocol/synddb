@@ -54,17 +54,30 @@ impl GcsTransport {
     pub async fn new(config: GcsTransportConfig) -> Result<Self, TransportError> {
         let (storage, control) = if let Some(ref emulator_host) = config.emulator_host {
             info!(emulator_host = %emulator_host, "Using GCS emulator for transport");
-            // For emulator, set the STORAGE_EMULATOR_HOST environment variable
-            // The official SDK reads this automatically
-            std::env::set_var("STORAGE_EMULATOR_HOST", emulator_host);
 
-            let storage = Storage::builder().build().await.map_err(|e| {
-                TransportError::Config(format!("Failed to create Storage client: {e}"))
-            })?;
+            // For emulator mode, we need:
+            // 1. Custom endpoint pointing to the emulator
+            // 2. Anonymous credentials (no authentication)
+            use google_cloud_auth::credentials::anonymous;
+            let anonymous_creds = anonymous::Builder::default().build();
 
-            let control = StorageControl::builder().build().await.map_err(|e| {
-                TransportError::Config(format!("Failed to create StorageControl client: {e}"))
-            })?;
+            let storage = Storage::builder()
+                .with_endpoint(emulator_host)
+                .with_credentials(anonymous_creds.clone())
+                .build()
+                .await
+                .map_err(|e| {
+                    TransportError::Config(format!("Failed to create Storage client: {e}"))
+                })?;
+
+            let control = StorageControl::builder()
+                .with_endpoint(emulator_host)
+                .with_credentials(anonymous_creds)
+                .build()
+                .await
+                .map_err(|e| {
+                    TransportError::Config(format!("Failed to create StorageControl client: {e}"))
+                })?;
 
             (storage, control)
         } else {

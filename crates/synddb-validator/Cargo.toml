@@ -65,6 +65,7 @@ reqwest = { workspace = true }
 
 # Google Cloud Storage
 google-cloud-storage = { workspace = true }
+google-cloud-auth = { workspace = true }
 
 [features]
 default = []

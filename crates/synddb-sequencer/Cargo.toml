@@ -67,6 +67,7 @@ rusqlite = { workspace = true }
 
 # Google Cloud Storage (always compiled for runtime transport selection)
 google-cloud-storage = { workspace = true }
+google-cloud-auth = { workspace = true }
 bytes = "1"
 
 [features]
