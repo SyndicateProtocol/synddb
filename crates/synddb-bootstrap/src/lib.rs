@@ -24,13 +24,17 @@
 //! ```
 
 mod config;
+mod drain;
 mod error;
+mod funding;
 mod proof_client;
 mod state_machine;
 mod submitter;
 
 pub use config::{BootstrapConfig, ProverMode};
+pub use drain::drain_to_treasury;
 pub use error::BootstrapError;
+pub use funding::{FundingClient, FundingRequest, FundingResponse};
 pub use proof_client::{ProofClient, ProofResponse};
 pub use state_machine::{BootstrapState, BootstrapStateMachine};
 pub use submitter::ContractSubmitter;

@@ -56,6 +56,14 @@ pub struct BootstrapConfig {
     /// Minimum balance required for gas (in wei)
     #[arg(long, env = "MIN_GAS_BALANCE", default_value = "10000000000000000")]
     pub min_gas_balance: u128,
+
+    /// Gas treasury contract address (for automated funding)
+    #[arg(long, env = "GAS_TREASURY_CONTRACT_ADDRESS")]
+    pub gas_treasury_address: Option<String>,
+
+    /// Funding relayer URL (for signature-based funding requests)
+    #[arg(long, env = "FUNDING_RELAYER_URL")]
+    pub funding_relayer_url: Option<String>,
 }
 
 impl Default for BootstrapConfig {
@@ -73,6 +81,8 @@ impl Default for BootstrapConfig {
             proof_max_retries: 3,
             tx_max_retries: 5,
             min_gas_balance: 10_000_000_000_000_000, // 0.01 ETH
+            gas_treasury_address: None,
+            funding_relayer_url: None,
         }
     }
 }
