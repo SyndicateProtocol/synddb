@@ -239,3 +239,14 @@ let mut validator = Validator::new(&config, fetcher.clone(), shutdown_rx.clone()
 ### Adding chain monitor handler (synddb-client)
 1. Implement `MessageHandler` trait
 2. Register with `ChainMonitor::add_handler()`
+
+## Security Model
+
+### Signing Key Management
+The sequencer generates ephemeral signing keys at startup. This is intentional for TEE isolation:
+
+- **Do NOT** manage signing keys via GCP Secret Manager or environment variables
+- **Do NOT** persist keys between sequencer restarts
+- Keys are generated fresh inside the TEE on each startup
+
+When the sequencer key changes, validators must be re-bootstrapped to learn the new public key. This is the intended deployment model - the key is bound to the TEE instance, not externally managed.
