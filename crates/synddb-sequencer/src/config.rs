@@ -204,12 +204,12 @@ pub struct SequencerConfig {
     /// 1. Generate an ephemeral signing key
     /// 2. Fetch a TEE attestation token
     /// 3. Generate an SP1 proof via the proof service
-    /// 4. Submit the proof to the TeeKeyManager contract
+    /// 4. Submit the proof to the `TeeKeyManager` contract
     /// 5. Wait for on-chain confirmation before accepting requests
     #[arg(long, env = "ENABLE_KEY_BOOTSTRAP", default_value = "false")]
     pub enable_key_bootstrap: bool,
 
-    /// TeeKeyManager contract address for key registration
+    /// `TeeKeyManager` contract address for key registration
     #[arg(long, env = "TEE_KEY_MANAGER_CONTRACT_ADDRESS")]
     pub tee_key_manager_address: Option<String>,
 
