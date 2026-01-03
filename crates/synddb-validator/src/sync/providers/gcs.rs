@@ -34,7 +34,7 @@ use synddb_shared::{
         message::{SignedBatch, SignedMessage},
     },
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Google Cloud Storage fetcher
 pub struct GcsFetcher {
@@ -201,7 +201,7 @@ impl StorageFetcher for GcsFetcher {
         if let Some(seq) = max_seq {
             debug!(sequence = seq, "Found latest sequence in GCS");
         } else {
-            warn!("No batches found in GCS");
+            debug!("No batches found in GCS");
         }
 
         Ok(max_seq)

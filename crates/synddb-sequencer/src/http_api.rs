@@ -136,16 +136,10 @@ impl<B> MakeSpan<B> for RequestIdMakeSpan {
 
 /// Create the HTTP router with all endpoints
 pub fn create_router(state: AppState, metrics_handle: PrometheusHandle) -> Router {
-    info!("Endpoints:");
-    info!("  POST /changesets       - Submit changeset batch");
-    info!("  POST /withdrawals      - Submit withdrawal request");
-    info!("  POST /snapshots        - Submit database snapshot");
-    info!("  GET  /health           - Health check (liveness)");
-    info!("  GET  /ready            - Readiness check");
-    info!("  GET  /status           - Sequencer status");
-    info!("  GET  /batch/stats      - CBOR batch statistics");
-    info!("  POST /batch/flush      - Force flush pending batch");
-    info!("  GET  /metrics          - Prometheus metrics");
+    info!(
+        endpoints = "/changesets, /withdrawals, /snapshots, /health, /ready, /status, /batch/stats, /batch/flush, /metrics",
+        "HTTP router initialized"
+    );
 
     // Create HTTP metrics layer (uses existing global recorder from init_metrics)
     let prometheus_layer = PrometheusMetricLayer::new();
