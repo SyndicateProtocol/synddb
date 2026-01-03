@@ -74,6 +74,8 @@ Avoid `git add -A`, `git add .`, or `git add --all`. These commands stage all mo
 git add path/to/file1.rs path/to/file2.rs
 ```
 
+Similarly, avoid `git restore .` or `git checkout .` to discard changes. Other files in the working directory may contain work from parallel sessions that should be preserved. Only restore specific files you intend to discard.
+
 ### Documentation (SPEC and PLAN files)
 The `SPEC.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
 - After making major implementation changes, update the corresponding SPEC and PLAN files to reflect the new state
