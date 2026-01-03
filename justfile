@@ -895,28 +895,28 @@ update-digests:
 
 # Initialize Terraform for an environment
 [group('terraform')]
-tf-init env="dev":
+tf-init env="staging":
     cd deploy/terraform/environments/{{ env }} && terraform init
 
 # Plan Terraform changes for an environment
 [group('terraform')]
-tf-plan env="dev":
+tf-plan env="staging":
     cd deploy/terraform/environments/{{ env }} && terraform plan
 
 # Apply Terraform changes for an environment
 [group('terraform')]
-tf-apply env="dev":
+tf-apply env="staging":
     cd deploy/terraform/environments/{{ env }} && terraform apply
 
 # Destroy Terraform resources for an environment
 [confirm('This will DESTROY all resources in {{ env }}. Are you sure?')]
 [group('terraform')]
-tf-destroy env="dev":
+tf-destroy env="staging":
     cd deploy/terraform/environments/{{ env }} && terraform destroy
 
 # Show Terraform outputs for an environment
 [group('terraform')]
-tf-output env="dev":
+tf-output env="staging":
     cd deploy/terraform/environments/{{ env }} && terraform output
 
 # Format all Terraform files
@@ -926,7 +926,7 @@ tf-fmt:
 
 # Validate Terraform configuration
 [group('terraform')]
-tf-validate env="dev":
+tf-validate env="staging":
     cd deploy/terraform/environments/{{ env }} && terraform validate
 
 # Initialize and plan Marketplace package

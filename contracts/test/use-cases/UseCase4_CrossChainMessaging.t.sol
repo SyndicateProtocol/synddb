@@ -73,7 +73,8 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             crossChainData
         );
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig =
+            createSequencerSignature(crossChainMessageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(crossChainMessageId, address(destinationChain), payload, sig, 0);
@@ -98,7 +99,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, structuredData
         );
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
@@ -134,7 +135,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             crossChainData
         );
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
@@ -158,8 +159,6 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             recipients[i] = makeAddr(string(abi.encodePacked("recipient", i)));
         }
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
-
         for (uint256 i = 0; i < messageCount; i++) {
             bytes32 messageId = keccak256(abi.encodePacked("batch-cc", i));
 
@@ -173,6 +172,8 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
                 amountPerMessage,
                 crossChainData
             );
+
+            SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
 
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
@@ -209,7 +210,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, metadata
         );
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
@@ -233,7 +234,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, crossChainData
         );
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
@@ -256,7 +257,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, emptyData
         );
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
@@ -279,7 +280,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, largeData
         );
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
@@ -299,50 +300,46 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         vm.prank(user);
         token.transfer(address(bridge), totalAmount);
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
-
+        // First mint message
         bytes32 mintMessageId = keccak256("complete-mint");
         bytes memory mintData = abi.encode("INITIAL_MINT", recipient, totalAmount);
-        vm.prank(sequencer);
-        bridge.initializeMessage(
+        bytes memory mintPayload = abi.encodeWithSelector(
+            destinationChain.receiveMintMessage.selector,
             mintMessageId,
-            address(destinationChain),
-            abi.encodeWithSelector(
-                destinationChain.receiveMintMessage.selector,
-                mintMessageId,
-                address(token),
-                recipient,
-                totalAmount,
-                mintData
-            ),
-            sig,
-            0
+            address(token),
+            recipient,
+            totalAmount,
+            mintData
         );
+        SequencerSignature memory mintSig =
+            createSequencerSignature(mintMessageId, address(destinationChain), mintPayload, 0);
+
+        vm.prank(sequencer);
+        bridge.initializeMessage(mintMessageId, address(destinationChain), mintPayload, mintSig, 0);
         submitValidatorSignatures(bridge, mintMessageId);
         bridge.handleMessage(mintMessageId);
 
         assertEq(token.balanceOf(recipient), totalAmount);
 
+        // Return mint message
         address returnRecipient = makeAddr("returnRecipient");
         uint256 returnAmount = 300e18;
 
         bytes32 returnMessageId = keccak256("return-mint");
         bytes memory returnData = abi.encode("RETURN_BRIDGE", returnRecipient, returnAmount);
-        vm.prank(sequencer);
-        bridge.initializeMessage(
+        bytes memory returnPayload = abi.encodeWithSelector(
+            destinationChain.receiveMintMessage.selector,
             returnMessageId,
-            address(destinationChain),
-            abi.encodeWithSelector(
-                destinationChain.receiveMintMessage.selector,
-                returnMessageId,
-                address(token),
-                returnRecipient,
-                returnAmount,
-                returnData
-            ),
-            sig,
-            0
+            address(token),
+            returnRecipient,
+            returnAmount,
+            returnData
         );
+        SequencerSignature memory returnSig =
+            createSequencerSignature(returnMessageId, address(destinationChain), returnPayload, 0);
+
+        vm.prank(sequencer);
+        bridge.initializeMessage(returnMessageId, address(destinationChain), returnPayload, returnSig, 0);
         submitValidatorSignatures(bridge, returnMessageId);
         bridge.handleMessage(returnMessageId);
 
@@ -370,7 +367,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             crossChainData
         );
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
@@ -397,7 +394,7 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
             crossChainData
         );
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);

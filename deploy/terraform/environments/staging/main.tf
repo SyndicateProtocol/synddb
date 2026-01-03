@@ -15,7 +15,7 @@ terraform {
   # Uncomment to use remote state
   # backend "gcs" {
   #   bucket = "your-terraform-state-bucket"
-  #   prefix = "synddb/dev"
+  #   prefix = "synddb/staging"
   # }
 }
 
@@ -49,25 +49,23 @@ resource "google_project_service" "apis" {
 module "networking" {
   source = "../../modules/networking"
 
-  project_id         = var.project_id
-  region             = var.region
-  name_prefix        = "synddb-dev"
-  allowed_ssh_ranges = var.allowed_ssh_ranges
-  labels             = var.labels
+  project_id  = var.project_id
+  region      = var.region
+  name_prefix = "synddb-staging"
+  labels      = var.labels
 
   depends_on = [google_project_service.apis]
 }
 
-# Storage
+# Storage - force_destroy enabled for staging teardown
 module "storage" {
   source = "../../modules/storage"
 
-  project_id                = var.project_id
-  bucket_name               = var.gcs_bucket_name
-  location                  = var.region
-  lifecycle_delete_age_days = var.lifecycle_delete_age_days
-  force_destroy             = true  # Allow bucket deletion in dev
-  labels                    = var.labels
+  project_id    = var.project_id
+  bucket_name   = var.gcs_bucket_name
+  location      = var.region
+  force_destroy = true  # Allow bucket deletion in staging
+  labels        = var.labels
 
   depends_on = [google_project_service.apis]
 }
@@ -77,7 +75,7 @@ module "iam" {
   source = "../../modules/iam"
 
   project_id                   = var.project_id
-  name_prefix                  = "synddb-dev"
+  name_prefix                  = "synddb-staging"
   gcs_bucket_name              = module.storage.bucket_name
   artifact_registry_location   = var.artifact_registry_location
   artifact_registry_repository = var.artifact_registry_repository
@@ -85,13 +83,31 @@ module "iam" {
   depends_on = [module.storage]
 }
 
-# Sequencer
+# Proof Service (required for TEE bootstrap)
+module "proof_service" {
+  source = "../../modules/proof-service"
+
+  project_id            = var.project_id
+  region                = var.region
+  service_name          = "synddb-staging-proof"
+  container_image       = var.proof_service_image
+  service_account_email = module.iam.proof_service_account_email
+  ingress               = "internal"
+  allow_unauthenticated = false
+  min_instances         = 0  # Scale to zero when idle
+  max_instances         = 1
+  labels                = var.labels
+
+  depends_on = [module.iam]
+}
+
+# Sequencer - production-like configuration
 module "sequencer" {
   source = "../../modules/sequencer"
 
   project_id            = var.project_id
   zone                  = var.zone
-  name_prefix           = "synddb-dev"
+  name_prefix           = "synddb-staging"
   network_self_link     = module.networking.network_self_link
   subnet_self_link      = module.networking.subnet_self_link
   service_account_email = module.iam.sequencer_service_account_email
@@ -99,26 +115,28 @@ module "sequencer" {
   gcs_bucket            = module.storage.bucket_name
   gcs_prefix            = var.gcs_prefix
   machine_type          = var.sequencer_machine_type
-  use_debug_image       = var.use_debug_images
-  use_spot_instance     = var.use_spot_instances
+  use_debug_image       = false  # Production-like: no debug
+  use_spot_instance     = false  # Production-like: stable instances
+  batch_max_messages    = var.batch_max_messages
+  batch_flush_interval  = var.batch_flush_interval
   enable_key_bootstrap  = var.enable_key_bootstrap
   tee_key_manager_address = var.tee_key_manager_address
   bootstrap_rpc_url     = var.bootstrap_rpc_url
   bootstrap_chain_id    = var.bootstrap_chain_id
-  proof_service_url     = var.deploy_proof_service ? module.proof_service[0].service_url : ""
+  proof_service_url     = module.proof_service.service_url
   attestation_audience  = var.attestation_audience
   labels                = var.labels
 
-  depends_on = [module.iam, module.networking]
+  depends_on = [module.iam, module.networking, module.proof_service]
 }
 
-# Validator
+# Validator - production-like configuration
 module "validator" {
   source = "../../modules/validator"
 
   project_id            = var.project_id
   zone                  = var.zone
-  name_prefix           = "synddb-dev"
+  name_prefix           = "synddb-staging"
   network_self_link     = module.networking.network_self_link
   subnet_self_link      = module.networking.subnet_self_link
   service_account_email = module.iam.validator_service_account_email
@@ -127,32 +145,18 @@ module "validator" {
   gcs_prefix            = var.gcs_prefix
   sequencer_url         = "http://${module.sequencer.internal_ip}:8433"
   machine_type          = var.validator_machine_type
-  use_debug_image       = var.use_debug_images
-  use_spot_instance     = var.use_spot_instances
+  use_debug_image       = false
+  use_spot_instance     = false
+  enable_bridge_signer  = var.enable_bridge_signer
+  bridge_contract_address = var.bridge_contract_address
+  bridge_chain_id       = var.bridge_chain_id
   enable_key_bootstrap  = var.enable_key_bootstrap
   tee_key_manager_address = var.tee_key_manager_address
   bootstrap_rpc_url     = var.bootstrap_rpc_url
   bootstrap_chain_id    = var.bootstrap_chain_id
-  proof_service_url     = var.deploy_proof_service ? module.proof_service[0].service_url : ""
+  proof_service_url     = module.proof_service.service_url
   attestation_audience  = var.attestation_audience
   labels                = var.labels
 
-  depends_on = [module.iam, module.networking, module.sequencer]
-}
-
-# Proof Service (optional)
-module "proof_service" {
-  count  = var.deploy_proof_service ? 1 : 0
-  source = "../../modules/proof-service"
-
-  project_id            = var.project_id
-  region                = var.region
-  service_name          = "synddb-dev-proof"
-  container_image       = var.proof_service_image
-  service_account_email = module.iam.proof_service_account_email
-  ingress               = "internal"
-  allow_unauthenticated = false
-  labels                = var.labels
-
-  depends_on = [module.iam]
+  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service]
 }

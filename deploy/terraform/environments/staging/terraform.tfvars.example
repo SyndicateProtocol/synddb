@@ -1,0 +1,52 @@
+# SyndDB Staging Environment Configuration
+# Copy this file to terraform.tfvars and customize for your project
+#
+# Staging is production-representative but can be wiped/rebuilt as needed.
+# All resources have force_destroy enabled for easy teardown.
+
+# Required: GCP Project
+project_id = "your-gcp-project-id"
+
+# Region and zone
+region = "us-central1"
+zone   = "us-central1-a"
+
+# Container images (use same versions as prod for testing)
+sequencer_image     = "us-central1-docker.pkg.dev/your-project/synddb/sequencer:v1.0.0"
+validator_image     = "us-central1-docker.pkg.dev/your-project/synddb/validator:v1.0.0"
+proof_service_image = "us-central1-docker.pkg.dev/your-project/synddb/proof-service:v1.0.0"
+
+# Storage
+gcs_bucket_name = "your-project-synddb-staging"
+gcs_prefix      = "sequencer"
+
+# Instance configuration (production-like sizing)
+sequencer_machine_type = "n2d-standard-4"
+validator_machine_type = "n2d-standard-4"
+
+# Artifact Registry
+artifact_registry_location   = "us-central1"
+artifact_registry_repository = "synddb"
+
+# TEE Bootstrap (enabled - use testnet for staging)
+enable_key_bootstrap    = true
+tee_key_manager_address = "0x..."  # Testnet TeeKeyManager contract
+bootstrap_rpc_url       = "https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY"
+bootstrap_chain_id      = 11155111  # Sepolia
+attestation_audience    = "https://synddb-staging.your-domain.com"
+
+# Bridge signer (optional)
+enable_bridge_signer    = false
+# bridge_contract_address = "0x..."
+# bridge_chain_id         = 11155111
+
+# Batching (production-like settings)
+batch_max_messages   = 100
+batch_flush_interval = "2s"
+
+# Labels
+labels = {
+  environment = "staging"
+  managed-by  = "terraform"
+  project     = "synddb"
+}

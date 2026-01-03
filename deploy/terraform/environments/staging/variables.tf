@@ -29,7 +29,6 @@ variable "validator_image" {
 variable "proof_service_image" {
   description = "Proof service container image URI"
   type        = string
-  default     = ""
 }
 
 # Storage
@@ -48,90 +47,83 @@ variable "gcs_prefix" {
 variable "sequencer_machine_type" {
   description = "Machine type for sequencer"
   type        = string
-  default     = "n2d-standard-2"
+  default     = "n2d-standard-4"
 }
 
 variable "validator_machine_type" {
   description = "Machine type for validator"
   type        = string
-  default     = "n2d-standard-2"
+  default     = "n2d-standard-4"
 }
 
-variable "use_spot_instances" {
-  description = "Use spot instances for cost savings"
-  type        = bool
-  default     = true
-}
-
-variable "use_debug_images" {
-  description = "Use debug images with SSH access"
-  type        = bool
-  default     = true
-}
-
-# Lifecycle
-variable "lifecycle_delete_age_days" {
-  description = "Delete GCS objects older than this many days (0 = disabled)"
-  type        = number
-  default     = 7
-}
-
-# Artifact Registry (optional)
+# Artifact Registry
 variable "artifact_registry_location" {
   description = "Artifact Registry location"
   type        = string
-  default     = ""
 }
 
 variable "artifact_registry_repository" {
   description = "Artifact Registry repository name"
   type        = string
-  default     = ""
 }
 
-# TEE Bootstrap (disabled for dev by default)
+# TEE Bootstrap (enabled by default for staging)
 variable "enable_key_bootstrap" {
   description = "Enable TEE key bootstrapping"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "tee_key_manager_address" {
   description = "TeeKeyManager contract address"
   type        = string
-  default     = ""
 }
 
 variable "bootstrap_rpc_url" {
   description = "RPC URL for bootstrap transactions"
   type        = string
-  default     = ""
 }
 
 variable "bootstrap_chain_id" {
   description = "Chain ID for bootstrap transactions"
   type        = number
-  default     = 0
 }
 
 variable "attestation_audience" {
   description = "Attestation audience"
   type        = string
-  default     = ""
 }
 
-# Proof service
-variable "deploy_proof_service" {
-  description = "Deploy GPU proof service"
+# Bridge signer (optional)
+variable "enable_bridge_signer" {
+  description = "Enable bridge signer on validators"
   type        = bool
   default     = false
 }
 
-# SSH access for debug
-variable "allowed_ssh_ranges" {
-  description = "CIDR ranges allowed for SSH (e.g., your IP)"
-  type        = list(string)
-  default     = []
+variable "bridge_contract_address" {
+  description = "Bridge contract address"
+  type        = string
+  default     = ""
+}
+
+variable "bridge_chain_id" {
+  description = "Bridge chain ID"
+  type        = number
+  default     = 0
+}
+
+# Batching
+variable "batch_max_messages" {
+  description = "Max messages per batch"
+  type        = number
+  default     = 100
+}
+
+variable "batch_flush_interval" {
+  description = "Batch flush interval"
+  type        = string
+  default     = "2s"
 }
 
 # Labels
@@ -139,7 +131,7 @@ variable "labels" {
   description = "Labels to apply to all resources"
   type        = map(string)
   default = {
-    environment = "dev"
+    environment = "staging"
     managed-by  = "terraform"
     project     = "synddb"
   }
