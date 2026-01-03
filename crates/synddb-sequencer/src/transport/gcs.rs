@@ -35,6 +35,8 @@ pub struct GcsTransport {
     storage: Storage,
     control: StorageControl,
     config: GcsConfig,
+    /// HTTP client for emulator REST API (`StorageControl` uses gRPC which fake-gcs-server doesn't support)
+    emulator_client: Option<reqwest::Client>,
 }
 
 impl std::fmt::Debug for GcsTransport {
@@ -52,12 +54,15 @@ impl GcsTransport {
     ///
     /// Uses default credentials or emulator if configured.
     pub async fn new(config: GcsTransportConfig) -> Result<Self, TransportError> {
-        let (storage, control) = if let Some(ref emulator_host) = config.emulator_host {
+        let (storage, control, emulator_client) = if let Some(ref emulator_host) =
+            config.emulator_host
+        {
             info!(emulator_host = %emulator_host, "Using GCS emulator for transport");
 
             // For emulator mode, we need:
             // 1. Custom endpoint pointing to the emulator
             // 2. Anonymous credentials (no authentication)
+            // 3. HTTP client for REST API (StorageControl uses gRPC which fake-gcs-server doesn't support)
             use google_cloud_auth::credentials::anonymous;
             let anonymous_creds = anonymous::Builder::default().build();
 
@@ -79,7 +84,9 @@ impl GcsTransport {
                     TransportError::Config(format!("Failed to create StorageControl client: {e}"))
                 })?;
 
-            (storage, control)
+            let http_client = reqwest::Client::new();
+
+            (storage, control, Some(http_client))
         } else {
             let storage = Storage::builder().build().await.map_err(|e| {
                 TransportError::Config(format!("Failed to create Storage client: {e}"))
@@ -89,7 +96,7 @@ impl GcsTransport {
                 TransportError::Config(format!("Failed to create StorageControl client: {e}"))
             })?;
 
-            (storage, control)
+            (storage, control, None)
         };
 
         info!(
@@ -102,6 +109,7 @@ impl GcsTransport {
             storage,
             control,
             config,
+            emulator_client,
         })
     }
 
@@ -196,6 +204,11 @@ impl GcsTransport {
     ///
     /// Handles GCS pagination to retrieve all batches.
     async fn list_batch_files(&self) -> Result<Vec<(u64, u64, String)>, TransportError> {
+        // Use REST API for emulator mode (StorageControl uses gRPC which fake-gcs-server doesn't support)
+        if let Some(ref client) = self.emulator_client {
+            return self.list_batch_files_emulator(client).await;
+        }
+
         let prefix = format!("{}/batches/", self.config.prefix);
         let mut batches = Vec::new();
         let mut page_token: Option<String> = None;
@@ -230,6 +243,80 @@ impl GcsTransport {
             }
             debug!(token = %response.next_page_token, "Fetching next page of batch files");
             page_token = Some(response.next_page_token);
+        }
+
+        batches.sort_by_key(|(start, _, _)| *start);
+        Ok(batches)
+    }
+
+    /// List batch files using the GCS REST API (for emulator mode)
+    ///
+    /// fake-gcs-server doesn't support gRPC, so we use the JSON API directly.
+    async fn list_batch_files_emulator(
+        &self,
+        client: &reqwest::Client,
+    ) -> Result<Vec<(u64, u64, String)>, TransportError> {
+        let emulator_host = self
+            .config
+            .emulator_host
+            .as_ref()
+            .expect("emulator_client exists only when emulator_host is set");
+
+        let prefix = format!("{}/batches/", self.config.prefix);
+        let mut batches = Vec::new();
+        let mut page_token: Option<String> = None;
+
+        loop {
+            // Build URL: {emulator}/storage/v1/b/{bucket}/o?prefix={prefix}
+            use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+            let encoded_prefix = utf8_percent_encode(&prefix, NON_ALPHANUMERIC).to_string();
+            let mut url = format!(
+                "{}/storage/v1/b/{}/o?prefix={}",
+                emulator_host, self.config.bucket, encoded_prefix
+            );
+            if let Some(ref token) = page_token {
+                let encoded_token = utf8_percent_encode(token, NON_ALPHANUMERIC).to_string();
+                url.push_str(&format!("&pageToken={}", encoded_token));
+            }
+
+            let response = client.get(&url).send().await.map_err(|e| {
+                TransportError::Storage(format!("Failed to list objects from emulator: {e}"))
+            })?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(TransportError::Storage(format!(
+                    "Emulator list objects failed: {} - {}",
+                    status, body
+                )));
+            }
+
+            let body: serde_json::Value = response.json().await.map_err(|e| {
+                TransportError::Storage(format!("Failed to parse emulator response: {e}"))
+            })?;
+
+            // Parse items from response
+            if let Some(items) = body.get("items").and_then(|v| v.as_array()) {
+                for item in items {
+                    if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                        if let Some(filename) = name.rsplit('/').next() {
+                            if let Some((start, end)) = parse_batch_filename(filename) {
+                                batches.push((start, end, name.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check for next page
+            match body.get("nextPageToken").and_then(|v| v.as_str()) {
+                Some(token) if !token.is_empty() => {
+                    debug!(token = %token, "Fetching next page of batch files (emulator)");
+                    page_token = Some(token.to_string());
+                }
+                _ => break,
+            }
         }
 
         batches.sort_by_key(|(start, _, _)| *start);

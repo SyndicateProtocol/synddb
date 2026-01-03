@@ -41,6 +41,8 @@ pub struct GcsFetcher {
     storage: Storage,
     control: StorageControl,
     config: GcsConfig,
+    /// HTTP client for emulator REST API (`StorageControl` uses gRPC which fake-gcs-server doesn't support)
+    emulator_client: Option<reqwest::Client>,
 }
 
 impl std::fmt::Debug for GcsFetcher {
@@ -61,43 +63,47 @@ impl GcsFetcher {
     ///
     /// If `emulator_host` is set in config, uses the emulator instead of real GCS.
     pub async fn from_config(config: GcsConfig) -> Result<Self> {
-        let (storage, control) = if let Some(ref emulator_host) = config.emulator_host {
-            info!(emulator_host = %emulator_host, "Using GCS emulator");
+        let (storage, control, emulator_client) =
+            if let Some(ref emulator_host) = config.emulator_host {
+                info!(emulator_host = %emulator_host, "Using GCS emulator");
 
-            // For emulator mode, we need:
-            // 1. Custom endpoint pointing to the emulator
-            // 2. Anonymous credentials (no authentication)
-            use google_cloud_auth::credentials::anonymous;
-            let anonymous_creds = anonymous::Builder::default().build();
+                // For emulator mode, we need:
+                // 1. Custom endpoint pointing to the emulator
+                // 2. Anonymous credentials (no authentication)
+                // 3. HTTP client for REST API (StorageControl uses gRPC which fake-gcs-server doesn't support)
+                use google_cloud_auth::credentials::anonymous;
+                let anonymous_creds = anonymous::Builder::default().build();
 
-            let storage = Storage::builder()
-                .with_endpoint(emulator_host)
-                .with_credentials(anonymous_creds.clone())
-                .build()
-                .await
-                .context("Failed to create Storage client for emulator")?;
+                let storage = Storage::builder()
+                    .with_endpoint(emulator_host)
+                    .with_credentials(anonymous_creds.clone())
+                    .build()
+                    .await
+                    .context("Failed to create Storage client for emulator")?;
 
-            let control = StorageControl::builder()
-                .with_endpoint(emulator_host)
-                .with_credentials(anonymous_creds)
-                .build()
-                .await
-                .context("Failed to create StorageControl client for emulator")?;
+                let control = StorageControl::builder()
+                    .with_endpoint(emulator_host)
+                    .with_credentials(anonymous_creds)
+                    .build()
+                    .await
+                    .context("Failed to create StorageControl client for emulator")?;
 
-            (storage, control)
-        } else {
-            let storage = Storage::builder()
-                .build()
-                .await
-                .context("Failed to create Storage client")?;
+                let http_client = reqwest::Client::new();
 
-            let control = StorageControl::builder()
-                .build()
-                .await
-                .context("Failed to create StorageControl client")?;
+                (storage, control, Some(http_client))
+            } else {
+                let storage = Storage::builder()
+                    .build()
+                    .await
+                    .context("Failed to create Storage client")?;
 
-            (storage, control)
-        };
+                let control = StorageControl::builder()
+                    .build()
+                    .await
+                    .context("Failed to create StorageControl client")?;
+
+                (storage, control, None)
+            };
 
         info!(bucket = %config.bucket, prefix = %config.prefix, "GCS fetcher initialized");
 
@@ -105,6 +111,7 @@ impl GcsFetcher {
             storage,
             control,
             config,
+            emulator_client,
         })
     }
 
@@ -170,6 +177,129 @@ impl GcsFetcher {
         }
         Ok(None)
     }
+
+    /// List batches using the GCS REST API (for emulator mode)
+    async fn list_batches_emulator(&self, client: &reqwest::Client) -> Result<Vec<BatchInfo>> {
+        let emulator_host = self
+            .config
+            .emulator_host
+            .as_ref()
+            .expect("emulator_client exists only when emulator_host is set");
+
+        let prefix = format!("{}/batches/", self.config.prefix);
+        let mut batches = Vec::new();
+        let mut page_token: Option<String> = None;
+
+        loop {
+            use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+            let encoded_prefix = utf8_percent_encode(&prefix, NON_ALPHANUMERIC).to_string();
+            let mut url = format!(
+                "{}/storage/v1/b/{}/o?prefix={}",
+                emulator_host, self.config.bucket, encoded_prefix
+            );
+            if let Some(ref token) = page_token {
+                let encoded_token = utf8_percent_encode(token, NON_ALPHANUMERIC).to_string();
+                url.push_str(&format!("&pageToken={}", encoded_token));
+            }
+
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to list objects from emulator: {e}"))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(anyhow::anyhow!(
+                    "Emulator list objects failed: {} - {}",
+                    status,
+                    body
+                ));
+            }
+
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to parse emulator response: {e}"))?;
+
+            // Parse items from response
+            if let Some(items) = body.get("items").and_then(|v| v.as_array()) {
+                for item in items {
+                    if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                        if let Some(filename) = name.rsplit('/').next() {
+                            if let Some((start, end)) = parse_batch_filename(filename) {
+                                debug!(filename, start, end, "Parsed batch file (emulator)");
+                                batches.push(BatchInfo::new(start, end, name.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check for next page
+            match body.get("nextPageToken").and_then(|v| v.as_str()) {
+                Some(token) if !token.is_empty() => {
+                    debug!(token = %token, "Fetching next page of batches (emulator)");
+                    page_token = Some(token.to_string());
+                }
+                _ => break,
+            }
+        }
+
+        batches.sort_by_key(|b| b.start_sequence);
+        info!(count = batches.len(), "Listed batches from GCS (emulator)");
+        Ok(batches)
+    }
+
+    /// Find a batch by prefix using the REST API (for emulator mode)
+    async fn find_batch_by_prefix_emulator(
+        &self,
+        client: &reqwest::Client,
+        prefix: &str,
+    ) -> Result<Option<String>> {
+        let emulator_host = self
+            .config
+            .emulator_host
+            .as_ref()
+            .expect("emulator_client exists only when emulator_host is set");
+
+        use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+        let encoded_prefix = utf8_percent_encode(prefix, NON_ALPHANUMERIC).to_string();
+        let url = format!(
+            "{}/storage/v1/b/{}/o?prefix={}&maxResults=1",
+            emulator_host, self.config.bucket, encoded_prefix
+        );
+
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list objects from emulator: {e}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Emulator list objects failed: {} - {}",
+                status,
+                body
+            ));
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to parse emulator response: {e}"))?;
+
+        Ok(body
+            .get("items")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("name"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()))
+    }
 }
 
 #[async_trait]
@@ -215,6 +345,11 @@ impl StorageFetcher for GcsFetcher {
     }
 
     async fn list_batches(&self) -> Result<Vec<BatchInfo>> {
+        // Use REST API for emulator mode (StorageControl uses gRPC which fake-gcs-server doesn't support)
+        if let Some(ref client) = self.emulator_client {
+            return self.list_batches_emulator(client).await;
+        }
+
         let prefix = format!("{}/batches/", self.config.prefix);
         let mut batches = Vec::new();
         let mut page_token: Option<String> = None;
@@ -264,17 +399,24 @@ impl StorageFetcher for GcsFetcher {
         // Find batch that starts with this sequence by listing with a specific prefix
         let prefix = format!("{}/batches/{:012}_", self.config.prefix, start_sequence);
 
-        let response = self
-            .control
-            .list_objects()
-            .set_parent(self.bucket_path())
-            .set_prefix(&prefix)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to list batch objects: {e}"))?;
+        // Use REST API for emulator mode
+        let obj_name = if let Some(ref client) = self.emulator_client {
+            self.find_batch_by_prefix_emulator(client, &prefix).await?
+        } else {
+            let response = self
+                .control
+                .list_objects()
+                .set_parent(self.bucket_path())
+                .set_prefix(&prefix)
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to list batch objects: {e}"))?;
 
-        if let Some(obj) = response.objects.into_iter().next() {
-            return self.get_batch_by_path(&obj.name).await;
+            response.objects.into_iter().next().map(|obj| obj.name)
+        };
+
+        if let Some(name) = obj_name {
+            return self.get_batch_by_path(&name).await;
         }
 
         Ok(None)
