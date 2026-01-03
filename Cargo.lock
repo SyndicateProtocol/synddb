@@ -3701,6 +3701,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "metrics-exporter-prometheus",
  "rusqlite",
  "synddb-shared",
  "synddb-validator",
@@ -5040,6 +5041,7 @@ dependencies = [
  "tower 0.5.2",
  "tower-http",
  "tracing",
+ "uuid",
  "zstd",
 ]
 
@@ -5102,6 +5104,7 @@ dependencies = [
  "tower 0.5.2",
  "tower-http",
  "tracing",
+ "uuid",
  "zstd",
 ]
 

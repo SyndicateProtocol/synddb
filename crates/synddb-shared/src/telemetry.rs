@@ -158,8 +158,6 @@ pub fn init_tracing(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_init_without_otel() {
         // This should work without the otel feature

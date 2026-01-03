@@ -27,7 +27,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     time::{interval, Duration},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 
 /// Statistics about batch operations
 #[derive(Debug, Clone, Default)]
@@ -245,13 +245,22 @@ impl Batcher {
                 }
                 _ = ticker.tick() => {
                     if !self.pending.is_empty() && self.last_flush.elapsed() >= flush_interval {
-                        debug!(
+                        let elapsed_ms = self.last_flush.elapsed().as_millis();
+                        info!(
                             pending_messages = self.pending.len(),
                             pending_bytes = self.pending_bytes,
-                            "Flush interval reached"
+                            elapsed_ms = elapsed_ms,
+                            "Flushing batch (interval timeout)"
                         );
                         if let Err(e) = self.flush_batch().await {
-                            error!(error = %e, "Interval flush failed");
+                            error!(
+                                error = %e,
+                                error_type = "interval_flush",
+                                pending_messages = self.pending.len(),
+                                pending_bytes = self.pending_bytes,
+                                "Interval flush failed"
+                            );
+                            crate::metrics::record_error("batch_flush");
                         }
                     }
                 }
@@ -267,8 +276,10 @@ impl Batcher {
     }
 
     /// Handle adding a message to the pending batch
+    #[instrument(skip(self, message), fields(message_size))]
     async fn handle_add_message(&mut self, message: CborSignedMessage) -> Result<(), BatcherError> {
         let size = message.size();
+        tracing::Span::current().record("message_size", size);
 
         self.pending.push(PendingMessage { message, size });
         self.pending_bytes += size;
@@ -276,7 +287,6 @@ impl Batcher {
         debug!(
             pending_messages = self.pending.len(),
             pending_bytes = self.pending_bytes,
-            message_size = size,
             "Message added to batch"
         );
 
@@ -293,11 +303,13 @@ impl Batcher {
             } else {
                 "max_bytes"
             };
-            debug!(
+            info!(
                 reason = reason,
                 pending_messages = self.pending.len(),
                 pending_bytes = self.pending_bytes,
-                "Threshold reached, flushing batch"
+                max_messages = self.config.max_messages,
+                max_bytes = self.config.max_batch_bytes,
+                "Flushing batch (threshold reached)"
             );
             self.flush_batch().await?;
         }
@@ -306,6 +318,7 @@ impl Batcher {
     }
 
     /// Flush the current batch to storage
+    #[instrument(skip(self), fields(message_count, start_sequence, end_sequence))]
     async fn flush_batch(&mut self) -> Result<Option<PublishMetadata>, BatcherError> {
         if self.pending.is_empty() {
             return Ok(None);
@@ -333,6 +346,12 @@ impl Batcher {
 
         let start_seq = batch.start_sequence;
         let end_seq = batch.end_sequence;
+
+        // Record span fields for distributed tracing
+        let span = tracing::Span::current();
+        span.record("message_count", message_count);
+        span.record("start_sequence", start_seq);
+        span.record("end_sequence", end_seq);
 
         info!(
             start_sequence = start_seq,

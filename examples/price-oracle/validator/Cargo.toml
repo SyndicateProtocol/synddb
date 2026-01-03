@@ -25,5 +25,8 @@ tracing = "0.1"
 # HTTP server
 axum = { version = "0.8", features = ["json"] }
 
+# Metrics
+metrics-exporter-prometheus = { workspace = true }
+
 # Database
 rusqlite = { workspace = true }

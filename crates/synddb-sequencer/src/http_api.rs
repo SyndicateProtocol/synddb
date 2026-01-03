@@ -61,7 +61,7 @@
 
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header::HeaderName, Request, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -70,8 +70,11 @@ use axum_prometheus::PrometheusMetricLayer;
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
-use tracing::{error, info, warn, Level};
+use tower_http::{
+    request_id::{PropagateRequestIdLayer, SetRequestIdLayer},
+    trace::{DefaultOnResponse, MakeSpan, TraceLayer},
+};
+use tracing::{error, info, instrument, warn, Level, Span};
 
 use crate::{
     attestation::AttestationVerifier,
@@ -79,6 +82,7 @@ use crate::{
     cbor_extractor::Cbor,
     http_errors::{HttpError, SequencerError},
     inbox::{Inbox, SequenceReceipt},
+    request_id::UuidRequestId,
 };
 use synddb_shared::types::{
     cbor::message::CborMessageType,
@@ -106,6 +110,30 @@ impl std::fmt::Debug for AppState {
     }
 }
 
+/// Custom span maker that includes request ID in all spans
+///
+/// This enables correlation of logs and traces across the request lifecycle.
+/// The request ID is extracted from the `x-request-id` header (set by middleware).
+#[derive(Clone, Debug)]
+struct RequestIdMakeSpan;
+
+impl<B> MakeSpan<B> for RequestIdMakeSpan {
+    fn make_span(&mut self, request: &Request<B>) -> Span {
+        let request_id = request
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-");
+
+        tracing::info_span!(
+            "http_request",
+            method = %request.method(),
+            uri = %request.uri(),
+            request_id = %request_id,
+        )
+    }
+}
+
 /// Create the HTTP router with all endpoints
 pub fn create_router(state: AppState, metrics_handle: PrometheusHandle) -> Router {
     info!("Endpoints:");
@@ -125,6 +153,9 @@ pub fn create_router(state: AppState, metrics_handle: PrometheusHandle) -> Route
     // Create metrics endpoint handler
     let metrics_endpoint = synddb_shared::metrics::metrics_endpoint(metrics_handle);
 
+    // Request ID header name
+    let x_request_id = HeaderName::from_static("x-request-id");
+
     Router::new()
         .route("/changesets", post(receive_changesets))
         .route("/withdrawals", post(receive_withdrawal))
@@ -135,12 +166,19 @@ pub fn create_router(state: AppState, metrics_handle: PrometheusHandle) -> Route
         .route("/batch/stats", get(batch_stats))
         .route("/batch/flush", post(batch_flush))
         .route("/metrics", get(metrics_endpoint))
+        // Layers are applied in reverse order (bottom to top)
+        // 1. PropagateRequestId - copies request ID to response headers
+        .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
+        // 2. Prometheus metrics
         .layer(prometheus_layer)
+        // 3. Trace layer with request ID in spans
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .make_span_with(RequestIdMakeSpan)
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
+        // 4. SetRequestId - generates x-request-id if not present
+        .layer(SetRequestIdLayer::new(x_request_id, UuidRequestId))
         .with_state(state)
 }
 
@@ -307,15 +345,12 @@ impl From<SignedMessage> for MessageResponse {
 // ============================================================================
 
 /// Receive and sequence a changeset batch (CBOR format)
+#[instrument(skip(state, request), fields(batch_id = %request.batch_id, changeset_count = request.changesets.len()))]
 async fn receive_changesets(
     State(state): State<AppState>,
     Cbor(request): Cbor<ChangesetBatchRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
-    info!(
-        batch_id = %request.batch_id,
-        changeset_count = request.changesets.len(),
-        "Received changeset batch"
-    );
+    info!("Received changeset batch");
 
     // Verify attestation token if verifier is configured
     if let Some(verifier) = &state.attestation_verifier {
@@ -378,16 +413,12 @@ async fn receive_changesets(
 }
 
 /// Receive and sequence a withdrawal request (CBOR format)
+#[instrument(skip(state, request), fields(request_id = %request.request_id, recipient = %request.recipient, amount = %request.amount))]
 async fn receive_withdrawal(
     State(state): State<AppState>,
     Cbor(request): Cbor<WithdrawalRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
-    info!(
-        request_id = %request.request_id,
-        recipient = %request.recipient,
-        amount = %request.amount,
-        "Received withdrawal request"
-    );
+    info!("Received withdrawal request");
 
     // Validate recipient address format (0x + 40 hex chars)
     if !request.recipient.starts_with("0x")
@@ -396,6 +427,12 @@ async fn receive_withdrawal(
             .chars()
             .all(|c| c.is_ascii_hexdigit())
     {
+        warn!(
+            request_id = %request.request_id,
+            recipient = %request.recipient,
+            recipient_len = request.recipient.len(),
+            "Invalid recipient address format"
+        );
         crate::metrics::record_error("invalid_recipient_address");
         return Err(SequencerError::InvalidRecipientAddress.into());
     }
@@ -405,19 +442,30 @@ async fn receive_withdrawal(
         || !request.amount.chars().all(|c| c.is_ascii_digit())
         || (request.amount.len() > 1 && request.amount.starts_with('0'))
     {
+        warn!(
+            request_id = %request.request_id,
+            amount = %request.amount,
+            "Invalid amount format"
+        );
         crate::metrics::record_error("invalid_amount");
         return Err(SequencerError::InvalidAmount.into());
     }
 
     // Validate request_id is not empty
     if request.request_id.is_empty() {
+        warn!("Empty request_id in withdrawal request");
         crate::metrics::record_error("empty_request_id");
         return Err(SequencerError::EmptyRequestId.into());
     }
 
     // Serialize the request as CBOR payload
     let payload = request.to_cbor().map_err(|e| {
-        error!("Failed to serialize withdrawal request: {}", e);
+        error!(
+            request_id = %request.request_id,
+            error = %e,
+            error_type = "cbor_serialization",
+            "Failed to serialize withdrawal request"
+        );
         crate::metrics::record_error("cbor_serialization");
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
@@ -427,7 +475,12 @@ async fn receive_withdrawal(
         .inbox
         .sequence_message(CborMessageType::Withdrawal, payload)
         .map_err(|e| {
-            error!("Failed to sequence withdrawal: {}", e);
+            error!(
+                request_id = %request.request_id,
+                error = %e,
+                error_type = "sequence_withdrawal",
+                "Failed to sequence withdrawal"
+            );
             crate::metrics::record_error("sequence_withdrawal");
             SequencerError::from(e)
         })?;
@@ -454,16 +507,12 @@ async fn receive_withdrawal(
 }
 
 /// Receive and sequence a database snapshot (CBOR format)
+#[instrument(skip(state, request), fields(message_id = %request.message_id, snapshot_size = request.snapshot.data.len(), client_sequence = request.snapshot.sequence))]
 async fn receive_snapshot(
     State(state): State<AppState>,
     Cbor(request): Cbor<SnapshotRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
-    info!(
-        message_id = %request.message_id,
-        snapshot_size = request.snapshot.data.len(),
-        client_sequence = request.snapshot.sequence,
-        "Received snapshot"
-    );
+    info!("Received snapshot");
 
     // Verify attestation token if verifier is configured
     if let Some(verifier) = &state.attestation_verifier {

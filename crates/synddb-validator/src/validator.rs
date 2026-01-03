@@ -23,7 +23,7 @@ use rusqlite::Connection;
 use std::{sync::Arc, time::Duration};
 use synddb_shared::types::message::{MessageType, SignedBatch, SignedMessage};
 use tokio::sync::watch;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 /// Result of applying a message with audit trail handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -512,6 +512,7 @@ impl Validator {
     ///
     /// The callback receives the `WithdrawalRequest` if the message is a withdrawal.
     /// Returns `Ok(true)` if message was synced, `Ok(false)` if not available yet.
+    #[instrument(skip(self, on_withdrawal), fields(message_type))]
     pub async fn sync_one_with_callback<F>(
         &mut self,
         sequence: u64,
@@ -530,11 +531,15 @@ impl Validator {
         };
         crate::metrics::record_fetch_duration(fetch_start.elapsed().as_secs_f64());
 
-        debug!(
-            sequence,
-            message_type = ?message.message_type,
-            "Fetched message"
-        );
+        // Record message type in span for distributed tracing
+        let message_type_str = match message.message_type {
+            MessageType::Changeset => "changeset",
+            MessageType::Withdrawal => "withdrawal",
+            MessageType::Snapshot => "snapshot",
+        };
+        tracing::Span::current().record("message_type", message_type_str);
+
+        debug!(sequence, message_type = message_type_str, "Fetched message");
 
         // 2. Validate sequence matches what we requested (defensive check)
         if message.sequence != sequence {
@@ -572,11 +577,6 @@ impl Validator {
         // 5. Apply to database with audit trail handling
         let apply_start = std::time::Instant::now();
         let apply_result = self.apply_message_with_audit(&message)?;
-        let message_type_str = match message.message_type {
-            MessageType::Changeset => "changeset",
-            MessageType::Withdrawal => "withdrawal",
-            MessageType::Snapshot => "snapshot",
-        };
         crate::metrics::record_apply_duration(
             message_type_str,
             apply_start.elapsed().as_secs_f64(),
@@ -656,6 +656,14 @@ impl Validator {
     /// Returns the number of messages synced from this batch.
     ///
     /// Signature verification is always performed using COSE format.
+    #[instrument(
+        skip(self, batch, on_withdrawal),
+        fields(
+            batch_start = batch.start_sequence,
+            batch_end = batch.end_sequence,
+            message_count = batch.messages.len()
+        )
+    )]
     pub async fn sync_batch<F>(&mut self, batch: &SignedBatch, on_withdrawal: &mut F) -> Result<u64>
     where
         F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),

@@ -52,6 +52,7 @@ zstd = { workspace = true }
 # Utilities
 async-trait = { workspace = true }
 strum = { workspace = true }
+uuid = { workspace = true }
 
 # Metrics (using metrics facade with Prometheus exporter)
 metrics = { workspace = true }
