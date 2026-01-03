@@ -4,6 +4,7 @@ members = [
   "crates/gcp-attestation",
   "crates/synddb-benchmark",
   "crates/synddb-bootstrap",
+  "crates/synddb-relayer",
   "crates/synddb-sequencer",
   "crates/synddb-validator",
   "crates/synddb-client",

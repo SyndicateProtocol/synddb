@@ -365,6 +365,21 @@ validator-bridge:
     BRIDGE_CHAIN_ID=31337 \
     cargo run -p synddb-validator --release
 
+# Run gas funding relayer for TEE key registration
+
+# The relayer handles key registration and funding for TEE keys that don't have gas.
+# Requires GasTreasury contract to be deployed and configured.
+[group('components')]
+relayer treasury_address:
+    RPC_URL={{ anvil_rpc_url }} \
+    CHAIN_ID={{ anvil_chain_id }} \
+    TEE_KEY_MANAGER_CONTRACT_ADDRESS={{ tee_key_manager_contract_address }} \
+    GAS_TREASURY_CONTRACT_ADDRESS={{ treasury_address }} \
+    RELAYER_PRIVATE_KEY={{ anvil_key_0 }} \
+    RELAYER_LISTEN_ADDR=127.0.0.1:{{ env_var_or_default('RELAYER_PORT', '8082') }} \
+    ALLOWED_IMAGE_DIGESTS=0x0000000000000000000000000000000000000000000000000000000000000000 \
+    cargo run -p synddb-relayer --release
+
 # ============================================================================
 # Building
 # ============================================================================

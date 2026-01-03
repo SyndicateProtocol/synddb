@@ -4963,6 +4963,7 @@ dependencies = [
  "humantime-serde",
  "reqwest",
  "serde",
+ "serde_json",
  "synddb-client",
  "synddb-shared",
  "thiserror 2.0.17",
@@ -5080,6 +5081,29 @@ dependencies = [
  "rand 0.9.2",
  "rusqlite",
  "tempfile",
+]
+
+[[package]]
+name = "synddb-relayer"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "clap",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "synddb-shared",
+ "thiserror 2.0.17",
+ "tokio",
+ "tower 0.5.2",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
