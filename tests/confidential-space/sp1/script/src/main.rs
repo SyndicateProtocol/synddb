@@ -5,9 +5,8 @@
 
 use alloy::{primitives::keccak256, sol_types::SolValue};
 use clap::Parser;
-use gcp_confidential_space::{
-    extract_kid_from_jwt, verify_attestation, JwkKey, PublicValuesStruct,
-};
+use gcp_attestation::{extract_kid_from_jwt, verify_attestation, JwkKey};
+use gcp_cs_attestation_sp1_program::PublicValuesStruct;
 use serde::Deserialize;
 use sp1_sdk::{include_elf, ProverClient, SP1Stdin};
 use std::fs;

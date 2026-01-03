@@ -79,9 +79,7 @@ jobs:
         run: just lint-deps
 
       - name: Check for unused dependencies (tests/confidential-space)
-        run: |
-          cargo machete tests/confidential-space
-          cargo machete crates/gcp-confidential-space
+        run: cargo machete tests/confidential-space
 
   lint-fmt:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
@@ -102,9 +100,7 @@ jobs:
         run: just lint-fmt
 
       - name: Check Rust formatting (tests/confidential-space)
-        run: |
-          cargo +nightly fmt --all --check --manifest-path tests/confidential-space/Cargo.toml
-          cargo +nightly fmt --all --check --manifest-path crates/gcp-confidential-space/Cargo.toml
+        run: cargo +nightly fmt --all --check --manifest-path tests/confidential-space/Cargo.toml
 
   lint:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
@@ -128,9 +124,7 @@ jobs:
         run: just lint
 
       - name: Run Clippy (tests/confidential-space)
-        run: |
-          cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/Cargo.toml
-          cargo clippy --all-targets --all-features --manifest-path crates/gcp-confidential-space/Cargo.toml
+        run: cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/Cargo.toml
 
       - name: Check documentation builds
         run: just lint-docs
@@ -163,9 +157,6 @@ jobs:
       # Fallback to standard cargo test for doctests (nextest doesn't support them)
       - name: Run doctests
         run: cargo test --workspace --doc --exclude synddb-e2e --exclude synddb-e2e-gcs
-
-      - name: Run tests (crates/gcp-confidential-space)
-        run: cargo test --manifest-path crates/gcp-confidential-space/Cargo.toml
 
   test-stress:
     if: github.event.pull_request.draft == false || github.event_name == 'push'

@@ -432,7 +432,8 @@ jobs:
               - 'docker/reproducible/relayer.Dockerfile'
             proof-service:
               - 'services/proof-service/**'
-              - 'crates/gcp-confidential-space/**'
+              - 'crates/gcp-attestation/**'
+              - 'crates/synddb-bootstrap/sp1/program/**'
 
       - name: Authenticate to Google Cloud
         if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'

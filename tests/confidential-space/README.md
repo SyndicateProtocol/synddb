@@ -3,7 +3,7 @@
 This directory contains tooling for GCP Confidential Space TEE attestation:
 
 1. **Sample capture workload** - Runs in GCP CS VM to capture real attestation tokens
-2. **Verification library** - `gcp-confidential-space/` crate for verifying attestations
+2. **Verification library** - `crates/gcp-attestation/` crate for verifying attestations
 3. **SP1 integration** - `sp1/` directory for generating ZK proofs of attestation
 
 ## Directory Structure
@@ -13,15 +13,16 @@ tests/confidential-space/
 ├── src/
 │   ├── main.rs          # Attestation capture workload (runs in GCP CS VM)
 │   └── verify.rs        # Local verification binary
-├── gcp-confidential-space/  # Verification library crate
-│   └── src/
 ├── sp1/
-│   ├── program/         # SP1 zkVM program
 │   └── script/          # Proof generation script
 ├── samples/             # Captured attestation tokens
 ├── deploy.sh            # Build and deploy to GCP
 ├── setup-gcp.sh         # One-time GCP infrastructure setup
 └── Dockerfile
+
+# Related crates:
+crates/gcp-attestation/                    # Core attestation verification library
+crates/synddb-bootstrap/sp1/program/       # SP1 zkVM program
 ```
 
 ## Quick Start
@@ -46,9 +47,8 @@ gcloud storage cp 'gs://<your-project-id>-cs-attestation-samples/attestation-sam
 # Using the standalone verify binary
 cargo run --bin verify-sample
 
-# Or using the gcp-confidential-space library tests
-cd gcp-confidential-space
-cargo test
+# Or using the gcp-attestation library tests
+cargo test -p gcp-attestation
 ```
 
 ### 3. Generate SP1 ZK Proof
@@ -127,9 +127,7 @@ After running `--prove`, provide your colleague with:
 
 1. **Proof file**: `sp1/script/gcp_cs_attestation_proof.bin`
 2. **Verification key**: Output of `cargo run --release --bin gcp-cs-vkey`
-3. **PublicValuesStruct**: Defined in `gcp-confidential-space/src/attestation.rs`
-
-See `gcp-confidential-space/README.md` for the Solidity contract pattern.
+3. **PublicValuesStruct**: Defined in `crates/synddb-bootstrap/sp1/program/src/types.rs`
 
 ---
 
