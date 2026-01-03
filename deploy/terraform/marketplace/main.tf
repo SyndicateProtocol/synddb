@@ -252,6 +252,7 @@ resource "google_compute_instance" "sequencer" {
       "tee-env-GCS_BUCKET"         = google_storage_bucket.synddb.name
       "tee-env-GCS_PREFIX"         = var.gcs_prefix
       "tee-env-LOG_JSON"           = "true"
+      "tee-env-RUST_LOG"           = var.rust_log
     },
     var.enable_key_bootstrap ? {
       "tee-env-ENABLE_KEY_BOOTSTRAP"             = "true"
@@ -329,6 +330,7 @@ resource "google_compute_instance" "validator" {
       "tee-env-GCS_PREFIX"         = var.gcs_prefix
       "tee-env-SEQUENCER_URL"      = "http://${google_compute_instance.sequencer.network_interface[0].network_ip}:8433"
       "tee-env-LOG_JSON"           = "true"
+      "tee-env-RUST_LOG"           = var.rust_log
     },
     var.enable_key_bootstrap ? {
       "tee-env-ENABLE_KEY_BOOTSTRAP"             = "true"

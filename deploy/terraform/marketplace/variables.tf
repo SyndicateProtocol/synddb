@@ -101,3 +101,10 @@ variable "deploy_proof_service" {
   type        = bool
   default     = false
 }
+
+# Logging
+variable "rust_log" {
+  description = "Log level for Rust components (info, debug, warn, error)"
+  type        = string
+  default     = "info"
+}

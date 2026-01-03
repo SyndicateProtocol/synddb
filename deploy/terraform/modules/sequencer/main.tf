@@ -24,6 +24,7 @@ locals {
 
       # Logging
       LOG_JSON = tostring(var.log_json)
+      RUST_LOG = var.rust_log
     },
     # TEE bootstrap configuration (if enabled)
     var.enable_key_bootstrap ? {

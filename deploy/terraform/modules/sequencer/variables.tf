@@ -116,6 +116,12 @@ variable "log_json" {
   default     = true
 }
 
+variable "rust_log" {
+  description = "Rust log level (e.g., info, debug, warn, error, or module-specific like synddb_sequencer=debug)"
+  type        = string
+  default     = "info"
+}
+
 variable "labels" {
   description = "Labels to apply"
   type        = map(string)

@@ -27,6 +27,7 @@ locals {
 
       # Logging
       LOG_JSON = tostring(var.log_json)
+      RUST_LOG = var.rust_log
     },
     # Sequencer connection
     var.sequencer_url != "" ? {
