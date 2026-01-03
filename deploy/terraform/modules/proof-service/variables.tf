@@ -53,9 +53,9 @@ variable "memory_limit" {
 
 # Scaling
 variable "timeout_seconds" {
-  description = "Request timeout in seconds"
+  description = "Request timeout in seconds (max 3600 for Groth16/PLONK proofs)"
   type        = number
-  default     = 900
+  default     = 3600
 }
 
 variable "max_instances" {

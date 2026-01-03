@@ -372,7 +372,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
       max_instance_count = 1
     }
 
-    timeout = "900s"
+    timeout = "3600s"  # 60 min for Groth16/PLONK proofs
 
     service_account = google_service_account.proof_service[0].email
 
