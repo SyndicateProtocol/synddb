@@ -420,6 +420,17 @@ jobs:
       id-token: write
 
     steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false  # Keep - removes LLVM which Rust may need
+          docker-images: true
+          swap-storage: false
+
       - uses: actions/checkout@v4
 
       - name: Check which images need building
