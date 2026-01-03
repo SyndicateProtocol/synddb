@@ -137,9 +137,8 @@ impl GcsFetcher {
                     || error_str.contains("not found")
                 {
                     return Ok(None);
-                } else {
-                    return Err(anyhow::anyhow!("Failed to download from GCS: {e}"));
                 }
+                return Err(anyhow::anyhow!("Failed to download from GCS: {e}"));
             }
         };
 
@@ -239,12 +238,11 @@ impl StorageFetcher for GcsFetcher {
             }
 
             // Check for more pages
-            if !response.next_page_token.is_empty() {
-                debug!(token = %response.next_page_token, "Fetching next page of batches");
-                page_token = Some(response.next_page_token);
-            } else {
+            if response.next_page_token.is_empty() {
                 break;
             }
+            debug!(token = %response.next_page_token, "Fetching next page of batches");
+            page_token = Some(response.next_page_token);
         }
 
         // Sort by start sequence
