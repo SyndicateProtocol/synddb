@@ -68,6 +68,12 @@ When working on large features or refactors, commit incrementally as you complet
 - Reduces risk of losing work
 - Creates a clear history of changes
 
+### Git Staging
+Avoid `git add -A`, `git add .`, or `git add --all`. These commands stage all modified files, which can accidentally include unrelated changes. Instead, stage only the specific files you modified for the current task:
+```bash
+git add path/to/file1.rs path/to/file2.rs
+```
+
 ### Documentation (SPEC and PLAN files)
 The `SPEC.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
 - After making major implementation changes, update the corresponding SPEC and PLAN files to reflect the new state
