@@ -5,8 +5,8 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "crates/synddb-bootstrap/sp1/**"
+      - "crates/gcp-confidential-space/**"
       - "tests/confidential-space/sp1/**"
-      - "tests/confidential-space/gcp-confidential-space/**"
       - ".github/workflows/sp1-ci.yml"
 
   push:
@@ -14,8 +14,8 @@ on:
       - main
     paths:
       - "crates/synddb-bootstrap/sp1/**"
+      - "crates/gcp-confidential-space/**"
       - "tests/confidential-space/sp1/**"
-      - "tests/confidential-space/gcp-confidential-space/**"
 
   # Allow manual trigger
   workflow_dispatch:
@@ -47,8 +47,8 @@ jobs:
         with:
           workspaces: |
             crates/synddb-bootstrap/sp1/program
+            crates/gcp-confidential-space
             tests/confidential-space/sp1/script
-            tests/confidential-space/gcp-confidential-space
 
       - name: Install SP1 toolchain
         run: |

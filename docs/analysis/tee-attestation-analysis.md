@@ -105,7 +105,7 @@ Debug VMs have additional attack surface:
 The `dbgstat` claim is extracted in the Rust code but never verified:
 
 ```rust
-// tests/confidential-space/gcp-confidential-space/src/attestation.rs:166
+// crates/gcp-confidential-space/src/attestation.rs:166
 dbgstat: parsed.claims.dbgstat.clone(),
 ```
 
@@ -145,7 +145,7 @@ While on-chain verification would eventually catch this (if the attacker tries t
 Use the existing `gcp-confidential-space` library which has full RS256 verification:
 
 ```rust
-// tests/confidential-space/gcp-confidential-space/src/attestation.rs:171-203
+// crates/gcp-confidential-space/src/attestation.rs:171-203
 fn verify_rs256_signature(parsed: &ParsedJwt, jwk: &JwkKey) -> Result<(), VerificationError>
 ```
 
@@ -407,7 +407,7 @@ Consider `hwmodel` for hardware verification.
 |-----------|------|
 | Client attestation | `crates/synddb-client/src/attestation.rs` |
 | Sequencer attestation | `crates/synddb-sequencer/src/attestation.rs` |
-| GCP CS library | `tests/confidential-space/gcp-confidential-space/src/` |
+| GCP CS library | `crates/gcp-confidential-space/src/` |
 | SP1 program | `tests/confidential-space/sp1/program/src/main.rs` |
 | AttestationVerifier | `contracts/src/attestation/AttestationVerifier.sol` |
 | TeeKeyManager | `contracts/src/attestation/TeeKeyManager.sol` |

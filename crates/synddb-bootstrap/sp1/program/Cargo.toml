@@ -9,6 +9,6 @@ publish = false
 [dependencies]
 alloy = { version = "1.0", default-features = false, features = ["sol-types"] }
 sp1-zkvm = "5.0"
-gcp-confidential-space = { path = "../../../../tests/confidential-space/gcp-confidential-space", default-features = false, features = [
+gcp-confidential-space = { path = "../../../gcp-confidential-space", default-features = false, features = [
   "sp1",
 ] }

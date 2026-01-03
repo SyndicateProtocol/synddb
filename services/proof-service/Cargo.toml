@@ -22,7 +22,7 @@ hex = "0.4"
 sp1-sdk = "5.0"
 
 # GCP attestation verification (for JWKS fetching)
-gcp-confidential-space = { path = "../../tests/confidential-space/gcp-confidential-space", features = [
+gcp-confidential-space = { path = "../../crates/gcp-confidential-space", features = [
   "sp1",
 ] }
 

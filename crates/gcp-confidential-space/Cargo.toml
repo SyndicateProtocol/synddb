@@ -16,7 +16,7 @@ sp1 = ["alloy"]
 
 [dependencies]
 # Core attestation verification (shared with sequencer)
-gcp-attestation = { path = "../../../crates/gcp-attestation", default-features = false }
+gcp-attestation = { path = "../gcp-attestation", default-features = false }
 
 # Solidity types for PublicValuesStruct (optional, for SP1)
 alloy = { version = "1.0", default-features = false, features = [

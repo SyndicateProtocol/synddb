@@ -17,7 +17,7 @@ path = "src/vkey.rs"
 [dependencies]
 alloy = { version = "1.0", features = ["sol-types"] }
 clap = { version = "4.5", features = ["derive"] }
-gcp-confidential-space = { path = "../../gcp-confidential-space", features = [
+gcp-confidential-space = { path = "../../../../crates/gcp-confidential-space", features = [
   "sp1",
 ] }
 hex = "0.4"

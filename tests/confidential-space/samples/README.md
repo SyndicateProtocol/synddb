@@ -66,7 +66,7 @@ cargo run --bin verify-sample
 ### Option 2: Using the gcp-confidential-space library
 
 ```bash
-cd tests/confidential-space/gcp-confidential-space
+cd crates/gcp-confidential-space
 cargo test
 ```
 
