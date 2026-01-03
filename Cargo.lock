@@ -4952,6 +4952,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "synddb-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "clap",
+ "gcp-attestation",
+ "hex",
+ "humantime",
+ "humantime-serde",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "synddb-shared",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "synddb-chain-monitor"
 version = "0.1.0"
 dependencies = [

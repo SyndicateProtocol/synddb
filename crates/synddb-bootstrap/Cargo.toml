@@ -1,0 +1,51 @@
+[package]
+name = "synddb-bootstrap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Key bootstrapping for SyndDB TEE services"
+
+[lints]
+workspace = true
+
+[dependencies]
+# SyndDB crates
+synddb-shared = { path = "../synddb-shared" }
+gcp-attestation = { path = "../gcp-attestation" }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# HTTP client for proof service
+reqwest = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+
+# Blockchain / Contract interaction
+alloy = { workspace = true, features = [
+  "signers",
+  "signer-local",
+  "provider-http",
+  "network",
+] }
+
+# CLI configuration
+clap = { workspace = true, features = ["env"] }
+humantime-serde = { workspace = true }
+humantime = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
