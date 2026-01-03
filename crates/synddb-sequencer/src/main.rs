@@ -27,10 +27,14 @@ use synddb_shared::{keys::EvmKeyManager, metrics, telemetry};
 async fn main() -> Result<()> {
     let config = SequencerConfig::parse();
 
-    // Initialize tracing with optional OpenTelemetry export
-    let _tracing_guard =
-        telemetry::init_tracing("synddb-sequencer", config.log_json, config.otel_enabled)
-            .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {e}"))?;
+    // Initialize tracing with optional OpenTelemetry export and Cloud Trace correlation
+    let _tracing_guard = telemetry::init_tracing(
+        "synddb-sequencer",
+        config.log_json,
+        config.otel_enabled,
+        config.gcp_project_id.clone(),
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {e}"))?;
 
     // Initialize Prometheus metrics exporter
     let metrics_handle = metrics::init_metrics();

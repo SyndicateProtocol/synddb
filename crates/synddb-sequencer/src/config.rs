@@ -149,6 +149,13 @@ pub struct SequencerConfig {
     #[arg(long, env = "OTEL_ENABLED", default_value = "false")]
     pub otel_enabled: bool,
 
+    /// GCP project ID for Cloud Trace log correlation
+    ///
+    /// When set along with `otel_enabled`, logs are formatted for Cloud Logging
+    /// with automatic trace correlation (logging.googleapis.com/trace fields).
+    #[arg(long, env = "GCP_PROJECT_ID")]
+    pub gcp_project_id: Option<String>,
+
     /// Attestation service URL for TEE token verification
     #[arg(long, env = "ATTESTATION_SERVICE_URL")]
     pub attestation_service_url: Option<String>,

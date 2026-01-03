@@ -45,6 +45,7 @@ opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
+tracing-stackdriver = { workspace = true, optional = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -60,6 +61,7 @@ otel = [
   "opentelemetry_sdk",
   "opentelemetry-otlp",
   "tracing-opentelemetry",
+  "tracing-stackdriver",
 ]
 
 [dev-dependencies]
