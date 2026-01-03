@@ -1,3 +1,7 @@
+// Binary-only crate: pub(crate) is semantically correct but triggers redundant_pub_crate
+// since modules are private. Allow this lint for binary crates.
+#![allow(clippy::redundant_pub_crate)]
+
 //! Gas funding relayer for `SyndDB` TEE keys
 //!
 //! This service handles key registration and funding for TEE keys that

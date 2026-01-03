@@ -57,7 +57,7 @@ pub struct FundingResponse {
     pub error: Option<String>,
 }
 
-/// EIP-712 domain for GasTreasury
+/// EIP-712 domain for `GasTreasury`
 struct Eip712Domain {
     name: &'static str,
     version: &'static str,
