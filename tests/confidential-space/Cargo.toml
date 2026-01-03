@@ -48,7 +48,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Google Cloud Storage (optional, for uploading samples)
-google-cloud-storage = { version = "0.22", optional = true }
+google-cloud-storage = { version = "1.5", optional = true }
+bytes = { version = "1", optional = true }
 
 # RSA signature verification
 rsa = { version = "0.9", features = ["sha2"] }
@@ -56,7 +57,7 @@ sha2 = { version = "0.10", features = ["oid"] }
 
 [features]
 default = []
-gcs = ["google-cloud-storage"]
+gcs = ["google-cloud-storage", "bytes"]
 
 [[bin]]
 name = "cs-attestation-sample"

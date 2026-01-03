@@ -25,6 +25,7 @@
 use crate::sync::fetcher::{BatchInfo, StorageFetcher};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use google_cloud_storage::client::{Storage, StorageControl};
 use synddb_shared::{
     gcs::GcsConfig,
     types::{
@@ -37,7 +38,8 @@ use tracing::{debug, info, warn};
 
 /// Google Cloud Storage fetcher
 pub struct GcsFetcher {
-    client: google_cloud_storage::client::Client,
+    storage: Storage,
+    control: StorageControl,
     config: GcsConfig,
 }
 
@@ -57,28 +59,45 @@ impl GcsFetcher {
     /// Uses default credentials (`GOOGLE_APPLICATION_CREDENTIALS` env var,
     /// workload identity, or metadata server).
     ///
-    /// If `emulator_host` is set in config, uses anonymous authentication and
-    /// connects to the specified emulator instead of real GCS.
+    /// If `emulator_host` is set in config, uses the emulator instead of real GCS.
     pub async fn from_config(config: GcsConfig) -> Result<Self> {
-        use google_cloud_storage::client::{Client, ClientConfig};
-
-        let client_config = if let Some(ref emulator_host) = config.emulator_host {
+        let (storage, control) = if let Some(ref emulator_host) = config.emulator_host {
             info!(emulator_host = %emulator_host, "Using GCS emulator");
-            let mut cfg = ClientConfig::default().anonymous();
-            cfg.storage_endpoint = emulator_host.clone();
-            cfg
-        } else {
-            ClientConfig::default()
-                .with_auth()
-                .await
-                .context("Failed to configure GCS auth")?
-        };
+            // Set the STORAGE_EMULATOR_HOST environment variable for the SDK
+            std::env::set_var("STORAGE_EMULATOR_HOST", emulator_host);
 
-        let client = Client::new(client_config);
+            let storage = Storage::builder()
+                .build()
+                .await
+                .context("Failed to create Storage client for emulator")?;
+
+            let control = StorageControl::builder()
+                .build()
+                .await
+                .context("Failed to create StorageControl client for emulator")?;
+
+            (storage, control)
+        } else {
+            let storage = Storage::builder()
+                .build()
+                .await
+                .context("Failed to create Storage client")?;
+
+            let control = StorageControl::builder()
+                .build()
+                .await
+                .context("Failed to create StorageControl client")?;
+
+            (storage, control)
+        };
 
         info!(bucket = %config.bucket, prefix = %config.prefix, "GCS fetcher initialized");
 
-        Ok(Self { client, config })
+        Ok(Self {
+            storage,
+            control,
+            config,
+        })
     }
 
     /// Create a new GCS fetcher (convenience constructor)
@@ -97,31 +116,41 @@ impl GcsFetcher {
         Self::from_config(config).await
     }
 
+    /// Get the bucket name
+    fn bucket_name(&self) -> &str {
+        &self.config.bucket
+    }
+
     /// Download data from GCS
     async fn download(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        use google_cloud_storage::http::objects::{download::Range, get::GetObjectRequest};
-
-        let request = GetObjectRequest {
-            bucket: self.config.bucket.clone(),
-            object: path.to_string(),
-            ..Default::default()
-        };
-
-        match self
-            .client
-            .download_object(&request, &Range::default())
+        let mut reader = match self
+            .storage
+            .read_object(self.bucket_name(), path)
+            .send()
             .await
         {
-            Ok(data) => Ok(Some(data)),
+            Ok(reader) => reader,
             Err(e) => {
                 let error_str = e.to_string();
-                if error_str.contains("404") || error_str.contains("No such object") {
-                    Ok(None)
+                if error_str.contains("404")
+                    || error_str.contains("No such object")
+                    || error_str.contains("not found")
+                {
+                    return Ok(None);
                 } else {
-                    Err(anyhow::anyhow!("Failed to download from GCS: {e}"))
+                    return Err(anyhow::anyhow!("Failed to download from GCS: {e}"));
                 }
             }
+        };
+
+        // Read all chunks into a buffer
+        let mut data = Vec::new();
+        while let Some(chunk) = reader.next().await {
+            let chunk = chunk.map_err(|e| anyhow::anyhow!("Failed to read chunk from GCS: {e}"))?;
+            data.extend_from_slice(&chunk);
         }
+
+        Ok(Some(data))
     }
 
     /// Find the batch containing a specific sequence number
@@ -179,45 +208,42 @@ impl StorageFetcher for GcsFetcher {
     }
 
     async fn list_batches(&self) -> Result<Vec<BatchInfo>> {
-        use google_cloud_storage::http::objects::list::ListObjectsRequest;
-
         let prefix = format!("{}/batches/", self.config.prefix);
         let mut batches = Vec::new();
         let mut page_token: Option<String> = None;
 
         loop {
-            let request = ListObjectsRequest {
-                bucket: self.config.bucket.clone(),
-                prefix: Some(prefix.clone()),
-                page_token: page_token.clone(),
-                ..Default::default()
-            };
+            let mut request = self
+                .control
+                .list_objects()
+                .set_parent(self.bucket_name())
+                .set_prefix(&prefix);
 
-            let response = self
-                .client
-                .list_objects(&request)
+            if let Some(ref token) = page_token {
+                request = request.set_page_token(token);
+            }
+
+            let response = request
+                .send()
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to list batch objects: {e}"))?;
 
             // Parse batch info from object names
-            if let Some(items) = response.items {
-                for obj in items {
-                    if let Some(filename) = obj.name.rsplit('/').next() {
-                        if let Some((start, end)) = parse_batch_filename(filename) {
-                            debug!(filename, start, end, "Parsed batch file");
-                            batches.push(BatchInfo::new(start, end, obj.name.clone()));
-                        }
+            for obj in response.objects {
+                if let Some(filename) = obj.name.rsplit('/').next() {
+                    if let Some((start, end)) = parse_batch_filename(filename) {
+                        debug!(filename, start, end, "Parsed batch file");
+                        batches.push(BatchInfo::new(start, end, obj.name.clone()));
                     }
                 }
             }
 
             // Check for more pages
-            match response.next_page_token {
-                Some(token) if !token.is_empty() => {
-                    debug!(token = %token, "Fetching next page of batches");
-                    page_token = Some(token);
-                }
-                _ => break,
+            if !response.next_page_token.is_empty() {
+                debug!(token = %response.next_page_token, "Fetching next page of batches");
+                page_token = Some(response.next_page_token);
+            } else {
+                break;
             }
         }
 
@@ -229,25 +255,23 @@ impl StorageFetcher for GcsFetcher {
     }
 
     async fn get_batch(&self, start_sequence: u64) -> Result<Option<SignedBatch>> {
-        use google_cloud_storage::http::objects::list::ListObjectsRequest;
-
-        // Find batch that starts with this sequence
+        // Find batch that starts with this sequence by listing with a specific prefix
         let prefix = format!("{}/batches/{:012}_", self.config.prefix, start_sequence);
-        let request = ListObjectsRequest {
-            bucket: self.config.bucket.clone(),
-            prefix: Some(prefix),
-            ..Default::default()
-        };
 
-        match self.client.list_objects(&request).await {
-            Ok(response) => {
-                if let Some(obj) = response.items.and_then(|items| items.into_iter().next()) {
-                    return self.get_batch_by_path(&obj.name).await;
-                }
-                Ok(None)
-            }
-            Err(e) => Err(anyhow::anyhow!("Failed to list batch objects: {e}")),
+        let response = self
+            .control
+            .list_objects()
+            .set_parent(self.bucket_name())
+            .set_prefix(&prefix)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list batch objects: {e}"))?;
+
+        if let Some(obj) = response.objects.into_iter().next() {
+            return self.get_batch_by_path(&obj.name).await;
         }
+
+        Ok(None)
     }
 
     async fn get_batch_by_path(&self, path: &str) -> Result<Option<SignedBatch>> {

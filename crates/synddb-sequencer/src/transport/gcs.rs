@@ -17,7 +17,7 @@
 
 use crate::transport::traits::{BatchInfo, PublishMetadata, TransportError, TransportPublisher};
 use async_trait::async_trait;
-use google_cloud_storage::client::Client;
+use google_cloud_storage::client::{Storage, StorageControl};
 use synddb_shared::{
     gcs::GcsConfig,
     types::{
@@ -32,7 +32,8 @@ pub type GcsTransportConfig = GcsConfig;
 
 /// Google Cloud Storage transport for CBOR batches
 pub struct GcsTransport {
-    client: Client,
+    storage: Storage,
+    control: StorageControl,
     config: GcsConfig,
 }
 
@@ -51,21 +52,32 @@ impl GcsTransport {
     ///
     /// Uses default credentials or emulator if configured.
     pub async fn new(config: GcsTransportConfig) -> Result<Self, TransportError> {
-        use google_cloud_storage::client::ClientConfig;
-
-        let client_config = if let Some(ref emulator_host) = config.emulator_host {
+        let (storage, control) = if let Some(ref emulator_host) = config.emulator_host {
             info!(emulator_host = %emulator_host, "Using GCS emulator for transport");
-            let mut cfg = ClientConfig::default().anonymous();
-            cfg.storage_endpoint = emulator_host.clone();
-            cfg
-        } else {
-            ClientConfig::default()
-                .with_auth()
-                .await
-                .map_err(|e| TransportError::Config(format!("Failed to configure GCS auth: {e}")))?
-        };
+            // For emulator, set the STORAGE_EMULATOR_HOST environment variable
+            // The official SDK reads this automatically
+            std::env::set_var("STORAGE_EMULATOR_HOST", emulator_host);
 
-        let client = Client::new(client_config);
+            let storage = Storage::builder().build().await.map_err(|e| {
+                TransportError::Config(format!("Failed to create Storage client: {e}"))
+            })?;
+
+            let control = StorageControl::builder().build().await.map_err(|e| {
+                TransportError::Config(format!("Failed to create StorageControl client: {e}"))
+            })?;
+
+            (storage, control)
+        } else {
+            let storage = Storage::builder().build().await.map_err(|e| {
+                TransportError::Config(format!("Failed to create Storage client: {e}"))
+            })?;
+
+            let control = StorageControl::builder().build().await.map_err(|e| {
+                TransportError::Config(format!("Failed to create StorageControl client: {e}"))
+            })?;
+
+            (storage, control)
+        };
 
         info!(
             bucket = %config.bucket,
@@ -73,7 +85,11 @@ impl GcsTransport {
             "GCS transport initialized"
         );
 
-        Ok(Self { client, config })
+        Ok(Self {
+            storage,
+            control,
+            config,
+        })
     }
 
     /// Get the path for a batch file
@@ -85,26 +101,22 @@ impl GcsTransport {
         )
     }
 
+    /// Get the bucket name in the format expected by the SDK
+    fn bucket_name(&self) -> &str {
+        &self.config.bucket
+    }
+
     /// Upload data to GCS
     async fn upload(
         &self,
         path: &str,
         data: Vec<u8>,
-        content_type: &str,
+        _content_type: &str,
     ) -> Result<(), TransportError> {
-        use google_cloud_storage::http::objects::upload::{Media, UploadObjectRequest, UploadType};
-
-        let mut media = Media::new(path.to_string());
-        media.content_type = content_type.to_string().into();
-
-        let upload_type = UploadType::Simple(media);
-        let request = UploadObjectRequest {
-            bucket: self.config.bucket.clone(),
-            ..Default::default()
-        };
-
-        self.client
-            .upload_object(&request, data, &upload_type)
+        use bytes::Bytes;
+        self.storage
+            .write_object(self.bucket_name(), path, Bytes::from(data))
+            .send_buffered()
             .await
             .map_err(|e| TransportError::Storage(format!("Failed to upload to GCS: {e}")))?;
 
@@ -113,31 +125,38 @@ impl GcsTransport {
 
     /// Download data from GCS
     async fn download(&self, path: &str) -> Result<Option<Vec<u8>>, TransportError> {
-        use google_cloud_storage::http::objects::{download::Range, get::GetObjectRequest};
-
-        let request = GetObjectRequest {
-            bucket: self.config.bucket.clone(),
-            object: path.to_string(),
-            ..Default::default()
-        };
-
-        match self
-            .client
-            .download_object(&request, &Range::default())
+        let mut reader = match self
+            .storage
+            .read_object(self.bucket_name(), path)
+            .send()
             .await
         {
-            Ok(data) => Ok(Some(data)),
+            Ok(reader) => reader,
             Err(e) => {
                 let error_str = e.to_string();
-                if error_str.contains("404") || error_str.contains("No such object") {
-                    Ok(None)
+                if error_str.contains("404")
+                    || error_str.contains("No such object")
+                    || error_str.contains("not found")
+                {
+                    return Ok(None);
                 } else {
-                    Err(TransportError::Storage(format!(
+                    return Err(TransportError::Storage(format!(
                         "Failed to download from GCS: {e}"
-                    )))
+                    )));
                 }
             }
+        };
+
+        // Read all chunks into a buffer
+        let mut data = Vec::new();
+        while let Some(chunk) = reader.next().await {
+            let chunk = chunk.map_err(|e| {
+                TransportError::Storage(format!("Failed to read chunk from GCS: {e}"))
+            })?;
+            data.extend_from_slice(&chunk);
         }
+
+        Ok(Some(data))
     }
 
     /// Find the batch containing a specific sequence number
@@ -163,44 +182,42 @@ impl GcsTransport {
 
     /// List all batch files and parse their metadata
     ///
-    /// Handles GCS pagination to retrieve all batches (GCS returns max 1000 per request).
+    /// Handles GCS pagination to retrieve all batches.
     async fn list_batch_files(&self) -> Result<Vec<(u64, u64, String)>, TransportError> {
-        use google_cloud_storage::http::objects::list::ListObjectsRequest;
-
         let prefix = format!("{}/batches/", self.config.prefix);
         let mut batches = Vec::new();
         let mut page_token: Option<String> = None;
 
         loop {
-            let request = ListObjectsRequest {
-                bucket: self.config.bucket.clone(),
-                prefix: Some(prefix.clone()),
-                page_token: page_token.clone(),
-                ..Default::default()
-            };
+            let mut request = self
+                .control
+                .list_objects()
+                .set_parent(self.bucket_name())
+                .set_prefix(&prefix);
 
-            let response = self.client.list_objects(&request).await.map_err(|e| {
+            if let Some(ref token) = page_token {
+                request = request.set_page_token(token);
+            }
+
+            let response = request.send().await.map_err(|e| {
                 TransportError::Storage(format!("Failed to list batch objects: {e}"))
             })?;
 
             // Parse batch info from object names
-            if let Some(items) = response.items {
-                for obj in items {
-                    if let Some(filename) = obj.name.rsplit('/').next() {
-                        if let Some((start, end)) = parse_batch_filename(filename) {
-                            batches.push((start, end, obj.name));
-                        }
+            for obj in response.objects {
+                if let Some(filename) = obj.name.rsplit('/').next() {
+                    if let Some((start, end)) = parse_batch_filename(filename) {
+                        batches.push((start, end, obj.name));
                     }
                 }
             }
 
             // Check for more pages
-            match response.next_page_token {
-                Some(token) if !token.is_empty() => {
-                    debug!(token = %token, "Fetching next page of batch files");
-                    page_token = Some(token);
-                }
-                _ => break,
+            if !response.next_page_token.is_empty() {
+                debug!(token = %response.next_page_token, "Fetching next page of batch files");
+                page_token = Some(response.next_page_token);
+            } else {
+                break;
             }
         }
 

@@ -972,29 +972,20 @@ fn init_logging() {
 
 #[cfg(feature = "gcs")]
 async fn upload_to_gcs(bucket: &str, content: &str) -> Result<()> {
-    use google_cloud_storage::{
-        client::{Client, ClientConfig},
-        http::objects::upload::{Media, UploadObjectRequest, UploadType},
-    };
+    use bytes::Bytes;
+    use google_cloud_storage::client::Storage;
 
-    let config = ClientConfig::default()
-        .with_auth()
+    let storage = Storage::builder()
+        .build()
         .await
-        .context("Failed to configure GCS auth")?;
-
-    let client = Client::new(config);
+        .context("Failed to create GCS Storage client")?;
 
     let timestamp = format_timestamp_utc();
     let path = format!("attestation-samples/samples_{}.json", timestamp);
 
-    let upload_type = UploadType::Simple(Media::new(path.clone()));
-    let request = UploadObjectRequest {
-        bucket: bucket.to_string(),
-        ..Default::default()
-    };
-
-    client
-        .upload_object(&request, content.as_bytes().to_vec(), &upload_type)
+    storage
+        .write_object(bucket, &path, Bytes::from(content.to_string()))
+        .send_buffered()
         .await
         .context("Failed to upload to GCS")?;
 

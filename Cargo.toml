@@ -94,8 +94,8 @@ k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
 url = { version = "2.5", features = ["serde"] }
 async-trait = "0.1"
 
-# Google Cloud
-google-cloud-storage = "0.22"
+# Google Cloud (official SDK)
+google-cloud-storage = "1.5"
 
 # Metrics (using metrics facade with Prometheus exporter)
 metrics = "0.24"
