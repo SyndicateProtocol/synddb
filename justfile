@@ -366,8 +366,8 @@ validator-bridge:
     cargo run -p synddb-validator --release
 
 # Run gas funding relayer for TEE key registration
-
 # The relayer handles key registration and funding for TEE keys that don't have gas.
+
 # Requires GasTreasury contract to be deployed and configured.
 [group('components')]
 relayer treasury_address:
