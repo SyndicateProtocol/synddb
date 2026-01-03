@@ -57,35 +57,16 @@ variable "machine_type" {
   }
 }
 
-# TEE Bootstrap
-variable "enable_key_bootstrap" {
-  description = "Enable TEE key bootstrapping (automatically deploys proof service)"
-  type        = bool
-  default     = false
-}
-
-variable "tee_key_manager_address" {
-  description = "TeeKeyManager contract address"
-  type        = string
-  default     = ""
-}
-
-variable "bootstrap_rpc_url" {
-  description = "RPC URL for bootstrap transactions"
-  type        = string
-  default     = ""
-}
-
-variable "bootstrap_chain_id" {
-  description = "Chain ID for bootstrap transactions"
-  type        = number
-  default     = 0
-}
-
-variable "attestation_audience" {
-  description = "Expected audience for attestation tokens"
-  type        = string
-  default     = ""
+# TEE Bootstrap (null = disabled, automatically deploys proof service when enabled)
+variable "tee_bootstrap" {
+  description = "TEE key bootstrap configuration. Set to null to disable."
+  type = object({
+    key_manager_address  = string # TeeKeyManager contract address
+    rpc_url              = string # RPC URL for bootstrap transactions
+    chain_id             = number # Chain ID for bootstrap transactions
+    attestation_audience = string # Expected audience for attestation tokens
+  })
+  default = null
 }
 
 # Logging

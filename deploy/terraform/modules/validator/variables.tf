@@ -78,41 +78,17 @@ variable "bridge_chain_id" {
   default     = 0
 }
 
-# TEE Bootstrap Configuration
-variable "enable_key_bootstrap" {
-  description = "Enable TEE key bootstrapping"
-  type        = bool
-  default     = false
-}
-
-variable "tee_key_manager_address" {
-  description = "TeeKeyManager contract address"
-  type        = string
-  default     = ""
-}
-
-variable "bootstrap_rpc_url" {
-  description = "RPC URL for bootstrap transactions"
-  type        = string
-  default     = ""
-}
-
-variable "bootstrap_chain_id" {
-  description = "Chain ID for bootstrap transactions"
-  type        = number
-  default     = 0
-}
-
-variable "proof_service_url" {
-  description = "URL of GPU proof service"
-  type        = string
-  default     = ""
-}
-
-variable "attestation_audience" {
-  description = "Expected audience for attestation tokens"
-  type        = string
-  default     = ""
+# TEE Bootstrap Configuration (null = disabled)
+variable "tee_bootstrap" {
+  description = "TEE key bootstrap configuration. Set to null to disable."
+  type = object({
+    key_manager_address  = string # TeeKeyManager contract address
+    rpc_url              = string # RPC URL for bootstrap transactions
+    chain_id             = number # Chain ID for bootstrap transactions
+    proof_service_url    = string # URL of GPU proof service
+    attestation_audience = string # Expected audience for attestation tokens
+  })
+  default = null
 }
 
 # Logging

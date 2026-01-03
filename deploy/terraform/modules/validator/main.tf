@@ -37,13 +37,13 @@ locals {
       BRIDGE_CHAIN_ID         = tostring(var.bridge_chain_id)
     } : {},
     # TEE bootstrap configuration (if enabled)
-    var.enable_key_bootstrap ? {
-      ENABLE_KEY_BOOTSTRAP            = "true"
-      TEE_KEY_MANAGER_CONTRACT_ADDRESS = var.tee_key_manager_address
-      BOOTSTRAP_RPC_URL               = var.bootstrap_rpc_url
-      BOOTSTRAP_CHAIN_ID              = tostring(var.bootstrap_chain_id)
-      PROOF_SERVICE_URL               = var.proof_service_url
-      ATTESTATION_AUDIENCE            = var.attestation_audience
+    var.tee_bootstrap != null ? {
+      ENABLE_KEY_BOOTSTRAP             = "true"
+      TEE_KEY_MANAGER_CONTRACT_ADDRESS = var.tee_bootstrap.key_manager_address
+      BOOTSTRAP_RPC_URL                = var.tee_bootstrap.rpc_url
+      BOOTSTRAP_CHAIN_ID               = tostring(var.tee_bootstrap.chain_id)
+      PROOF_SERVICE_URL                = var.tee_bootstrap.proof_service_url
+      ATTESTATION_AUDIENCE             = var.tee_bootstrap.attestation_audience
     } : {}
   )
 }

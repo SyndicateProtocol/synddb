@@ -83,8 +83,9 @@ module "iam" {
   depends_on = [module.storage]
 }
 
-# Proof Service (required for TEE bootstrap)
+# Proof Service (deployed when TEE bootstrap is enabled)
 module "proof_service" {
+  count  = var.tee_bootstrap != null ? 1 : 0
   source = "../../modules/proof-service"
 
   project_id            = var.project_id
@@ -116,13 +117,16 @@ module "sequencer" {
   machine_type          = var.sequencer_machine_type
   batch_max_messages    = var.batch_max_messages
   batch_flush_interval  = var.batch_flush_interval
-  enable_key_bootstrap  = var.enable_key_bootstrap
-  tee_key_manager_address = var.tee_key_manager_address
-  bootstrap_rpc_url     = var.bootstrap_rpc_url
-  bootstrap_chain_id    = var.bootstrap_chain_id
-  proof_service_url     = module.proof_service.service_url
-  attestation_audience  = var.attestation_audience
   labels                = var.labels
+
+  # TEE bootstrap (null = disabled)
+  tee_bootstrap = var.tee_bootstrap != null ? {
+    key_manager_address  = var.tee_bootstrap.key_manager_address
+    rpc_url              = var.tee_bootstrap.rpc_url
+    chain_id             = var.tee_bootstrap.chain_id
+    proof_service_url    = module.proof_service[0].service_url
+    attestation_audience = var.tee_bootstrap.attestation_audience
+  } : null
 
   depends_on = [module.iam, module.networking, module.proof_service]
 }
@@ -144,13 +148,16 @@ module "validator" {
   enable_bridge_signer  = var.enable_bridge_signer
   bridge_contract_address = var.bridge_contract_address
   bridge_chain_id       = var.bridge_chain_id
-  enable_key_bootstrap  = var.enable_key_bootstrap
-  tee_key_manager_address = var.tee_key_manager_address
-  bootstrap_rpc_url     = var.bootstrap_rpc_url
-  bootstrap_chain_id    = var.bootstrap_chain_id
-  proof_service_url     = module.proof_service.service_url
-  attestation_audience  = var.attestation_audience
   labels                = var.labels
+
+  # TEE bootstrap (null = disabled)
+  tee_bootstrap = var.tee_bootstrap != null ? {
+    key_manager_address  = var.tee_bootstrap.key_manager_address
+    rpc_url              = var.tee_bootstrap.rpc_url
+    chain_id             = var.tee_bootstrap.chain_id
+    proof_service_url    = module.proof_service[0].service_url
+    attestation_audience = var.tee_bootstrap.attestation_audience
+  } : null
 
   depends_on = [module.iam, module.networking, module.sequencer, module.proof_service]
 }

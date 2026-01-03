@@ -26,11 +26,13 @@ artifact_registry_location   = "us-central1"
 artifact_registry_repository = "synddb"
 
 # TEE Bootstrap (required for production)
-enable_key_bootstrap    = true
-tee_key_manager_address = "0x..."  # Deployed TeeKeyManager contract
-bootstrap_rpc_url       = "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
-bootstrap_chain_id      = 1
-attestation_audience    = "https://synddb.your-domain.com"
+# Set to null to disable, or provide the object to enable
+tee_bootstrap = {
+  key_manager_address  = "0x..."  # Deployed TeeKeyManager contract
+  rpc_url              = "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
+  chain_id             = 1
+  attestation_audience = "https://synddb.your-domain.com"
+}
 
 # Bridge signer (optional, for cross-chain withdrawals)
 enable_bridge_signer    = false

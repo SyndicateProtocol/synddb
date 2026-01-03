@@ -27,12 +27,14 @@ validator_machine_type = "n2d-standard-4"
 artifact_registry_location   = "us-central1"
 artifact_registry_repository = "synddb"
 
-# TEE Bootstrap (enabled - use testnet for staging)
-enable_key_bootstrap    = true
-tee_key_manager_address = "0x..."  # Testnet TeeKeyManager contract
-bootstrap_rpc_url       = "https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY"
-bootstrap_chain_id      = 11155111  # Sepolia
-attestation_audience    = "https://synddb-staging.your-domain.com"
+# TEE Bootstrap (use testnet for staging)
+# Set to null to disable, or provide the object to enable
+tee_bootstrap = {
+  key_manager_address  = "0x..."  # Testnet TeeKeyManager contract
+  rpc_url              = "https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY"
+  chain_id             = 11155111  # Sepolia
+  attestation_audience = "https://synddb-staging.your-domain.com"
+}
 
 # Bridge signer (optional)
 enable_bridge_signer    = false

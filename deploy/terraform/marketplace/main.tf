@@ -143,7 +143,7 @@ resource "google_service_account" "validator" {
 }
 
 resource "google_service_account" "proof_service" {
-  count        = var.enable_key_bootstrap ? 1 : 0
+  count        = var.tee_bootstrap != null ? 1 : 0
   project      = var.project_id
   account_id   = "${local.name_prefix}-proof"
   display_name = "SyndDB Proof Service (${local.name_prefix})"
@@ -254,12 +254,12 @@ resource "google_compute_instance" "sequencer" {
       "tee-env-LOG_JSON"       = "true"
       "tee-env-RUST_LOG"       = var.rust_log
     },
-    var.enable_key_bootstrap ? {
+    var.tee_bootstrap != null ? {
       "tee-env-ENABLE_KEY_BOOTSTRAP"             = "true"
-      "tee-env-TEE_KEY_MANAGER_CONTRACT_ADDRESS" = var.tee_key_manager_address
-      "tee-env-BOOTSTRAP_RPC_URL"                = var.bootstrap_rpc_url
-      "tee-env-BOOTSTRAP_CHAIN_ID"               = tostring(var.bootstrap_chain_id)
-      "tee-env-ATTESTATION_AUDIENCE"             = var.attestation_audience
+      "tee-env-TEE_KEY_MANAGER_CONTRACT_ADDRESS" = var.tee_bootstrap.key_manager_address
+      "tee-env-BOOTSTRAP_RPC_URL"                = var.tee_bootstrap.rpc_url
+      "tee-env-BOOTSTRAP_CHAIN_ID"               = tostring(var.tee_bootstrap.chain_id)
+      "tee-env-ATTESTATION_AUDIENCE"             = var.tee_bootstrap.attestation_audience
       "tee-env-PROOF_SERVICE_URL"                = google_cloud_run_v2_service.proof_service[0].uri
     } : {}
   )
@@ -332,12 +332,12 @@ resource "google_compute_instance" "validator" {
       "tee-env-LOG_JSON"      = "true"
       "tee-env-RUST_LOG"      = var.rust_log
     },
-    var.enable_key_bootstrap ? {
+    var.tee_bootstrap != null ? {
       "tee-env-ENABLE_KEY_BOOTSTRAP"             = "true"
-      "tee-env-TEE_KEY_MANAGER_CONTRACT_ADDRESS" = var.tee_key_manager_address
-      "tee-env-BOOTSTRAP_RPC_URL"                = var.bootstrap_rpc_url
-      "tee-env-BOOTSTRAP_CHAIN_ID"               = tostring(var.bootstrap_chain_id)
-      "tee-env-ATTESTATION_AUDIENCE"             = var.attestation_audience
+      "tee-env-TEE_KEY_MANAGER_CONTRACT_ADDRESS" = var.tee_bootstrap.key_manager_address
+      "tee-env-BOOTSTRAP_RPC_URL"                = var.tee_bootstrap.rpc_url
+      "tee-env-BOOTSTRAP_CHAIN_ID"               = tostring(var.tee_bootstrap.chain_id)
+      "tee-env-ATTESTATION_AUDIENCE"             = var.tee_bootstrap.attestation_audience
       "tee-env-PROOF_SERVICE_URL"                = google_cloud_run_v2_service.proof_service[0].uri
     } : {}
   )
@@ -359,7 +359,7 @@ resource "google_compute_instance" "validator" {
 # ============================================================================
 
 resource "google_cloud_run_v2_service" "proof_service" {
-  count    = var.enable_key_bootstrap ? 1 : 0
+  count    = var.tee_bootstrap != null ? 1 : 0
   provider = google-beta
   name     = "${local.name_prefix}-proof"
   location = var.region
