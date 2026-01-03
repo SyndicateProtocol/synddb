@@ -25,7 +25,12 @@ output "gcs_bucket_url" {
 
 output "proof_service_url" {
   description = "URL of the proof service"
-  value       = module.proof_service.service_url
+  value       = length(module.proof_service) > 0 ? module.proof_service[0].service_url : null
+}
+
+output "relayer_url" {
+  description = "URL of the relayer service"
+  value       = length(module.relayer) > 0 ? module.relayer[0].service_url : null
 }
 
 output "network_name" {

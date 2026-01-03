@@ -47,6 +47,7 @@ resource "google_project_service" "apis" {
     "iamcredentials.googleapis.com",
     "storage.googleapis.com",
     "run.googleapis.com",
+    "secretmanager.googleapis.com",
   ])
 
   project            = var.project_id
@@ -149,6 +150,13 @@ resource "google_service_account" "proof_service" {
   display_name = "SyndDB Proof Service (${local.name_prefix})"
 }
 
+resource "google_service_account" "relayer" {
+  count        = var.relayer_config != null ? 1 : 0
+  project      = var.project_id
+  account_id   = "${local.name_prefix}-relayer"
+  display_name = "SyndDB Relayer (${local.name_prefix})"
+}
+
 resource "google_project_iam_member" "sequencer_cc" {
   project = var.project_id
   role    = "roles/confidentialcomputing.workloadUser"
@@ -171,6 +179,13 @@ resource "google_project_iam_member" "validator_logging" {
   project = var.project_id
   role    = "roles/logging.logWriter"
   member  = "serviceAccount:${google_service_account.validator.email}"
+}
+
+resource "google_project_iam_member" "relayer_logging" {
+  count   = var.relayer_config != null ? 1 : 0
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.relayer[0].email}"
 }
 
 # ============================================================================
@@ -425,4 +440,152 @@ resource "google_cloud_run_v2_service" "proof_service" {
   labels = local.labels
 
   depends_on = [google_project_service.apis]
+}
+
+# ============================================================================
+# Relayer Service (deployed when relayer config is provided)
+# ============================================================================
+
+# Secret for relayer private key
+resource "google_secret_manager_secret" "relayer_private_key" {
+  count     = var.relayer_config != null ? 1 : 0
+  project   = var.project_id
+  secret_id = "${local.name_prefix}-relayer-key"
+
+  replication {
+    auto {}
+  }
+
+  labels = local.labels
+
+  depends_on = [google_project_service.apis]
+}
+
+# Grant relayer access to the secret
+resource "google_secret_manager_secret_iam_member" "relayer_secret_access" {
+  count     = var.relayer_config != null ? 1 : 0
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.relayer_private_key[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.relayer[0].email}"
+}
+
+resource "google_cloud_run_v2_service" "relayer" {
+  count    = var.relayer_config != null ? 1 : 0
+  provider = google-beta
+  name     = "${local.name_prefix}-relayer"
+  location = var.region
+  project  = var.project_id
+  ingress  = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+
+  template {
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 2
+    }
+
+    timeout = "300s"
+
+    service_account = google_service_account.relayer[0].email
+
+    containers {
+      image = var.relayer_image
+
+      ports {
+        container_port = 8082
+      }
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+        cpu_idle          = true
+        startup_cpu_boost = true
+      }
+
+      env {
+        name  = "RELAYER_LISTEN_ADDR"
+        value = "0.0.0.0:8082"
+      }
+
+      env {
+        name  = "RPC_URL"
+        value = var.relayer_config.rpc_url
+      }
+
+      env {
+        name  = "CHAIN_ID"
+        value = tostring(var.relayer_config.chain_id)
+      }
+
+      env {
+        name  = "TEE_KEY_MANAGER_CONTRACT_ADDRESS"
+        value = var.relayer_config.key_manager_address
+      }
+
+      env {
+        name  = "GAS_TREASURY_CONTRACT_ADDRESS"
+        value = var.relayer_config.treasury_address
+      }
+
+      env {
+        name  = "REQUIRED_AUDIENCE_HASH"
+        value = var.relayer_config.required_audience_hash
+      }
+
+      env {
+        name  = "ALLOWED_IMAGE_DIGESTS"
+        value = join(",", var.relayer_config.allowed_image_digests)
+      }
+
+      env {
+        name = "RELAYER_PRIVATE_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.relayer_private_key[0].secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name  = "LOG_JSON"
+        value = "true"
+      }
+
+      env {
+        name  = "RUST_LOG"
+        value = var.rust_log
+      }
+
+      startup_probe {
+        http_get {
+          path = "/health"
+          port = 8082
+        }
+        initial_delay_seconds = 5
+        period_seconds        = 5
+        failure_threshold     = 12
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/health"
+          port = 8082
+        }
+        period_seconds    = 30
+        failure_threshold = 3
+      }
+    }
+
+    max_instance_request_concurrency = 80
+  }
+
+  labels = local.labels
+
+  depends_on = [
+    google_project_service.apis,
+    google_secret_manager_secret_iam_member.relayer_secret_access,
+  ]
 }

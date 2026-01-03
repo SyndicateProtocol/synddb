@@ -31,6 +31,12 @@ variable "proof_service_image" {
   type        = string
 }
 
+variable "relayer_image" {
+  description = "Relayer container image URI"
+  type        = string
+  default     = ""
+}
+
 # Storage
 variable "gcs_bucket_name" {
   description = "GCS bucket name for batch storage"
@@ -109,6 +115,20 @@ variable "batch_flush_interval" {
   description = "Batch flush interval"
   type        = string
   default     = "2s"
+}
+
+# Relayer configuration (null = disabled)
+variable "relayer_config" {
+  description = "Relayer configuration. Set to null to disable."
+  type = object({
+    rpc_url                = string       # RPC URL for transaction submission
+    chain_id               = number       # Chain ID for EIP-712 domain
+    key_manager_address    = string       # TeeKeyManager contract address
+    treasury_address       = string       # GasTreasury contract address
+    required_audience_hash = string       # Audience hash for the application
+    allowed_image_digests  = list(string) # Allowed TEE image digests
+  })
+  default = null
 }
 
 # Labels

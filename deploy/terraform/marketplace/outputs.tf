@@ -90,12 +90,31 @@ output "gcs_bucket_url" {
 
 output "proof_service_url" {
   description = "URL of the proof service (if deployed)"
-  value       = var.deploy_proof_service ? google_cloud_run_v2_service.proof_service[0].uri : null
+  value       = var.tee_bootstrap != null ? google_cloud_run_v2_service.proof_service[0].uri : null
 }
 
 output "proof_service_name" {
   description = "Name of the proof service (if deployed)"
-  value       = var.deploy_proof_service ? google_cloud_run_v2_service.proof_service[0].name : null
+  value       = var.tee_bootstrap != null ? google_cloud_run_v2_service.proof_service[0].name : null
+}
+
+# =============================================================================
+# Relayer Service (Optional)
+# =============================================================================
+
+output "relayer_url" {
+  description = "URL of the relayer service (if deployed)"
+  value       = var.relayer_config != null ? google_cloud_run_v2_service.relayer[0].uri : null
+}
+
+output "relayer_name" {
+  description = "Name of the relayer service (if deployed)"
+  value       = var.relayer_config != null ? google_cloud_run_v2_service.relayer[0].name : null
+}
+
+output "relayer_secret_id" {
+  description = "Secret Manager secret ID for relayer private key (set manually after deployment)"
+  value       = var.relayer_config != null ? google_secret_manager_secret.relayer_private_key[0].secret_id : null
 }
 
 # =============================================================================

@@ -164,3 +164,34 @@ module "validator" {
 
   depends_on = [module.iam, module.networking, module.sequencer, module.proof_service]
 }
+
+# Relayer - gas funding service for TEE keys
+module "relayer" {
+  count  = var.relayer_config != null && var.relayer_image != "" ? 1 : 0
+  source = "../../modules/relayer"
+
+  project_id            = var.project_id
+  region                = var.region
+  service_name          = "synddb-prod-relayer"
+  container_image       = var.relayer_image
+  service_account_email = module.iam.relayer_service_account_email
+
+  # Blockchain configuration
+  rpc_url             = var.relayer_config.rpc_url
+  chain_id            = var.relayer_config.chain_id
+  key_manager_address = var.relayer_config.key_manager_address
+  treasury_address    = var.relayer_config.treasury_address
+
+  # Application configuration
+  required_audience_hash = var.relayer_config.required_audience_hash
+  allowed_image_digests  = var.relayer_config.allowed_image_digests
+
+  # Production settings
+  ingress               = "internal"
+  allow_unauthenticated = false
+  min_instances         = 1  # Keep one instance warm in production
+  max_instances         = 4
+  labels                = var.labels
+
+  depends_on = [module.iam]
+}

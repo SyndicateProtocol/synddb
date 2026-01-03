@@ -27,3 +27,13 @@ output "proof_service_account_id" {
   description = "ID of the proof service account"
   value       = google_service_account.proof_service.id
 }
+
+output "relayer_service_account_email" {
+  description = "Email of the relayer service account"
+  value       = google_service_account.relayer.email
+}
+
+output "relayer_service_account_id" {
+  description = "ID of the relayer service account"
+  value       = google_service_account.relayer.id
+}

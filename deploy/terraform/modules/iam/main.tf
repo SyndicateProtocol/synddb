@@ -31,6 +31,14 @@ resource "google_service_account" "proof_service" {
   description  = "Service account for SyndDB proof generation service"
 }
 
+# Relayer service account
+resource "google_service_account" "relayer" {
+  project      = var.project_id
+  account_id   = "${var.name_prefix}-relayer"
+  display_name = "SyndDB Relayer"
+  description  = "Service account for SyndDB gas funding relayer"
+}
+
 # Confidential Computing workload user role (required for attestation)
 resource "google_project_iam_member" "sequencer_cc_workload" {
   project = var.project_id
@@ -61,6 +69,12 @@ resource "google_project_iam_member" "proof_service_logging" {
   project = var.project_id
   role    = "roles/logging.logWriter"
   member  = "serviceAccount:${google_service_account.proof_service.email}"
+}
+
+resource "google_project_iam_member" "relayer_logging" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.relayer.email}"
 }
 
 # GCS permissions - sequencer writes, validator reads
