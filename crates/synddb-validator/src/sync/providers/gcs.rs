@@ -220,7 +220,7 @@ impl StorageFetcher for GcsFetcher {
             let mut request = self
                 .control
                 .list_objects()
-                .set_parent(&self.bucket_path())
+                .set_parent(self.bucket_path())
                 .set_prefix(&prefix);
 
             if let Some(ref token) = page_token {
@@ -264,7 +264,7 @@ impl StorageFetcher for GcsFetcher {
         let response = self
             .control
             .list_objects()
-            .set_parent(&self.bucket_path())
+            .set_parent(self.bucket_path())
             .set_prefix(&prefix)
             .send()
             .await

@@ -196,7 +196,7 @@ impl GcsTransport {
             let mut request = self
                 .control
                 .list_objects()
-                .set_parent(&self.bucket_path())
+                .set_parent(self.bucket_path())
                 .set_prefix(&prefix);
 
             if let Some(ref token) = page_token {

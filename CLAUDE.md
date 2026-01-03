@@ -128,7 +128,16 @@ gh pr checks
 
 # View PR details
 gh pr view <pr-number>
+
+# Check your current API rate limit
+gh api rate_limit
 ```
+
+**Rate Limits:** The `gh` CLI uses GitHub's REST and GraphQL APIs, which are subject to rate limits (5,000 requests/hour for authenticated users). Be judicious when checking workflow status:
+- Avoid repeatedly running `gh run list` in a loop - each call consumes API quota
+- Prefer `gh run watch <run-id>` to monitor a single run (it polls efficiently)
+- For long-running workflows, check status infrequently rather than polling continuously
+- If you hit rate limits, wait before retrying - the limit resets hourly
 
 **Note:** When squash-merging PRs, ensure the commit message body does not contain `[skip ci]` - GitHub scans the entire message and will skip all workflows if found.
 
