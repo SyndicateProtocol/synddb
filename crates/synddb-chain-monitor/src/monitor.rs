@@ -119,11 +119,25 @@ impl ChainMonitor {
         let mut sub = self.eth_client.subscribe_logs(&self.filter).await;
         info!("WebSocket subscription active");
 
+        let mut last_checkpoint_block: Option<u64> = None;
+
         loop {
             let heartbeat_timeout = Duration::from_secs(30);
 
             match timeout(heartbeat_timeout, sub.recv()).await {
                 Ok(Ok(log)) => {
+                    // Save block checkpoint for crash recovery
+                    if let Some(block_number) = log.block_number {
+                        // Only save checkpoint if we've advanced to a new block
+                        if last_checkpoint_block.map_or(true, |last| block_number > last) {
+                            if let Err(e) = self.event_store.set_last_processed_block(block_number)
+                            {
+                                warn!(%e, "Failed to save block checkpoint");
+                            }
+                            last_checkpoint_block = Some(block_number);
+                        }
+                    }
+
                     if let Err(e) = self.process_event(&log).await {
                         error!(%e, "Failed to process event");
                     }
