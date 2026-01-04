@@ -157,8 +157,10 @@ impl ChainMonitor {
     /// Run in RPC polling mode.
     ///
     /// This polls the RPC endpoint periodically for new events.
+    /// Uses exponential backoff on errors to avoid hammering failing endpoints.
     async fn run_rpc_monitor(&self) -> Result<()> {
-        let poll_interval = Duration::from_secs(5);
+        let base_poll_interval = Duration::from_secs(5);
+        let max_poll_interval = Duration::from_secs(60);
         let polling_window = 100; // blocks per poll
 
         // Resume from last processed block or use filter's start block
@@ -169,14 +171,16 @@ impl ChainMonitor {
             .get_last_processed_block()?
             .unwrap_or(start_block_from_filter);
 
+        let mut consecutive_errors = 0u32;
+
         info!(
             starting_block = current_block,
-            poll_interval_secs = poll_interval.as_secs(),
+            poll_interval_secs = base_poll_interval.as_secs(),
             "RPC polling mode active"
         );
 
         loop {
-            match self.poll_for_events(current_block, polling_window).await {
+            let sleep_duration = match self.poll_for_events(current_block, polling_window).await {
                 Ok((logs, end_block)) => {
                     if !logs.is_empty() {
                         info!(
@@ -194,13 +198,29 @@ impl ChainMonitor {
 
                     current_block = end_block;
                     self.event_store.set_last_processed_block(end_block)?;
+
+                    // Reset backoff on success
+                    consecutive_errors = 0;
+                    base_poll_interval
                 }
                 Err(e) => {
-                    error!(%e, "Error polling for logs");
+                    consecutive_errors += 1;
+                    // Exponential backoff: 5s, 10s, 20s, 40s, 60s (capped)
+                    let backoff = std::cmp::min(
+                        base_poll_interval * 2u32.saturating_pow(consecutive_errors - 1),
+                        max_poll_interval,
+                    );
+                    error!(
+                        %e,
+                        consecutive_errors,
+                        next_retry_secs = backoff.as_secs(),
+                        "Error polling for logs, backing off"
+                    );
+                    backoff
                 }
-            }
+            };
 
-            tokio::time::sleep(poll_interval).await;
+            tokio::time::sleep(sleep_duration).await;
         }
     }
 
