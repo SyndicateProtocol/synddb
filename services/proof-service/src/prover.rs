@@ -37,7 +37,7 @@ impl AttestationProver {
     /// * `jwt_token` - Raw JWT attestation token from Confidential Space
     /// * `jwk` - JWK public key that signed the token
     /// * `expected_audience` - Expected audience claim
-    /// * `tee_public_key` - 64-byte uncompressed secp256k1 public key of the TEE
+    /// * `evm_public_key` - 64-byte uncompressed secp256k1 public key for EVM signing
     ///
     /// # Returns
     /// The SP1 proof with public values
@@ -46,7 +46,7 @@ impl AttestationProver {
         jwt_token: &str,
         jwk: &JwkKey,
         expected_audience: &str,
-        tee_public_key: &[u8; 64],
+        evm_public_key: &[u8; 64],
     ) -> Result<SP1ProofWithPublicValues> {
         info!("Starting proof generation");
 
@@ -55,7 +55,7 @@ impl AttestationProver {
         stdin.write(&jwt_token.as_bytes().to_vec());
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
-        stdin.write(tee_public_key);
+        stdin.write(evm_public_key);
 
         // Setup proving and verification keys
         debug!("Setting up proving keys");
@@ -86,7 +86,7 @@ impl AttestationProver {
         jwt_token: &str,
         jwk: &JwkKey,
         expected_audience: &str,
-        tee_public_key: &[u8; 64],
+        evm_public_key: &[u8; 64],
     ) -> Result<Vec<u8>> {
         info!("Executing program in test mode");
 
@@ -94,7 +94,7 @@ impl AttestationProver {
         stdin.write(&jwt_token.as_bytes().to_vec());
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
-        stdin.write(tee_public_key);
+        stdin.write(evm_public_key);
 
         let (output, report) = self
             .client

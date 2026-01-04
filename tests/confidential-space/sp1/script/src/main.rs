@@ -102,9 +102,9 @@ fn main() {
     // Setup prover client
     let client = ProverClient::from_env();
 
-    // Generate a mock TEE public key for testing (64 bytes)
-    // In production, this would be the actual TEE's secp256k1 public key
-    let mock_tee_public_key: [u8; 64] = {
+    // Generate a mock EVM public key for testing (64 bytes)
+    // In production, this would be the sequencer/validator's secp256k1 public key
+    let mock_evm_public_key: [u8; 64] = {
         let mut key = [0u8; 64];
         // Use a deterministic pattern for reproducible tests
         for (i, byte) in key.iter_mut().enumerate() {
@@ -113,17 +113,17 @@ fn main() {
         key
     };
 
-    // Derive expected address from mock public key
-    let pubkey_hash = keccak256(&mock_tee_public_key);
-    let expected_tee_address = Address::from_slice(&pubkey_hash[12..]);
-    println!("Mock TEE address: {}", expected_tee_address);
+    // Derive expected address from mock EVM public key
+    let pubkey_hash = keccak256(&mock_evm_public_key);
+    let expected_evm_address = Address::from_slice(&pubkey_hash[12..]);
+    println!("Mock EVM address: {}", expected_evm_address);
 
     // Prepare inputs for the zkVM
     let mut stdin = SP1Stdin::new();
     stdin.write(&sample.raw_token.as_bytes().to_vec());
     stdin.write(&jwk);
     stdin.write(&sample.audience);
-    stdin.write(&mock_tee_public_key);
+    stdin.write(&mock_evm_public_key);
 
     if args.execute {
         println!("\n=== Executing program (test mode) ===\n");
@@ -191,8 +191,8 @@ fn main() {
             keccak256(expected.audience.as_bytes())
         );
         assert_eq!(
-            public_values.tee_signing_key, expected_tee_address,
-            "TEE address mismatch"
+            public_values.tee_signing_key, expected_evm_address,
+            "EVM address mismatch"
         );
 
         println!("\nAll values match local verification!");

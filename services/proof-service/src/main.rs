@@ -42,8 +42,8 @@ struct ProveRequest {
     jwt_token: String,
     /// Expected audience claim
     expected_audience: String,
-    /// TEE public key (64-byte uncompressed, hex-encoded with 0x prefix)
-    tee_public_key: String,
+    /// EVM public key (64-byte uncompressed secp256k1, hex-encoded with 0x prefix)
+    evm_public_key: String,
 }
 
 /// Response from proof generation
@@ -174,13 +174,13 @@ async fn prove_handler(
 async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Result<ProveResponse> {
     info!("Processing proof request");
 
-    // Parse TEE public key from hex
-    let pubkey_hex = request.tee_public_key.trim_start_matches("0x");
+    // Parse EVM public key from hex
+    let pubkey_hex = request.evm_public_key.trim_start_matches("0x");
     let pubkey_bytes = hex::decode(pubkey_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid TEE public key hex: {}", e))?;
-    let tee_public_key: [u8; 64] = pubkey_bytes
+        .map_err(|e| anyhow::anyhow!("Invalid EVM public key hex: {}", e))?;
+    let evm_public_key: [u8; 64] = pubkey_bytes
         .try_into()
-        .map_err(|_| anyhow::anyhow!("TEE public key must be exactly 64 bytes"))?;
+        .map_err(|_| anyhow::anyhow!("EVM public key must be exactly 64 bytes"))?;
 
     // Extract key ID from JWT
     let kid = get_jwt_kid(&request.jwt_token)?;
@@ -195,7 +195,7 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
         &request.jwt_token,
         &jwk,
         &request.expected_audience,
-        &tee_public_key,
+        &evm_public_key,
     )?;
 
     // Decode public values to get TEE address
