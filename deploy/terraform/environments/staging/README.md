@@ -145,29 +145,21 @@ cast call \
 The price oracle runs inside Confidential Space alongside the sequencer and validator,
 ensuring the entire data pipeline is TEE-protected.
 
-### Build and Push the Image
+The price oracle image is **built automatically by CI** and pushed to Artifact Registry
+on every push to `main` or `example-app`. No manual image building required.
 
-```bash
-# Build the price oracle image
-docker build -t price-oracle:latest -f examples/price-oracle/Dockerfile .
+### Configuration
 
-# Tag and push to Artifact Registry
-docker tag price-oracle:latest \
-    us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge
-docker push us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge
-```
-
-### Enable in Terraform
-
-Uncomment in `terraform.tfvars`:
+In `terraform.tfvars`, configure the price oracle:
 
 ```hcl
-price_oracle_image = "us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge"
+# Image is built by CI - use edge for latest, or pin to a specific sha/version
+price_oracle_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle:edge"
 
 price_oracle_contract_address = "0x..."  # From contract deployment
 
 price_oracle_config = {
-  coingecko_api_key     = ""  # Optional
+  coingecko_api_key     = ""  # Optional - free tier works without
   cmc_api_key           = ""  # Optional
   fetch_interval        = 60
   assets                = ["BTC", "ETH", "SOL"]

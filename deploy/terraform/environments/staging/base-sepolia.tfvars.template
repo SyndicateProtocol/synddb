@@ -91,9 +91,9 @@ batch_flush_interval = "2s"
 # Price Oracle Configuration
 # -----------------------------------------------------------------------------
 # The price oracle runs in Confidential Space alongside sequencer/validator
+# Image is built automatically by CI and pushed to Artifact Registry
 
-# TODO: Build and push the price oracle image, then uncomment
-# price_oracle_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle:edge"
+price_oracle_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle:edge"
 
 # TODO: PriceOracle contract address (from contract deployment)
 price_oracle_contract_address = "0xTODO_PRICE_ORACLE_ADDRESS"
@@ -165,14 +165,10 @@ labels = {
 #     - Bridge:         0x...
 #     - PriceOracle:    0x...
 #
-# Step 3: Build and push the price oracle image
-#   docker build -t price-oracle:latest -f examples/price-oracle/Dockerfile .
-#   docker tag price-oracle:latest us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge
-#   docker push us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge
+# Step 3: Fill in TODO values above with deployed contract addresses
+#   (Container images are built automatically by CI)
 #
-# Step 4: Fill in TODO values above with deployed contract addresses and image URIs
-#
-# Step 5: Deploy infrastructure
+# Step 4: Deploy infrastructure
 #   cd deploy/terraform/environments/staging
 #   cp base-sepolia.tfvars.template terraform.tfvars
 #   # Edit terraform.tfvars with your values
@@ -180,11 +176,11 @@ labels = {
 #   terraform plan
 #   terraform apply
 #
-# Step 6: Verify deployment
+# Step 5: Verify deployment
 #   terraform output
 #   gcloud compute instances list --filter="name~synddb-staging"
 #
-# Step 7: Test end-to-end
+# Step 6: Test end-to-end
 #   # Request a price on-chain
 #   cast send --rpc-url https://sepolia.base.org --account deployer \
 #       $PRICE_ORACLE_CONTRACT_ADDRESS "requestPrice(string)" "BTC"

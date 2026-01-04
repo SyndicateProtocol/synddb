@@ -19,6 +19,7 @@ on:
       - "docker/reproducible/**"
       - "crates/**"
       - "services/**"
+      - "examples/price-oracle/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/gcp-artifact-registry.yml"
@@ -438,28 +439,31 @@ jobs:
               - 'services/proof-service/**'
               - 'crates/gcp-attestation/**'
               - 'crates/synddb-bootstrap/sp1/program/**'
+            price-oracle:
+              - 'examples/price-oracle/**'
+              - 'crates/synddb-client/**'
 
       - name: Authenticate to Google Cloud
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
         run: gcloud auth configure-docker ${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev --quiet
 
       - name: Set up Docker Buildx
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Generate image tags
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
         id: tags
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
@@ -470,20 +474,24 @@ jobs:
             if [[ "${{ github.event_name }}" == "push" ]]; then
               echo "relayer_tags=$REGISTRY/synddb-relayer:$VERSION,$REGISTRY/synddb-relayer:latest" >> $GITHUB_OUTPUT
               echo "proof_service_tags=$REGISTRY/proof-service:$VERSION,$REGISTRY/proof-service:latest" >> $GITHUB_OUTPUT
+              echo "price_oracle_tags=$REGISTRY/price-oracle:$VERSION,$REGISTRY/price-oracle:latest" >> $GITHUB_OUTPUT
             else
               echo "relayer_tags=$REGISTRY/synddb-relayer:$VERSION" >> $GITHUB_OUTPUT
               echo "proof_service_tags=$REGISTRY/proof-service:$VERSION" >> $GITHUB_OUTPUT
+              echo "price_oracle_tags=$REGISTRY/price-oracle:$VERSION" >> $GITHUB_OUTPUT
             fi
             echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/example-app" ]]; then
             # Branch push: sha + edge
             echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA,$REGISTRY/synddb-relayer:edge" >> $GITHUB_OUTPUT
             echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA,$REGISTRY/proof-service:edge" >> $GITHUB_OUTPUT
+            echo "price_oracle_tags=$REGISTRY/price-oracle:sha-$SHORT_SHA,$REGISTRY/price-oracle:edge" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
           else
             # Manual run or other branch: sha only
             echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "price_oracle_tags=$REGISTRY/price-oracle:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
           fi
 
@@ -517,8 +525,23 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Build and push price-oracle
+        if: steps.changes.outputs.price-oracle == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: examples/price-oracle/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.price_oracle_tags }}
+          cache-from: type=gha,scope=price-oracle
+          cache-to: type=gha,mode=max,scope=price-oracle
+          # SLSA provenance attestation - proves this image was built by this workflow
+          provenance: mode=max
+          sbom: true
+
       - name: Summary
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
 
@@ -526,5 +549,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Image | Tags |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| synddb-relayer | \`${{ steps.tags.outputs.relayer_tags }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| proof-service | \`${{ steps.tags.outputs.proof_service_tags }}\` |" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.changes.outputs.relayer }}" == "true" ]]; then
+            echo "| synddb-relayer | \`${{ steps.tags.outputs.relayer_tags }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [[ "${{ steps.changes.outputs.proof-service }}" == "true" ]]; then
+            echo "| proof-service | \`${{ steps.tags.outputs.proof_service_tags }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [[ "${{ steps.changes.outputs.price-oracle }}" == "true" ]]; then
+            echo "| price-oracle | \`${{ steps.tags.outputs.price_oracle_tags }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
