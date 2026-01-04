@@ -123,7 +123,7 @@ fn main() {
     stdin.write(&sample.raw_token.as_bytes().to_vec());
     stdin.write(&jwk);
     stdin.write(&sample.audience);
-    stdin.write(&mock_evm_public_key);
+    stdin.write(&mock_evm_public_key.to_vec());
 
     if args.execute {
         println!("\n=== Executing program (test mode) ===\n");

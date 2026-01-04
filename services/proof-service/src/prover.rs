@@ -55,7 +55,7 @@ impl AttestationProver {
         stdin.write(&jwt_token.as_bytes().to_vec());
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
-        stdin.write(evm_public_key);
+        stdin.write(&evm_public_key.to_vec());
 
         // Setup proving and verification keys
         debug!("Setting up proving keys");
@@ -94,7 +94,7 @@ impl AttestationProver {
         stdin.write(&jwt_token.as_bytes().to_vec());
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
-        stdin.write(evm_public_key);
+        stdin.write(&evm_public_key.to_vec());
 
         let (output, report) = self
             .client

@@ -22,7 +22,14 @@ pub fn main() {
     let jwt_bytes: Vec<u8> = sp1_zkvm::io::read();
     let jwk: JwkKey = sp1_zkvm::io::read();
     let expected_audience: String = sp1_zkvm::io::read();
-    let evm_public_key: [u8; 64] = sp1_zkvm::io::read();
+    let evm_public_key_vec: Vec<u8> = sp1_zkvm::io::read();
+
+    // Convert to fixed-size array (serde doesn't support [u8; 64] directly)
+    assert!(
+        evm_public_key_vec.len() == 64,
+        "EVM public key must be exactly 64 bytes"
+    );
+    let evm_public_key: [u8; 64] = evm_public_key_vec.try_into().unwrap();
 
     // Verify the attestation (skip time validation inside zkVM)
     let result = verify_attestation(
