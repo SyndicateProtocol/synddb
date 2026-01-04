@@ -16,6 +16,7 @@ use std::sync::Arc;
 use synddb_chain_monitor::{
     config::ChainMonitorConfig, handler::MessageHandler, monitor::ChainMonitor,
 };
+use tokio::sync::watch;
 use tracing::info;
 
 /// A simple handler that just logs all events it receives.
@@ -69,13 +70,25 @@ async fn main() -> Result<()> {
     // Create handler
     let handler = Arc::new(SimpleHandler);
 
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    // Handle Ctrl+C
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        info!("Shutdown signal received");
+        let _ = shutdown_tx.send(true);
+    });
+
     // Create and run monitor
     let mut monitor = ChainMonitor::new(config, handler).await?;
 
-    info!("Monitor initialized - listening for events...");
+    info!("Monitor initialized - listening for events... (Ctrl+C to stop)");
 
-    // Run indefinitely (will use WebSocket if available, otherwise RPC polling)
-    monitor.run().await?;
+    // Run until shutdown signal (will use WebSocket if available, otherwise RPC polling)
+    monitor.run(shutdown_rx).await?;
 
     Ok(())
 }

@@ -15,6 +15,7 @@ use std::sync::Arc;
 use synddb_chain_monitor::{
     config::ChainMonitorConfig, events::Deposit, handler::MessageHandler, monitor::ChainMonitor,
 };
+use tokio::sync::watch;
 use tracing::{error, info};
 
 /// Example deposit handler that processes deposit events.
@@ -126,13 +127,25 @@ async fn main() -> Result<()> {
     // Create handler
     let handler = Arc::new(DepositHandler::default());
 
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    // Handle Ctrl+C
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        info!("Shutdown signal received");
+        let _ = shutdown_tx.send(true);
+    });
+
     // Create and run monitor
     let mut monitor = ChainMonitor::new(config, handler).await?;
 
-    info!("Chain monitor initialized - starting event processing");
+    info!("Chain monitor initialized - starting event processing (Ctrl+C to stop)");
 
-    // Run indefinitely
-    monitor.run().await?;
+    // Run until shutdown signal
+    monitor.run(shutdown_rx).await?;
 
     Ok(())
 }
