@@ -140,6 +140,88 @@ cast call \
     $SIGNER
 ```
 
+## Running the Price Oracle Example
+
+After infrastructure is deployed, run the price oracle to verify the full pipeline.
+
+### 1. Set Environment Variables
+
+```bash
+export SEQUENCER_IP=$(terraform output -raw sequencer_external_ip)
+export SEQUENCER_URL="http://$SEQUENCER_IP:8433"
+export PRICE_ORACLE_CONTRACT_ADDRESS="0x..."  # From contract deployment
+```
+
+### 2. Set Up Python Environment
+
+```bash
+cd examples/price-oracle
+
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 3. Fetch Prices (One-Time Test)
+
+```bash
+python -m app.main --sequencer-url $SEQUENCER_URL fetch BTC ETH SOL
+```
+
+This should:
+- Fetch prices from CoinGecko
+- Store them in the local SQLite database
+- Submit changesets to the sequencer
+
+### 4. Run the Daemon (Continuous)
+
+```bash
+python -m app.main --sequencer-url $SEQUENCER_URL run-daemon \
+    --interval 60 \
+    --push
+```
+
+### 5. Watch for On-Chain Requests (Optional)
+
+In a separate terminal, listen for `PriceRequested` events on Base Sepolia:
+
+```bash
+python -m app.main watch \
+    --rpc-url https://sepolia.base.org \
+    --contract $PRICE_ORACLE_CONTRACT_ADDRESS \
+    --start-block 0
+```
+
+### 6. Verify Data Flow
+
+Check the sequencer received changesets:
+
+```bash
+curl -s $SEQUENCER_URL/status | jq '.total_changesets'
+```
+
+Check the validator replicated the state:
+
+```bash
+VALIDATOR_IP=$(terraform output -raw validator_external_ip)
+curl -s http://$VALIDATOR_IP:8080/status | jq '.replicated_sequence'
+```
+
+### 7. Query Prices via Bridge (End-to-End Test)
+
+Request a price update on-chain:
+
+```bash
+cast send \
+    --rpc-url https://sepolia.base.org \
+    --account deployer \
+    $PRICE_ORACLE_CONTRACT_ADDRESS \
+    "requestPrice(string)" \
+    "BTC"
+```
+
+The validator (with bridge signer enabled) will pick up the request and submit the price update to the contract.
+
 ## Teardown
 
 To destroy all staging resources:
