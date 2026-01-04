@@ -321,19 +321,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "gcp-confidential-space"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "gcp-attestation",
-]
-
-[[package]]
 name = "gcp-cs-attestation-sp1-program"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "gcp-confidential-space",
+ "gcp-attestation",
  "sp1-zkvm",
 ]
 
