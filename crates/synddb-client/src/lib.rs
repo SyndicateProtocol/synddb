@@ -512,15 +512,21 @@ impl SyndDB {
         let changeset_handle = thread::spawn({
             let recovery_clone = recovery.clone();
             let config_clone = config.clone();
+            let stats_clone = stats.clone();
             move || {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .expect("Failed to create tokio runtime for changeset sender")
                     .block_on(async {
-                        ChangesetSender::new(config_clone, recovery_clone, attestation_client)
-                            .run(changeset_rx, changeset_shutdown_rx)
-                            .await
+                        ChangesetSender::new(
+                            config_clone,
+                            recovery_clone,
+                            attestation_client,
+                            stats_clone,
+                        )
+                        .run(changeset_rx, changeset_shutdown_rx)
+                        .await
                     });
             }
         });
