@@ -11,6 +11,7 @@ use {
     prediction_market::chain_monitor::{confirm_withdrawal, insert_deposit, BridgeEventHandler},
     std::sync::Arc,
     synddb_chain_monitor::{config::ChainMonitorConfig, monitor::ChainMonitor},
+    tokio::sync::watch,
     tracing::warn,
 };
 
@@ -466,16 +467,20 @@ fn run_chain_monitor(
 
         info!("Chain monitor started. Press Ctrl+C to stop.");
 
-        // Run the monitor until it errors or is interrupted
-        tokio::select! {
-            result = monitor.run() => {
-                if let Err(e) = result {
-                    tracing::error!("Chain monitor error: {}", e);
-                }
-            }
-            _ = tokio::signal::ctrl_c() => {
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        // Handle Ctrl+C in a separate task
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
                 info!("Received shutdown signal");
+                let _ = shutdown_tx.send(true);
             }
+        });
+
+        // Run the monitor until shutdown is signaled
+        if let Err(e) = monitor.run(shutdown_rx).await {
+            tracing::error!("Chain monitor error: {}", e);
         }
     });
 

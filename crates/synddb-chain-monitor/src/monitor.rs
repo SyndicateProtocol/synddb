@@ -154,7 +154,7 @@ impl ChainMonitor {
                             // Save block checkpoint for crash recovery
                             if let Some(block_number) = log.block_number {
                                 // Only save checkpoint if we've advanced to a new block
-                                if last_checkpoint_block.map_or(true, |last| block_number > last) {
+                                if last_checkpoint_block.is_none_or(|last| block_number > last) {
                                     if let Err(e) = self.event_store.set_last_processed_block(block_number)
                                     {
                                         warn!(%e, "Failed to save block checkpoint");
