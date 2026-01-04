@@ -13,7 +13,8 @@ struct ProofRequest {
     pub jwt_token: String,
     /// Expected audience claim
     pub expected_audience: String,
-    /// TEE public key (64-byte uncompressed, hex-encoded)
+    /// EVM public key (64-byte uncompressed secp256k1, hex-encoded)
+    #[serde(rename = "evm_public_key")]
     pub tee_public_key: String,
 }
 
