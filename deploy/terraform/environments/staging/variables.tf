@@ -37,6 +37,12 @@ variable "relayer_image" {
   default     = ""
 }
 
+variable "price_oracle_image" {
+  description = "Price oracle container image URI"
+  type        = string
+  default     = ""
+}
+
 # Storage
 variable "gcs_bucket_name" {
   description = "GCS bucket name for batch storage"
@@ -52,6 +58,12 @@ variable "sequencer_machine_type" {
 
 variable "validator_machine_type" {
   description = "Machine type for validator"
+  type        = string
+  default     = "n2d-standard-2"
+}
+
+variable "price_oracle_machine_type" {
+  description = "Machine type for price oracle"
   type        = string
   default     = "n2d-standard-2"
 }
@@ -109,6 +121,25 @@ variable "batch_flush_interval" {
   description = "Batch flush interval"
   type        = string
   default     = "2s"
+}
+
+# Price Oracle configuration (null = disabled)
+variable "price_oracle_config" {
+  description = "Price oracle configuration. Set to null to disable."
+  type = object({
+    coingecko_api_key      = optional(string, "")
+    cmc_api_key            = optional(string, "")
+    fetch_interval         = optional(number, 60)
+    assets                 = optional(list(string), ["BTC", "ETH"])
+    chain_monitor_enabled  = optional(bool, false)
+  })
+  default = null
+}
+
+variable "price_oracle_contract_address" {
+  description = "PriceOracle contract address (for chain monitor)"
+  type        = string
+  default     = ""
 }
 
 # Relayer configuration (null = disabled)

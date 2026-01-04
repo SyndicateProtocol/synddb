@@ -88,6 +88,32 @@ batch_max_messages   = 100
 batch_flush_interval = "2s"
 
 # -----------------------------------------------------------------------------
+# Price Oracle Configuration
+# -----------------------------------------------------------------------------
+# The price oracle runs in Confidential Space alongside sequencer/validator
+
+# TODO: Build and push the price oracle image, then uncomment
+# price_oracle_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle:edge"
+
+# TODO: PriceOracle contract address (from contract deployment)
+price_oracle_contract_address = "0xTODO_PRICE_ORACLE_ADDRESS"
+
+price_oracle_config = {
+  # API keys (optional - free tier works without)
+  coingecko_api_key = ""
+  cmc_api_key       = ""
+
+  # Fetch interval in seconds
+  fetch_interval = 60
+
+  # Assets to track
+  assets = ["BTC", "ETH", "SOL"]
+
+  # Enable chain monitor to watch for on-chain price requests
+  chain_monitor_enabled = true
+}
+
+# -----------------------------------------------------------------------------
 # Relayer Configuration (Optional - for gas funding)
 # -----------------------------------------------------------------------------
 # Uncomment and fill in to enable the relayer service
@@ -139,19 +165,31 @@ labels = {
 #     - Bridge:         0x...
 #     - PriceOracle:    0x...
 #
-# Step 3: Fill in TODO values above with deployed contract addresses
+# Step 3: Build and push the price oracle image
+#   docker build -t price-oracle:latest -f examples/price-oracle/Dockerfile .
+#   docker tag price-oracle:latest us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge
+#   docker push us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge
 #
-# Step 4: Deploy infrastructure
+# Step 4: Fill in TODO values above with deployed contract addresses and image URIs
+#
+# Step 5: Deploy infrastructure
 #   cd deploy/terraform/environments/staging
-#   cp terraform.tfvars.base-sepolia terraform.tfvars
+#   cp base-sepolia.tfvars.template terraform.tfvars
+#   # Edit terraform.tfvars with your values
 #   terraform init
 #   terraform plan
 #   terraform apply
 #
-# Step 5: Get outputs
+# Step 6: Verify deployment
 #   terraform output
+#   gcloud compute instances list --filter="name~synddb-staging"
 #
-# Step 6: Deploy price oracle app (separate service)
-#   See examples/price-oracle/README.md
+# Step 7: Test end-to-end
+#   # Request a price on-chain
+#   cast send --rpc-url https://sepolia.base.org --account deployer \
+#       $PRICE_ORACLE_CONTRACT_ADDRESS "requestPrice(string)" "BTC"
+#
+#   # Check logs
+#   gcloud compute instances get-serial-port-output synddb-staging-price-oracle --zone us-central1-a
 #
 # =============================================================================

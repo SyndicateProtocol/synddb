@@ -162,6 +162,50 @@ module "validator" {
   depends_on = [module.iam, module.networking, module.sequencer, module.proof_service]
 }
 
+# Price Oracle - example application in Confidential Space
+module "price_oracle" {
+  count  = var.price_oracle_config != null ? 1 : 0
+  source = "../../modules/price-oracle"
+
+  project_id            = var.project_id
+  zone                  = var.zone
+  name_prefix           = "synddb-staging"
+  network_self_link     = module.networking.network_self_link
+  subnet_self_link      = module.networking.subnet_self_link
+  service_account_email = module.iam.price_oracle_service_account_email
+  container_image       = var.price_oracle_image
+  sequencer_url         = "http://${module.sequencer.internal_ip}:8433"
+  machine_type          = var.price_oracle_machine_type
+
+  # Price sources
+  coingecko_api_key = var.price_oracle_config.coingecko_api_key
+  cmc_api_key       = var.price_oracle_config.cmc_api_key
+
+  # Daemon configuration
+  fetch_interval = var.price_oracle_config.fetch_interval
+  assets         = var.price_oracle_config.assets
+
+  # Chain monitor for on-chain price requests
+  chain_monitor = var.price_oracle_config.chain_monitor_enabled ? {
+    rpc_url          = var.tee_bootstrap.rpc_url
+    contract_address = var.price_oracle_contract_address
+    poll_interval    = 5
+  } : null
+
+  # TEE bootstrap (same as sequencer/validator)
+  tee_bootstrap = var.tee_bootstrap != null ? {
+    key_manager_address  = var.tee_bootstrap.key_manager_address
+    rpc_url              = var.tee_bootstrap.rpc_url
+    chain_id             = var.tee_bootstrap.chain_id
+    proof_service_url    = module.proof_service[0].service_url
+    attestation_audience = var.tee_bootstrap.attestation_audience
+  } : null
+
+  labels = var.labels
+
+  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service]
+}
+
 # Relayer - gas funding service for TEE keys
 module "relayer" {
   count  = var.relayer_config != null && var.relayer_image != "" ? 1 : 0

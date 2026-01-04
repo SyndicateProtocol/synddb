@@ -140,74 +140,82 @@ cast call \
     $SIGNER
 ```
 
-## Running the Price Oracle Example
+## Price Oracle (Confidential Space)
 
-After infrastructure is deployed, run the price oracle to verify the full pipeline.
+The price oracle runs inside Confidential Space alongside the sequencer and validator,
+ensuring the entire data pipeline is TEE-protected.
 
-### 1. Set Environment Variables
-
-```bash
-export SEQUENCER_IP=$(terraform output -raw sequencer_external_ip)
-export SEQUENCER_URL="http://$SEQUENCER_IP:8433"
-export PRICE_ORACLE_CONTRACT_ADDRESS="0x..."  # From contract deployment
-```
-
-### 2. Set Up Python Environment
+### Build and Push the Image
 
 ```bash
-cd examples/price-oracle
+# Build the price oracle image
+docker build -t price-oracle:latest -f examples/price-oracle/Dockerfile .
 
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# Tag and push to Artifact Registry
+docker tag price-oracle:latest \
+    us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge
+docker push us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge
 ```
 
-### 3. Fetch Prices (One-Time Test)
+### Enable in Terraform
+
+Uncomment in `terraform.tfvars`:
+
+```hcl
+price_oracle_image = "us-central1-docker.pkg.dev/YOUR_PROJECT/synddb/price-oracle:edge"
+
+price_oracle_contract_address = "0x..."  # From contract deployment
+
+price_oracle_config = {
+  coingecko_api_key     = ""  # Optional
+  cmc_api_key           = ""  # Optional
+  fetch_interval        = 60
+  assets                = ["BTC", "ETH", "SOL"]
+  chain_monitor_enabled = true
+}
+```
+
+Then apply:
 
 ```bash
-python -m app.main --sequencer-url $SEQUENCER_URL fetch BTC ETH SOL
+terraform apply
 ```
 
-This should:
-- Fetch prices from CoinGecko
-- Store them in the local SQLite database
-- Submit changesets to the sequencer
+### Verify the Price Oracle
 
-### 4. Run the Daemon (Continuous)
+Check the VM is running:
 
 ```bash
-python -m app.main --sequencer-url $SEQUENCER_URL run-daemon \
-    --interval 60 \
-    --push
+gcloud compute instances describe synddb-staging-price-oracle \
+    --zone us-central1-a \
+    --format='get(status)'
 ```
 
-### 5. Watch for On-Chain Requests (Optional)
-
-In a separate terminal, listen for `PriceRequested` events on Base Sepolia:
+View logs:
 
 ```bash
-python -m app.main watch \
-    --rpc-url https://sepolia.base.org \
-    --contract $PRICE_ORACLE_CONTRACT_ADDRESS \
-    --start-block 0
+gcloud compute instances get-serial-port-output synddb-staging-price-oracle \
+    --zone us-central1-a
 ```
 
-### 6. Verify Data Flow
+### Verify Data Flow
 
 Check the sequencer received changesets:
 
 ```bash
-curl -s $SEQUENCER_URL/status | jq '.total_changesets'
+SEQUENCER_IP=$(terraform output -raw sequencer_internal_ip)
+# From within GCP or via IAP tunnel:
+curl -s http://$SEQUENCER_IP:8433/status | jq '.total_changesets'
 ```
 
 Check the validator replicated the state:
 
 ```bash
-VALIDATOR_IP=$(terraform output -raw validator_external_ip)
+VALIDATOR_IP=$(terraform output -raw validator_internal_ip)
 curl -s http://$VALIDATOR_IP:8080/status | jq '.replicated_sequence'
 ```
 
-### 7. Query Prices via Bridge (End-to-End Test)
+### End-to-End Test: On-Chain Price Request
 
 Request a price update on-chain:
 
@@ -220,7 +228,11 @@ cast send \
     "BTC"
 ```
 
-The validator (with bridge signer enabled) will pick up the request and submit the price update to the contract.
+The price oracle (running in Confidential Space) will:
+1. Detect the `PriceRequested` event via chain monitor
+2. Fetch the price from CoinGecko/CoinMarketCap
+3. Submit the changeset to the sequencer
+4. The validator picks it up and submits to the bridge
 
 ## Teardown
 
