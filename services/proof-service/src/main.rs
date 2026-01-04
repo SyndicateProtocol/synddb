@@ -43,8 +43,7 @@ struct ProveRequest {
     /// Expected audience claim
     expected_audience: String,
     /// TEE public key (64-byte uncompressed, hex-encoded with 0x prefix)
-    #[serde(default)]
-    tee_public_key: Option<String>,
+    tee_public_key: String,
 }
 
 /// Response from proof generation
@@ -94,7 +93,10 @@ async fn main() -> anyhow::Result<()> {
     let prover = AttestationProver::new();
 
     // Initialize JWKS cache
-    let jwks_cache = JwksCache::new(config.google_oidc_discovery_url.clone(), config.jwks_cache_ttl_secs);
+    let jwks_cache = JwksCache::new(
+        config.google_oidc_discovery_url.clone(),
+        config.jwks_cache_ttl_secs,
+    );
 
     let state = Arc::new(AppState {
         prover,
@@ -172,6 +174,14 @@ async fn prove_handler(
 async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Result<ProveResponse> {
     info!("Processing proof request");
 
+    // Parse TEE public key from hex
+    let pubkey_hex = request.tee_public_key.trim_start_matches("0x");
+    let pubkey_bytes = hex::decode(pubkey_hex)
+        .map_err(|e| anyhow::anyhow!("Invalid TEE public key hex: {}", e))?;
+    let tee_public_key: [u8; 64] = pubkey_bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("TEE public key must be exactly 64 bytes"))?;
+
     // Extract key ID from JWT
     let kid = get_jwt_kid(&request.jwt_token)?;
     info!(kid = %kid, "Extracted key ID from JWT");
@@ -181,9 +191,12 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
     info!("Found matching JWK");
 
     // Generate proof (this is CPU/GPU intensive and takes minutes)
-    let proof = state
-        .prover
-        .generate_proof(&request.jwt_token, &jwk, &request.expected_audience)?;
+    let proof = state.prover.generate_proof(
+        &request.jwt_token,
+        &jwk,
+        &request.expected_audience,
+        &tee_public_key,
+    )?;
 
     // Decode public values to get TEE address
     let public_values = decode_public_values(proof.public_values.as_slice())?;

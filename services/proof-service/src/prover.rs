@@ -4,7 +4,7 @@ use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use gcp_attestation::{extract_kid_from_jwt, JwkKey};
 use gcp_cs_attestation_sp1_program::PublicValuesStruct;
-use sp1_sdk::{EnvProver, Prover, ProverClient, SP1ProofWithPublicValues, SP1Stdin, include_elf};
+use sp1_sdk::{include_elf, EnvProver, Prover, ProverClient, SP1ProofWithPublicValues, SP1Stdin};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -37,6 +37,7 @@ impl AttestationProver {
     /// * `jwt_token` - Raw JWT attestation token from Confidential Space
     /// * `jwk` - JWK public key that signed the token
     /// * `expected_audience` - Expected audience claim
+    /// * `tee_public_key` - 64-byte uncompressed secp256k1 public key of the TEE
     ///
     /// # Returns
     /// The SP1 proof with public values
@@ -45,6 +46,7 @@ impl AttestationProver {
         jwt_token: &str,
         jwk: &JwkKey,
         expected_audience: &str,
+        tee_public_key: &[u8; 64],
     ) -> Result<SP1ProofWithPublicValues> {
         info!("Starting proof generation");
 
@@ -53,6 +55,7 @@ impl AttestationProver {
         stdin.write(&jwt_token.as_bytes().to_vec());
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
+        stdin.write(tee_public_key);
 
         // Setup proving and verification keys
         debug!("Setting up proving keys");
@@ -78,13 +81,20 @@ impl AttestationProver {
     }
 
     /// Execute the program without generating a proof (for testing)
-    pub fn execute(&self, jwt_token: &str, jwk: &JwkKey, expected_audience: &str) -> Result<Vec<u8>> {
+    pub fn execute(
+        &self,
+        jwt_token: &str,
+        jwk: &JwkKey,
+        expected_audience: &str,
+        tee_public_key: &[u8; 64],
+    ) -> Result<Vec<u8>> {
         info!("Executing program in test mode");
 
         let mut stdin = SP1Stdin::new();
         stdin.write(&jwt_token.as_bytes().to_vec());
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
+        stdin.write(tee_public_key);
 
         let (output, report) = self
             .client
@@ -92,7 +102,10 @@ impl AttestationProver {
             .run()
             .context("Program execution failed")?;
 
-        info!(cycles = report.total_instruction_count(), "Program executed");
+        info!(
+            cycles = report.total_instruction_count(),
+            "Program executed"
+        );
         Ok(output.to_vec())
     }
 }

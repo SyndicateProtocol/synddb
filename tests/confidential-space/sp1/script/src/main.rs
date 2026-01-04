@@ -3,7 +3,10 @@
 //! This script reads attestation samples and generates ZK proofs that can be
 //! verified on-chain.
 
-use alloy::{primitives::keccak256, sol_types::SolValue};
+use alloy::{
+    primitives::{keccak256, Address},
+    sol_types::SolValue,
+};
 use clap::Parser;
 use gcp_attestation::{extract_kid_from_jwt, verify_attestation, JwkKey};
 use gcp_cs_attestation_sp1_program::PublicValuesStruct;
@@ -78,11 +81,14 @@ fn main() {
     }
 
     let sample = &bundle.samples[args.index];
-    println!("Using sample {} with audience: {}", args.index, sample.audience);
+    println!(
+        "Using sample {} with audience: {}",
+        args.index, sample.audience
+    );
 
     // Find the JWK for this token (extract kid from JWT header)
-    let kid = extract_kid_from_jwt(sample.raw_token.as_bytes())
-        .expect("Failed to extract kid from JWT");
+    let kid =
+        extract_kid_from_jwt(sample.raw_token.as_bytes()).expect("Failed to extract kid from JWT");
     println!("Token signed with key ID: {}", kid);
 
     let jwk = bundle
@@ -96,11 +102,28 @@ fn main() {
     // Setup prover client
     let client = ProverClient::from_env();
 
+    // Generate a mock TEE public key for testing (64 bytes)
+    // In production, this would be the actual TEE's secp256k1 public key
+    let mock_tee_public_key: [u8; 64] = {
+        let mut key = [0u8; 64];
+        // Use a deterministic pattern for reproducible tests
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(7).wrapping_add(42);
+        }
+        key
+    };
+
+    // Derive expected address from mock public key
+    let pubkey_hash = keccak256(&mock_tee_public_key);
+    let expected_tee_address = Address::from_slice(&pubkey_hash[12..]);
+    println!("Mock TEE address: {}", expected_tee_address);
+
     // Prepare inputs for the zkVM
     let mut stdin = SP1Stdin::new();
     stdin.write(&sample.raw_token.as_bytes().to_vec());
     stdin.write(&jwk);
     stdin.write(&sample.audience);
+    stdin.write(&mock_tee_public_key);
 
     if args.execute {
         println!("\n=== Executing program (test mode) ===\n");
@@ -113,17 +136,29 @@ fn main() {
         println!("Program executed successfully!");
 
         // Decode the public values
-        let public_values =
-            PublicValuesStruct::abi_decode_validate(output.as_slice()).expect("Failed to decode output");
+        let public_values = PublicValuesStruct::abi_decode_validate(output.as_slice())
+            .expect("Failed to decode output");
 
         println!("\n=== Public Values ===");
-        println!("jwk_key_hash: 0x{}", hex::encode(public_values.jwk_key_hash));
-        println!("validity_window_start: {}", public_values.validity_window_start);
+        println!(
+            "jwk_key_hash: 0x{}",
+            hex::encode(public_values.jwk_key_hash)
+        );
+        println!(
+            "validity_window_start: {}",
+            public_values.validity_window_start
+        );
         println!("validity_window_end: {}", public_values.validity_window_end);
-        println!("image_digest_hash: 0x{}", hex::encode(public_values.image_digest_hash));
+        println!(
+            "image_digest_hash: 0x{}",
+            hex::encode(public_values.image_digest_hash)
+        );
         println!("tee_signing_key: {}", public_values.tee_signing_key);
         println!("secboot: {}", public_values.secboot);
-        println!("audience_hash: 0x{}", hex::encode(public_values.audience_hash));
+        println!(
+            "audience_hash: 0x{}",
+            hex::encode(public_values.audience_hash)
+        );
 
         // Verify against local verification
         let expected = verify_attestation(
@@ -138,8 +173,14 @@ fn main() {
             public_values.jwk_key_hash,
             keccak256(expected.signing_key_id.as_bytes())
         );
-        assert_eq!(public_values.validity_window_start, expected.validity_window_start);
-        assert_eq!(public_values.validity_window_end, expected.validity_window_end);
+        assert_eq!(
+            public_values.validity_window_start,
+            expected.validity_window_start
+        );
+        assert_eq!(
+            public_values.validity_window_end,
+            expected.validity_window_end
+        );
         assert_eq!(
             public_values.image_digest_hash,
             keccak256(expected.image_digest.as_bytes())
@@ -148,6 +189,10 @@ fn main() {
         assert_eq!(
             public_values.audience_hash,
             keccak256(expected.audience.as_bytes())
+        );
+        assert_eq!(
+            public_values.tee_signing_key, expected_tee_address,
+            "TEE address mismatch"
         );
 
         println!("\nAll values match local verification!");
@@ -165,14 +210,14 @@ fn main() {
         println!("Proof generated successfully!");
 
         // Verify the proof
-        client.verify(&proof, &vk).expect("Proof verification failed");
+        client
+            .verify(&proof, &vk)
+            .expect("Proof verification failed");
         println!("Proof verified successfully!");
 
         // Save proof to file
         let proof_path = "gcp_cs_attestation_proof.bin";
-        proof
-            .save(proof_path)
-            .expect("Failed to save proof");
+        proof.save(proof_path).expect("Failed to save proof");
         println!("Proof saved to: {}", proof_path);
     }
 }
