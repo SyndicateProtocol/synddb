@@ -13,7 +13,7 @@ use alloy::{
 };
 use anyhow::Result;
 use std::{fmt::Debug, sync::Arc, time::Duration};
-use tokio::time::timeout;
+use tokio::{sync::watch, time::timeout};
 use tracing::{debug, error, info, warn};
 
 /// Chain monitor service that listens to blockchain events.
@@ -87,35 +87,50 @@ impl ChainMonitor {
         })
     }
 
-    /// Run the chain monitor.
+    /// Run the chain monitor until shutdown is signaled.
     ///
     /// This method will try WebSocket subscription first, and fall back to
     /// RPC polling if WebSocket is not supported by the provider.
     ///
-    /// This method runs indefinitely until an error occurs or the process is terminated.
-    pub async fn run(&mut self) -> Result<()> {
+    /// # Arguments
+    ///
+    /// * `shutdown_rx` - A watch receiver that signals when to stop monitoring.
+    ///   The monitor will stop when this receives `true`.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` when shutdown is signaled, or an error if monitoring fails.
+    pub async fn run(&mut self, mut shutdown_rx: watch::Receiver<bool>) -> Result<()> {
         info!(
             contract = %format!("{:#x}", self.contract_address),
             "Starting chain monitor"
         );
 
         // Try WebSocket first, fallback to RPC polling
-        match self.eth_client.try_subscribe_logs(&self.filter).await {
+        let result = match self.eth_client.try_subscribe_logs(&self.filter).await {
             Ok(_) => {
                 info!("WebSocket subscription supported - using real-time monitoring");
-                self.run_ws_monitor().await
+                self.run_ws_monitor(&mut shutdown_rx).await
             }
             Err(e) => {
                 warn!(%e, "WebSocket not supported - falling back to RPC polling");
-                self.run_rpc_monitor().await
+                self.run_rpc_monitor(&mut shutdown_rx).await
             }
+        };
+
+        // Call handler cleanup on shutdown
+        info!("Chain monitor shutting down, calling handler cleanup");
+        if let Err(e) = self.handler.on_stop().await {
+            warn!(%e, "Handler cleanup failed");
         }
+
+        result
     }
 
     /// Run in WebSocket subscription mode.
     ///
     /// This provides real-time event delivery with low latency.
-    async fn run_ws_monitor(&self) -> Result<()> {
+    async fn run_ws_monitor(&self, shutdown_rx: &mut watch::Receiver<bool>) -> Result<()> {
         let mut sub = self.eth_client.subscribe_logs(&self.filter).await;
         info!("WebSocket subscription active");
 
@@ -124,31 +139,43 @@ impl ChainMonitor {
         loop {
             let heartbeat_timeout = Duration::from_secs(30);
 
-            match timeout(heartbeat_timeout, sub.recv()).await {
-                Ok(Ok(log)) => {
-                    // Save block checkpoint for crash recovery
-                    if let Some(block_number) = log.block_number {
-                        // Only save checkpoint if we've advanced to a new block
-                        if last_checkpoint_block.map_or(true, |last| block_number > last) {
-                            if let Err(e) = self.event_store.set_last_processed_block(block_number)
-                            {
-                                warn!(%e, "Failed to save block checkpoint");
+            tokio::select! {
+                // Check for shutdown signal
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        info!("Shutdown signal received in WebSocket monitor");
+                        return Ok(());
+                    }
+                }
+                // Process events with timeout
+                result = timeout(heartbeat_timeout, sub.recv()) => {
+                    match result {
+                        Ok(Ok(log)) => {
+                            // Save block checkpoint for crash recovery
+                            if let Some(block_number) = log.block_number {
+                                // Only save checkpoint if we've advanced to a new block
+                                if last_checkpoint_block.map_or(true, |last| block_number > last) {
+                                    if let Err(e) = self.event_store.set_last_processed_block(block_number)
+                                    {
+                                        warn!(%e, "Failed to save block checkpoint");
+                                    }
+                                    last_checkpoint_block = Some(block_number);
+                                }
                             }
-                            last_checkpoint_block = Some(block_number);
+
+                            if let Err(e) = self.process_event(&log).await {
+                                error!(%e, "Failed to process event");
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            error!(%e, "Subscription error, recreating...");
+                            sub = self.eth_client.subscribe_logs(&self.filter).await;
+                            info!("WebSocket subscription recreated");
+                        }
+                        Err(_) => {
+                            debug!("Heartbeat: No events in last 30s");
                         }
                     }
-
-                    if let Err(e) = self.process_event(&log).await {
-                        error!(%e, "Failed to process event");
-                    }
-                }
-                Ok(Err(e)) => {
-                    error!(%e, "Subscription error, recreating...");
-                    sub = self.eth_client.subscribe_logs(&self.filter).await;
-                    info!("WebSocket subscription recreated");
-                }
-                Err(_) => {
-                    debug!("Heartbeat: No events in last 30s");
                 }
             }
         }
@@ -158,7 +185,7 @@ impl ChainMonitor {
     ///
     /// This polls the RPC endpoint periodically for new events.
     /// Uses exponential backoff on errors to avoid hammering failing endpoints.
-    async fn run_rpc_monitor(&self) -> Result<()> {
+    async fn run_rpc_monitor(&self, shutdown_rx: &mut watch::Receiver<bool>) -> Result<()> {
         let base_poll_interval = Duration::from_secs(5);
         let max_poll_interval = Duration::from_secs(60);
         let polling_window = 100; // blocks per poll
@@ -180,6 +207,12 @@ impl ChainMonitor {
         );
 
         loop {
+            // Check for shutdown before polling
+            if *shutdown_rx.borrow() {
+                info!("Shutdown signal received in RPC monitor");
+                return Ok(());
+            }
+
             let sleep_duration = match self.poll_for_events(current_block, polling_window).await {
                 Ok((logs, end_block)) => {
                     if !logs.is_empty() {
@@ -220,7 +253,16 @@ impl ChainMonitor {
                 }
             };
 
-            tokio::time::sleep(sleep_duration).await;
+            // Sleep with shutdown check
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        info!("Shutdown signal received during sleep in RPC monitor");
+                        return Ok(());
+                    }
+                }
+                _ = tokio::time::sleep(sleep_duration) => {}
+            }
         }
     }
 
@@ -295,16 +337,6 @@ impl ChainMonitor {
         }
 
         Ok(())
-    }
-}
-
-impl Drop for ChainMonitor {
-    fn drop(&mut self) {
-        // Call handler cleanup (best effort)
-        let handler = self.handler.clone();
-        tokio::spawn(async move {
-            let _ = handler.on_stop().await;
-        });
     }
 }
 
