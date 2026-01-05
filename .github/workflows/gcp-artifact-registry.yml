@@ -5,12 +5,8 @@ name: GCP Artifact Registry
 # This workflow handles two types of images:
 # 1. Reproducible TEE images (sequencer, validator) - bit-for-bit reproducible
 #    for Confidential Space attestation where image hash must be verifiable
-# 2. Standard images (relayer, proof-service) - regular builds without
-#    reproducibility requirements
-#
-# COST OPTIMIZATION:
-# Standard images only build when their specific files change. A change detection
-# job runs first to determine which images need rebuilding.
+# 2. Standard images (relayer, proof-service, price-oracle) - regular builds
+#    without reproducibility requirements
 
 on:
   push:
@@ -35,55 +31,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
-  # Detect which standard images need to be built
-  detect-changes:
-    name: Detect Changes
-    runs-on: ubuntu-latest
-    outputs:
-      relayer: ${{ steps.filter.outputs.relayer }}
-      proof-service: ${{ steps.filter.outputs.proof-service }}
-      price-oracle: ${{ steps.filter.outputs.price-oracle }}
-      price-oracle-validator: ${{ steps.filter.outputs.price-oracle-validator }}
-      any-standard: ${{ steps.filter.outputs.relayer == 'true' || steps.filter.outputs.proof-service == 'true' || steps.filter.outputs.price-oracle == 'true' || steps.filter.outputs.price-oracle-validator == 'true' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check for file changes
-        uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            relayer:
-              - 'docker/relayer.Dockerfile'
-              - 'crates/synddb-relayer/**'
-              - 'crates/synddb-shared/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-            proof-service:
-              - 'services/proof-service/**'
-            price-oracle:
-              - 'examples/price-oracle/Dockerfile'
-              - 'examples/price-oracle/app/**'
-              - 'examples/price-oracle/requirements.txt'
-            price-oracle-validator:
-              - 'examples/price-oracle/validator.Dockerfile'
-              - 'crates/synddb-validator/**'
-              - 'crates/synddb-shared/**'
-              - 'examples/price-oracle-validator/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-
-      - name: Summary
-        run: |
-          echo "## Change Detection Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | Changed | Will Build |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|---------|------------|" >> $GITHUB_STEP_SUMMARY
-          echo "| relayer | ${{ steps.filter.outputs.relayer }} | ${{ steps.filter.outputs.relayer }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| proof-service | ${{ steps.filter.outputs.proof-service }} | ${{ steps.filter.outputs.proof-service }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| price-oracle | ${{ steps.filter.outputs.price-oracle }} | ${{ steps.filter.outputs.price-oracle }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| price-oracle-validator | ${{ steps.filter.outputs.price-oracle-validator }} | ${{ steps.filter.outputs.price-oracle-validator }} |" >> $GITHUB_STEP_SUMMARY
-
   # Build on multiple runners to verify cross-machine reproducibility
   build:
     name: Reproducible Build (${{ matrix.runner }}, ${{ matrix.image }})
@@ -378,18 +325,8 @@ jobs:
           } >> $GITHUB_STEP_SUMMARY
 
   # Build and publish non-reproducible images (no TEE attestation required)
-  # Only builds images that have changed files
   publish-standard:
     name: Standard Publish ${{ matrix.image }}
-    needs: detect-changes
-    # Only run if this specific image has changes, or on manual/tag triggers
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      startsWith(github.ref, 'refs/tags/v') ||
-      (matrix.image == 'synddb-relayer' && needs.detect-changes.outputs.relayer == 'true') ||
-      (matrix.image == 'proof-service' && needs.detect-changes.outputs.proof-service == 'true') ||
-      (matrix.image == 'price-oracle' && needs.detect-changes.outputs.price-oracle == 'true') ||
-      (matrix.image == 'price-oracle-validator' && needs.detect-changes.outputs.price-oracle-validator == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -401,58 +338,18 @@ jobs:
           - image: synddb-relayer
             dockerfile: docker/relayer.Dockerfile
             cache-scope: relayer
-            change-key: relayer
           - image: proof-service
             dockerfile: services/proof-service/Dockerfile
             cache-scope: proof-service
-            change-key: proof-service
           - image: price-oracle
             dockerfile: examples/price-oracle/Dockerfile
             cache-scope: price-oracle
-            change-key: price-oracle
           - image: price-oracle-validator
             dockerfile: examples/price-oracle/validator.Dockerfile
             cache-scope: price-oracle-validator
-            change-key: price-oracle-validator
 
     steps:
-      - name: Check if should build
-        id: should-build
-        run: |
-          # On manual trigger or tag, always build
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "Building ${{ matrix.image }} (manual/tag trigger)"
-            exit 0
-          fi
-
-          # Check change detection output
-          CHANGE_KEY="${{ matrix.change-key }}"
-          case "$CHANGE_KEY" in
-            relayer)
-              CHANGED="${{ needs.detect-changes.outputs.relayer }}"
-              ;;
-            proof-service)
-              CHANGED="${{ needs.detect-changes.outputs.proof-service }}"
-              ;;
-            price-oracle)
-              CHANGED="${{ needs.detect-changes.outputs.price-oracle }}"
-              ;;
-            price-oracle-validator)
-              CHANGED="${{ needs.detect-changes.outputs.price-oracle-validator }}"
-              ;;
-          esac
-
-          if [[ "$CHANGED" == "true" ]]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "Building ${{ matrix.image }} (files changed)"
-          else
-            echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "Skipping ${{ matrix.image }} (no changes)"
-          fi
-
       - name: Free disk space
-        if: steps.should-build.outputs.should_build == 'true'
         uses: endersonmenezes/free-disk-space@v3
         with:
           remove_android: true
@@ -462,33 +359,26 @@ jobs:
           remove_swap: false
 
       - uses: actions/checkout@v4
-        if: steps.should-build.outputs.should_build == 'true'
 
       - name: Authenticate to Google Cloud
-        if: steps.should-build.outputs.should_build == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        if: steps.should-build.outputs.should_build == 'true'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        if: steps.should-build.outputs.should_build == 'true'
         run: gcloud auth configure-docker ${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev --quiet
 
       - name: Set up Docker Buildx
-        if: steps.should-build.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Install cosign
-        if: steps.should-build.outputs.should_build == 'true'
         uses: sigstore/cosign-installer@v4.0.0
 
       - name: Generate image tags
-        if: steps.should-build.outputs.should_build == 'true'
         id: tags
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
@@ -509,7 +399,6 @@ jobs:
           fi
 
       - name: Build and push ${{ matrix.image }}
-        if: steps.should-build.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -523,7 +412,6 @@ jobs:
           sbom: true
 
       - name: Sign images
-        if: steps.should-build.outputs.should_build == 'true'
         run: |
           IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.tags }}"
           for TAG in "${TAGS[@]}"; do
@@ -532,19 +420,9 @@ jobs:
           done
 
       - name: Summary
-        if: steps.should-build.outputs.should_build == 'true'
         run: |
           {
             echo "## ${{ matrix.image }}"
             echo ""
             echo "Tags: \`${{ steps.tags.outputs.tags }}\`"
-          } >> $GITHUB_STEP_SUMMARY
-
-      - name: Skip notice
-        if: steps.should-build.outputs.should_build == 'false'
-        run: |
-          {
-            echo "## ${{ matrix.image }}"
-            echo ""
-            echo "Skipped - no relevant file changes detected."
           } >> $GITHUB_STEP_SUMMARY
