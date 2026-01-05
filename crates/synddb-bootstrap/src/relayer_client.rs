@@ -25,7 +25,6 @@ pub struct RelayerClient {
     bridge_address: Address,
     chain_id: u64,
     http_client: reqwest::Client,
-    timeout: std::time::Duration,
 }
 
 impl std::fmt::Debug for RelayerClient {
@@ -74,12 +73,16 @@ impl RelayerClient {
         chain_id: u64,
         timeout: std::time::Duration,
     ) -> Self {
+        let http_client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .expect("Failed to build HTTP client for relayer");
+
         Self {
             relayer_url,
             bridge_address,
             chain_id,
-            http_client: reqwest::Client::new(),
-            timeout,
+            http_client,
         }
     }
 
@@ -130,7 +133,6 @@ impl RelayerClient {
             .http_client
             .post(&url)
             .json(&request)
-            .timeout(self.timeout)
             .send()
             .await
             .map_err(|e| {

@@ -143,14 +143,22 @@ struct JwksResponse {
     keys: Vec<JwkKey>,
 }
 
+/// Default timeout for JWKS HTTP requests (30 seconds)
+const JWKS_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl JwksCache {
     /// Create a new JWKS cache
     pub fn new(discovery_url: String, cache_ttl_secs: u64) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(JWKS_HTTP_TIMEOUT)
+            .build()
+            .expect("Failed to build HTTP client for JWKS cache");
+
         Self {
             keys: Arc::new(RwLock::new(None)),
             discovery_url,
             cache_ttl_secs,
-            client: reqwest::Client::new(),
+            client,
         }
     }
 

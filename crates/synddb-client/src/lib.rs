@@ -501,9 +501,12 @@ impl SyndDB {
                     .build()
                     .expect("Failed to create tokio runtime for snapshot sender")
                     .block_on(async {
-                        SnapshotSender::new(cfg, rec, att)
-                            .run(snapshot_rx, snapshot_shutdown_rx)
-                            .await
+                        match SnapshotSender::new(cfg, rec, att) {
+                            Ok(sender) => sender.run(snapshot_rx, snapshot_shutdown_rx).await,
+                            Err(e) => {
+                                error!("Failed to create snapshot sender: {}", e);
+                            }
+                        }
                     });
             })
         };
