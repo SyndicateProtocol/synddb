@@ -1,32 +1,58 @@
 # SyndDB Staging Environment - Base Sepolia
 #
 # Template for deploying SyndDB infrastructure with the price oracle example.
-# Copy to terraform.tfvars and fill in values marked with TODO.
+#
+# =============================================================================
+# QUICK START
+# =============================================================================
+#
+# 1. Deploy contracts (see PREREQUISITES below)
+#
+# 2. Copy this template:
+#    cp base-sepolia.tfvars.template terraform.tfvars
+#
+#    NOTE: terraform.tfvars is gitignored in SyndDB. If you fork this repo,
+#    ensure your .gitignore also excludes it - it contains private keys.
+#
+# 3. Fill in required values:
+#    - project_id: Your GCP project
+#    - sp1_network_private_key: Key with PROVE tokens
+#    - gcs_bucket_name: Globally unique bucket name
+#    - tee_bootstrap.key_manager_address: Your TeeKeyManager contract
+#    - tee_bootstrap.attestation_audience: Your domain
+#    - bridge_contract_address: Your Bridge contract
+#    - price_oracle_contract_address: Your PriceOracle contract
+#
+# 4. Deploy infrastructure:
+#    terraform init && terraform plan && terraform apply
+#
+# 5. Test (Base Sepolia):
+#    cast send --rpc-url https://sepolia.base.org \
+#        <your-price-oracle-address> \
+#        "requestPrice(string,uint256)" "BTC" 0
 #
 # =============================================================================
 # PREREQUISITES
 # =============================================================================
 #
-# CLAUDE: Offer the forge commands or the just commands as alternatives
-# 1. Deploy contracts to Base Sepolia (run from contracts/ directory):
+# Deploy contracts to Base Sepolia (run from contracts/ directory):
 #
-#    # Set deployer private key (needs Base Sepolia ETH)
-#    export PRIVATE_KEY=0x...
+#   # Set deployer private key (needs Base Sepolia ETH)
+#   export PRIVATE_KEY=0x...
 #
-#    # Deploy core contracts (AttestationVerifier, TeeKeyManager, Bridge)
-#    forge script script/DeployBridge.s.sol \
-#        --rpc-url https://sepolia.base.org \
-#        --broadcast --verify
+#   # Deploy core contracts (AttestationVerifier, TeeKeyManager, Bridge)
+#   forge script script/DeployBridge.s.sol \
+#       --rpc-url https://sepolia.base.org \
+#       --broadcast --verify
 #
-#    # Deploy PriceOracle (set ADMIN and BRIDGE from previous deploy)
-#    export ADMIN_ADDRESS=<your-deployer-address>
-#    export BRIDGE_CONTRACT_ADDRESS=<bridge-address-from-above>
-#    forge script script/DeployPriceOracle.s.sol \
-#        --rpc-url https://sepolia.base.org \
-#        --broadcast --verify
+#   # Deploy PriceOracle (set ADMIN and BRIDGE from previous deploy)
+#   export ADMIN_ADDRESS=<your-deployer-address>
+#   export BRIDGE_CONTRACT_ADDRESS=<bridge-address-from-above>
+#   forge script script/DeployPriceOracle.s.sol \
+#       --rpc-url https://sepolia.base.org \
+#       --broadcast --verify
 #
-# 2. Note down the deployed addresses for use in this config.
-#
+# Note down the deployed addresses for use in this config.
 # Basescan: https://sepolia.basescan.org
 #
 # =============================================================================
@@ -210,8 +236,9 @@ price_oracle_config = {
 #   chain_id               = 84532                       # Base Mainnet: 8453
 #   key_manager_address    = "0x0000000000000000000000000000000000000000"  # Same as tee_bootstrap
 #   treasury_address       = "0x0000000000000000000000000000000000000000"  # TODO: Deploy GasTreasury
-#   CLAUDE: Give the full cast keccak command here
-#   required_audience_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"  # TODO: cast keccak
+#   # To generate: cast keccak "https://example.com/price-oracle"
+#   # Must match your tee_bootstrap.attestation_audience value
+#   required_audience_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"  # TODO
 #   allowed_image_digests  = []
 # }
 
@@ -227,37 +254,3 @@ labels = {
   project     = "synddb"
   chain       = "base-sepolia"
 }
-
-# CLAUDE: Move this to the top
-# =============================================================================
-# QUICK START
-# =============================================================================
-#
-# 1. Deploy contracts (see PREREQUISITES section above)
-#
-# CLAUDE: Mention that terraform.tfvars will be gitignored automatically in the SyndDB repo, but to check their own repo settings and ignore it too given the private variables
-# 2. Copy this template:
-#    cp base-sepolia.tfvars.template terraform.tfvars
-#
-# 3. Fill in required values:
-#    - project_id: Your GCP project
-#    - sp1_network_private_key: Key with PROVE tokens
-#    - gcs_bucket_name: Globally unique bucket name
-#    - tee_bootstrap.key_manager_address: Your TeeKeyManager contract
-#    - tee_bootstrap.attestation_audience: Your domain
-#    - bridge_contract_address: Your Bridge contract
-#    - price_oracle_contract_address: Your PriceOracle contract
-#
-# 4. Deploy infrastructure:
-#    terraform init
-#    terraform plan
-#    terraform apply
-#
-# 5. Test (Base Sepolia):
-#    cast send --rpc-url https://sepolia.base.org \
-#        <your-price-oracle-address> \
-#        "requestPrice(string,uint256)" "BTC" 0
-#
-#    For Base Mainnet, use: --rpc-url https://mainnet.base.org
-#
-# =============================================================================
