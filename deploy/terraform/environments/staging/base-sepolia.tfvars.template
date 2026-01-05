@@ -25,8 +25,11 @@ zone   = "us-central1-a"
 # Using edge tag from Artifact Registry. Change to specific version for stability.
 
 sequencer_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-sequencer:edge"
-validator_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-validator:edge"
 proof_service_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/proof-service:edge"
+
+# For price oracle example, use the custom validator with price consistency rules
+# For other use cases, use: us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-validator:edge
+validator_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle-validator:edge"
 
 # -----------------------------------------------------------------------------
 # Storage

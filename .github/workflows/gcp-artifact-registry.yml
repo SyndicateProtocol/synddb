@@ -440,30 +440,47 @@ jobs:
               - 'crates/gcp-attestation/**'
               - 'crates/synddb-bootstrap/sp1/program/**'
             price-oracle:
-              - 'examples/price-oracle/**'
+              - 'examples/price-oracle/app/**'
+              - 'examples/price-oracle/Dockerfile'
               - 'crates/synddb-client/**'
+            price-oracle-validator:
+              - 'examples/price-oracle/validator/**'
+              - 'examples/price-oracle/validator.Dockerfile'
+              - 'crates/synddb-validator/**'
+
+      - name: Check if any standard image needs building
+        id: needs-build
+        run: |
+          if [[ "${{ steps.changes.outputs.relayer }}" == "true" ]] || \
+             [[ "${{ steps.changes.outputs.proof-service }}" == "true" ]] || \
+             [[ "${{ steps.changes.outputs.price-oracle }}" == "true" ]] || \
+             [[ "${{ steps.changes.outputs.price-oracle-validator }}" == "true" ]]; then
+            echo "result=true" >> $GITHUB_OUTPUT
+          else
+            echo "result=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Authenticate to Google Cloud
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
+        if: steps.needs-build.outputs.result == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
+        if: steps.needs-build.outputs.result == 'true'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
+        if: steps.needs-build.outputs.result == 'true'
         run: gcloud auth configure-docker ${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev --quiet
 
       - name: Set up Docker Buildx
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
+        if: steps.needs-build.outputs.result == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Generate image tags
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
+        if: steps.needs-build.outputs.result == 'true'
         id: tags
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
@@ -475,10 +492,12 @@ jobs:
               echo "relayer_tags=$REGISTRY/synddb-relayer:$VERSION,$REGISTRY/synddb-relayer:latest" >> $GITHUB_OUTPUT
               echo "proof_service_tags=$REGISTRY/proof-service:$VERSION,$REGISTRY/proof-service:latest" >> $GITHUB_OUTPUT
               echo "price_oracle_tags=$REGISTRY/price-oracle:$VERSION,$REGISTRY/price-oracle:latest" >> $GITHUB_OUTPUT
+              echo "price_oracle_validator_tags=$REGISTRY/price-oracle-validator:$VERSION,$REGISTRY/price-oracle-validator:latest" >> $GITHUB_OUTPUT
             else
               echo "relayer_tags=$REGISTRY/synddb-relayer:$VERSION" >> $GITHUB_OUTPUT
               echo "proof_service_tags=$REGISTRY/proof-service:$VERSION" >> $GITHUB_OUTPUT
               echo "price_oracle_tags=$REGISTRY/price-oracle:$VERSION" >> $GITHUB_OUTPUT
+              echo "price_oracle_validator_tags=$REGISTRY/price-oracle-validator:$VERSION" >> $GITHUB_OUTPUT
             fi
             echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/example-app" ]]; then
@@ -486,12 +505,14 @@ jobs:
             echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA,$REGISTRY/synddb-relayer:edge" >> $GITHUB_OUTPUT
             echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA,$REGISTRY/proof-service:edge" >> $GITHUB_OUTPUT
             echo "price_oracle_tags=$REGISTRY/price-oracle:sha-$SHORT_SHA,$REGISTRY/price-oracle:edge" >> $GITHUB_OUTPUT
+            echo "price_oracle_validator_tags=$REGISTRY/price-oracle-validator:sha-$SHORT_SHA,$REGISTRY/price-oracle-validator:edge" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
           else
             # Manual run or other branch: sha only
             echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "price_oracle_tags=$REGISTRY/price-oracle:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "price_oracle_validator_tags=$REGISTRY/price-oracle-validator:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
           fi
 
@@ -540,8 +561,23 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Build and push price-oracle-validator
+        if: steps.changes.outputs.price-oracle-validator == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: examples/price-oracle/validator.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.price_oracle_validator_tags }}
+          cache-from: type=gha,scope=price-oracle-validator
+          cache-to: type=gha,mode=max,scope=price-oracle-validator
+          # SLSA provenance attestation - proves this image was built by this workflow
+          provenance: mode=max
+          sbom: true
+
       - name: Summary
-        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true' || steps.changes.outputs.price-oracle == 'true'
+        if: steps.needs-build.outputs.result == 'true'
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
 
@@ -557,4 +593,7 @@ jobs:
           fi
           if [[ "${{ steps.changes.outputs.price-oracle }}" == "true" ]]; then
             echo "| price-oracle | \`${{ steps.tags.outputs.price_oracle_tags }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [[ "${{ steps.changes.outputs.price-oracle-validator }}" == "true" ]]; then
+            echo "| price-oracle-validator | \`${{ steps.tags.outputs.price_oracle_validator_tags }}\` |" >> $GITHUB_STEP_SUMMARY
           fi

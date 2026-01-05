@@ -91,8 +91,12 @@ This shows what resources will be created:
 - GCS bucket for batch storage
 - Service accounts with minimal permissions
 - Sequencer Confidential VM
-- Validator Confidential VM
+- Validator Confidential VM (with custom price consistency rules)
 - Proof service (Cloud Run)
+
+**Note:** The template uses `price-oracle-validator` image which includes custom validation
+rules for price consistency. For other use cases, change `validator_image` to use
+`synddb-validator` instead.
 
 ### 6. Deploy Infrastructure
 
