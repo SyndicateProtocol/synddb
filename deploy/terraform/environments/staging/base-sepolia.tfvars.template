@@ -7,6 +7,7 @@
 # PREREQUISITES
 # =============================================================================
 #
+# CLAUDE: Give the command here that they can run to deploy the contracts on Base Sepolia
 # 1. Deploy contracts first (see contracts/README.md):
 #    - AttestationVerifier
 #    - TeeKeyManager
@@ -24,6 +25,7 @@
 # -----------------------------------------------------------------------------
 # Your GCP project where infrastructure will be deployed.
 # Create a project at https://console.cloud.google.com or use an existing one.
+# CLAUDE: Isn't this handled via the Terraform config? If so, do we need to mention it?
 # Requires: Compute Engine, Cloud Run, Cloud Storage, Artifact Registry APIs enabled.
 
 project_id = "my-gcp-project"  # TODO: Your GCP project ID
@@ -90,6 +92,7 @@ artifact_registry_repository = "synddb"
 # -----------------------------------------------------------------------------
 # Instance Configuration
 # -----------------------------------------------------------------------------
+# CLAUDE: Give a monthly cost estimate here
 # Machine types for Confidential VMs. Must use AMD SEV-compatible types (n2d-*).
 # n2d-standard-2: 2 vCPU, 8GB RAM - sufficient for staging workloads.
 # For production, consider n2d-standard-4 or higher.
@@ -169,6 +172,7 @@ price_oracle_config = {
   cmc_api_key           = ""  # Optional: CoinMarketCap API key
   fetch_interval        = 60
   assets                = ["BTC", "ETH", "SOL"]
+  # CLAUDE: Default to false so that someone cannot drain someone's API usage
   chain_monitor_enabled = true
 }
 
