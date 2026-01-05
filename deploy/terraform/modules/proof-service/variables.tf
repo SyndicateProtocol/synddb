@@ -25,22 +25,9 @@ variable "service_account_email" {
   type        = string
 }
 
-# GPU Configuration
-variable "gpu_type" {
-  description = "GPU type"
-  type        = string
-  default     = "nvidia-l4"
-}
-
-variable "gpu_count" {
-  description = "Number of GPUs"
-  type        = number
-  default     = 1
-}
-
 # Resource Limits
 variable "cpu_limit" {
-  description = "CPU limit"
+  description = "CPU limit (AVX512 proving benefits from more cores)"
   type        = string
   default     = "8"
 }
@@ -48,7 +35,7 @@ variable "cpu_limit" {
 variable "memory_limit" {
   description = "Memory limit"
   type        = string
-  default     = "32Gi"
+  default     = "16Gi"
 }
 
 # Scaling

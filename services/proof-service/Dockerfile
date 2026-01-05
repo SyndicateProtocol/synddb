@@ -1,7 +1,7 @@
-# GPU-accelerated SP1 proof generation service
+# CPU-accelerated SP1 proof generation service with AVX512
 #
 # Build: docker build -t proof-service .
-# Run:   docker run --gpus all -p 8080:8080 proof-service
+# Run:   docker run -p 8080:8080 proof-service
 
 # Build stage
 FROM rust:1.92-bookworm AS builder
@@ -30,22 +30,18 @@ WORKDIR /app
 # Copy the entire repo context (needed for workspace dependencies)
 COPY . .
 
-# Build the proof service
+# Build the proof service with AVX512 acceleration
+# See: https://docs.succinct.xyz/docs/sp1/generating-proofs/hardware-acceleration
 WORKDIR /app/services/proof-service
+ENV RUSTFLAGS="-C target-cpu=x86-64-v4 -C target-feature=+avx512f"
 RUN cargo build --release
 
-# Runtime stage with CUDA support
-# Using CUDA 12.5.1 to meet SP1's >= 12.5.1 recommendation
-# Cloud Run provides driver 535 (CUDA 12.2), so we need forward compatibility
-FROM nvidia/cuda:12.5.1-runtime-ubuntu22.04
+# Runtime stage - lightweight Debian image (no CUDA needed for CPU mode)
+FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    cuda-compat-12-5 \
     && rm -rf /var/lib/apt/lists/*
-
-# Use forward compatibility libraries for Cloud Run's older driver (535/CUDA 12.2)
-ENV LD_LIBRARY_PATH=/usr/local/cuda-12.5/compat:${LD_LIBRARY_PATH}
 
 WORKDIR /app
 
@@ -53,8 +49,8 @@ WORKDIR /app
 COPY --from=builder /app/services/proof-service/target/release/proof-service /app/proof-service
 
 # SP1 prover configuration
-# Set to "cuda" for GPU acceleration, "local" for CPU, or "network" for SP1 Network
-ENV SP1_PROVER=cuda
+# Using "local" for CPU-based proving with AVX512 acceleration
+ENV SP1_PROVER=local
 ENV BIND_ADDRESS=0.0.0.0:8080
 ENV RUST_LOG=info
 

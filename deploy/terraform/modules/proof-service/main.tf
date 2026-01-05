@@ -4,16 +4,11 @@ terraform {
       source  = "hashicorp/google"
       version = ">= 5.0.0"
     }
-    google-beta = {
-      source  = "hashicorp/google-beta"
-      version = ">= 5.0.0"
-    }
   }
 }
 
-# Cloud Run v2 service with GPU
+# Cloud Run v2 service for CPU-based proof generation with AVX512
 resource "google_cloud_run_v2_service" "proof_service" {
-  provider = google-beta  # GPU support requires beta provider
   name     = var.service_name
   location = var.region
   project  = var.project_id
@@ -47,9 +42,8 @@ resource "google_cloud_run_v2_service" "proof_service" {
 
       resources {
         limits = {
-          cpu              = var.cpu_limit
-          memory           = var.memory_limit
-          "nvidia.com/gpu" = tostring(var.gpu_count)
+          cpu    = var.cpu_limit
+          memory = var.memory_limit
         }
         cpu_idle          = false
         startup_cpu_boost = true
@@ -57,7 +51,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
 
       env {
         name  = "SP1_PROVER"
-        value = "cuda"
+        value = "local"
       }
 
       env {
@@ -75,7 +69,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
           path = "/health"
           port = 8080
         }
-        initial_delay_seconds = 30
+        initial_delay_seconds = 10
         period_seconds        = 10
         failure_threshold     = 30
         timeout_seconds       = 5
@@ -93,7 +87,6 @@ resource "google_cloud_run_v2_service" "proof_service" {
     }
 
     annotations = {
-      "run.googleapis.com/gpu-type"          = var.gpu_type
       "run.googleapis.com/startup-cpu-boost" = "true"
     }
 
@@ -101,6 +94,9 @@ resource "google_cloud_run_v2_service" "proof_service" {
   }
 
   labels = var.labels
+
+  # Allow deletion for staging environments
+  deletion_protection = false
 
   lifecycle {
     ignore_changes = [
