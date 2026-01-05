@@ -118,7 +118,8 @@ validator_machine_type = "n2d-standard-2"
 tee_bootstrap = {
   key_manager_address  = "0x0000000000000000000000000000000000000000"  # TODO: Your TeeKeyManager
   rpc_url              = "https://sepolia.base.org"  # TODO: Use Alchemy/Infura for reliability
-  chain_id             = 84532
+                                                     # Base Mainnet: https://mainnet.base.org
+  chain_id             = 84532                       # Base Mainnet: 8453
   attestation_audience = "https://example.com/price-oracle"  # TODO: Your domain
 }
 
@@ -131,7 +132,7 @@ tee_bootstrap = {
 
 enable_bridge_signer    = true
 bridge_contract_address = "0x0000000000000000000000000000000000000000"  # TODO: Your Bridge contract
-bridge_chain_id         = 84532
+bridge_chain_id         = 84532  # Base Mainnet: 8453
 
 # -----------------------------------------------------------------------------
 # Batching Configuration
@@ -187,8 +188,8 @@ price_oracle_config = {
 # relayer_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-relayer:edge"
 #
 # relayer_config = {
-#   rpc_url                = "https://sepolia.base.org"
-#   chain_id               = 84532
+#   rpc_url                = "https://sepolia.base.org"  # Base Mainnet: https://mainnet.base.org
+#   chain_id               = 84532                       # Base Mainnet: 8453
 #   key_manager_address    = "0x0000000000000000000000000000000000000000"  # Same as tee_bootstrap
 #   treasury_address       = "0x0000000000000000000000000000000000000000"  # TODO: Deploy GasTreasury
 #   required_audience_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"  # TODO: cast keccak
@@ -232,9 +233,11 @@ labels = {
 #    terraform plan
 #    terraform apply
 #
-# 5. Test:
+# 5. Test (Base Sepolia):
 #    cast send --rpc-url https://sepolia.base.org \
 #        <your-price-oracle-address> \
 #        "requestPrice(string,uint256)" "BTC" 0
+#
+#    For Base Mainnet, use: --rpc-url https://mainnet.base.org
 #
 # =============================================================================
