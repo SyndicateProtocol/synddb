@@ -39,10 +39,10 @@ ARTIFACT_TYPE="application/vnd.syndicate.image-signature.v1+json"
 
 REFERRERS=$(oras discover "$IMAGE" \
   --artifact-type "$ARTIFACT_TYPE" \
-  --format json 2>/dev/null || echo '{"manifests":[]}')
+  --format json 2>/dev/null || echo '{"referrers":[]}')
 
 # Check if we found any signatures
-MANIFEST_DIGEST=$(echo "$REFERRERS" | jq -r '.manifests[0].digest // empty')
+MANIFEST_DIGEST=$(echo "$REFERRERS" | jq -r '.referrers[0].digest // empty')
 
 if [[ -z "$MANIFEST_DIGEST" ]]; then
   # No signature found
@@ -58,8 +58,8 @@ REFERRER_REF="$BASE_IMAGE@$MANIFEST_DIGEST"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-# Pull the signature artifact
-if ! oras pull "$REFERRER_REF" -o "$TMPDIR" 2>/dev/null; then
+# Pull the signature artifact (suppress output)
+if ! oras pull "$REFERRER_REF" -o "$TMPDIR" --no-tty >/dev/null 2>&1; then
   echo '{"signature": "", "found": "false", "error": "failed to pull signature artifact"}'
   exit 0
 fi
