@@ -7,12 +7,22 @@
 # PREREQUISITES
 # =============================================================================
 #
-# CLAUDE: Give the command here that they can run to deploy the contracts on Base Sepolia
-# 1. Deploy contracts first (see contracts/README.md):
-#    - AttestationVerifier
-#    - TeeKeyManager
-#    - Bridge
-#    - PriceOracle (or your app contract)
+# 1. Deploy contracts to Base Sepolia (run from contracts/ directory):
+#
+#    # Set deployer private key (needs Base Sepolia ETH)
+#    export PRIVATE_KEY=0x...
+#
+#    # Deploy core contracts (AttestationVerifier, TeeKeyManager, Bridge)
+#    forge script script/DeployBridge.s.sol \
+#        --rpc-url https://sepolia.base.org \
+#        --broadcast --verify
+#
+#    # Deploy PriceOracle (set ADMIN and BRIDGE from previous deploy)
+#    export ADMIN_ADDRESS=<your-deployer-address>
+#    export BRIDGE_CONTRACT_ADDRESS=<bridge-address-from-above>
+#    forge script script/DeployPriceOracle.s.sol \
+#        --rpc-url https://sepolia.base.org \
+#        --broadcast --verify
 #
 # 2. Note down the deployed addresses for use in this config.
 #
@@ -25,8 +35,7 @@
 # -----------------------------------------------------------------------------
 # Your GCP project where infrastructure will be deployed.
 # Create a project at https://console.cloud.google.com or use an existing one.
-# CLAUDE: Isn't this handled via the Terraform config? If so, do we need to mention it?
-# Requires: Compute Engine, Cloud Run, Cloud Storage, Artifact Registry APIs enabled.
+# Required APIs are enabled automatically by Terraform.
 
 project_id = "my-gcp-project"  # TODO: Your GCP project ID
 
@@ -92,10 +101,15 @@ artifact_registry_repository = "synddb"
 # -----------------------------------------------------------------------------
 # Instance Configuration
 # -----------------------------------------------------------------------------
-# CLAUDE: Give a monthly cost estimate here
 # Machine types for Confidential VMs. Must use AMD SEV-compatible types (n2d-*).
 # n2d-standard-2: 2 vCPU, 8GB RAM - sufficient for staging workloads.
 # For production, consider n2d-standard-4 or higher.
+#
+# Estimated monthly cost (us-central1, 24/7):
+#   n2d-standard-2 Confidential VM: ~$75/month each
+#   2 VMs (sequencer + validator): ~$150/month
+#   Cloud Run proof-service: scales to zero, pay per request
+#   GCS storage: ~$0.02/GB/month
 
 sequencer_machine_type = "n2d-standard-2"
 validator_machine_type = "n2d-standard-2"
@@ -172,8 +186,7 @@ price_oracle_config = {
   cmc_api_key           = ""  # Optional: CoinMarketCap API key
   fetch_interval        = 60
   assets                = ["BTC", "ETH", "SOL"]
-  # CLAUDE: Default to false so that someone cannot drain someone's API usage
-  chain_monitor_enabled = true
+  chain_monitor_enabled = false  # Set true to watch for on-chain price requests
 }
 
 # -----------------------------------------------------------------------------
@@ -217,8 +230,7 @@ labels = {
 # QUICK START
 # =============================================================================
 #
-# 1. Deploy contracts (see contracts/README.md):
-#    just contracts::deploy-base-sepolia
+# 1. Deploy contracts (see PREREQUISITES section above)
 #
 # 2. Copy this template:
 #    cp base-sepolia.tfvars.template terraform.tfvars
