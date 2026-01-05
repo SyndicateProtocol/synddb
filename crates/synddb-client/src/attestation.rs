@@ -63,14 +63,14 @@ impl AttestationResponse {
         let body_str = String::from_utf8_lossy(body);
 
         // First, try to parse as JSON object with "token" field
-        if let Ok(response) = serde_json::from_slice::<AttestationResponse>(body) {
+        if let Ok(response) = serde_json::from_slice::<Self>(body) {
             return Ok(response);
         }
 
         // If that fails, check if the body is a raw JWT (starts with eyJ which is base64 for {"alg)
         let trimmed = body_str.trim();
         if trimmed.starts_with("eyJ") && trimmed.contains('.') {
-            return Ok(AttestationResponse {
+            return Ok(Self {
                 token: trimmed.to_string(),
             });
         }
