@@ -67,8 +67,9 @@ tee_bootstrap = {
 
   chain_id = 84532
 
-  # TODO: Your staging domain for attestation audience
-  attestation_audience = "https://TODO_YOUR_STAGING_DOMAIN"
+  # TODO: Your attestation audience (must be unique per example)
+  # Format: https://<your-domain>/<example-name>
+  attestation_audience = "https://TODO_YOUR_DOMAIN/price-oracle"
 }
 
 # -----------------------------------------------------------------------------
