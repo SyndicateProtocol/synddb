@@ -15,6 +15,10 @@ struct ProofRequest {
     pub expected_audience: String,
     /// EVM public key (64-byte uncompressed secp256k1, hex-encoded)
     pub evm_public_key: String,
+    /// Cosign signature over image digest (64 bytes: r || s, hex-encoded)
+    pub cosign_signature: String,
+    /// Cosign public key (64 or 65 bytes, hex-encoded)
+    pub cosign_pubkey: String,
 }
 
 /// Response from the proof service
@@ -60,11 +64,20 @@ impl ProofClient {
     }
 
     /// Generate a proof for the given attestation
+    ///
+    /// # Arguments
+    /// * `jwt_token` - Raw JWT attestation token from Confidential Space
+    /// * `expected_audience` - Expected audience claim
+    /// * `evm_public_key` - 64-byte uncompressed secp256k1 public key
+    /// * `cosign_signature` - 64-byte cosign signature (r || s) over the image digest
+    /// * `cosign_pubkey` - 64 or 65 byte cosign public key (P-256 / secp256r1)
     pub async fn generate_proof(
         &self,
         jwt_token: &str,
         expected_audience: &str,
         evm_public_key: &[u8; 64],
+        cosign_signature: &[u8],
+        cosign_pubkey: &[u8],
     ) -> Result<ProofResponse, BootstrapError> {
         // Check for mock mode
         if self.service_url.starts_with("mock://") {
@@ -75,6 +88,8 @@ impl ProofClient {
             jwt_token: jwt_token.to_string(),
             expected_audience: expected_audience.to_string(),
             evm_public_key: format!("0x{}", hex::encode(evm_public_key)),
+            cosign_signature: format!("0x{}", hex::encode(cosign_signature)),
+            cosign_pubkey: format!("0x{}", hex::encode(cosign_pubkey)),
         };
 
         info!(
@@ -151,10 +166,9 @@ impl ProofClient {
         debug!(address = %address, "Generated mock proof");
 
         // Return mock data that matches expected format
+        // PublicValuesStruct has 12 fields × 32 bytes = 384 bytes ABI-encoded
         Ok(ProofResponse {
-            // Mock public values - 256 bytes of zeros
-            public_values: format!("0x{}", "00".repeat(256)),
-            // Mock proof - empty
+            public_values: format!("0x{}", "00".repeat(384)),
             proof_bytes: "0x".into(),
             tee_address: format!("{address}"),
         })

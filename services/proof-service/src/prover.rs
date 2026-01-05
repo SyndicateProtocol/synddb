@@ -38,6 +38,8 @@ impl AttestationProver {
     /// * `jwk` - JWK public key that signed the token
     /// * `expected_audience` - Expected audience claim
     /// * `evm_public_key` - 64-byte uncompressed secp256k1 public key for EVM signing
+    /// * `cosign_signature` - 64-byte cosign signature (r || s) over the image digest
+    /// * `cosign_pubkey` - 64 or 65 byte cosign public key (P-256 / secp256r1)
     ///
     /// # Returns
     /// The SP1 proof with public values
@@ -47,6 +49,8 @@ impl AttestationProver {
         jwk: &JwkKey,
         expected_audience: &str,
         evm_public_key: &[u8; 64],
+        cosign_signature: &[u8],
+        cosign_pubkey: &[u8],
     ) -> Result<SP1ProofWithPublicValues> {
         info!("Starting proof generation");
 
@@ -56,6 +60,8 @@ impl AttestationProver {
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
         stdin.write(&evm_public_key.to_vec());
+        stdin.write(&cosign_signature.to_vec());
+        stdin.write(&cosign_pubkey.to_vec());
 
         // Setup proving and verification keys
         debug!("Setting up proving keys");
@@ -87,6 +93,8 @@ impl AttestationProver {
         jwk: &JwkKey,
         expected_audience: &str,
         evm_public_key: &[u8; 64],
+        cosign_signature: &[u8],
+        cosign_pubkey: &[u8],
     ) -> Result<Vec<u8>> {
         info!("Executing program in test mode");
 
@@ -95,6 +103,8 @@ impl AttestationProver {
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
         stdin.write(&evm_public_key.to_vec());
+        stdin.write(&cosign_signature.to_vec());
+        stdin.write(&cosign_pubkey.to_vec());
 
         let (output, report) = self
             .client
