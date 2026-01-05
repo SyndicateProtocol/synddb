@@ -233,10 +233,8 @@ pub struct ValidatorConfig {
     #[arg(long, env = "ENABLE_KEY_BOOTSTRAP", default_value = "false")]
     pub enable_key_bootstrap: bool,
 
-    /// Bridge contract address for key registration
-    #[arg(long, env = "BRIDGE_CONTRACT_ADDRESS")]
-    pub bridge_contract_address: Option<String>,
-
+    // Note: Bridge contract address for bootstrap uses the same `bridge_contract` field
+    // defined in the Bridge Signer Mode section above (env: BRIDGE_CONTRACT_ADDRESS)
     /// RPC URL for verifying key registration
     #[arg(long, env = "BOOTSTRAP_RPC_URL")]
     pub bootstrap_rpc_url: Option<String>,
@@ -291,7 +289,7 @@ impl ValidatorConfig {
             return Ok(());
         }
 
-        if self.bridge_contract_address.is_none() {
+        if self.bridge_contract.is_none() {
             return Err(
                 "BRIDGE_CONTRACT_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true".into(),
             );
