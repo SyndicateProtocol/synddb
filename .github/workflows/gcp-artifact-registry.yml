@@ -406,12 +406,29 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
   # Build and publish non-reproducible images (no TEE attestation required)
+  # Runs in parallel using matrix strategy for faster builds
   publish-standard:
-    name: Publish Standard Images
+    name: Publish ${{ matrix.image }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: synddb-relayer
+            dockerfile: docker/reproducible/relayer.Dockerfile
+            cache-scope: relayer
+          - image: proof-service
+            dockerfile: services/proof-service/Dockerfile
+            cache-scope: proof-service
+          - image: price-oracle
+            dockerfile: examples/price-oracle/Dockerfile
+            cache-scope: price-oracle
+          - image: price-oracle-validator
+            dockerfile: examples/price-oracle/validator.Dockerfile
+            cache-scope: price-oracle-validator
 
     steps:
       - name: Free disk space
@@ -445,102 +462,38 @@ jobs:
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          IMAGE="${{ matrix.image }}"
 
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
             if [[ "${{ github.event_name }}" == "push" ]]; then
-              echo "relayer_tags=$REGISTRY/synddb-relayer:$VERSION,$REGISTRY/synddb-relayer:latest" >> $GITHUB_OUTPUT
-              echo "proof_service_tags=$REGISTRY/proof-service:$VERSION,$REGISTRY/proof-service:latest" >> $GITHUB_OUTPUT
-              echo "price_oracle_tags=$REGISTRY/price-oracle:$VERSION,$REGISTRY/price-oracle:latest" >> $GITHUB_OUTPUT
-              echo "price_oracle_validator_tags=$REGISTRY/price-oracle-validator:$VERSION,$REGISTRY/price-oracle-validator:latest" >> $GITHUB_OUTPUT
+              echo "tags=$REGISTRY/$IMAGE:$VERSION,$REGISTRY/$IMAGE:latest" >> $GITHUB_OUTPUT
             else
-              echo "relayer_tags=$REGISTRY/synddb-relayer:$VERSION" >> $GITHUB_OUTPUT
-              echo "proof_service_tags=$REGISTRY/proof-service:$VERSION" >> $GITHUB_OUTPUT
-              echo "price_oracle_tags=$REGISTRY/price-oracle:$VERSION" >> $GITHUB_OUTPUT
-              echo "price_oracle_validator_tags=$REGISTRY/price-oracle-validator:$VERSION" >> $GITHUB_OUTPUT
+              echo "tags=$REGISTRY/$IMAGE:$VERSION" >> $GITHUB_OUTPUT
             fi
-            echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/example-app" ]]; then
-            # Branch push: sha + edge
-            echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA,$REGISTRY/synddb-relayer:edge" >> $GITHUB_OUTPUT
-            echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA,$REGISTRY/proof-service:edge" >> $GITHUB_OUTPUT
-            echo "price_oracle_tags=$REGISTRY/price-oracle:sha-$SHORT_SHA,$REGISTRY/price-oracle:edge" >> $GITHUB_OUTPUT
-            echo "price_oracle_validator_tags=$REGISTRY/price-oracle-validator:sha-$SHORT_SHA,$REGISTRY/price-oracle-validator:edge" >> $GITHUB_OUTPUT
-            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "tags=$REGISTRY/$IMAGE:sha-$SHORT_SHA,$REGISTRY/$IMAGE:edge" >> $GITHUB_OUTPUT
           else
-            # Manual run or other branch: sha only
-            echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
-            echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
-            echo "price_oracle_tags=$REGISTRY/price-oracle:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
-            echo "price_oracle_validator_tags=$REGISTRY/price-oracle-validator:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
-            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "tags=$REGISTRY/$IMAGE:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build and push relayer
+      - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/reproducible/relayer.Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.tags.outputs.relayer_tags }}
-          cache-from: type=gha,scope=relayer
-          cache-to: type=gha,mode=max,scope=relayer
-          # SLSA provenance attestation - proves this image was built by this workflow
-          provenance: mode=max
-          sbom: true
-
-      - name: Build and push proof-service
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: services/proof-service/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.tags.outputs.proof_service_tags }}
-          cache-from: type=gha,scope=proof-service
-          cache-to: type=gha,mode=max,scope=proof-service
-          # SLSA provenance attestation - proves this image was built by this workflow
-          provenance: mode=max
-          sbom: true
-
-      - name: Build and push price-oracle
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: examples/price-oracle/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.tags.outputs.price_oracle_tags }}
-          cache-from: type=gha,scope=price-oracle
-          cache-to: type=gha,mode=max,scope=price-oracle
-          # SLSA provenance attestation - proves this image was built by this workflow
-          provenance: mode=max
-          sbom: true
-
-      - name: Build and push price-oracle-validator
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: examples/price-oracle/validator.Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.tags.outputs.price_oracle_validator_tags }}
-          cache-from: type=gha,scope=price-oracle-validator
-          cache-to: type=gha,mode=max,scope=price-oracle-validator
-          # SLSA provenance attestation - proves this image was built by this workflow
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.cache-scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache-scope }}
           provenance: mode=max
           sbom: true
 
       - name: Summary
         run: |
           {
-            echo "## Standard Images Published"
+            echo "## ${{ matrix.image }}"
             echo ""
-            echo "| Image | Tags |"
-            echo "|-------|------|"
-            echo "| synddb-relayer | \`${{ steps.tags.outputs.relayer_tags }}\` |"
-            echo "| proof-service | \`${{ steps.tags.outputs.proof_service_tags }}\` |"
-            echo "| price-oracle | \`${{ steps.tags.outputs.price_oracle_tags }}\` |"
-            echo "| price-oracle-validator | \`${{ steps.tags.outputs.price_oracle_validator_tags }}\` |"
+            echo "Tags: \`${{ steps.tags.outputs.tags }}\`"
           } >> $GITHUB_STEP_SUMMARY
