@@ -6,6 +6,7 @@ set -euo pipefail
 
 # Configuration
 REGISTRY="us-central1-docker.pkg.dev/synddb-infra/synddb"
+REGISTRY_PROJECT="synddb-infra"
 TAG="${IMAGE_TAG:-edge}"
 
 # Colors for output
@@ -45,6 +46,7 @@ get_image_digest() {
     # Get the digest using gcloud (stderr to /dev/null, only output digest)
     local digest
     digest=$(gcloud artifacts docker images describe "${full_image}" \
+        --project="${REGISTRY_PROJECT}" \
         --format='get(image_summary.digest)' 2>/dev/null) || {
         echo ""
         return 1
