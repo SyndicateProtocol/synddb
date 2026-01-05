@@ -7,11 +7,19 @@
 FROM rust:1.92-bookworm AS builder
 
 # Install SP1 toolchain dependencies
+# Go 1.22+ and Clang are required for native-gnark feature (avoids Docker-in-Docker)
 RUN apt-get update && apt-get install -y \
     cmake \
     pkg-config \
     libssl-dev \
+    clang \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Go 1.25 (required for native-gnark)
+RUN curl -LO https://go.dev/dl/go1.25.5.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz && \
+    rm go1.25.5.linux-amd64.tar.gz
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Install SP1 toolchain
 RUN curl -L https://sp1.succinct.xyz | bash && \
