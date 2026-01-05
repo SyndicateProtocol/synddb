@@ -108,8 +108,8 @@ resource "google_cloud_run_v2_service" "relayer" {
       }
 
       env {
-        name  = "REQUIRED_AUDIENCE_HASH"
-        value = var.required_audience_hash
+        name  = "REQUIRED_AUDIENCE"
+        value = var.required_audience
       }
 
       env {

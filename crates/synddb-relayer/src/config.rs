@@ -152,9 +152,9 @@ pub(crate) struct CliConfig {
     #[arg(long, env = "RELAYER_LISTEN_ADDR", default_value = "0.0.0.0:8082")]
     pub listen_addr: SocketAddr,
 
-    /// Required audience hash (single-app mode)
-    #[arg(long, env = "REQUIRED_AUDIENCE_HASH")]
-    pub required_audience_hash: Option<String>,
+    /// Required audience string (single-app mode) - hash computed automatically
+    #[arg(long, env = "REQUIRED_AUDIENCE")]
+    pub required_audience: Option<String>,
 
     /// Allowed image digests (comma-separated hex hashes, single-app mode)
     #[arg(long, env = "ALLOWED_IMAGE_DIGESTS")]
@@ -264,16 +264,18 @@ impl RelayerConfig {
         let private_key = cli
             .private_key
             .ok_or_else(|| anyhow::anyhow!("RELAYER_PRIVATE_KEY is required"))?;
-        let audience_hash_str = cli
-            .required_audience_hash
-            .ok_or_else(|| anyhow::anyhow!("REQUIRED_AUDIENCE_HASH is required"))?;
         let allowed_digests_str = cli
             .allowed_image_digests
             .ok_or_else(|| anyhow::anyhow!("ALLOWED_IMAGE_DIGESTS is required"))?;
 
-        // Parse audience hash
-        let audience_hash = parse_b256(&audience_hash_str)
-            .ok_or_else(|| anyhow::anyhow!("Invalid REQUIRED_AUDIENCE_HASH format"))?;
+        // Compute audience hash from string
+        let audience = cli
+            .required_audience
+            .ok_or_else(|| anyhow::anyhow!("REQUIRED_AUDIENCE is required"))?;
+        let audience_hash = {
+            use alloy::primitives::keccak256;
+            keccak256(audience.as_bytes())
+        };
 
         // Parse allowed digests
         let allowed_image_digests: Vec<B256> = allowed_digests_str

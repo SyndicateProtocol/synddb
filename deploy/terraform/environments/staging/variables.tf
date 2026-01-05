@@ -169,7 +169,7 @@ variable "relayer_config" {
     chain_id               = number       # Chain ID for EIP-712 domain
     key_manager_address    = string       # TeeKeyManager contract address
     treasury_address       = string       # GasTreasury contract address
-    required_audience_hash = string       # Audience hash for the application
+    required_audience      = string       # Audience string (e.g., https://example.com/app)
     allowed_image_digests  = list(string) # Allowed TEE image digests
   })
   default = null

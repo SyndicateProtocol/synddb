@@ -226,7 +226,7 @@ module "relayer" {
   treasury_address    = var.relayer_config.treasury_address
 
   # Application configuration
-  required_audience_hash = var.relayer_config.required_audience_hash
+  required_audience      = var.relayer_config.required_audience
   allowed_image_digests  = var.relayer_config.allowed_image_digests
 
   # Access settings

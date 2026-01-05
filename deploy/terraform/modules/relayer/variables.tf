@@ -47,8 +47,8 @@ variable "treasury_address" {
 }
 
 # Application Configuration
-variable "required_audience_hash" {
-  description = "Audience hash that identifies the application (from TEE attestation)"
+variable "required_audience" {
+  description = "Audience string that identifies the application (e.g., https://example.com/app)"
   type        = string
 }
 
