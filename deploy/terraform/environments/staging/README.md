@@ -1,6 +1,6 @@
 # SyndDB Staging Deployment
 
-This guide covers deploying SyndDB to Base Sepolia using GCP Confidential VMs.
+This guide covers deploying SyndDB to Base Sepolia using GCP Confidential VMs with **real TEE attestation**.
 
 ## Prerequisites
 
@@ -13,46 +13,85 @@ This guide covers deploying SyndDB to Base Sepolia using GCP Confidential VMs.
 
 ## Deployment Steps
 
-### 1. Set Up Deployer Wallet
+### 1. Run Setup Script
 
-Import your deployer private key into Foundry's encrypted keystore:
-
-```bash
-cast wallet import deployer --interactive
-```
-
-Verify it was added:
+The setup script fetches image digests from Artifact Registry and outputs the required environment variables:
 
 ```bash
-cast wallet list
+cd deploy/terraform/environments/staging
+
+# Authenticate with GCP
+gcloud auth login
+gcloud auth application-default login
+
+# Run setup script
+./setup-deployment.sh
 ```
+
+This outputs:
+- `ATTESTATION_VERIFIER_VKEY` - SP1 verification key (stable)
+- `EXPECTED_IMAGE_DIGEST_HASH` - Hash of allowed Docker images
+- `EXPIRATION_TOLERANCE` - 24 hours (86400 seconds)
+
+Export these variables before deploying contracts.
 
 ### 2. Deploy Contracts to Base Sepolia
+
+Deploy contracts in order with real TEE attestation:
 
 ```bash
 cd contracts
 
-ADMIN_ADDRESS="0xYOUR_WALLET_ADDRESS" \
-SEQUENCER_ADDRESS="0xYOUR_WALLET_ADDRESS" \
-forge script script/DeployLocalDevEnv.s.sol:DeployLocalDevEnv \
+# Set your wallet address
+export ADMIN_ADDRESS="0xYOUR_WALLET_ADDRESS"
+
+# 2a. Deploy AttestationVerifier and TeeKeyManager
+ATTESTATION_VERIFIER_VKEY="0x005d59c275cbbb6fb41f5ba96c0d6505bd09cf154ac890a0e001673c71a05fc7" \
+EXPECTED_IMAGE_DIGEST_HASH="$EXPECTED_IMAGE_DIGEST_HASH" \
+EXPIRATION_TOLERANCE="86400" \
+forge script script/DeployAttestationVerifier.s.sol:DeployAttestationVerifier \
     --rpc-url https://sepolia.base.org \
-    --account deployer \
+    --private-key $PRIVATE_KEY \
     --etherscan-api-key $BASESCAN_API_KEY \
     --verify \
     --broadcast \
     -vvv
+
+# Record: AttestationVerifier and TeeKeyManager addresses
+
+# 2b. Deploy Bridge (uses OP Stack WETH predeploy)
+ADMIN_ADDRESS="$ADMIN_ADDRESS" \
+WRAPPED_NATIVE_TOKEN_CONTRACT_ADDRESS="0x4200000000000000000000000000000000000006" \
+TEE_KEY_MANAGER_CONTRACT_ADDRESS="0xTEE_KEY_MANAGER_FROM_STEP_2A" \
+forge script script/DeployBridge.s.sol:DeployBridge \
+    --rpc-url https://sepolia.base.org \
+    --private-key $PRIVATE_KEY \
+    --etherscan-api-key $BASESCAN_API_KEY \
+    --verify \
+    --broadcast \
+    -vvv
+
+# Record: Bridge address
+
+# 2c. Deploy PriceOracle
+ADMIN_ADDRESS="$ADMIN_ADDRESS" \
+BRIDGE_CONTRACT_ADDRESS="0xBRIDGE_FROM_STEP_2B" \
+forge script script/DeployPriceOracle.s.sol:DeployPriceOracle \
+    --rpc-url https://sepolia.base.org \
+    --private-key $PRIVATE_KEY \
+    --etherscan-api-key $BASESCAN_API_KEY \
+    --verify \
+    --broadcast \
+    -vvv
+
+# Record: PriceOracle address
 ```
 
-Record the deployed contract addresses from the output:
-
-```
-== Logs ==
-  MockWETH deployed at: 0x...
-  MockAttestationVerifier deployed at: 0x...
-  TeeKeyManager deployed at: 0x...
-  Bridge deployed at: 0x...
-  PriceOracle deployed at: 0x...
-```
+Deployed addresses to record:
+- AttestationVerifier: `0x...`
+- TeeKeyManager: `0x...`
+- Bridge: `0x...`
+- PriceOracle: `0x...`
 
 ### 3. Create Terraform Configuration
 
