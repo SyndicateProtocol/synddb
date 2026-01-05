@@ -124,11 +124,6 @@ resource "google_cloud_run_v2_service" "relayer" {
       }
 
       env {
-        name  = "LOG_JSON"
-        value = "true"
-      }
-
-      env {
         name  = "RUST_LOG"
         value = var.rust_log
       }

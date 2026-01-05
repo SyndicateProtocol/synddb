@@ -16,7 +16,7 @@ on:
     tags:
       - 'v*'  # Release tags (e.g., v1.0.0)
     paths:
-      - "docker/reproducible/**"
+      - "docker/**"
       - "crates/**"
       - "services/**"
       - "examples/price-oracle/**"
@@ -337,7 +337,7 @@ jobs:
       matrix:
         include:
           - image: synddb-relayer
-            dockerfile: docker/reproducible/relayer.Dockerfile
+            dockerfile: docker/relayer.Dockerfile
             cache-scope: relayer
           - image: proof-service
             dockerfile: services/proof-service/Dockerfile
