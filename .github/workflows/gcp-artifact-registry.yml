@@ -317,7 +317,7 @@ jobs:
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
           echo "::notice::Image digest: $DIGEST"
 
-      - name: Sign image by digest
+      - name: Sign image by digest (cosign)
         run: |
           # Sign by digest (not tag) to ensure signature binds to exact image content.
           # Tags are mutable and could be reassigned; digests are immutable content hashes.
@@ -325,6 +325,29 @@ jobs:
           DIGEST="${{ steps.build.outputs.digest }}"
           cosign sign --yes "$IMAGE@$DIGEST"
           echo "::notice::Signed $IMAGE@$DIGEST"
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Sign image digest (secp256k1)
+        id: image_sig
+        if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
+        env:
+          PRIVATE_KEY: ${{ secrets.IMAGE_SIGNER_PRIVATE_KEY }}
+        run: |
+          # Sign the image digest with secp256k1 for on-chain TEE bootstrap verification.
+          # The signature is over keccak256(digest_string) where digest_string is "sha256:abc123..."
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Compute keccak256 of the digest string (including the "sha256:" prefix)
+          MESSAGE_HASH=$(cast keccak "$DIGEST")
+
+          # Sign the hash directly (no EIP-191 prefix)
+          SIGNATURE=$(cast wallet sign --private-key "$PRIVATE_KEY" --no-hash "$MESSAGE_HASH")
+
+          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          echo "::notice::Image signature: $SIGNATURE"
+          echo "::notice::Signer address: ${{ vars.IMAGE_SIGNER_ADDRESS }}"
 
       - name: Summary
         run: |
@@ -336,6 +359,21 @@ jobs:
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
             echo ""
             echo "Verified hash: \`${{ steps.hash.outputs.verified }}\`"
+            echo ""
+            if [[ -n "${{ steps.image_sig.outputs.signature }}" ]]; then
+              echo "### Image Signature (secp256k1)"
+              echo ""
+              echo "Use this signature in your Terraform config:"
+              echo ""
+              echo "\`\`\`"
+              echo "tee_bootstrap = {"
+              echo "  ..."
+              echo "  image_signature = \"${{ steps.image_sig.outputs.signature }}\""
+              echo "}"
+              echo "\`\`\`"
+              echo ""
+              echo "Signer: \`${{ vars.IMAGE_SIGNER_ADDRESS }}\`"
+            fi
           } >> $GITHUB_STEP_SUMMARY
 
   # Build and publish non-reproducible images (no TEE attestation required)
@@ -426,7 +464,7 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Sign image by digest
+      - name: Sign image by digest (cosign)
         run: |
           # Sign by digest (not tag) to ensure signature binds to exact image content.
           # Tags are mutable and could be reassigned; digests are immutable content hashes.
@@ -436,6 +474,29 @@ jobs:
           cosign sign --yes "$IMAGE@$DIGEST"
           echo "::notice::Signed $IMAGE@$DIGEST"
 
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Sign image digest (secp256k1)
+        id: image_sig
+        if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
+        env:
+          PRIVATE_KEY: ${{ secrets.IMAGE_SIGNER_PRIVATE_KEY }}
+        run: |
+          # Sign the image digest with secp256k1 for on-chain TEE bootstrap verification.
+          # The signature is over keccak256(digest_string) where digest_string is "sha256:abc123..."
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Compute keccak256 of the digest string (including the "sha256:" prefix)
+          MESSAGE_HASH=$(cast keccak "$DIGEST")
+
+          # Sign the hash directly (no EIP-191 prefix)
+          SIGNATURE=$(cast wallet sign --private-key "$PRIVATE_KEY" --no-hash "$MESSAGE_HASH")
+
+          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          echo "::notice::Image signature: $SIGNATURE"
+          echo "::notice::Signer address: ${{ vars.IMAGE_SIGNER_ADDRESS }}"
+
       - name: Summary
         run: |
           {
@@ -444,4 +505,19 @@ jobs:
             echo "Tags: \`${{ steps.tags.outputs.tags }}\`"
             echo ""
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
+            echo ""
+            if [[ -n "${{ steps.image_sig.outputs.signature }}" ]]; then
+              echo "### Image Signature (secp256k1)"
+              echo ""
+              echo "Use this signature in your Terraform config:"
+              echo ""
+              echo "\`\`\`"
+              echo "tee_bootstrap = {"
+              echo "  ..."
+              echo "  image_signature = \"${{ steps.image_sig.outputs.signature }}\""
+              echo "}"
+              echo "\`\`\`"
+              echo ""
+              echo "Signer: \`${{ vars.IMAGE_SIGNER_ADDRESS }}\`"
+            fi
           } >> $GITHUB_STEP_SUMMARY

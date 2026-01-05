@@ -47,9 +47,8 @@ locals {
         PROOF_SERVICE_URL       = var.tee_bootstrap.proof_service_url
         ATTESTATION_AUDIENCE    = var.tee_bootstrap.attestation_audience
       },
-      # Cosign signature and pubkey for on-chain verification (optional)
-      var.tee_bootstrap.cosign_signature != null ? { COSIGN_SIGNATURE = var.tee_bootstrap.cosign_signature } : {},
-      var.tee_bootstrap.cosign_pubkey != null ? { COSIGN_PUBKEY = var.tee_bootstrap.cosign_pubkey } : {}
+      # Image signature for on-chain verification (optional)
+      var.tee_bootstrap.image_signature != null ? { IMAGE_SIGNATURE = var.tee_bootstrap.image_signature } : {}
     ) : {}
   )
 }

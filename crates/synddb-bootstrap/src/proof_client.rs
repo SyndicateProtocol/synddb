@@ -15,10 +15,9 @@ struct ProofRequest {
     pub expected_audience: String,
     /// EVM public key (64-byte uncompressed secp256k1, hex-encoded)
     pub evm_public_key: String,
-    /// Cosign signature over image digest (64 bytes: r || s, hex-encoded)
-    pub cosign_signature: String,
-    /// Cosign public key (64 or 65 bytes, hex-encoded)
-    pub cosign_pubkey: String,
+    /// Image signature (65 bytes: r || s || v, hex-encoded)
+    /// This is a secp256k1 ECDSA signature over keccak256(image_digest) for on-chain ecrecover
+    pub image_signature: String,
 }
 
 /// Response from the proof service
@@ -71,15 +70,13 @@ impl ProofClient {
     /// * `jwt_token` - Raw JWT attestation token from Confidential Space
     /// * `expected_audience` - Expected audience claim
     /// * `evm_public_key` - 64-byte uncompressed secp256k1 public key
-    /// * `cosign_signature` - 64-byte cosign signature (r || s) over the image digest
-    /// * `cosign_pubkey` - 64 or 65 byte cosign public key (P-256 / secp256r1)
+    /// * `image_signature` - 65-byte secp256k1 signature (r || s || v) over keccak256(image_digest)
     pub async fn generate_proof(
         &self,
         jwt_token: &str,
         expected_audience: &str,
         evm_public_key: &[u8; 64],
-        cosign_signature: &[u8],
-        cosign_pubkey: &[u8],
+        image_signature: &[u8],
     ) -> Result<ProofResponse, BootstrapError> {
         // Check for mock mode
         if self.service_url.starts_with("mock://") {
@@ -90,8 +87,7 @@ impl ProofClient {
             jwt_token: jwt_token.to_string(),
             expected_audience: expected_audience.to_string(),
             evm_public_key: format!("0x{}", hex::encode(evm_public_key)),
-            cosign_signature: format!("0x{}", hex::encode(cosign_signature)),
-            cosign_pubkey: format!("0x{}", hex::encode(cosign_pubkey)),
+            image_signature: format!("0x{}", hex::encode(image_signature)),
         };
 
         info!(
@@ -168,9 +164,9 @@ impl ProofClient {
         debug!(address = %address, "Generated mock proof");
 
         // Build ABI-encoded public values with correct tee_address placement
-        // PublicValuesStruct has 12 fields × 32 bytes = 384 bytes ABI-encoded
+        // PublicValuesStruct has 11 fields × 32 bytes = 352 bytes ABI-encoded
         // Slot 4 (bytes 128-160): tee_signing_key (address is right-aligned, bytes 140-160)
-        let mut public_values_bytes = vec![0u8; 384];
+        let mut public_values_bytes = vec![0u8; 352];
         // Place address at bytes 140-160 (right-aligned in 32-byte slot 4)
         public_values_bytes[140..160].copy_from_slice(address.as_slice());
 
