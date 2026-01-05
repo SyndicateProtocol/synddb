@@ -42,15 +42,12 @@ get_image_digest() {
     local image=$1
     local full_image="${REGISTRY}/${image}:${TAG}"
 
-    info "Fetching digest for ${image}:${TAG}..."
-
-    # Get the digest using gcloud
+    # Get the digest using gcloud (stderr to /dev/null, only output digest)
     local digest
     digest=$(gcloud artifacts docker images describe "${full_image}" \
         --format='get(image_summary.digest)' 2>/dev/null) || {
-        warn "Image ${full_image} not found"
         echo ""
-        return
+        return 1
     }
 
     echo "${digest}"
@@ -87,10 +84,21 @@ main() {
     info "Fetching image digests from Artifact Registry..."
     echo ""
 
+    info "  Fetching synddb-sequencer:${TAG}..."
     SEQUENCER_DIGEST=$(get_image_digest "synddb-sequencer")
+    [[ -z "$SEQUENCER_DIGEST" ]] && warn "    Image not found"
+
+    info "  Fetching price-oracle-validator:${TAG}..."
     VALIDATOR_DIGEST=$(get_image_digest "price-oracle-validator")
+    [[ -z "$VALIDATOR_DIGEST" ]] && warn "    Image not found"
+
+    info "  Fetching price-oracle:${TAG}..."
     PRICE_ORACLE_DIGEST=$(get_image_digest "price-oracle")
+    [[ -z "$PRICE_ORACLE_DIGEST" ]] && warn "    Image not found"
+
+    info "  Fetching proof-service:${TAG}..."
     PROOF_SERVICE_DIGEST=$(get_image_digest "proof-service")
+    [[ -z "$PROOF_SERVICE_DIGEST" ]] && warn "    Image not found"
 
     echo ""
     info "Image Digests:"
