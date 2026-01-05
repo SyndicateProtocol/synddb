@@ -31,6 +31,13 @@ variable "proof_service_image" {
   type        = string
 }
 
+variable "sp1_network_private_key" {
+  description = "SP1 Network private key for proof generation (Secp256k1 key with PROVE tokens)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "relayer_image" {
   description = "Relayer container image URI"
   type        = string
@@ -73,14 +80,25 @@ variable "artifact_registry_repository" {
   type        = string
 }
 
+# Bridge contract (used by TEE bootstrap, bridge signer, and relayer)
+variable "bridge_contract_address" {
+  description = "Bridge contract address (shared across all services)"
+  type        = string
+  default     = ""
+}
+
+variable "bridge_chain_id" {
+  description = "Chain ID for the bridge contract"
+  type        = number
+  default     = 0
+}
+
 # TEE Bootstrap (null = disabled)
 variable "tee_bootstrap" {
   description = "TEE key bootstrap configuration. Set to null to disable."
   type = object({
-    bridge_address       = string # Bridge contract address for key registration
     relayer_url          = string # Relayer URL for key registration
     rpc_url              = string # RPC URL for verifying key registration
-    chain_id             = number # Chain ID for EIP-712 signatures
     attestation_audience = string # Expected audience for attestation tokens
   })
   default = null
@@ -91,18 +109,6 @@ variable "enable_bridge_signer" {
   description = "Enable bridge signer on validators"
   type        = bool
   default     = false
-}
-
-variable "bridge_contract_address" {
-  description = "Bridge contract address"
-  type        = string
-  default     = ""
-}
-
-variable "bridge_chain_id" {
-  description = "Bridge chain ID"
-  type        = number
-  default     = 0
 }
 
 # Batching (production tuning)
@@ -123,8 +129,6 @@ variable "relayer_config" {
   description = "Relayer configuration. Set to null to disable."
   type = object({
     rpc_url               = string       # RPC URL for transaction submission
-    chain_id              = number       # Chain ID for EIP-712 domain
-    bridge_address        = string       # Bridge contract address for key registration
     required_audience     = string       # Audience string (e.g., https://example.com/app)
     allowed_image_digests = list(string) # Allowed TEE image digests
   })

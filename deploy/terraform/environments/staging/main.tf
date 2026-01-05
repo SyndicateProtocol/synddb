@@ -125,10 +125,10 @@ module "sequencer" {
 
   # TEE bootstrap (null = disabled)
   tee_bootstrap = var.tee_bootstrap != null ? {
-    bridge_address       = var.tee_bootstrap.bridge_address
+    bridge_address       = var.bridge_contract_address
     relayer_url          = var.tee_bootstrap.relayer_url
     rpc_url              = var.tee_bootstrap.rpc_url
-    chain_id             = var.tee_bootstrap.chain_id
+    chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
@@ -157,10 +157,10 @@ module "validator" {
 
   # TEE bootstrap (null = disabled)
   tee_bootstrap = var.tee_bootstrap != null ? {
-    bridge_address       = var.tee_bootstrap.bridge_address
+    bridge_address       = var.bridge_contract_address
     relayer_url          = var.tee_bootstrap.relayer_url
     rpc_url              = var.tee_bootstrap.rpc_url
-    chain_id             = var.tee_bootstrap.chain_id
+    chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
@@ -200,10 +200,10 @@ module "price_oracle" {
 
   # TEE bootstrap (same as sequencer/validator)
   tee_bootstrap = var.tee_bootstrap != null ? {
-    bridge_address       = var.tee_bootstrap.bridge_address
+    bridge_address       = var.bridge_contract_address
     relayer_url          = var.tee_bootstrap.relayer_url
     rpc_url              = var.tee_bootstrap.rpc_url
-    chain_id             = var.tee_bootstrap.chain_id
+    chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
@@ -226,8 +226,8 @@ module "relayer" {
 
   # Blockchain configuration
   rpc_url        = var.relayer_config.rpc_url
-  chain_id       = var.relayer_config.chain_id
-  bridge_address = var.relayer_config.bridge_address
+  chain_id       = var.bridge_chain_id
+  bridge_address = var.bridge_contract_address
 
   # Application configuration
   required_audience      = var.relayer_config.required_audience

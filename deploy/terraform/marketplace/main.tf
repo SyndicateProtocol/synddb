@@ -271,10 +271,10 @@ resource "google_compute_instance" "sequencer" {
     },
     var.tee_bootstrap != null ? {
       "tee-env-ENABLE_KEY_BOOTSTRAP"     = "true"
-      "tee-env-BRIDGE_CONTRACT_ADDRESS"  = var.tee_bootstrap.bridge_address
+      "tee-env-BRIDGE_CONTRACT_ADDRESS"  = var.bridge_contract_address
       "tee-env-RELAYER_URL"              = var.tee_bootstrap.relayer_url
       "tee-env-BOOTSTRAP_RPC_URL"        = var.tee_bootstrap.rpc_url
-      "tee-env-BOOTSTRAP_CHAIN_ID"       = tostring(var.tee_bootstrap.chain_id)
+      "tee-env-BOOTSTRAP_CHAIN_ID"       = tostring(var.bridge_chain_id)
       "tee-env-ATTESTATION_AUDIENCE"     = var.tee_bootstrap.attestation_audience
       "tee-env-PROOF_SERVICE_URL"        = google_cloud_run_v2_service.proof_service[0].uri
     } : {}
@@ -350,10 +350,10 @@ resource "google_compute_instance" "validator" {
     },
     var.tee_bootstrap != null ? {
       "tee-env-ENABLE_KEY_BOOTSTRAP"     = "true"
-      "tee-env-BRIDGE_CONTRACT_ADDRESS"  = var.tee_bootstrap.bridge_address
+      "tee-env-BRIDGE_CONTRACT_ADDRESS"  = var.bridge_contract_address
       "tee-env-RELAYER_URL"              = var.tee_bootstrap.relayer_url
       "tee-env-BOOTSTRAP_RPC_URL"        = var.tee_bootstrap.rpc_url
-      "tee-env-BOOTSTRAP_CHAIN_ID"       = tostring(var.tee_bootstrap.chain_id)
+      "tee-env-BOOTSTRAP_CHAIN_ID"       = tostring(var.bridge_chain_id)
       "tee-env-ATTESTATION_AUDIENCE"     = var.tee_bootstrap.attestation_audience
       "tee-env-PROOF_SERVICE_URL"        = google_cloud_run_v2_service.proof_service[0].uri
     } : {}
@@ -374,6 +374,30 @@ resource "google_compute_instance" "validator" {
 # ============================================================================
 # Proof Service (deployed when TEE bootstrap is enabled)
 # ============================================================================
+
+# Secret for SP1 Network private key
+resource "google_secret_manager_secret" "sp1_network_private_key" {
+  count     = var.tee_bootstrap != null ? 1 : 0
+  project   = var.project_id
+  secret_id = "${local.name_prefix}-sp1-key"
+
+  replication {
+    auto {}
+  }
+
+  labels = local.labels
+
+  depends_on = [google_project_service.apis]
+}
+
+# Grant proof service access to the secret
+resource "google_secret_manager_secret_iam_member" "proof_service_secret_access" {
+  count     = var.tee_bootstrap != null ? 1 : 0
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.sp1_network_private_key[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.proof_service[0].email}"
+}
 
 resource "google_cloud_run_v2_service" "proof_service" {
   count    = var.tee_bootstrap != null ? 1 : 0
@@ -414,6 +438,16 @@ resource "google_cloud_run_v2_service" "proof_service" {
         value = "true"
       }
 
+      env {
+        name = "SP1_NETWORK_PRIVATE_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.sp1_network_private_key[0].secret_id
+            version = "latest"
+          }
+        }
+      }
+
       startup_probe {
         http_get {
           path = "/health"
@@ -434,7 +468,10 @@ resource "google_cloud_run_v2_service" "proof_service" {
 
   labels = local.labels
 
-  depends_on = [google_project_service.apis]
+  depends_on = [
+    google_project_service.apis,
+    google_secret_manager_secret_iam_member.proof_service_secret_access,
+  ]
 }
 
 # ============================================================================
@@ -511,12 +548,12 @@ resource "google_cloud_run_v2_service" "relayer" {
 
       env {
         name  = "CHAIN_ID"
-        value = tostring(var.relayer_config.chain_id)
+        value = tostring(var.bridge_chain_id)
       }
 
       env {
         name  = "BRIDGE_CONTRACT_ADDRESS"
-        value = var.relayer_config.bridge_address
+        value = var.bridge_contract_address
       }
 
       env {

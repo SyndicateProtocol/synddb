@@ -57,16 +57,21 @@ terraform apply
 | `enable_key_bootstrap` | No | Enable TEE key bootstrapping (default: false) |
 | `deploy_proof_service` | No | Deploy proof service (default: false) |
 
+### Bridge Configuration
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `bridge_contract_address` | Yes | Bridge contract address (shared across all services) |
+| `bridge_chain_id` | Yes | Chain ID for the bridge contract |
+
 ### TEE Bootstrap Configuration
 
 When `tee_bootstrap` is configured:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `bridge_address` | Yes | Bridge contract address for key registration |
 | `relayer_url` | Yes | Relayer URL for key registration |
 | `rpc_url` | Yes | Ethereum RPC endpoint |
-| `chain_id` | Yes | Chain ID for transactions |
 | `attestation_audience` | Yes | Expected audience for attestation |
 | `proof_service_image` | Yes | Proof service container image |
 

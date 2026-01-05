@@ -13,6 +13,11 @@ sequencer_image     = "us-central1-docker.pkg.dev/your-project/synddb/sequencer:
 validator_image     = "us-central1-docker.pkg.dev/your-project/synddb/validator:v1.0.0"
 proof_service_image = "us-central1-docker.pkg.dev/your-project/synddb/proof-service:v1.0.0"
 
+# SP1 Network Prover (required for TEE attestation proofs)
+# Generate a key with: cast wallet new
+# Fund with PROVE tokens: https://explorer.succinct.xyz
+sp1_network_private_key = ""  # Secp256k1 private key (0x prefixed)
+
 # Storage
 gcs_bucket_name = "your-project-synddb-prod"
 
@@ -25,20 +30,20 @@ validator_count        = 1
 artifact_registry_location   = "us-central1"
 artifact_registry_repository = "synddb"
 
+# Bridge contract (shared across all services)
+bridge_contract_address = "0x..."  # Your Bridge contract
+bridge_chain_id         = 1
+
 # TEE Bootstrap (required for production)
 # Set to null to disable, or provide the object to enable
 tee_bootstrap = {
-  bridge_address       = "0x..."  # Deployed Bridge contract
   relayer_url          = "https://relayer.your-domain.com"  # Relayer service URL
   rpc_url              = "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
-  chain_id             = 1
   attestation_audience = "https://synddb.your-domain.com"
 }
 
 # Bridge signer (optional, for cross-chain withdrawals)
-enable_bridge_signer    = false
-# bridge_contract_address = "0x..."
-# bridge_chain_id         = 1
+enable_bridge_signer = false
 
 # Batching (production tuning)
 batch_max_messages   = 100

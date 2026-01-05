@@ -108,11 +108,11 @@ Edit `terraform.tfvars` and fill in:
 |----------|-------|
 | `project_id` | Your GCP project ID |
 | `gcs_bucket_name` | Unique bucket name (e.g., `myproject-synddb-staging`) |
-| `tee_bootstrap.bridge_address` | Bridge address from step 2 |
+| `bridge_contract_address` | Bridge address from step 2 |
+| `bridge_chain_id` | Chain ID (84532 for Base Sepolia) |
 | `tee_bootstrap.relayer_url` | URL of the relayer service |
 | `tee_bootstrap.rpc_url` | Your Base Sepolia RPC URL |
 | `tee_bootstrap.attestation_audience` | Your staging domain |
-| `bridge_contract_address` | Bridge address from step 2 |
 
 ### 4. Initialize Terraform
 
