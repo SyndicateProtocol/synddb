@@ -71,6 +71,8 @@ contract PriceOracle is AccessControl {
     error ZeroAddressNotAllowed();
     error StalePrice(uint256 priceAge, uint256 maxAge);
     error InvalidPrice();
+    error FutureTimestamp(uint256 timestamp, uint256 currentTime);
+    error ArrayLengthMismatch();
     error AssetNotFound(string asset);
 
     // ============ Constructor ============
@@ -109,6 +111,7 @@ contract PriceOracle is AccessControl {
      */
     function updatePrice(string calldata asset, uint256 price, uint256 timestamp) external onlyRole(UPDATER_ROLE) {
         if (price == 0) revert InvalidPrice();
+        if (timestamp > block.timestamp) revert FutureTimestamp(timestamp, block.timestamp);
 
         bytes32 assetHash = keccak256(bytes(asset));
 
@@ -136,6 +139,7 @@ contract PriceOracle is AccessControl {
         onlyRole(UPDATER_ROLE)
     {
         if (price == 0) revert InvalidPrice();
+        if (timestamp > block.timestamp) revert FutureTimestamp(timestamp, block.timestamp);
 
         bytes32 assetHash = keccak256(bytes(asset));
 
@@ -161,10 +165,13 @@ contract PriceOracle is AccessControl {
         external
         onlyRole(UPDATER_ROLE)
     {
-        require(assets.length == priceValues.length && assets.length == timestamps.length, "Array length mismatch");
+        if (assets.length != priceValues.length || assets.length != timestamps.length) {
+            revert ArrayLengthMismatch();
+        }
 
         for (uint256 i = 0; i < assets.length; i++) {
             if (priceValues[i] == 0) continue; // Skip invalid prices
+            if (timestamps[i] > block.timestamp) continue; // Skip future timestamps
 
             bytes32 assetHash = keccak256(bytes(assets[i]));
 

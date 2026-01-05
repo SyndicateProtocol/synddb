@@ -19,6 +19,8 @@ contract PriceOracleTest is Test {
     event PriceRequestFulfilled(bytes32 indexed requestId, string indexed asset, uint256 price);
 
     function setUp() public {
+        // Warp to a realistic timestamp (Jan 1, 2024)
+        vm.warp(1704067200);
         oracle = new PriceOracle(admin, bridge);
     }
 
@@ -79,6 +81,13 @@ contract PriceOracleTest is Test {
         oracle.updatePrice("BTC", 0, 1703500000);
     }
 
+    function test_UpdatePrice_RevertWhen_FutureTimestamp() public {
+        uint256 futureTime = block.timestamp + 1 hours;
+        vm.prank(bridge);
+        vm.expectRevert(abi.encodeWithSelector(PriceOracle.FutureTimestamp.selector, futureTime, block.timestamp));
+        oracle.updatePrice("BTC", 50000_00000000, futureTime);
+    }
+
     function test_UpdatePrice_OverwritesExisting() public {
         vm.startPrank(bridge);
 
@@ -137,14 +146,51 @@ contract PriceOracleTest is Test {
         priceValues[1] = 0; // Should be skipped
 
         uint256[] memory timestamps = new uint256[](2);
-        timestamps[0] = 1703500000;
-        timestamps[1] = 1703500001;
+        timestamps[0] = block.timestamp;
+        timestamps[1] = block.timestamp;
 
         vm.prank(bridge);
         oracle.batchUpdatePrices(assets, priceValues, timestamps);
 
         assertTrue(oracle.hasPrice("BTC"));
         assertFalse(oracle.hasPrice("ETH"));
+    }
+
+    function test_BatchUpdatePrices_SkipsFutureTimestamps() public {
+        string[] memory assets = new string[](2);
+        assets[0] = "BTC";
+        assets[1] = "ETH";
+
+        uint256[] memory priceValues = new uint256[](2);
+        priceValues[0] = 50000_00000000;
+        priceValues[1] = 3000_00000000;
+
+        uint256[] memory timestamps = new uint256[](2);
+        timestamps[0] = block.timestamp;
+        timestamps[1] = block.timestamp + 1 hours; // Future - should be skipped
+
+        vm.prank(bridge);
+        oracle.batchUpdatePrices(assets, priceValues, timestamps);
+
+        assertTrue(oracle.hasPrice("BTC"));
+        assertFalse(oracle.hasPrice("ETH"));
+    }
+
+    function test_BatchUpdatePrices_RevertWhen_ArrayLengthMismatch() public {
+        string[] memory assets = new string[](2);
+        assets[0] = "BTC";
+        assets[1] = "ETH";
+
+        uint256[] memory priceValues = new uint256[](1); // Mismatched length
+        priceValues[0] = 50000_00000000;
+
+        uint256[] memory timestamps = new uint256[](2);
+        timestamps[0] = block.timestamp;
+        timestamps[1] = block.timestamp;
+
+        vm.prank(bridge);
+        vm.expectRevert(PriceOracle.ArrayLengthMismatch.selector);
+        oracle.batchUpdatePrices(assets, priceValues, timestamps);
     }
 
     // ============ Pull Model: requestPrice Tests ============
@@ -210,16 +256,26 @@ contract PriceOracleTest is Test {
         vm.prank(bridge);
 
         vm.expectEmit(true, true, true, true);
-        emit PriceUpdated("BTC", 50000_00000000, 1703500000, bridge);
+        emit PriceUpdated("BTC", 50000_00000000, block.timestamp, bridge);
 
         vm.expectEmit(true, true, true, true);
         emit PriceRequestFulfilled(requestId, "BTC", 50000_00000000);
 
-        oracle.fulfillPriceRequest(requestId, "BTC", 50000_00000000, 1703500000);
+        oracle.fulfillPriceRequest(requestId, "BTC", 50000_00000000, block.timestamp);
 
         // Price should be stored
         (uint256 price,,) = oracle.getPrice("BTC");
         assertEq(price, 50000_00000000);
+    }
+
+    function test_FulfillPriceRequest_RevertWhen_FutureTimestamp() public {
+        vm.prank(user);
+        bytes32 requestId = oracle.requestPrice("BTC", 300);
+
+        uint256 futureTime = block.timestamp + 1 hours;
+        vm.prank(bridge);
+        vm.expectRevert(abi.encodeWithSelector(PriceOracle.FutureTimestamp.selector, futureTime, block.timestamp));
+        oracle.fulfillPriceRequest(requestId, "BTC", 50000_00000000, futureTime);
     }
 
     // ============ Read Function Tests ============
