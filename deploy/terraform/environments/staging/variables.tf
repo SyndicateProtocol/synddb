@@ -115,7 +115,6 @@ variable "bridge_chain_id" {
 variable "tee_bootstrap" {
   description = "TEE key bootstrap configuration. Set to null to disable."
   type = object({
-    relayer_url          = string # Relayer URL for key registration
     rpc_url              = string # RPC URL for verifying key registration
     attestation_audience = string # Expected audience for attestation tokens
   })
@@ -170,6 +169,13 @@ variable "relayer_config" {
     allowed_image_digests = list(string) # Allowed TEE image digests
   })
   default = null
+}
+
+variable "relayer_private_key" {
+  description = "Relayer private key (hex-encoded). If empty, set manually in Secret Manager console."
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 # Labels

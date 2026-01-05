@@ -123,17 +123,17 @@ module "sequencer" {
   batch_flush_interval  = var.batch_flush_interval
   labels                = var.labels
 
-  # TEE bootstrap (null = disabled)
-  tee_bootstrap = var.tee_bootstrap != null ? {
+  # TEE bootstrap (null = disabled, requires relayer to be deployed)
+  tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
     bridge_address       = var.bridge_contract_address
-    relayer_url          = var.tee_bootstrap.relayer_url
+    relayer_url          = module.relayer[0].service_url
     rpc_url              = var.tee_bootstrap.rpc_url
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
 
-  depends_on = [module.iam, module.networking, module.proof_service]
+  depends_on = [module.iam, module.networking, module.proof_service, module.relayer]
 }
 
 # Validator - production-like configuration
@@ -155,17 +155,17 @@ module "validator" {
   bridge_chain_id       = var.bridge_chain_id
   labels                = var.labels
 
-  # TEE bootstrap (null = disabled)
-  tee_bootstrap = var.tee_bootstrap != null ? {
+  # TEE bootstrap (null = disabled, requires relayer to be deployed)
+  tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
     bridge_address       = var.bridge_contract_address
-    relayer_url          = var.tee_bootstrap.relayer_url
+    relayer_url          = module.relayer[0].service_url
     rpc_url              = var.tee_bootstrap.rpc_url
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
 
-  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service]
+  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service, module.relayer]
 }
 
 # Price Oracle - example application in Confidential Space
@@ -198,10 +198,10 @@ module "price_oracle" {
     poll_interval    = 5
   } : null
 
-  # TEE bootstrap (same as sequencer/validator)
-  tee_bootstrap = var.tee_bootstrap != null ? {
+  # TEE bootstrap (same as sequencer/validator, requires relayer)
+  tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
     bridge_address       = var.bridge_contract_address
-    relayer_url          = var.tee_bootstrap.relayer_url
+    relayer_url          = module.relayer[0].service_url
     rpc_url              = var.tee_bootstrap.rpc_url
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
@@ -210,7 +210,7 @@ module "price_oracle" {
 
   labels = var.labels
 
-  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service]
+  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service, module.relayer]
 }
 
 # Relayer - gas funding service for TEE keys
@@ -232,6 +232,9 @@ module "relayer" {
   # Application configuration
   required_audience      = var.relayer_config.required_audience
   allowed_image_digests  = var.relayer_config.allowed_image_digests
+
+  # Secret (if empty, set manually in Secret Manager console)
+  private_key = var.relayer_private_key
 
   # Access settings
   ingress               = "internal"

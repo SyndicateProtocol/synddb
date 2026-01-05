@@ -19,7 +19,6 @@
 #    - sp1_network_private_key: Key with PROVE tokens
 #    - gcs_bucket_name: Globally unique bucket name
 #    - bridge_contract_address: Your Bridge contract
-#    - tee_bootstrap.relayer_url: URL of your relayer service
 #    - tee_bootstrap.attestation_audience: Your domain
 #    - price_oracle_contract_address: Your PriceOracle contract
 #
@@ -156,7 +155,8 @@ bridge_chain_id         = 84532  # Base Mainnet: 8453
 # When a TEE instance starts, it generates an ephemeral signing key and
 # registers it with the Bridge contract via the relayer service.
 #
-# relayer_url: URL of the relayer service that submits key registrations
+# The relayer URL is automatically injected from the relayer module output.
+#
 # rpc_url: RPC endpoint for verifying key registration on-chain
 #          Public endpoint works, but use Alchemy/Infura for reliability
 # attestation_audience: Unique identifier for your deployment
@@ -164,7 +164,6 @@ bridge_chain_id         = 84532  # Base Mainnet: 8453
 #                       Used to scope TEE attestations to your application
 
 tee_bootstrap = {
-  relayer_url          = ""  # TODO: Relayer service URL (e.g., from Cloud Run)
   rpc_url              = "https://sepolia.base.org"  # TODO: Use Alchemy/Infura for reliability
                                                      # Base Mainnet: https://mainnet.base.org
   attestation_audience = "https://example.com/price-oracle"  # TODO: Your domain
@@ -218,25 +217,34 @@ price_oracle_config = {
 }
 
 # -----------------------------------------------------------------------------
-# Relayer Configuration (Optional)
+# Relayer Configuration (Required for TEE Bootstrap)
 # -----------------------------------------------------------------------------
 # The relayer handles key registration for TEE instances.
 # The relayer pays gas on behalf of TEE keys during key registration.
-# Uncomment and configure if deploying the relayer.
 #
 # Note: bridge_contract_address and bridge_chain_id are defined above.
 #
 # rpc_url: RPC for transaction submission (use private RPC for reliability)
 # required_audience: Must match tee_bootstrap.attestation_audience
-# allowed_image_digests: Restrict to specific container image hashes
-
-# relayer_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-relayer:edge"
+# allowed_image_digests: Restrict to specific container image hashes (empty = allow all)
 #
-# relayer_config = {
-#   rpc_url               = "https://sepolia.base.org"  # Base Mainnet: https://mainnet.base.org
-#   required_audience     = "https://example.com/price-oracle"  # Same as tee_bootstrap
-#   allowed_image_digests = []
-# }
+# Private Key Options:
+#   Option A: Set relayer_private_key here (stored in Secret Manager, but also in tfstate)
+#   Option B: Leave empty and set manually in GCP Console > Secret Manager after deploy
+
+relayer_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-relayer:edge"
+
+relayer_config = {
+  rpc_url               = "https://sepolia.base.org"  # TODO: Use Alchemy/Infura for reliability
+                                                      # Base Mainnet: https://mainnet.base.org
+  required_audience     = "https://example.com/price-oracle"  # TODO: Same as tee_bootstrap.attestation_audience
+  allowed_image_digests = []  # Empty = allow all images (restrict for production)
+}
+
+# Relayer private key - funds gas for TEE key registration transactions
+# Generate with: cast wallet new
+# Fund with ETH on Base Sepolia for gas
+relayer_private_key = ""  # TODO: Set here or in Secret Manager console after deploy
 
 # -----------------------------------------------------------------------------
 # Labels
