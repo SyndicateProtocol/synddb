@@ -132,7 +132,7 @@ module "sequencer" {
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
-    image_signature      = var.tee_bootstrap.image_signature
+    image_signature      = var.tee_bootstrap.sequencer_image_signature
   } : null
 
   depends_on = [module.iam, module.networking, module.proof_service, module.relayer]
@@ -165,7 +165,7 @@ module "validator" {
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
-    image_signature      = var.tee_bootstrap.image_signature
+    image_signature      = var.tee_bootstrap.validator_image_signature
   } : null
 
   depends_on = [module.iam, module.networking, module.sequencer, module.proof_service, module.relayer]
@@ -209,7 +209,7 @@ module "price_oracle" {
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
-    image_signature      = var.tee_bootstrap.image_signature
+    image_signature      = var.tee_bootstrap.price_oracle_image_signature
   } : null
 
   labels = var.labels
