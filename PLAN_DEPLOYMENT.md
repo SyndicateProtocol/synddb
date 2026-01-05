@@ -20,7 +20,7 @@ First end-to-end deployment on Google Cloud for testing purposes.
 
 ### Docker
 
-Multi-stage Dockerfile in `docker/Dockerfile` supports all service targets:
+Multi-stage Dockerfile in `docker/local.Dockerfile` supports all service targets:
 - sequencer
 - validator
 - customer-app

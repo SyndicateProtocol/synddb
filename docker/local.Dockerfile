@@ -6,7 +6,7 @@
 # Usage with docker compose:
 #   build:
 #     context: .
-#     dockerfile: docker/Dockerfile
+#     dockerfile: docker/local.Dockerfile
 #     target: sequencer
 #
 # Available targets:
