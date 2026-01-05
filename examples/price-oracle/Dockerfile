@@ -26,6 +26,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+# Create data directory for SQLite database
+RUN mkdir -p /data
+
 # Copy FFI library for Python bindings
 COPY --from=rust-builder /app/target/release/libsynddb_client.so /usr/local/lib/
 
