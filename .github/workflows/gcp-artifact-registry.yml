@@ -435,18 +435,22 @@ jobs:
             relayer:
               - 'crates/synddb-relayer/**'
               - 'docker/reproducible/relayer.Dockerfile'
+              - '.github/workflows/gcp-artifact-registry.yml'
             proof-service:
               - 'services/proof-service/**'
               - 'crates/gcp-attestation/**'
               - 'crates/synddb-bootstrap/sp1/program/**'
+              - '.github/workflows/gcp-artifact-registry.yml'
             price-oracle:
               - 'examples/price-oracle/app/**'
               - 'examples/price-oracle/Dockerfile'
               - 'crates/synddb-client/**'
+              - '.github/workflows/gcp-artifact-registry.yml'
             price-oracle-validator:
               - 'examples/price-oracle/validator/**'
               - 'examples/price-oracle/validator.Dockerfile'
               - 'crates/synddb-validator/**'
+              - '.github/workflows/gcp-artifact-registry.yml'
 
       - name: Check if any standard image needs building
         id: needs-build
