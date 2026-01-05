@@ -5,6 +5,7 @@ import {ModuleCheckRegistry} from "src/ModuleCheckRegistry.sol";
 import {IBridge} from "src/interfaces/IBridge.sol";
 import {IWrappedNativeToken} from "src/interfaces/IWrappedNativeToken.sol";
 import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
+import {IAttestationVerifier} from "src/interfaces/IAttestationVerifier.sol";
 import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataTypes.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
@@ -12,56 +13,31 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 /**
  * @title Bridge
  * @notice Cross-chain message bridge for SyndDB that validates and executes sequenced messages
- * @dev Manages message lifecycle with pre/post execution validation modules and native token transfers
+ * @dev Manages message lifecycle with pre/post execution validation modules, native token transfers,
+ *      and TEE key management. Uses Ownable2Step for secure ownership transfer.
  */
 contract Bridge is IBridge, ModuleCheckRegistry {
     mapping(bytes32 messageId => MessageState state) public messageStates;
 
     IWrappedNativeToken public immutable wrappedNativeToken;
-    ITeeKeyManager public teeKeyManager;
 
-    /**
-     * @notice Emitted when a new message is initialized
-     * @dev The messageId can be used for idempotency checks (duplicate message IDs will revert).
-     *      Recommended ID schemes include:
-     *      - Sequential nonces: `keccak256(abi.encodePacked(chainId, nonce))`
-     *      - UUIDs: Must be hashed to bytes32, e.g., `keccak256(abi.encodePacked(uuidString))`
-     *      - Hash of message data: `keccak256(abi.encodePacked(sourceChain, sender, nonce, payload))`
-     * @param messageId Unique identifier of the message (bytes32)
-     * @param payload Encoded function call data (e.g., abi.encodeWithSignature("transfer(address,uint256)", recipient, amount))
-     */
+    /// @notice Whether sequencer key registration requires owner approval
+    bool public sequencerKeyRegistrationRestricted;
+
+    /// @notice Whether validator key registration requires owner approval
+    bool public validatorKeyRegistrationRestricted;
+
+    /// @notice Default expiration duration for new keys (0 = never expires)
+    uint256 public defaultKeyExpiration;
+
     event MessageInitialized(bytes32 indexed messageId, bytes payload);
-
-    /**
-     * @notice Emitted when a message execution completes
-     * @dev This corresponds to ProcessingStage.Completed in DataTypes.sol
-     * @param messageId Unique identifier of the message
-     * @param success Whether the execution succeeded
-     */
     event MessageHandled(bytes32 indexed messageId, bool success);
-
-    /**
-     * @notice Emitted when native token is wrapped to ERC20 wrapped native token
-     * @dev This occurs in the fallback receive() function when native tokens are sent to the bridge.
-     *      The bridge does NOT accept ERC-20 tokens directly; only native tokens are automatically wrapped.
-     * @param sender Address that sent the native token
-     * @param amount Amount of native token wrapped
-     */
     event NativeTokenWrapped(address indexed sender, uint256 amount);
-
-    /**
-     * @notice Emitted when wrapped native token is unwrapped for message execution
-     * @param amount Amount of native token unwrapped
-     * @param target Address receiving the native token
-     */
     event NativeTokenUnwrapped(uint256 amount, address indexed target);
-
-    /**
-     * @notice Emitted when the TEE key manager is updated
-     * @param oldKeyManager Previous key manager address
-     * @param newKeyManager New key manager address
-     */
     event TeeKeyManagerUpdated(address indexed oldKeyManager, address indexed newKeyManager);
+    event SequencerKeyRegistrationRestrictionUpdated(bool restricted);
+    event ValidatorKeyRegistrationRestrictionUpdated(bool restricted);
+    event DefaultKeyExpirationUpdated(uint256 expiration);
 
     error ZeroAddressNotAllowed();
     error InvalidSequencerSignature(address recoveredSigner);
@@ -76,12 +52,12 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
     /**
      * @notice Initializes the bridge contract
-     * @param admin Address to be granted admin privileges
+     * @param _owner Address to be granted ownership
      * @param _wrappedNativeToken Address of the wrapped native token contract (e.g., WETH)
-     * @param _teeKeyManager Address of the TEE key manager contract for sequencer verification
+     * @param _teeKeyManager Address of the TEE key manager contract for sequencer/validator verification
      */
-    constructor(address admin, address _wrappedNativeToken, address _teeKeyManager) ModuleCheckRegistry(admin) {
-        if (admin == address(0) || _wrappedNativeToken == address(0) || _teeKeyManager == address(0)) {
+    constructor(address _owner, address _wrappedNativeToken, address _teeKeyManager) ModuleCheckRegistry(_owner) {
+        if (_owner == address(0) || _wrappedNativeToken == address(0) || _teeKeyManager == address(0)) {
             revert ZeroAddressNotAllowed();
         }
         wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
@@ -89,28 +65,215 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     }
 
     /**
-     * @notice Receives native native token and wraps it to wrappedNativeToken for internal accounting
-     * @dev This function is intentionally public and allows anyone to send native token to the bridge.
-     * The native token is immediately wrapped to wrappedNativeToken for consistent accounting and balance tracking.
-     *
-     * When msg.sender is the WrappedNativeToken contract itself (during unwrapping in handleMessage),
-     * the native token is NOT re-wrapped to prevent infinite loops.
+     * @notice Receives native token and wraps it to wrappedNativeToken for internal accounting
+     * @dev When msg.sender is the WrappedNativeToken contract itself (during unwrapping),
+     *      the native token is NOT re-wrapped to prevent infinite loops.
      */
     receive() external payable {
-        // Only wrap native token if it's not coming from WrappedNativeToken unwrapping
         if (msg.sender != address(wrappedNativeToken)) {
             _wrapNativeToken(msg.value);
         }
     }
 
+    /*//////////////////////////////////////////////////////////////
+                            KEY MANAGEMENT
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Updates the TEE key manager contract address
+     * @dev Only callable by owner. Use with caution as this changes which keys are considered valid.
+     * @param _teeKeyManager New TEE key manager contract address
+     */
+    function setTeeKeyManager(address _teeKeyManager) external onlyOwner {
+        if (_teeKeyManager == address(0)) {
+            revert ZeroAddressNotAllowed();
+        }
+        address oldKeyManager = address(teeKeyManager);
+        teeKeyManager = ITeeKeyManager(_teeKeyManager);
+        emit TeeKeyManagerUpdated(oldKeyManager, _teeKeyManager);
+    }
+
+    /**
+     * @notice Sets whether sequencer key registration requires owner approval
+     * @param restricted If true, new sequencer keys require approval
+     */
+    function setSequencerKeyRegistrationRestricted(bool restricted) external onlyOwner {
+        sequencerKeyRegistrationRestricted = restricted;
+        emit SequencerKeyRegistrationRestrictionUpdated(restricted);
+    }
+
+    /**
+     * @notice Sets whether validator key registration requires owner approval
+     * @param restricted If true, new validator keys require approval
+     */
+    function setValidatorKeyRegistrationRestricted(bool restricted) external onlyOwner {
+        validatorKeyRegistrationRestricted = restricted;
+        emit ValidatorKeyRegistrationRestrictionUpdated(restricted);
+    }
+
+    /**
+     * @notice Sets the default expiration duration for new keys
+     * @param expiration Duration in seconds from registration (0 = never expires)
+     */
+    function setDefaultKeyExpiration(uint256 expiration) external onlyOwner {
+        defaultKeyExpiration = expiration;
+        emit DefaultKeyExpirationUpdated(expiration);
+    }
+
+    /**
+     * @notice Registers a new sequencer key with attestation proof
+     * @dev Anyone can call this. If registration is restricted, key goes to pending state.
+     * @param publicValues The encoded public values from the attestation
+     * @param proofBytes The SP1 proof bytes
+     * @return publicKey The registered key address
+     */
+    function registerSequencerKey(bytes calldata publicValues, bytes calldata proofBytes)
+        external
+        returns (address publicKey)
+    {
+        uint256 expiresAt = defaultKeyExpiration == 0 ? 0 : block.timestamp + defaultKeyExpiration;
+        return teeKeyManager.addSequencerKey(publicValues, proofBytes, sequencerKeyRegistrationRestricted, expiresAt);
+    }
+
+    /**
+     * @notice Registers a new validator key with attestation proof
+     * @dev Anyone can call this. If registration is restricted, key goes to pending state.
+     * @param publicValues The encoded public values from the attestation
+     * @param proofBytes The SP1 proof bytes
+     * @return publicKey The registered key address
+     */
+    function registerValidatorKey(bytes calldata publicValues, bytes calldata proofBytes)
+        external
+        returns (address publicKey)
+    {
+        uint256 expiresAt = defaultKeyExpiration == 0 ? 0 : block.timestamp + defaultKeyExpiration;
+        return teeKeyManager.addValidatorKey(publicValues, proofBytes, validatorKeyRegistrationRestricted, expiresAt);
+    }
+
+    /**
+     * @notice Registers a sequencer key via signature (for keys without gas)
+     * @param publicValues The encoded public values from the attestation
+     * @param proofBytes The SP1 proof bytes
+     * @param deadline Timestamp after which the signature expires
+     * @param signature EIP-712 signature from the TEE key
+     * @return publicKey The registered key address
+     */
+    function registerSequencerKeyWithSignature(
+        bytes calldata publicValues,
+        bytes calldata proofBytes,
+        uint256 deadline,
+        bytes calldata signature
+    ) external returns (address publicKey) {
+        uint256 expiresAt = defaultKeyExpiration == 0 ? 0 : block.timestamp + defaultKeyExpiration;
+        return teeKeyManager.addSequencerKeyWithSignature(
+            publicValues, proofBytes, deadline, signature, sequencerKeyRegistrationRestricted, expiresAt
+        );
+    }
+
+    /**
+     * @notice Registers a validator key via signature (for keys without gas)
+     * @param publicValues The encoded public values from the attestation
+     * @param proofBytes The SP1 proof bytes
+     * @param deadline Timestamp after which the signature expires
+     * @param signature EIP-712 signature from the TEE key
+     * @return publicKey The registered key address
+     */
+    function registerValidatorKeyWithSignature(
+        bytes calldata publicValues,
+        bytes calldata proofBytes,
+        uint256 deadline,
+        bytes calldata signature
+    ) external returns (address publicKey) {
+        uint256 expiresAt = defaultKeyExpiration == 0 ? 0 : block.timestamp + defaultKeyExpiration;
+        return teeKeyManager.addValidatorKeyWithSignature(
+            publicValues, proofBytes, deadline, signature, validatorKeyRegistrationRestricted, expiresAt
+        );
+    }
+
+    /**
+     * @notice Approves a pending sequencer key
+     * @param publicKey The pending key to approve
+     * @param expiresAt Expiration timestamp (0 = never expires)
+     */
+    function approveSequencerKey(address publicKey, uint256 expiresAt) external onlyOwner {
+        teeKeyManager.approveSequencerKey(publicKey, expiresAt);
+    }
+
+    /**
+     * @notice Approves a pending validator key
+     * @param publicKey The pending key to approve
+     * @param expiresAt Expiration timestamp (0 = never expires)
+     */
+    function approveValidatorKey(address publicKey, uint256 expiresAt) external onlyOwner {
+        teeKeyManager.approveValidatorKey(publicKey, expiresAt);
+    }
+
+    /**
+     * @notice Rejects a pending sequencer key
+     * @param publicKey The pending key to reject
+     */
+    function rejectSequencerKey(address publicKey) external onlyOwner {
+        teeKeyManager.rejectSequencerKey(publicKey);
+    }
+
+    /**
+     * @notice Rejects a pending validator key
+     * @param publicKey The pending key to reject
+     */
+    function rejectValidatorKey(address publicKey) external onlyOwner {
+        teeKeyManager.rejectValidatorKey(publicKey);
+    }
+
+    /**
+     * @notice Removes a sequencer key
+     * @param publicKey The key to remove
+     */
+    function removeSequencerKey(address publicKey) external onlyOwner {
+        teeKeyManager.removeSequencerKey(publicKey);
+    }
+
+    /**
+     * @notice Removes a validator key
+     * @param publicKey The key to remove
+     */
+    function removeValidatorKey(address publicKey) external onlyOwner {
+        teeKeyManager.removeValidatorKey(publicKey);
+    }
+
+    /**
+     * @notice Sets expiration for a key
+     * @param publicKey The key to update
+     * @param expiresAt New expiration timestamp (0 = never expires)
+     */
+    function setKeyExpiration(address publicKey, uint256 expiresAt) external onlyOwner {
+        teeKeyManager.setKeyExpiration(publicKey, expiresAt);
+    }
+
+    /**
+     * @notice Revokes all registered keys
+     */
+    function revokeAllKeys() external onlyOwner {
+        teeKeyManager.revokeAllKeys();
+    }
+
+    /**
+     * @notice Updates the attestation verifier in the TeeKeyManager
+     * @param _attestationVerifier The new attestation verifier contract
+     */
+    function updateAttestationVerifier(IAttestationVerifier _attestationVerifier) external onlyOwner {
+        teeKeyManager.updateAttestationVerifier(_attestationVerifier);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            NATIVE TOKEN HANDLING
+    //////////////////////////////////////////////////////////////*/
+
     /**
      * @notice Wraps any stuck native token in the bridge to wrapped native token
-     * @dev This function can be called by the sequencer to recover any native token that may be stuck in the contract.
-     * It wraps up to the specified amount, limited by the contract's current native token balance.
-     * This should not be needed in normal operation but provides a safety mechanism.
+     * @dev Can be called by message initializer to recover stuck native token.
      * @param amount Maximum amount to wrap (will wrap min(amount, address(this).balance))
      */
-    function wrapNativeToken(uint256 amount) external onlyRole(MESSAGE_INITIALIZER_ROLE) {
+    function wrapNativeToken(uint256 amount) external onlyMessageInitializer {
         uint256 balance = address(this).balance;
         uint256 amountToWrap = amount > balance ? balance : amount;
 
@@ -121,28 +284,14 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         _wrapNativeToken(amountToWrap);
     }
 
-    /**
-     * @notice Internal function to wrap native token to wrapped native token
-     * @param amount Amount of native token to wrap
-     */
     function _wrapNativeToken(uint256 amount) private {
         wrappedNativeToken.deposit{value: amount}();
         emit NativeTokenWrapped(msg.sender, amount);
     }
 
-    /**
-     * @notice Updates the TEE key manager contract address
-     * @dev Only callable by admin. Use with caution as this changes which keys are considered valid.
-     * @param _teeKeyManager New TEE key manager contract address
-     */
-    function setTeeKeyManager(address _teeKeyManager) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (_teeKeyManager == address(0)) {
-            revert ZeroAddressNotAllowed();
-        }
-        address oldKeyManager = address(teeKeyManager);
-        teeKeyManager = ITeeKeyManager(_teeKeyManager);
-        emit TeeKeyManagerUpdated(oldKeyManager, _teeKeyManager);
-    }
+    /*//////////////////////////////////////////////////////////////
+                            MESSAGE HANDLING
+    //////////////////////////////////////////////////////////////*/
 
     /// @inheritdoc IBridge
     function initializeMessage(
@@ -151,20 +300,10 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
         uint256 nativeTokenAmount
-    ) public onlyRole(MESSAGE_INITIALIZER_ROLE) {
+    ) public onlyMessageInitializer {
         _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
     }
 
-    /**
-     * @notice Internal function to initialize a message
-     * @dev Creates the message state, verifies the sequencer signature against TeeKeyManager,
-     *      and stores the signature. The sequencer must sign a hash of the message parameters.
-     * @param messageId Unique identifier for the message
-     * @param targetAddress Address that will receive the message call
-     * @param payload Encoded function call data
-     * @param sequencerSignature Signature from the trusted sequencer
-     * @param nativeTokenAmount Amount of native token to transfer with the call
-     */
     function _initializeMessage(
         bytes32 messageId,
         address targetAddress,
@@ -182,8 +321,8 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         address signer = ECDSA.recover(ethSignedHash, sequencerSignature.signature);
 
-        // This will revert with InvalidPublicKey if the signer is not a registered TEE key
-        if (!teeKeyManager.isKeyValid(signer)) {
+        // This will revert with InvalidPublicKey if the signer is not a registered TEE sequencer key
+        if (!teeKeyManager.isSequencerKeyValid(signer)) {
             revert InvalidSequencerSignature(signer);
         }
 
@@ -202,9 +341,6 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     }
 
     /// @inheritdoc IBridge
-    /// @dev This function allows reentrancy for composability but prevents re-processing the same message via stage checks.
-    ///      WARNING: Message handlers should be carefully designed to handle reentrant calls. The bridge allows
-    ///      cross-message reentrancy to enable composable cross-chain operations, but same-message reentrancy is blocked.
     function handleMessage(bytes32 messageId) public {
         MessageState storage state = messageStates[messageId];
 
@@ -263,7 +399,6 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     ) external {
         initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
 
-        // collect validator signatures and verify them
         for (uint256 i = 0; i < validatorSignatures.length; i++) {
             signMessageWithSignature(messageId, validatorSignatures[i]);
         }
@@ -297,13 +432,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
     /**
      * @notice Initializes multiple messages in a single transaction
-     * @dev Only callable by addresses with MESSAGE_INITIALIZER_ROLE. All arrays must have equal length.
-     *      If any message initialization fails, the entire batch will revert atomically.
-     * @param messageIds Array of unique message identifiers
-     * @param targetAddresses Array of addresses that will receive message calls
-     * @param payloads Array of encoded function call data
-     * @param _sequencerSignatures Array of sequencer signatures
-     * @param nativeTokenAmounts Array of native token amounts to transfer
+     * @dev Only callable by message initializers. All arrays must have equal length.
      */
     function batchInitializeMessage(
         bytes32[] calldata messageIds,
@@ -311,7 +440,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes[] calldata payloads,
         SequencerSignature[] calldata _sequencerSignatures,
         uint256[] calldata nativeTokenAmounts
-    ) external onlyRole(MESSAGE_INITIALIZER_ROLE) {
+    ) external onlyMessageInitializer {
         if (
             messageIds.length != targetAddresses.length || messageIds.length != payloads.length
                 || messageIds.length != _sequencerSignatures.length || messageIds.length != nativeTokenAmounts.length
@@ -328,8 +457,6 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
     /**
      * @notice Executes multiple previously initialized messages in a single transaction
-     * @dev If any message execution fails, the entire batch will revert and no partial batch will be committed.
-     *      This ensures atomic execution of all messages in the batch.
      * @param messageIds Array of message identifiers to execute
      */
     function batchHandleMessage(bytes32[] calldata messageIds) external {

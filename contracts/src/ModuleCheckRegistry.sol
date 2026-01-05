@@ -5,7 +5,8 @@ import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
 import {ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
 import {IModuleCheckRegistry} from "src/interfaces/IModuleCheckRegistry.sol";
 import {IValidatorSigningAndQuery} from "src/interfaces/IValidatorSigningAndQuery.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
+import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
@@ -13,45 +14,30 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 /**
  * @title ModuleCheckRegistry
  * @notice Abstract contract that manages validation modules, validator signatures, and sequencer signatures
- * @dev Inherited by Bridge.sol. Provides role-based access control for message initializers and validators,
- *      and manages pre/post execution validation modules. Stores both validator and sequencer signatures
- *      for consistency and centralized signature management.
+ * @dev Inherited by Bridge.sol. Provides owner-based access control for admin operations,
+ *      role-based access for message initializers, and manages pre/post execution validation modules.
+ *      Validator authorization is delegated to TeeKeyManager (TEE attestation-based).
  */
-abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigningAndQuery, AccessControl {
+abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigningAndQuery, Ownable2Step {
     using EnumerableSet for EnumerableSet.AddressSet;
-
-    bytes32 public constant MESSAGE_INITIALIZER_ROLE = keccak256("MESSAGE_INITIALIZER_ROLE");
-    bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
 
     EnumerableSet.AddressSet private preModules;
     EnumerableSet.AddressSet private postModules;
 
+    /// @notice Addresses authorized to initialize messages
+    mapping(address account => bool isAuthorized) public messageInitializers;
+
     mapping(bytes32 messageId => mapping(address validator => bool hasSigned)) public validatorSignatures;
     mapping(bytes32 messageId => SequencerSignature signature) public sequencerSignatures;
 
-    /**
-     * @notice Emitted when a pre-execution module is added to the registry
-     * @param module Address of the added module
-     */
+    /// @notice Reference to the TEE key manager for validator authorization
+    ITeeKeyManager public teeKeyManager;
+
     event PreModuleAdded(address indexed module);
-
-    /**
-     * @notice Emitted when a post-execution module is added to the registry
-     * @param module Address of the added module
-     */
     event PostModuleAdded(address indexed module);
-
-    /**
-     * @notice Emitted when a pre-execution module is removed from the registry
-     * @param module Address of the removed module
-     */
     event PreModuleRemoved(address indexed module);
-
-    /**
-     * @notice Emitted when a post-execution module is removed from the registry
-     * @param module Address of the removed module
-     */
     event PostModuleRemoved(address indexed module);
+    event MessageInitializerUpdated(address indexed account, bool authorized);
 
     error InvalidModuleAddress();
     error ModuleAlreadyExists();
@@ -60,45 +46,60 @@ abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigning
     error InvalidPostExecutionStage(ProcessingStage stage);
     error ModuleCheckFailed(address module, ProcessingStage stage);
     error InvalidValidatorSignature();
+    error NotMessageInitializer();
 
-    /**
-     * @notice Initializes the contract with an admin address
-     * @dev DEFAULT_ADMIN_ROLE has the ability to:
-     *      - Add/remove validation modules (addPreModule, removePreModule, addPostModule, removePostModule)
-     *      - Grant MESSAGE_INITIALIZER_ROLE to sequencers and relayers
-     *      - Grant VALIDATOR_ROLE to authorized validators
-     * @param admin Address to be granted the DEFAULT_ADMIN_ROLE
-     */
-    constructor(address admin) {
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+    modifier onlyMessageInitializer() {
+        if (!messageInitializers[msg.sender]) revert NotMessageInitializer();
+        _;
     }
 
+    /**
+     * @notice Initializes the contract with an owner address
+     * @dev Owner has the ability to:
+     *      - Add/remove validation modules
+     *      - Grant/revoke message initializer permissions
+     *      - Manage TEE keys via TeeKeyManager
+     * @param _owner Address to be granted ownership
+     */
+    constructor(address _owner) Ownable(_owner) {}
+
     /// @inheritdoc IModuleCheckRegistry
-    function addPreModule(address module) external virtual onlyRole(DEFAULT_ADMIN_ROLE) {
+    function addPreModule(address module) external virtual onlyOwner {
         if (module == address(0)) revert InvalidModuleAddress();
         if (!preModules.add(module)) revert ModuleAlreadyExists();
         emit PreModuleAdded(module);
     }
 
     /// @inheritdoc IModuleCheckRegistry
-    function addPostModule(address module) external virtual onlyRole(DEFAULT_ADMIN_ROLE) {
+    function addPostModule(address module) external virtual onlyOwner {
         if (module == address(0)) revert InvalidModuleAddress();
         if (!postModules.add(module)) revert ModuleAlreadyExists();
         emit PostModuleAdded(module);
     }
 
     /// @inheritdoc IModuleCheckRegistry
-    function removePreModule(address module) external virtual onlyRole(DEFAULT_ADMIN_ROLE) {
+    function removePreModule(address module) external virtual onlyOwner {
         if (module == address(0)) revert InvalidModuleAddress();
         if (!preModules.remove(module)) revert ModuleDoesNotExist();
         emit PreModuleRemoved(module);
     }
 
     /// @inheritdoc IModuleCheckRegistry
-    function removePostModule(address module) external virtual onlyRole(DEFAULT_ADMIN_ROLE) {
+    function removePostModule(address module) external virtual onlyOwner {
         if (module == address(0)) revert InvalidModuleAddress();
         if (!postModules.remove(module)) revert ModuleDoesNotExist();
         emit PostModuleRemoved(module);
+    }
+
+    /**
+     * @notice Grants or revokes message initializer permission
+     * @dev Only callable by owner
+     * @param account Address to update
+     * @param authorized Whether the account should be authorized
+     */
+    function setMessageInitializer(address account, bool authorized) external onlyOwner {
+        messageInitializers[account] = authorized;
+        emit MessageInitializerUpdated(account, authorized);
     }
 
     /// @inheritdoc IModuleCheckRegistry
@@ -114,8 +115,7 @@ abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigning
     /**
      * @notice Internal function to validate a message against a set of modules
      * @dev Iterates through all modules and reverts if any check fails.
-     *      WARNING: Ensure the total gas cost of all modules does NOT exceed the block gas limit on your target chain.
-     *      Adding too many modules or gas-intensive modules can cause transactions to fail with out-of-gas errors.
+     *      WARNING: Ensure the total gas cost of all modules does NOT exceed the block gas limit.
      * @param messageId Unique identifier of the message
      * @param modules Set of module addresses to validate against
      * @param stage Current processing stage
@@ -142,7 +142,6 @@ abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigning
 
     /**
      * @notice Validates all pre-execution modules for a message
-     * @dev Ensures stage is PreExecution before validating
      * @param messageId Unique identifier of the message
      * @param stage Must be ProcessingStage.PreExecution
      * @param payload Encoded function call data
@@ -163,7 +162,6 @@ abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigning
 
     /**
      * @notice Validates all post-execution modules for a message
-     * @dev Ensures stage is PostExecution before validating
      * @param messageId Unique identifier of the message
      * @param stage Must be ProcessingStage.PostExecution
      * @param payload Encoded function call data
@@ -183,12 +181,15 @@ abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigning
     }
 
     /*//////////////////////////////////////////////////////////////
-                                 VALIDATORS SIGNING
+                             VALIDATORS SIGNING
     //////////////////////////////////////////////////////////////*/
 
     /// @inheritdoc IValidatorSigningAndQuery
-    function signMessage(bytes32 messageId) external onlyRole(VALIDATOR_ROLE) {
-        // Direct validator call pattern - validator calls via msg.sender
+    function signMessage(bytes32 messageId) external {
+        // Validator must be registered in TeeKeyManager
+        // This will revert if not a valid validator key
+        teeKeyManager.isValidatorKeyValid(msg.sender);
+
         validatorSignatures[messageId][msg.sender] = true;
         emit MessageSigned(messageId, msg.sender, msg.sender);
     }
@@ -199,9 +200,9 @@ abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigning
         bytes32 messageHash = MessageHashUtils.toEthSignedMessageHash(messageId);
         address validator = ECDSA.recover(messageHash, signature);
 
-        if (!hasRole(VALIDATOR_ROLE, validator)) {
-            revert ValidatorNotAuthorized();
-        }
+        // Validator must be registered in TeeKeyManager
+        // This will revert if not a valid validator key
+        teeKeyManager.isValidatorKeyValid(validator);
 
         validatorSignatures[messageId][validator] = true;
         emit MessageSigned(messageId, validator, msg.sender);
