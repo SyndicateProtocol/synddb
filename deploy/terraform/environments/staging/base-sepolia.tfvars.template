@@ -37,14 +37,13 @@
 #
 # Deploy contracts to Base Sepolia:
 #
-#   # 1. Set up foundry keystore (one-time):
-#   cast wallet import deployer --interactive
-#
-#   # 2. Set ETHERSCAN_API_KEY in .env (see .env.defaults for template):
+#   # 1. Create .env with your private key and API key:
 #   cp .env.defaults .env
-#   # Edit .env and set ETHERSCAN_API_KEY=<your-basescan-api-key>
+#   # Edit .env and set:
+#   #   PRIVATE_KEY=<your-deployer-private-key>
+#   #   ETHERSCAN_API_KEY=<your-basescan-api-key>
 #
-#   # 3. Deploy contracts:
+#   # 2. Deploy contracts:
 #   just contracts::deploy-base-sepolia
 #
 # Note down the deployed addresses for use in this config.
