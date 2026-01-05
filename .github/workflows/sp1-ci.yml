@@ -34,6 +34,8 @@ jobs:
     name: SP1 Build & Execute
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      vkey: ${{ steps.vkey.outputs.vkey }}
     steps:
       - uses: actions/checkout@v4
 
@@ -84,11 +86,21 @@ jobs:
         run: |
           cd tests/confidential-space/sp1/script
           VKEY=$(cargo run --release --bin gcp-cs-vkey 2>/dev/null | grep "bytes32" | awk '{print $NF}')
-          echo "vkey=$VKEY" >> $GITHUB_OUTPUT
-          echo "## SP1 Verification Key" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Use this value for \`ATTESTATION_VERIFIER_VKEY\` in contract deployment:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "$VKEY" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+          # Validate vkey format (should be 0x followed by 64 hex chars)
+          if [[ ! "$VKEY" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
+            echo "::error::Invalid vkey format: $VKEY"
+            exit 1
+          fi
+
+          echo "vkey=$VKEY" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## SP1 Verification Key"
+            echo ""
+            echo "Use this value for \`ATTESTATION_VERIFIER_VKEY\` in contract deployment:"
+            echo ""
+            echo "\`\`\`"
+            echo "$VKEY"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
