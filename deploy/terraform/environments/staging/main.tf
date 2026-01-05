@@ -99,6 +99,8 @@ module "proof_service" {
   allow_unauthenticated = false
   min_instances         = 0  # Scale to zero when idle
   max_instances         = 1
+  cpu_limit             = "2"
+  memory_limit          = "2Gi"
   labels                = var.labels
 
   depends_on = [module.iam]
