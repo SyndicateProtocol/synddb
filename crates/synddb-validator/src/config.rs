@@ -266,7 +266,7 @@ pub struct ValidatorConfig {
 
     /// Image signature over the container image digest (65 bytes r||s||v, hex-encoded with 0x prefix)
     ///
-    /// This is the secp256k1 ECDSA signature produced by CI when signing keccak256(image_digest).
+    /// This is the secp256k1 ECDSA signature produced by CI when signing `keccak256(image_digest)`.
     /// Required when `enable_key_bootstrap` is true.
     #[arg(long, env = "IMAGE_SIGNATURE")]
     pub image_signature: Option<String>,

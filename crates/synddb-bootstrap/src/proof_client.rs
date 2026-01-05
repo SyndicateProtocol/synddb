@@ -16,7 +16,7 @@ struct ProofRequest {
     /// EVM public key (64-byte uncompressed secp256k1, hex-encoded)
     pub evm_public_key: String,
     /// Image signature (65 bytes: r || s || v, hex-encoded)
-    /// This is a secp256k1 ECDSA signature over keccak256(image_digest) for on-chain ecrecover
+    /// This is a secp256k1 ECDSA signature over `keccak256(image_digest)` for on-chain ecrecover
     pub image_signature: String,
 }
 
@@ -70,7 +70,7 @@ impl ProofClient {
     /// * `jwt_token` - Raw JWT attestation token from Confidential Space
     /// * `expected_audience` - Expected audience claim
     /// * `evm_public_key` - 64-byte uncompressed secp256k1 public key
-    /// * `image_signature` - 65-byte secp256k1 signature (r || s || v) over keccak256(image_digest)
+    /// * `image_signature` - 65-byte secp256k1 signature (r || s || v) over `keccak256(image_digest)`
     pub async fn generate_proof(
         &self,
         jwt_token: &str,
