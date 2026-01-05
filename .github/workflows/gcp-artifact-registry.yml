@@ -346,8 +346,25 @@ jobs:
           SIGNATURE=$(cast wallet sign --private-key "$PRIVATE_KEY" --no-hash "$MESSAGE_HASH")
 
           echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          echo "message_hash=$MESSAGE_HASH" >> $GITHUB_OUTPUT
           echo "::notice::Image signature: $SIGNATURE"
           echo "::notice::Signer address: ${{ vars.IMAGE_SIGNER_ADDRESS }}"
+
+      - name: Verify image signature (secp256k1)
+        if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
+        run: |
+          # Verify signature matches expected signer address before publishing
+          SIGNATURE="${{ steps.image_sig.outputs.signature }}"
+          MESSAGE_HASH="${{ steps.image_sig.outputs.message_hash }}"
+          EXPECTED_SIGNER="${{ vars.IMAGE_SIGNER_ADDRESS }}"
+
+          # cast wallet verify returns exit code 0 on success
+          if ! cast wallet verify --address "$EXPECTED_SIGNER" "$SIGNATURE" "$MESSAGE_HASH"; then
+            echo "::error::Signature verification failed! Signature does not match expected signer $EXPECTED_SIGNER"
+            exit 1
+          fi
+
+          echo "::notice::Signature verified: signer matches $EXPECTED_SIGNER"
 
       - name: Summary
         run: |
@@ -494,8 +511,25 @@ jobs:
           SIGNATURE=$(cast wallet sign --private-key "$PRIVATE_KEY" --no-hash "$MESSAGE_HASH")
 
           echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          echo "message_hash=$MESSAGE_HASH" >> $GITHUB_OUTPUT
           echo "::notice::Image signature: $SIGNATURE"
           echo "::notice::Signer address: ${{ vars.IMAGE_SIGNER_ADDRESS }}"
+
+      - name: Verify image signature (secp256k1)
+        if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
+        run: |
+          # Verify signature matches expected signer address before publishing
+          SIGNATURE="${{ steps.image_sig.outputs.signature }}"
+          MESSAGE_HASH="${{ steps.image_sig.outputs.message_hash }}"
+          EXPECTED_SIGNER="${{ vars.IMAGE_SIGNER_ADDRESS }}"
+
+          # cast wallet verify returns exit code 0 on success
+          if ! cast wallet verify --address "$EXPECTED_SIGNER" "$SIGNATURE" "$MESSAGE_HASH"; then
+            echo "::error::Signature verification failed! Signature does not match expected signer $EXPECTED_SIGNER"
+            exit 1
+          fi
+
+          echo "::notice::Signature verified: signer matches $EXPECTED_SIGNER"
 
       - name: Summary
         run: |
