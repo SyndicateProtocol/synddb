@@ -17,11 +17,17 @@ variable "gcs_bucket_name" {
 variable "artifact_registry_location" {
   description = "Location of Artifact Registry repository"
   type        = string
-  default     = ""
+  default     = "us-central1"
 }
 
 variable "artifact_registry_repository" {
   description = "Name of Artifact Registry repository"
   type        = string
-  default     = ""
+  default     = "synddb"
+}
+
+variable "app_artifact_registry_project" {
+  description = "GCP project for app images (validator, price-oracle). Override if using a custom registry."
+  type        = string
+  default     = "synddb-infra"
 }
