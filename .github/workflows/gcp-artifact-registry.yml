@@ -193,6 +193,7 @@ jobs:
       id-token: write  # Required for Workload Identity Federation
     strategy:
       fail-fast: false
+      max-parallel: 1  # Sequential builds to preserve reproducibility
       matrix:
         include:
           - image: sequencer
