@@ -242,6 +242,7 @@ module "relayer" {
   allow_unauthenticated = false
   min_instances         = 0
   max_instances         = 2
+  deletion_protection   = false  # Allow destruction in staging
   labels                = var.labels
 
   depends_on = [module.iam]

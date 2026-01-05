@@ -141,3 +141,9 @@ variable "labels" {
   type        = map(string)
   default     = {}
 }
+
+variable "deletion_protection" {
+  description = "Enable deletion protection for the Cloud Run service"
+  type        = bool
+  default     = true
+}

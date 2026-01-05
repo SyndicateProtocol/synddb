@@ -288,3 +288,31 @@ The sequencer and validator run inside TEEs (Trusted Execution Environments). Wh
 If a proposed change could affect the TEE security boundary, flag the implications and confirm before proceeding.
 
 **Note:** Smart contracts (in `contracts/`) run on-chain, not inside TEEs. TEE boundary considerations do not apply to contract code.
+
+## GCP Infrastructure
+
+### Terraform Environments
+Infrastructure is managed via Terraform in `deploy/terraform/environments/`:
+- `staging/` - Test environment on Base Sepolia
+- `prod/` - Production environment
+
+### Deleting Cloud Run Services
+Cloud Run v2 services have `deletion_protection = true` by default. To delete a protected service:
+
+```bash
+# Use gcloud to delete directly (bypasses Terraform protection check)
+gcloud run services delete <service-name> --region=<region> --project=<project> --quiet
+
+# Example: delete staging relayer
+gcloud run services delete synddb-staging-relayer --region=us-central1 --project=synddb-staging --quiet
+```
+
+Then run `terraform apply` to recreate if needed. Do NOT try to use `terraform destroy` or modify deletion_protection through Terraform - the gcloud delete command is simpler.
+
+### Destroying Staging Infrastructure
+```bash
+cd deploy/terraform/environments/staging
+terraform destroy
+```
+
+For services with deletion protection, delete them via gcloud first (see above).
