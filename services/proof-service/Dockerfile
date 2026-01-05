@@ -50,9 +50,9 @@ COPY --from=builder /app/services/proof-service/target/release/proof-service /ap
 # Using "network" to offload proving to Succinct's hosted infrastructure
 # Requires SP1_PRIVATE_KEY environment variable at runtime
 ENV SP1_PROVER=network
-ENV BIND_ADDRESS=0.0.0.0:8080
+ENV BIND_ADDRESS=0.0.0.0:8083
 ENV RUST_LOG=info
 
-EXPOSE 8080
+EXPOSE 8083
 
 CMD ["/app/proof-service"]
