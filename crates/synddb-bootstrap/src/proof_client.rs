@@ -165,10 +165,15 @@ impl ProofClient {
 
         debug!(address = %address, "Generated mock proof");
 
-        // Return mock data that matches expected format
+        // Build ABI-encoded public values with correct tee_address placement
         // PublicValuesStruct has 12 fields × 32 bytes = 384 bytes ABI-encoded
+        // Slot 4 (bytes 128-160): tee_signing_key (address is right-aligned, bytes 140-160)
+        let mut public_values_bytes = vec![0u8; 384];
+        // Place address at bytes 140-160 (right-aligned in 32-byte slot 4)
+        public_values_bytes[140..160].copy_from_slice(address.as_slice());
+
         Ok(ProofResponse {
-            public_values: format!("0x{}", "00".repeat(384)),
+            public_values: format!("0x{}", hex::encode(&public_values_bytes)),
             proof_bytes: "0x".into(),
             tee_address: format!("{address}"),
         })

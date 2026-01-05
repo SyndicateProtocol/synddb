@@ -71,6 +71,8 @@ async fn main() -> Result<()> {
                 relayer_url: config.relayer_url.clone(),
                 proof_service_url: config.proof_service_url.clone(),
                 attestation_audience: config.attestation_audience.clone(),
+                cosign_signature: config.cosign_signature.clone(),
+                cosign_pubkey: config.cosign_pubkey.clone(),
                 proof_timeout: config.proof_timeout,
                 bootstrap_timeout: config.bootstrap_timeout,
                 prover_mode: ProverMode::Service,

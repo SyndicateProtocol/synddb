@@ -257,6 +257,20 @@ pub struct ValidatorConfig {
     #[arg(long, env = "ATTESTATION_AUDIENCE")]
     pub attestation_audience: Option<String>,
 
+    /// Cosign signature over the container image digest (64 bytes r||s, hex-encoded with 0x prefix)
+    ///
+    /// This is the ECDSA P-256 signature produced by cosign when signing the container image.
+    /// Required when `enable_key_bootstrap` is true.
+    #[arg(long, env = "COSIGN_SIGNATURE")]
+    pub cosign_signature: Option<String>,
+
+    /// Cosign public key for signature verification (64 or 65 bytes, hex-encoded with 0x prefix)
+    ///
+    /// P-256 public key: either 64 bytes (x||y) or 65 bytes (0x04||x||y uncompressed).
+    /// Required when `enable_key_bootstrap` is true.
+    #[arg(long, env = "COSIGN_PUBKEY")]
+    pub cosign_pubkey: Option<String>,
+
     /// Timeout for proof generation (default: 10 minutes)
     #[arg(long, env = "PROOF_TIMEOUT", default_value = "600s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
@@ -296,6 +310,12 @@ impl ValidatorConfig {
         }
         if self.attestation_audience.is_none() {
             return Err("ATTESTATION_AUDIENCE is required when ENABLE_KEY_BOOTSTRAP=true".into());
+        }
+        if self.cosign_signature.is_none() {
+            return Err("COSIGN_SIGNATURE is required when ENABLE_KEY_BOOTSTRAP=true".into());
+        }
+        if self.cosign_pubkey.is_none() {
+            return Err("COSIGN_PUBKEY is required when ENABLE_KEY_BOOTSTRAP=true".into());
         }
 
         Ok(())
