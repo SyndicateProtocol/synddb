@@ -1,6 +1,6 @@
 # Proof Service
 
-GPU-accelerated SP1 proof generation service for TEE attestation verification.
+SP1 proof generation service for TEE attestation verification using the Succinct Network Prover.
 
 This service receives GCP Confidential Space attestation tokens from TEE services (sequencers/validators) and generates SP1 zero-knowledge proofs that can be verified on-chain. The proofs attest that:
 
@@ -21,7 +21,7 @@ TEE Service                    Proof Service                  On-Chain
     │   cosign_pubkey}             │                              │
     ├─────────────────────────────►│                              │
     │                              │  Fetch JWKS from Google      │
-    │                              │  Generate SP1 proof (GPU)    │
+    │                              │  Generate SP1 proof (network)│
     │                              │                              │
     │  {public_values, proof,      │                              │
     │   tee_address}               │                              │
@@ -127,15 +127,19 @@ The on-chain `AttestationVerifier` contract:
 |---------------------|---------|-------------|
 | `BIND_ADDRESS` | `0.0.0.0:8080` | HTTP server listen address |
 | `LOG_JSON` | `false` | Enable JSON log output |
-| `SP1_PROVER` | (from env) | Prover backend: `cpu`, `cuda`, or `network` |
+| `SP1_PROVER` | `network` | Prover backend (network only) |
+| `NETWORK_PRIVATE_KEY` | (required) | Secp256k1 private key for SP1 Network Prover |
 | `GOOGLE_OIDC_DISCOVERY_URL` | GCP default | OIDC discovery endpoint for JWKS |
 | `JWKS_CACHE_TTL_SECS` | `3600` | How long to cache Google's public keys |
 
-### SP1 Prover Modes
+### SP1 Network Prover
 
-- `cpu` - CPU-based proving (slow, ~10-30 min per proof)
-- `cuda` - GPU-accelerated proving (fast, ~2-5 min per proof)
-- `network` - SP1 Network Prover (requires `SP1_PRIVATE_KEY`)
+This service uses the [SP1 Network Prover](https://docs.succinct.xyz/prover-network/overview.html), which offloads proof generation to Succinct's hosted infrastructure. This requires:
+
+1. A secp256k1 private key with PROVE tokens (set via `NETWORK_PRIVATE_KEY`)
+2. Network connectivity to Succinct's prover network
+
+Proof generation typically takes 2-5 minutes depending on network load.
 
 ## Deployment
 
@@ -145,11 +149,8 @@ The on-chain `AttestationVerifier` contract:
 # Build
 cargo build --release
 
-# Run with CPU prover
-SP1_PROVER=cpu ./target/release/proof-service
-
-# Run with GPU prover (requires CUDA)
-SP1_PROVER=cuda ./target/release/proof-service
+# Run with network prover
+NETWORK_PRIVATE_KEY=<your-key> ./target/release/proof-service
 ```
 
 ### Docker
@@ -158,30 +159,22 @@ SP1_PROVER=cuda ./target/release/proof-service
 # Build image
 docker build -t proof-service .
 
-# Run with GPU
-docker run --gpus all -p 8080:8080 proof-service
+# Run
+docker run -p 8080:8080 -e NETWORK_PRIVATE_KEY=<key> proof-service
 ```
 
-### Cloud Run (GPU)
+### Cloud Run
 
-```bash
-# Build and push
-gcloud builds submit --tag gcr.io/$PROJECT_ID/proof-service
+The service is deployed via Terraform in `deploy/terraform/modules/proof-service/`. See the staging environment for configuration examples.
 
-# Deploy with GPU
-gcloud run services replace deploy/cloud-run.yaml --region=us-central1
-```
-
-The `deploy/cloud-run.yaml` configures:
-- NVIDIA L4 GPU
-- 8 vCPUs, 32GB RAM
-- 15-minute timeout for proof generation
-- Single instance (proofs are resource-intensive)
-- Container concurrency of 1
+Key settings:
+- 1 vCPU, 512MB RAM (lightweight since proving is offloaded)
+- 60-minute timeout for proof generation
+- Single instance, concurrency of 1
 
 ## Security Considerations
 
-1. **Rate Limiting**: Each proof takes 2-10 minutes and significant GPU resources. Consider rate limiting or authentication.
+1. **Rate Limiting**: Each proof takes 2-5 minutes. Consider rate limiting or authentication.
 
 2. **Network Security**: The service should only be accessible from TEE workloads. Consider VPC Service Controls or mTLS.
 
@@ -195,7 +188,6 @@ The `deploy/cloud-run.yaml` configures:
 
 - Rust 1.75+
 - SP1 toolchain: `curl -L https://sp1.succinct.xyz | bash && sp1up`
-- CUDA toolkit (for GPU proving)
 
 ### Building the SP1 Program
 

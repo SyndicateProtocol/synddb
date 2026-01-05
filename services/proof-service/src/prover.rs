@@ -20,10 +20,8 @@ pub struct AttestationProver {
 impl AttestationProver {
     /// Create a new prover using environment configuration
     ///
-    /// The SP1_PROVER environment variable controls which prover backend to use:
-    /// - Not set or "cpu": Use local CPU prover
-    /// - "cuda": Use local GPU prover (requires CUDA)
-    /// - "network": Use SP1 Network Prover (requires NETWORK_PRIVATE_KEY)
+    /// Uses the SP1 Network Prover which offloads proof generation to Succinct's
+    /// hosted infrastructure. Requires the `NETWORK_PRIVATE_KEY` environment variable.
     pub fn new() -> Self {
         info!("Initializing SP1 prover from environment");
         Self {
