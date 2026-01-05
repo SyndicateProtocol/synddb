@@ -314,6 +314,14 @@ contract PriceOracleTest is Test {
         assertEq(price, 50000_00000000);
     }
 
+    function test_AssetHash_ReturnsCorrectHash() public view {
+        bytes32 expected = keccak256(bytes("BTC"));
+        assertEq(oracle.assetHash("BTC"), expected);
+
+        expected = keccak256(bytes("ETH"));
+        assertEq(oracle.assetHash("ETH"), expected);
+    }
+
     // ============ Fuzz Tests ============
 
     function testFuzz_UpdatePrice(uint256 price, uint256 timestamp) public {
