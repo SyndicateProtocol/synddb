@@ -296,23 +296,11 @@ Infrastructure is managed via Terraform in `deploy/terraform/environments/`:
 - `staging/` - Test environment on Base Sepolia
 - `prod/` - Production environment
 
-### Deleting Cloud Run Services
-Cloud Run v2 services have `deletion_protection = true` by default. To delete a protected service:
+### Deleting Infrastructure
+Cloud Run v2 services have `deletion_protection = true` by default. To delete:
 
-```bash
-# Use gcloud to delete directly (bypasses Terraform protection check)
-gcloud run services delete <service-name> --region=<region> --project=<project> --quiet
+1. Set `deletion_protection = false` on the resource in Terraform
+2. Run `terraform apply` to update the protection setting
+3. Run `terraform destroy` to delete the infrastructure
 
-# Example: delete staging relayer
-gcloud run services delete synddb-staging-relayer --region=us-central1 --project=synddb-staging --quiet
-```
-
-Then run `terraform apply` to recreate if needed. Do NOT try to use `terraform destroy` or modify deletion_protection through Terraform - the gcloud delete command is simpler.
-
-### Destroying Staging Infrastructure
-```bash
-cd deploy/terraform/environments/staging
-terraform destroy
-```
-
-For services with deletion protection, delete them via gcloud first (see above).
+Do NOT use `gcloud run services delete` as it causes Terraform state drift.
