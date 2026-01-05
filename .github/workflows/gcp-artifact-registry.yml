@@ -427,64 +427,22 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Check which images need building
-        uses: dorny/paths-filter@v3
-        id: changes
-        with:
-          filters: |
-            relayer:
-              - 'crates/synddb-relayer/**'
-              - 'docker/reproducible/relayer.Dockerfile'
-              - '.github/workflows/gcp-artifact-registry.yml'
-            proof-service:
-              - 'services/proof-service/**'
-              - 'crates/gcp-attestation/**'
-              - 'crates/synddb-bootstrap/sp1/program/**'
-              - '.github/workflows/gcp-artifact-registry.yml'
-            price-oracle:
-              - 'examples/price-oracle/app/**'
-              - 'examples/price-oracle/Dockerfile'
-              - 'crates/synddb-client/**'
-              - '.github/workflows/gcp-artifact-registry.yml'
-            price-oracle-validator:
-              - 'examples/price-oracle/validator/**'
-              - 'examples/price-oracle/validator.Dockerfile'
-              - 'crates/synddb-validator/**'
-              - '.github/workflows/gcp-artifact-registry.yml'
-
-      - name: Check if any standard image needs building
-        id: needs-build
-        run: |
-          if [[ "${{ steps.changes.outputs.relayer }}" == "true" ]] || \
-             [[ "${{ steps.changes.outputs.proof-service }}" == "true" ]] || \
-             [[ "${{ steps.changes.outputs.price-oracle }}" == "true" ]] || \
-             [[ "${{ steps.changes.outputs.price-oracle-validator }}" == "true" ]]; then
-            echo "result=true" >> $GITHUB_OUTPUT
-          else
-            echo "result=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Authenticate to Google Cloud
-        if: steps.needs-build.outputs.result == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        if: steps.needs-build.outputs.result == 'true'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        if: steps.needs-build.outputs.result == 'true'
         run: gcloud auth configure-docker ${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev --quiet
 
       - name: Set up Docker Buildx
-        if: steps.needs-build.outputs.result == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Generate image tags
-        if: steps.needs-build.outputs.result == 'true'
         id: tags
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
@@ -521,7 +479,6 @@ jobs:
           fi
 
       - name: Build and push relayer
-        if: steps.changes.outputs.relayer == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -536,7 +493,6 @@ jobs:
           sbom: true
 
       - name: Build and push proof-service
-        if: steps.changes.outputs.proof-service == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -551,7 +507,6 @@ jobs:
           sbom: true
 
       - name: Build and push price-oracle
-        if: steps.changes.outputs.price-oracle == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -566,7 +521,6 @@ jobs:
           sbom: true
 
       - name: Build and push price-oracle-validator
-        if: steps.changes.outputs.price-oracle-validator == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -581,23 +535,14 @@ jobs:
           sbom: true
 
       - name: Summary
-        if: steps.needs-build.outputs.result == 'true'
         run: |
-          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
-
-          echo "## Standard Images Published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | Tags |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ steps.changes.outputs.relayer }}" == "true" ]]; then
-            echo "| synddb-relayer | \`${{ steps.tags.outputs.relayer_tags }}\` |" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [[ "${{ steps.changes.outputs.proof-service }}" == "true" ]]; then
-            echo "| proof-service | \`${{ steps.tags.outputs.proof_service_tags }}\` |" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [[ "${{ steps.changes.outputs.price-oracle }}" == "true" ]]; then
-            echo "| price-oracle | \`${{ steps.tags.outputs.price_oracle_tags }}\` |" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [[ "${{ steps.changes.outputs.price-oracle-validator }}" == "true" ]]; then
-            echo "| price-oracle-validator | \`${{ steps.tags.outputs.price_oracle_validator_tags }}\` |" >> $GITHUB_STEP_SUMMARY
-          fi
+          {
+            echo "## Standard Images Published"
+            echo ""
+            echo "| Image | Tags |"
+            echo "|-------|------|"
+            echo "| synddb-relayer | \`${{ steps.tags.outputs.relayer_tags }}\` |"
+            echo "| proof-service | \`${{ steps.tags.outputs.proof_service_tags }}\` |"
+            echo "| price-oracle | \`${{ steps.tags.outputs.price_oracle_tags }}\` |"
+            echo "| price-oracle-validator | \`${{ steps.tags.outputs.price_oracle_validator_tags }}\` |"
+          } >> $GITHUB_STEP_SUMMARY
