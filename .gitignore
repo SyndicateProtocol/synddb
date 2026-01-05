@@ -48,19 +48,44 @@ tests/e2e-gcs/.credentials/
 .synddb/
 
 # Terraform
-# - terraform.tfvars: contains secrets/project-specific values, NEVER commit
-# - *.tfvars.example: safe templates with placeholders, DO commit
-# - *.tfvars.<env>: templates like base-sepolia, DO commit (no secrets)
-*.tfstate
-*.tfstate.*
+# Based on: https://github.com/github/gitignore/blob/main/Terraform.gitignore
+#
+# Safe to commit (templates without secrets):
+# - *.tfvars.example: templates with placeholders
+# - *.tfvars.template: environment-specific templates (e.g., base-sepolia.tfvars.template)
+
+# Local .terraform directories and lock files
 .terraform/
 .terraform.lock.hcl
-terraform.tfvars
+.terraform.tfstate.lock.info
+
+# State files (contain sensitive infrastructure data)
+*.tfstate
+*.tfstate.*
+
+# Variable files (likely contain secrets)
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+
+# Crash log files
 crash.log
 crash.*.log
+
+# Override files (used for local development)
 override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+# Plan output files (can contain secrets)
 *.tfplan
 tfplan
+
+# Backend configuration (may contain credentials)
+*.tfbackend
+backend.hcl
+
+# CLI configuration files
+.terraformrc
+terraform.rc
