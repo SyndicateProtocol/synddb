@@ -2,7 +2,7 @@
 // since modules are private. Allow this lint for binary crates.
 #![allow(clippy::redundant_pub_crate)]
 
-//! Gas relayer for SyndDB TEE key registration
+//! Gas relayer for `SyndDB` TEE key registration
 //!
 //! This service handles key registration for TEE keys that don't have gas
 //! to submit their own transactions. The relayer pays gas on behalf of TEEs.

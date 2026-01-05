@@ -162,7 +162,7 @@ impl RelayerClient {
 
     /// Create EIP-712 signature for key registration
     ///
-    /// Signs the AddKey struct for the TeeKeyManager contract.
+    /// Signs the `AddKey` struct for the `TeeKeyManager` contract.
     async fn create_registration_signature(
         &self,
         signer: &PrivateKeySigner,

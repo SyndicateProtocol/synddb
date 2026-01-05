@@ -78,7 +78,7 @@ impl Default for BootstrapStateMachine {
 
 impl BootstrapStateMachine {
     /// Create a new bootstrap state machine for a sequencer key
-    pub fn new(key_type: KeyType) -> Self {
+    pub const fn new(key_type: KeyType) -> Self {
         Self {
             state: BootstrapState::NotStarted,
             key_manager: None,
@@ -91,12 +91,12 @@ impl BootstrapStateMachine {
     }
 
     /// Create a new bootstrap state machine for a sequencer
-    pub fn for_sequencer() -> Self {
+    pub const fn for_sequencer() -> Self {
         Self::new(KeyType::Sequencer)
     }
 
     /// Create a new bootstrap state machine for a validator
-    pub fn for_validator() -> Self {
+    pub const fn for_validator() -> Self {
         Self::new(KeyType::Validator)
     }
 
@@ -188,7 +188,7 @@ impl BootstrapStateMachine {
         // Step 4: Register key via relayer
         self.state = BootstrapState::RegisteringKey;
         let signer = key_manager.signer();
-        self.register_with_retry(&relayer_client, &proof, &signer, config.relayer_max_retries)
+        self.register_with_retry(&relayer_client, &proof, signer, config.relayer_max_retries)
             .await?;
 
         // Step 5: Verify registration

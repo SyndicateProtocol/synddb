@@ -43,3 +43,6 @@ url = { workspace = true }
 [[bin]]
 name = "synddb-relayer"
 path = "src/main.rs"
+
+[dev-dependencies]
+serde_json = { workspace = true }
