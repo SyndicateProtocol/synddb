@@ -290,6 +290,21 @@ If a proposed change could affect the TEE security boundary, flag the implicatio
 
 **Note:** Smart contracts (in `contracts/`) run on-chain, not inside TEEs. TEE boundary considerations do not apply to contract code.
 
+### TEE Environment Variable Overrides
+When adding or modifying environment variables for components that run in Confidential Space (sequencer, validator, price-oracle), you must update the `tee.launch_policy.allow_env_override` label in the corresponding Dockerfile. Confidential Space blocks all env vars by default—only those explicitly listed in this label can be set by the VM operator at runtime.
+
+**Affected Dockerfiles:**
+- `docker/reproducible/sequencer.Dockerfile:148` - Production sequencer
+- `docker/reproducible/validator.Dockerfile:153` - Production validator
+- `examples/price-oracle/Dockerfile:59` - Price oracle application
+- `examples/price-oracle/validator.Dockerfile:46` - Price oracle validator
+- `tests/confidential-space/Dockerfile:31` - Attestation sample
+
+When adding a new env var:
+1. Add the env var to the application code (config struct with `#[arg(env = "...")]`)
+2. Update the `allow_env_override` label in the Dockerfile to include the new variable
+3. Document the variable's purpose in a comment above the label (see `examples/price-oracle/Dockerfile:52-58` for the pattern)
+
 ## GCP Infrastructure
 
 ### Terraform Environments
