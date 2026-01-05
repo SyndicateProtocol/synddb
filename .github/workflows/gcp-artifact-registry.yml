@@ -376,6 +376,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.0.0
+
       - name: Generate image tags
         id: tags
         run: |
@@ -408,6 +411,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.cache-scope }}
           provenance: mode=max
           sbom: true
+
+      - name: Sign images
+        run: |
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.tags }}"
+          for TAG in "${TAGS[@]}"; do
+            cosign sign --yes "$TAG"
+            echo "::notice::Signed $TAG"
+          done
 
       - name: Summary
         run: |
