@@ -84,7 +84,7 @@ module "iam" {
   depends_on = [module.storage]
 }
 
-# Proof Service (CPU-based proof generation with AVX512 acceleration)
+# Proof Service (SP1 Network Prover - offloads to Succinct's infrastructure)
 module "proof_service" {
   count  = var.tee_bootstrap != null ? 1 : 0
   source = "../../modules/proof-service"
@@ -94,6 +94,7 @@ module "proof_service" {
   service_name          = "synddb-staging-proof"
   container_image       = var.proof_service_image
   service_account_email = module.iam.proof_service_account_email
+  sp1_network_private_key = var.sp1_network_private_key
   ingress               = "internal"
   allow_unauthenticated = false
   min_instances         = 0  # Scale to zero when idle

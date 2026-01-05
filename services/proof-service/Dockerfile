@@ -1,7 +1,7 @@
-# CPU-accelerated SP1 proof generation service with AVX512
+# SP1 proof generation service using Succinct Network Prover
 #
 # Build: docker build -t proof-service .
-# Run:   docker run -p 8080:8080 proof-service
+# Run:   docker run -p 8080:8080 -e NETWORK_PRIVATE_KEY=<key> proof-service
 
 # Build stage
 FROM rust:1.92-bookworm AS builder
@@ -30,13 +30,11 @@ WORKDIR /app
 # Copy the entire repo context (needed for workspace dependencies)
 COPY . .
 
-# Build the proof service with AVX512 acceleration
-# See: https://docs.succinct.xyz/docs/sp1/generating-proofs/hardware-acceleration
+# Build the proof service
 WORKDIR /app/services/proof-service
-ENV RUSTFLAGS="-C target-cpu=x86-64-v4 -C target-feature=+avx512f"
 RUN cargo build --release
 
-# Runtime stage - lightweight Debian image (no CUDA needed for CPU mode)
+# Runtime stage - lightweight Debian image (network prover offloads to Succinct)
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
@@ -49,8 +47,9 @@ WORKDIR /app
 COPY --from=builder /app/services/proof-service/target/release/proof-service /app/proof-service
 
 # SP1 prover configuration
-# Using "local" for CPU-based proving with AVX512 acceleration
-ENV SP1_PROVER=local
+# Using "network" to offload proving to Succinct's hosted infrastructure
+# Requires SP1_PRIVATE_KEY environment variable at runtime
+ENV SP1_PROVER=network
 ENV BIND_ADDRESS=0.0.0.0:8080
 ENV RUST_LOG=info
 

@@ -7,7 +7,7 @@ terraform {
   }
 }
 
-# Cloud Run v2 service for CPU-based proof generation with AVX512
+# Cloud Run v2 service for SP1 Network Prover (offloads proving to Succinct)
 resource "google_cloud_run_v2_service" "proof_service" {
   name     = var.service_name
   location = var.region
@@ -51,7 +51,12 @@ resource "google_cloud_run_v2_service" "proof_service" {
 
       env {
         name  = "SP1_PROVER"
-        value = "local"
+        value = "network"
+      }
+
+      env {
+        name  = "NETWORK_PRIVATE_KEY"
+        value = var.sp1_network_private_key
       }
 
       env {

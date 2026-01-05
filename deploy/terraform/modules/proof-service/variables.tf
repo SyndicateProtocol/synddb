@@ -25,17 +25,24 @@ variable "service_account_email" {
   type        = string
 }
 
-# Resource Limits
-variable "cpu_limit" {
-  description = "CPU limit (AVX512 proving benefits from more cores)"
+# SP1 Network Prover
+variable "sp1_network_private_key" {
+  description = "SP1 Network private key for proof generation (Secp256k1 key with PROVE tokens)"
   type        = string
-  default     = "8"
+  sensitive   = true
+}
+
+# Resource Limits (small instance - heavy work offloaded to SP1 Network)
+variable "cpu_limit" {
+  description = "CPU limit"
+  type        = string
+  default     = "1"
 }
 
 variable "memory_limit" {
   description = "Memory limit"
   type        = string
-  default     = "16Gi"
+  default     = "512Mi"
 }
 
 # Scaling
