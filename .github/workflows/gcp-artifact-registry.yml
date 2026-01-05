@@ -358,8 +358,9 @@ jobs:
           MESSAGE_HASH="${{ steps.image_sig.outputs.message_hash }}"
           EXPECTED_SIGNER="${{ vars.IMAGE_SIGNER_ADDRESS }}"
 
-          # cast wallet verify returns exit code 0 on success
-          if ! cast wallet verify --address "$EXPECTED_SIGNER" "$SIGNATURE" "$MESSAGE_HASH"; then
+          # cast wallet verify: --address <ADDR> <MESSAGE> <SIGNATURE>
+          # Use --no-hash since MESSAGE_HASH is already a keccak256 hash
+          if ! cast wallet verify --no-hash --address "$EXPECTED_SIGNER" "$MESSAGE_HASH" "$SIGNATURE"; then
             echo "::error::Signature verification failed! Signature does not match expected signer $EXPECTED_SIGNER"
             exit 1
           fi
@@ -523,8 +524,9 @@ jobs:
           MESSAGE_HASH="${{ steps.image_sig.outputs.message_hash }}"
           EXPECTED_SIGNER="${{ vars.IMAGE_SIGNER_ADDRESS }}"
 
-          # cast wallet verify returns exit code 0 on success
-          if ! cast wallet verify --address "$EXPECTED_SIGNER" "$SIGNATURE" "$MESSAGE_HASH"; then
+          # cast wallet verify: --address <ADDR> <MESSAGE> <SIGNATURE>
+          # Use --no-hash since MESSAGE_HASH is already a keccak256 hash
+          if ! cast wallet verify --no-hash --address "$EXPECTED_SIGNER" "$MESSAGE_HASH" "$SIGNATURE"; then
             echo "::error::Signature verification failed! Signature does not match expected signer $EXPECTED_SIGNER"
             exit 1
           fi
