@@ -7,7 +7,7 @@ Self-contained Terraform package for GCP Marketplace deployment.
 This package deploys SyndDB with:
 - **Sequencer**: Confidential Space VM for message ordering and signing
 - **Validator**: Confidential Space VM for state validation and sync
-- **Proof Service** (optional): Cloud Run with GPU for SP1 attestation proofs
+- **Proof Service** (optional): Cloud Run for SP1 attestation proofs
 - **Storage**: GCS bucket for batch storage
 - **Networking**: Private VPC with NAT for outbound access
 
@@ -15,8 +15,7 @@ This package deploys SyndDB with:
 
 1. GCP project with billing enabled
 2. Required APIs enabled (automated by this package)
-3. GPU quota in Cloud Run (if deploying proof service)
-4. Container images in Artifact Registry
+3. Container images in Artifact Registry
 
 ## Deployment
 
@@ -56,7 +55,7 @@ terraform apply
 | `validator_image` | Yes | Validator container image URI |
 | `gcs_bucket_name` | Yes | GCS bucket name for batch storage |
 | `enable_key_bootstrap` | No | Enable TEE key bootstrapping (default: false) |
-| `deploy_proof_service` | No | Deploy GPU proof service (default: false) |
+| `deploy_proof_service` | No | Deploy proof service (default: false) |
 
 ### TEE Bootstrap Configuration
 
@@ -98,7 +97,7 @@ When `enable_key_bootstrap = true`:
 │  └───────────────────────────────────────┘          │
 │                                                      │
 │  ┌───────────────┐                                  │
-│  │ Proof Service │ (Cloud Run GPU, optional)        │
+│  │ Proof Service │ (Cloud Run, optional)            │
 │  │   :8080       │                                  │
 │  └───────────────┘                                  │
 └─────────────────────────────────────────────────────┘
