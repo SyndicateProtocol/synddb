@@ -35,24 +35,17 @@
 # PREREQUISITES
 # =============================================================================
 #
-# Deploy contracts to Base Sepolia. Using just (recommended):
+# Deploy contracts to Base Sepolia:
 #
+#   # 1. Set up foundry keystore (one-time):
+#   cast wallet import deployer --interactive
+#
+#   # 2. Set ETHERSCAN_API_KEY in .env (see .env.defaults for template):
+#   cp .env.defaults .env
+#   # Edit .env and set ETHERSCAN_API_KEY=<your-basescan-api-key>
+#
+#   # 3. Deploy contracts:
 #   just contracts::deploy-base-sepolia
-#
-# Or using forge directly:
-#
-#   cd contracts
-#   forge script script/DeployBridge.s.sol \
-#       --rpc-url https://sepolia.base.org \
-#       --broadcast --verify
-#
-# Then deploy PriceOracle:
-#
-#   export ADMIN_ADDRESS=<your-deployer-address>
-#   export BRIDGE_CONTRACT_ADDRESS=<bridge-address-from-above>
-#   forge script script/DeployPriceOracle.s.sol \
-#       --rpc-url https://sepolia.base.org \
-#       --broadcast --verify
 #
 # Note down the deployed addresses for use in this config.
 # Basescan: https://sepolia.basescan.org
