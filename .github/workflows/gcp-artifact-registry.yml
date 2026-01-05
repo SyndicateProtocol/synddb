@@ -27,8 +27,9 @@ on:
   # Allow manual triggering for verification before releases
   workflow_dispatch:
 
-# Queue builds instead of canceling to prevent race conditions where an older
-# build finishing after a newer one would overwrite the latest image.
+# Queue builds instead of running concurrently to prevent race conditions where
+# an older build finishing after a newer one overwrites the latest image.
+# Cancellation is also avoided to ensure no builds are skipped.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
 
