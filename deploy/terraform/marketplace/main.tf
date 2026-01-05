@@ -400,17 +400,11 @@ resource "google_cloud_run_v2_service" "proof_service" {
 
       resources {
         limits = {
-          cpu              = "8"
-          memory           = "32Gi"
-          "nvidia.com/gpu" = "1"
+          cpu    = "2"
+          memory = "2Gi"
         }
-        cpu_idle          = false
+        cpu_idle          = true
         startup_cpu_boost = true
-      }
-
-      env {
-        name  = "SP1_PROVER"
-        value = "cuda"
       }
 
       env {
@@ -430,7 +424,6 @@ resource "google_cloud_run_v2_service" "proof_service" {
     }
 
     annotations = {
-      "run.googleapis.com/gpu-type"          = "nvidia-l4"
       "run.googleapis.com/startup-cpu-boost" = "true"
     }
 
