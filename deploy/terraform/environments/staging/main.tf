@@ -77,9 +77,9 @@ module "iam" {
   project_id                   = var.project_id
   name_prefix                  = "synddb-staging"
   gcs_bucket_name              = module.storage.bucket_name
-  artifact_registry_location   = var.artifact_registry_location
-  artifact_registry_repository = var.artifact_registry_repository
-  # app_artifact_registry_project - leave empty, all images in synddb-infra for staging
+  artifact_registry_location    = var.artifact_registry_location
+  artifact_registry_repository  = var.artifact_registry_repository
+  app_artifact_registry_project = var.app_artifact_registry_project
 
   depends_on = [module.storage]
 }

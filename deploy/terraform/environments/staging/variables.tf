@@ -92,6 +92,12 @@ variable "artifact_registry_repository" {
   type        = string
 }
 
+variable "app_artifact_registry_project" {
+  description = "GCP project for app images (validator, price-oracle). Only needed if hosting custom images outside synddb-infra."
+  type        = string
+  default     = "synddb-infra"
+}
+
 # TEE Bootstrap (null = disabled)
 variable "tee_bootstrap" {
   description = "TEE key bootstrap configuration. Set to null to disable."

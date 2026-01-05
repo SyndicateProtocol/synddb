@@ -67,11 +67,22 @@ gcs_bucket_name = "my-gcp-project-synddb-staging"  # TODO: Globally unique bucke
 # -----------------------------------------------------------------------------
 # Artifact Registry
 # -----------------------------------------------------------------------------
-# Location of container images. Default uses synddb-infra public registry.
-# Only change if hosting your own images.
+# Controls where Terraform creates IAM bindings for pulling container images.
+#
+# Core images (sequencer, proof-service) always come from synddb-infra.
+# App images (validator, price-oracle) default to synddb-infra but can be
+# overridden if you're hosting custom images in your own registry.
+#
+# To use custom app images:
+#   1. Set app_artifact_registry_project to your GCP project
+#   2. Update validator_image/price_oracle_image URLs to point to your registry
+#   3. Ensure your images are in <location>-docker.pkg.dev/<project>/<repository>/
 
 artifact_registry_location   = "us-central1"
 artifact_registry_repository = "synddb"
+
+# Uncomment to use custom app images from your own registry:
+# app_artifact_registry_project = "my-gcp-project"
 
 # -----------------------------------------------------------------------------
 # Instance Configuration
