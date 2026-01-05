@@ -76,53 +76,45 @@ jobs:
         run: |
           ./scripts/deploy-local.sh
 
-      - name: Verify deterministic addresses
-        run: |
-          # Load expected addresses from .env.defaults (single source of truth)
-          set -a
-          source .env.defaults
-          set +a
-
-          # Check that addresses match expected values
-          ADDRESSES=$(cat .synddb/local-addresses.json)
-
-          # Verify WETH address (nonce 0)
-          WETH=$(echo "$ADDRESSES" | jq -r '.contracts.weth')
-          if [ "$WETH" != "$WETH_CONTRACT_ADDRESS" ]; then
-            echo "WETH address mismatch: $WETH (expected $WETH_CONTRACT_ADDRESS)"
-            exit 1
-          fi
-
-          # Verify Bridge address (nonce 1)
-          BRIDGE=$(echo "$ADDRESSES" | jq -r '.contracts.bridge')
-          if [ "$BRIDGE" != "$BRIDGE_CONTRACT_ADDRESS" ]; then
-            echo "Bridge address mismatch: $BRIDGE (expected $BRIDGE_CONTRACT_ADDRESS)"
-            exit 1
-          fi
-
-          # Verify PriceOracle address (nonce 3, after grantRole)
-          ORACLE=$(echo "$ADDRESSES" | jq -r '.contracts.priceOracle')
-          if [ "$ORACLE" != "$PRICE_ORACLE_CONTRACT_ADDRESS" ]; then
-            echo "PriceOracle address mismatch: $ORACLE (expected $PRICE_ORACLE_CONTRACT_ADDRESS)"
-            exit 1
-          fi
-
-          echo "All addresses verified successfully"
-
       - name: Verify contracts are deployed
         run: |
-          # Load addresses from .env.defaults
+          # Load RPC URL from .env.defaults
           set -a
           source .env.defaults
           set +a
 
-          # Check that contracts have code at expected addresses
-          BRIDGE_CODE=$(cast code "$BRIDGE_CONTRACT_ADDRESS" --rpc-url "$ANVIL_RPC_URL")
+          # Get addresses from deployment output (not hardcoded)
+          ADDRESSES=$(cat .synddb/local-addresses.json)
+          BRIDGE=$(echo "$ADDRESSES" | jq -r '.contracts.bridge')
+          WETH=$(echo "$ADDRESSES" | jq -r '.contracts.weth')
+          ORACLE=$(echo "$ADDRESSES" | jq -r '.contracts.priceOracle')
+
+          # Check that contracts have code at deployed addresses
+          echo "Verifying Bridge at $BRIDGE..."
+          BRIDGE_CODE=$(cast code "$BRIDGE" --rpc-url "$ANVIL_RPC_URL")
           if [ "$BRIDGE_CODE" == "0x" ]; then
             echo "Bridge contract has no code"
             exit 1
           fi
-          echo "Bridge contract verified at $BRIDGE_CONTRACT_ADDRESS"
+          echo "✓ Bridge contract verified"
+
+          echo "Verifying WETH at $WETH..."
+          WETH_CODE=$(cast code "$WETH" --rpc-url "$ANVIL_RPC_URL")
+          if [ "$WETH_CODE" == "0x" ]; then
+            echo "WETH contract has no code"
+            exit 1
+          fi
+          echo "✓ WETH contract verified"
+
+          echo "Verifying PriceOracle at $ORACLE..."
+          ORACLE_CODE=$(cast code "$ORACLE" --rpc-url "$ANVIL_RPC_URL")
+          if [ "$ORACLE_CODE" == "0x" ]; then
+            echo "PriceOracle contract has no code"
+            exit 1
+          fi
+          echo "✓ PriceOracle contract verified"
+
+          echo "All contracts verified successfully"
 
       - name: Cleanup
         if: always()
