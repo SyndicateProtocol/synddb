@@ -290,23 +290,23 @@ struct AttestationFields {
 
 /// Extract attestation fields from ABI-encoded public values
 ///
-/// The PublicValuesStruct is ABI-encoded by the SP1 program, meaning each field
+/// The `PublicValuesStruct` is ABI-encoded by the SP1 program, meaning each field
 /// occupies a 32-byte slot regardless of its actual size:
 ///
-/// | Slot | Bytes     | Field                  | Notes                           |
-/// |------|-----------|------------------------|---------------------------------|
-/// | 0    | 0-31      | jwk_key_hash           | bytes32                         |
-/// | 1    | 32-63     | validity_window_start  | uint64, right-aligned           |
-/// | 2    | 64-95     | validity_window_end    | uint64, right-aligned           |
-/// | 3    | 96-127    | image_digest_hash      | bytes32                         |
-/// | 4    | 128-159   | tee_signing_key        | address, right-aligned (140-159)|
-/// | 5    | 160-191   | secboot                | bool, right-aligned             |
-/// | 6    | 192-223   | dbgstat_disabled       | bool, right-aligned             |
-/// | 7    | 224-255   | audience_hash          | bytes32                         |
-/// | 8    | 256-287   | cosign_signature_r     | bytes32                         |
-/// | 9    | 288-319   | cosign_signature_s     | bytes32                         |
-/// | 10   | 320-351   | cosign_pubkey_x        | bytes32                         |
-/// | 11   | 352-383   | cosign_pubkey_y        | bytes32                         |
+/// | Slot | Bytes     | Field                    | Notes                           |
+/// |------|-----------|--------------------------|-------------------------------- |
+/// | 0    | 0-31      | `jwk_key_hash`           | bytes32                         |
+/// | 1    | 32-63     | `validity_window_start`  | uint64, right-aligned           |
+/// | 2    | 64-95     | `validity_window_end`    | uint64, right-aligned           |
+/// | 3    | 96-127    | `image_digest_hash`      | bytes32                         |
+/// | 4    | 128-159   | `tee_signing_key`        | address, right-aligned (140-159)|
+/// | 5    | 160-191   | `secboot`                | bool, right-aligned             |
+/// | 6    | 192-223   | `dbgstat_disabled`       | bool, right-aligned             |
+/// | 7    | 224-255   | `audience_hash`          | bytes32                         |
+/// | 8    | 256-287   | `cosign_signature_r`     | bytes32                         |
+/// | 9    | 288-319   | `cosign_signature_s`     | bytes32                         |
+/// | 10   | 320-351   | `cosign_pubkey_x`        | bytes32                         |
+/// | 11   | 352-383   | `cosign_pubkey_y`        | bytes32                         |
 ///
 /// Total: 384 bytes (12 slots × 32 bytes)
 fn extract_attestation_fields(public_values: &[u8]) -> Option<AttestationFields> {
