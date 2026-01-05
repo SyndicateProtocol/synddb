@@ -27,6 +27,16 @@ region = "us-central1"
 zone   = "us-central1-a"
 
 # -----------------------------------------------------------------------------
+# SP1 Network Prover (for TEE attestation proofs)
+# -----------------------------------------------------------------------------
+# Get a private key: cast wallet new
+# Deposit PROVE tokens: https://explorer.succinct.xyz
+# Docs: https://docs.succinct.xyz/docs/sp1/prover-network/quickstart
+
+# TODO: Your Secp256k1 private key with PROVE tokens
+sp1_network_private_key = ""
+
+# -----------------------------------------------------------------------------
 # Container Images
 # -----------------------------------------------------------------------------
 
