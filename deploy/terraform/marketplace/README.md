@@ -59,13 +59,14 @@ terraform apply
 
 ### TEE Bootstrap Configuration
 
-When `enable_key_bootstrap = true`:
+When `tee_bootstrap` is configured:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `tee_key_manager_address` | Yes | TeeKeyManager contract address |
-| `bootstrap_rpc_url` | Yes | Ethereum RPC endpoint |
-| `bootstrap_chain_id` | Yes | Chain ID for transactions |
+| `bridge_address` | Yes | Bridge contract address for key registration |
+| `relayer_url` | Yes | Relayer URL for key registration |
+| `rpc_url` | Yes | Ethereum RPC endpoint |
+| `chain_id` | Yes | Chain ID for transactions |
 | `attestation_audience` | Yes | Expected audience for attestation |
 | `proof_service_image` | Yes | Proof service container image |
 

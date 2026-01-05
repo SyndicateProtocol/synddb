@@ -18,7 +18,7 @@
 #    - project_id: Your GCP project
 #    - sp1_network_private_key: Key with PROVE tokens
 #    - gcs_bucket_name: Globally unique bucket name
-#    - tee_bootstrap.key_manager_address: Your TeeKeyManager contract
+#    - tee_bootstrap.bridge_address: Your Bridge contract
 #    - tee_bootstrap.attestation_audience: Your domain
 #    - bridge_contract_address: Your Bridge contract
 #    - price_oracle_contract_address: Your PriceOracle contract
@@ -138,15 +138,16 @@ validator_machine_type = "n2d-standard-2"
 # -----------------------------------------------------------------------------
 # TEE Bootstrap Configuration
 # -----------------------------------------------------------------------------
-# Configuration for TEE key registration on-chain.
+# Configuration for TEE key registration on-chain via the relayer.
 # When a TEE instance starts, it generates an ephemeral signing key and
-# registers it with the TeeKeyManager contract via an attestation proof.
+# registers it with the Bridge contract via the relayer service.
 #
 # PREREQUISITE: Deploy contracts first. See contracts/README.md for instructions.
 # You'll deploy: AttestationVerifier, TeeKeyManager, Bridge, and your app contract.
 #
-# key_manager_address: Your deployed TeeKeyManager contract address
-# rpc_url: RPC endpoint for bootstrap transactions
+# bridge_address: Your deployed Bridge contract address (for key registration)
+# relayer_url: URL of the relayer service that submits key registrations
+# rpc_url: RPC endpoint for verifying key registration on-chain
 #          Public endpoint works, but use Alchemy/Infura for reliability
 # chain_id: Base Sepolia = 84532
 # attestation_audience: Unique identifier for your deployment
@@ -154,7 +155,8 @@ validator_machine_type = "n2d-standard-2"
 #                       Used to scope TEE attestations to your application
 
 tee_bootstrap = {
-  key_manager_address  = "0x0000000000000000000000000000000000000000"  # TODO: Your TeeKeyManager
+  bridge_address       = "0x0000000000000000000000000000000000000000"  # TODO: Your Bridge contract
+  relayer_url          = ""  # TODO: Relayer service URL (e.g., from Cloud Run)
   rpc_url              = "https://sepolia.base.org"  # TODO: Use Alchemy/Infura for reliability
                                                      # Base Mainnet: https://mainnet.base.org
   chain_id             = 84532                       # Base Mainnet: 8453
@@ -213,12 +215,12 @@ price_oracle_config = {
 # -----------------------------------------------------------------------------
 # Relayer Configuration (Optional)
 # -----------------------------------------------------------------------------
-# The relayer funds gas for TEE instances to submit transactions.
-# Only needed if TEE instances don't have their own ETH for gas.
-# Uncomment and configure if using gas sponsorship.
+# The relayer handles key registration for TEE instances.
+# The relayer pays gas on behalf of TEE keys during key registration.
+# Uncomment and configure if deploying the relayer.
 #
 # rpc_url: RPC for transaction submission (use private RPC for reliability)
-# treasury_address: GasTreasury contract holding sponsored ETH
+# bridge_address: Bridge contract address for key registration
 # required_audience: Must match tee_bootstrap.attestation_audience
 # allowed_image_digests: Restrict to specific container image hashes
 
@@ -227,8 +229,7 @@ price_oracle_config = {
 # relayer_config = {
 #   rpc_url               = "https://sepolia.base.org"  # Base Mainnet: https://mainnet.base.org
 #   chain_id              = 84532                       # Base Mainnet: 8453
-#   key_manager_address   = "0x0000000000000000000000000000000000000000"  # Same as tee_bootstrap
-#   treasury_address      = "0x0000000000000000000000000000000000000000"  # TODO: Deploy GasTreasury
+#   bridge_address        = "0x0000000000000000000000000000000000000000"  # Bridge contract
 #   required_audience     = "https://example.com/price-oracle"           # Same as tee_bootstrap
 #   allowed_image_digests = []
 # }

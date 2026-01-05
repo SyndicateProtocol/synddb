@@ -36,13 +36,8 @@ variable "chain_id" {
   type        = number
 }
 
-variable "key_manager_address" {
-  description = "TeeKeyManager contract address"
-  type        = string
-}
-
-variable "treasury_address" {
-  description = "GasTreasury contract address"
+variable "bridge_address" {
+  description = "Bridge contract address (for key registration)"
   type        = string
 }
 
@@ -53,21 +48,9 @@ variable "required_audience" {
 }
 
 variable "allowed_image_digests" {
-  description = "List of allowed TEE image digests that can be funded"
+  description = "List of allowed TEE image digests for key registration"
   type        = list(string)
   default     = []
-}
-
-variable "max_funding_per_digest_daily" {
-  description = "Maximum total funding per image digest per day (in wei)"
-  type        = string
-  default     = "1000000000000000000" # 1 ETH
-}
-
-variable "max_funding_per_address" {
-  description = "Maximum funding per address (in wei)"
-  type        = string
-  default     = "50000000000000000" # 0.05 ETH
 }
 
 # Secret Configuration

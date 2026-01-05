@@ -28,7 +28,8 @@ artifact_registry_repository = "synddb"
 # TEE Bootstrap (required for production)
 # Set to null to disable, or provide the object to enable
 tee_bootstrap = {
-  key_manager_address  = "0x..."  # Deployed TeeKeyManager contract
+  bridge_address       = "0x..."  # Deployed Bridge contract
+  relayer_url          = "https://relayer.your-domain.com"  # Relayer service URL
   rpc_url              = "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
   chain_id             = 1
   attestation_audience = "https://synddb.your-domain.com"

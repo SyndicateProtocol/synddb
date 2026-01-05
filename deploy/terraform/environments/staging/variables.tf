@@ -102,9 +102,10 @@ variable "app_artifact_registry_project" {
 variable "tee_bootstrap" {
   description = "TEE key bootstrap configuration. Set to null to disable."
   type = object({
-    key_manager_address  = string # TeeKeyManager contract address
-    rpc_url              = string # RPC URL for bootstrap transactions
-    chain_id             = number # Chain ID for bootstrap transactions
+    bridge_address       = string # Bridge contract address for key registration
+    relayer_url          = string # Relayer URL for key registration
+    rpc_url              = string # RPC URL for verifying key registration
+    chain_id             = number # Chain ID for EIP-712 signatures
     attestation_audience = string # Expected audience for attestation tokens
   })
   default = null
@@ -165,12 +166,11 @@ variable "price_oracle_contract_address" {
 variable "relayer_config" {
   description = "Relayer configuration. Set to null to disable."
   type = object({
-    rpc_url                = string       # RPC URL for transaction submission
-    chain_id               = number       # Chain ID for EIP-712 domain
-    key_manager_address    = string       # TeeKeyManager contract address
-    treasury_address       = string       # GasTreasury contract address
-    required_audience      = string       # Audience string (e.g., https://example.com/app)
-    allowed_image_digests  = list(string) # Allowed TEE image digests
+    rpc_url               = string       # RPC URL for transaction submission
+    chain_id              = number       # Chain ID for EIP-712 domain
+    bridge_address        = string       # Bridge contract address for key registration
+    required_audience     = string       # Audience string (e.g., https://example.com/app)
+    allowed_image_digests = list(string) # Allowed TEE image digests
   })
   default = null
 }

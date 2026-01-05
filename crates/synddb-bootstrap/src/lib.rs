@@ -5,9 +5,10 @@
 //!
 //! 1. Generate ephemeral signing key inside TEE
 //! 2. Fetch attestation token from Confidential Space
-//! 3. Request SP1 proof from GPU proof service
-//! 4. Submit proof to `TeeKeyManager` contract
-//! 5. Wait for on-chain confirmation
+//! 3. Request SP1 proof from proof service
+//! 4. Sign registration request (EIP-712)
+//! 5. Send to relayer for on-chain submission (relayer pays gas)
+//! 6. Verify key registration on-chain
 //!
 //! # Usage
 //!
@@ -15,7 +16,7 @@
 //! use synddb_bootstrap::{BootstrapConfig, BootstrapStateMachine};
 //!
 //! let config = BootstrapConfig::parse();
-//! let mut bootstrap = BootstrapStateMachine::new();
+//! let mut bootstrap = BootstrapStateMachine::for_sequencer();
 //!
 //! // This blocks until key is registered on-chain
 //! let key_manager = bootstrap.run(&config).await?;
@@ -26,15 +27,15 @@
 mod config;
 mod drain;
 mod error;
-mod funding;
 mod proof_client;
+mod relayer_client;
 mod state_machine;
 mod submitter;
 
 pub use config::{BootstrapConfig, ProverMode};
 pub use drain::drain_to_treasury;
 pub use error::BootstrapError;
-pub use funding::{FundingClient, FundingRequest, FundingResponse};
 pub use proof_client::{ProofClient, ProofResponse};
+pub use relayer_client::{KeyType, RegisterKeyResponse, RelayerClient};
 pub use state_machine::{BootstrapState, BootstrapStateMachine};
 pub use submitter::ContractSubmitter;

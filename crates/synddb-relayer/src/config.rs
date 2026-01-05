@@ -12,85 +12,12 @@ use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 /// Per-application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ApplicationConfig {
-    /// Audience hash that identifies this application
-    /// (extracted from TEE attestation public values)
-    pub audience_hash: B256,
-
-    /// `GasTreasury` contract address for this application
-    pub treasury_address: Address,
+    /// Audience string that identifies this application
+    pub audience: String,
 
     /// Allowed image digests for this application
-    /// Only TEEs running these code versions will be funded
+    /// Only TEEs running these code versions will be registered
     pub allowed_image_digests: Vec<B256>,
-
-    /// Maximum total funding per image digest per day (in wei)
-    /// Stored as string in TOML since TOML doesn't support u128
-    #[serde(
-        default = "default_max_funding_per_digest_daily",
-        deserialize_with = "deserialize_u128_from_str_or_num"
-    )]
-    pub max_funding_per_digest_daily: u128,
-
-    /// Maximum funding per address (in wei)
-    /// Stored as string in TOML since TOML doesn't support u128
-    #[serde(
-        default = "default_max_funding_per_address",
-        deserialize_with = "deserialize_u128_from_str_or_num"
-    )]
-    pub max_funding_per_address: u128,
-}
-
-/// Deserialize u128 from either a string or a number
-fn deserialize_u128_from_str_or_num<'de, D>(deserializer: D) -> Result<u128, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::{self, Visitor};
-
-    struct U128Visitor;
-
-    impl<'de> Visitor<'de> for U128Visitor {
-        type Value = u128;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("a string or integer representing a u128")
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            value.parse().map_err(de::Error::custom)
-        }
-
-        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(value as u128)
-        }
-
-        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            if value >= 0 {
-                Ok(value as u128)
-            } else {
-                Err(de::Error::custom("negative values not allowed"))
-            }
-        }
-    }
-
-    deserializer.deserialize_any(U128Visitor)
-}
-
-const fn default_max_funding_per_digest_daily() -> u128 {
-    1_000_000_000_000_000_000 // 1 ETH
-}
-
-const fn default_max_funding_per_address() -> u128 {
-    50_000_000_000_000_000 // 0.05 ETH
 }
 
 /// TOML configuration file structure
@@ -102,8 +29,8 @@ pub(crate) struct ConfigFile {
     /// Chain ID for EIP-712 domain
     pub chain_id: u64,
 
-    /// `TeeKeyManager` contract address (shared across all applications)
-    pub key_manager_address: Address,
+    /// Bridge contract address (for key registration)
+    pub bridge_address: Address,
 
     /// Relayer's private key (hex-encoded, for paying gas)
     pub private_key: String,
@@ -136,13 +63,9 @@ pub(crate) struct CliConfig {
     #[arg(long, env = "CHAIN_ID")]
     pub chain_id: Option<u64>,
 
-    /// `TeeKeyManager` contract address
-    #[arg(long, env = "TEE_KEY_MANAGER_CONTRACT_ADDRESS")]
-    pub key_manager_address: Option<Address>,
-
-    /// `GasTreasury` contract address (single-app mode)
-    #[arg(long, env = "GAS_TREASURY_CONTRACT_ADDRESS")]
-    pub treasury_address: Option<Address>,
+    /// Bridge contract address
+    #[arg(long, env = "BRIDGE_CONTRACT_ADDRESS")]
+    pub bridge_address: Option<Address>,
 
     /// Relayer's private key (hex-encoded, for paying gas)
     #[arg(long, env = "RELAYER_PRIVATE_KEY")]
@@ -152,29 +75,13 @@ pub(crate) struct CliConfig {
     #[arg(long, env = "RELAYER_LISTEN_ADDR", default_value = "0.0.0.0:8082")]
     pub listen_addr: SocketAddr,
 
-    /// Required audience string (single-app mode) - hash computed automatically
+    /// Required audience string (single-app mode)
     #[arg(long, env = "REQUIRED_AUDIENCE")]
     pub required_audience: Option<String>,
 
     /// Allowed image digests (comma-separated hex hashes, single-app mode)
     #[arg(long, env = "ALLOWED_IMAGE_DIGESTS")]
     pub allowed_image_digests: Option<String>,
-
-    /// Maximum total funding per image digest per day (in wei)
-    #[arg(
-        long,
-        env = "MAX_FUNDING_PER_DIGEST_DAILY",
-        default_value = "1000000000000000000"
-    )]
-    pub max_funding_per_digest_daily: u128,
-
-    /// Maximum funding per address (in wei)
-    #[arg(
-        long,
-        env = "MAX_FUNDING_PER_ADDRESS",
-        default_value = "50000000000000000"
-    )]
-    pub max_funding_per_address: u128,
 }
 
 /// Runtime configuration for the relayer
@@ -186,8 +93,8 @@ pub(crate) struct RelayerConfig {
     /// Chain ID for EIP-712 domain
     pub chain_id: u64,
 
-    /// `TeeKeyManager` contract address
-    pub key_manager_address: Address,
+    /// Bridge contract address
+    pub bridge_address: Address,
 
     /// Relayer's private key (hex-encoded, for paying gas)
     pub private_key: String,
@@ -195,7 +102,7 @@ pub(crate) struct RelayerConfig {
     /// Listen address for HTTP server
     pub listen_addr: SocketAddr,
 
-    /// Application configs indexed by `audience_hash`
+    /// Application configs indexed by audience hash
     pub applications: HashMap<B256, ApplicationConfig>,
 }
 
@@ -231,16 +138,17 @@ impl RelayerConfig {
             if app.allowed_image_digests.is_empty() {
                 anyhow::bail!(
                     "Application {} must have at least one allowed_image_digest",
-                    app.audience_hash
+                    app.audience
                 );
             }
-            applications.insert(app.audience_hash, app);
+            let audience_hash = compute_audience_hash(&app.audience);
+            applications.insert(audience_hash, app);
         }
 
         Ok(Self {
             rpc_url: config.rpc_url,
             chain_id: config.chain_id,
-            key_manager_address: config.key_manager_address,
+            bridge_address: config.bridge_address,
             private_key: config.private_key,
             listen_addr: config.listen_addr,
             applications,
@@ -255,27 +163,18 @@ impl RelayerConfig {
         let chain_id = cli
             .chain_id
             .ok_or_else(|| anyhow::anyhow!("CHAIN_ID is required"))?;
-        let key_manager_address = cli
-            .key_manager_address
-            .ok_or_else(|| anyhow::anyhow!("TEE_KEY_MANAGER_CONTRACT_ADDRESS is required"))?;
-        let treasury_address = cli
-            .treasury_address
-            .ok_or_else(|| anyhow::anyhow!("GAS_TREASURY_CONTRACT_ADDRESS is required"))?;
+        let bridge_address = cli
+            .bridge_address
+            .ok_or_else(|| anyhow::anyhow!("BRIDGE_CONTRACT_ADDRESS is required"))?;
         let private_key = cli
             .private_key
             .ok_or_else(|| anyhow::anyhow!("RELAYER_PRIVATE_KEY is required"))?;
         let allowed_digests_str = cli
             .allowed_image_digests
             .ok_or_else(|| anyhow::anyhow!("ALLOWED_IMAGE_DIGESTS is required"))?;
-
-        // Compute audience hash from string
         let audience = cli
             .required_audience
             .ok_or_else(|| anyhow::anyhow!("REQUIRED_AUDIENCE is required"))?;
-        let audience_hash = {
-            use alloy::primitives::keccak256;
-            keccak256(audience.as_bytes())
-        };
 
         // Parse allowed digests
         let allowed_image_digests: Vec<B256> = allowed_digests_str
@@ -293,12 +192,10 @@ impl RelayerConfig {
             anyhow::bail!("RELAYER_PRIVATE_KEY must be a 32-byte hex string");
         }
 
+        let audience_hash = compute_audience_hash(&audience);
         let app_config = ApplicationConfig {
-            audience_hash,
-            treasury_address,
+            audience,
             allowed_image_digests,
-            max_funding_per_digest_daily: cli.max_funding_per_digest_daily,
-            max_funding_per_address: cli.max_funding_per_address,
         };
 
         let mut applications = HashMap::new();
@@ -307,7 +204,7 @@ impl RelayerConfig {
         Ok(Self {
             rpc_url,
             chain_id,
-            key_manager_address,
+            bridge_address,
             private_key,
             listen_addr: cli.listen_addr,
             applications,
@@ -325,6 +222,12 @@ impl RelayerConfig {
             .get(audience_hash)
             .is_some_and(|app| app.allowed_image_digests.contains(image_digest))
     }
+}
+
+/// Compute audience hash from string
+pub(crate) fn compute_audience_hash(audience: &str) -> B256 {
+    use alloy::primitives::keccak256;
+    keccak256(audience.as_bytes())
 }
 
 /// Parse a hex string into B256
@@ -356,44 +259,45 @@ mod tests {
 
     #[test]
     fn test_parse_b256_invalid() {
-        assert!(parse_b256("0x123").is_none()); // Too short
+        assert!(parse_b256("0x123").is_none());
         assert!(parse_b256("not_hex").is_none());
     }
 
     #[test]
+    fn test_compute_audience_hash() {
+        let hash1 = compute_audience_hash("https://my-app.example.com");
+        let hash2 = compute_audience_hash("https://my-app.example.com");
+        let hash3 = compute_audience_hash("https://other-app.example.com");
+
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
+    }
+
+    #[test]
     fn test_config_file_parse() {
-        // Note: u128 values must be quoted as strings in TOML
         let toml = r#"
             rpc_url = "http://localhost:8545"
             chain_id = 31337
-            key_manager_address = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+            bridge_address = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
             private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
             [[application]]
-            audience_hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            treasury_address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+            audience = "https://sequencer.example.com"
             allowed_image_digests = [
                 "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
             ]
 
             [[application]]
-            audience_hash = "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-            treasury_address = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+            audience = "https://validator.example.com"
             allowed_image_digests = [
                 "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
             ]
-            max_funding_per_digest_daily = "500000000000000000"
-            max_funding_per_address = "25000000000000000"
         "#;
 
         let config: ConfigFile = toml::from_str(toml).unwrap();
         assert_eq!(config.applications.len(), 2);
         assert_eq!(config.applications[0].allowed_image_digests.len(), 2);
         assert_eq!(config.applications[1].allowed_image_digests.len(), 1);
-        assert_eq!(
-            config.applications[1].max_funding_per_digest_daily,
-            500_000_000_000_000_000
-        );
     }
 }

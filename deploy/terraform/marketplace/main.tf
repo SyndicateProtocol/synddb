@@ -270,12 +270,13 @@ resource "google_compute_instance" "sequencer" {
       "tee-env-RUST_LOG"       = var.rust_log
     },
     var.tee_bootstrap != null ? {
-      "tee-env-ENABLE_KEY_BOOTSTRAP"             = "true"
-      "tee-env-TEE_KEY_MANAGER_CONTRACT_ADDRESS" = var.tee_bootstrap.key_manager_address
-      "tee-env-BOOTSTRAP_RPC_URL"                = var.tee_bootstrap.rpc_url
-      "tee-env-BOOTSTRAP_CHAIN_ID"               = tostring(var.tee_bootstrap.chain_id)
-      "tee-env-ATTESTATION_AUDIENCE"             = var.tee_bootstrap.attestation_audience
-      "tee-env-PROOF_SERVICE_URL"                = google_cloud_run_v2_service.proof_service[0].uri
+      "tee-env-ENABLE_KEY_BOOTSTRAP"     = "true"
+      "tee-env-BRIDGE_CONTRACT_ADDRESS"  = var.tee_bootstrap.bridge_address
+      "tee-env-RELAYER_URL"              = var.tee_bootstrap.relayer_url
+      "tee-env-BOOTSTRAP_RPC_URL"        = var.tee_bootstrap.rpc_url
+      "tee-env-BOOTSTRAP_CHAIN_ID"       = tostring(var.tee_bootstrap.chain_id)
+      "tee-env-ATTESTATION_AUDIENCE"     = var.tee_bootstrap.attestation_audience
+      "tee-env-PROOF_SERVICE_URL"        = google_cloud_run_v2_service.proof_service[0].uri
     } : {}
   )
 
@@ -348,12 +349,13 @@ resource "google_compute_instance" "validator" {
       "tee-env-RUST_LOG"      = var.rust_log
     },
     var.tee_bootstrap != null ? {
-      "tee-env-ENABLE_KEY_BOOTSTRAP"             = "true"
-      "tee-env-TEE_KEY_MANAGER_CONTRACT_ADDRESS" = var.tee_bootstrap.key_manager_address
-      "tee-env-BOOTSTRAP_RPC_URL"                = var.tee_bootstrap.rpc_url
-      "tee-env-BOOTSTRAP_CHAIN_ID"               = tostring(var.tee_bootstrap.chain_id)
-      "tee-env-ATTESTATION_AUDIENCE"             = var.tee_bootstrap.attestation_audience
-      "tee-env-PROOF_SERVICE_URL"                = google_cloud_run_v2_service.proof_service[0].uri
+      "tee-env-ENABLE_KEY_BOOTSTRAP"     = "true"
+      "tee-env-BRIDGE_CONTRACT_ADDRESS"  = var.tee_bootstrap.bridge_address
+      "tee-env-RELAYER_URL"              = var.tee_bootstrap.relayer_url
+      "tee-env-BOOTSTRAP_RPC_URL"        = var.tee_bootstrap.rpc_url
+      "tee-env-BOOTSTRAP_CHAIN_ID"       = tostring(var.tee_bootstrap.chain_id)
+      "tee-env-ATTESTATION_AUDIENCE"     = var.tee_bootstrap.attestation_audience
+      "tee-env-PROOF_SERVICE_URL"        = google_cloud_run_v2_service.proof_service[0].uri
     } : {}
   )
 
@@ -513,13 +515,8 @@ resource "google_cloud_run_v2_service" "relayer" {
       }
 
       env {
-        name  = "TEE_KEY_MANAGER_CONTRACT_ADDRESS"
-        value = var.relayer_config.key_manager_address
-      }
-
-      env {
-        name  = "GAS_TREASURY_CONTRACT_ADDRESS"
-        value = var.relayer_config.treasury_address
+        name  = "BRIDGE_CONTRACT_ADDRESS"
+        value = var.relayer_config.bridge_address
       }
 
       env {

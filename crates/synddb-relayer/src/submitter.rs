@@ -1,6 +1,6 @@
 //! Contract interaction for the relayer
 //!
-//! Handles submitting addKey and fundKeyWithSignature transactions.
+//! Handles submitting key registration transactions to the Bridge contract.
 
 use crate::config::RelayerConfig;
 use alloy::{
@@ -14,35 +14,36 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 use url::Url;
 
-// Contract interfaces
+// Bridge contract interface for key registration
 sol! {
     #[sol(rpc)]
-    interface ITeeKeyManager {
-        function addKey(bytes calldata publicValues, bytes calldata proofBytes) external;
-        function addKeyWithSignature(
+    interface IBridge {
+        function registerSequencerKeyWithSignature(
             bytes calldata publicValues,
             bytes calldata proofBytes,
             uint256 deadline,
             bytes calldata signature
-        ) external;
-        function isKeyValid(address publicKey) external view returns (bool);
+        ) external returns (address publicKey);
+
+        function registerValidatorKeyWithSignature(
+            bytes calldata publicValues,
+            bytes calldata proofBytes,
+            uint256 deadline,
+            bytes calldata signature
+        ) external returns (address publicKey);
     }
 
     #[sol(rpc)]
-    interface IGasTreasury {
-        function fundKeyWithSignature(
-            address teeKey,
-            uint256 deadline,
-            bytes calldata signature
-        ) external;
-        function fundingAmount() external view returns (uint256);
+    interface ITeeKeyManager {
+        function isSequencerKeyValid(address publicKey) external view returns (bool);
+        function isValidatorKeyValid(address publicKey) external view returns (bool);
     }
 }
 
 /// Submitter for relayer transactions
 pub(crate) struct RelayerSubmitter {
     rpc_url: String,
-    key_manager_address: Address,
+    bridge_address: Address,
     signer: PrivateKeySigner,
 }
 
@@ -50,7 +51,7 @@ impl std::fmt::Debug for RelayerSubmitter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RelayerSubmitter")
             .field("rpc_url", &self.rpc_url)
-            .field("key_manager_address", &self.key_manager_address)
+            .field("bridge_address", &self.bridge_address)
             .field("relayer_address", &self.signer.address())
             .finish()
     }
@@ -64,112 +65,111 @@ impl RelayerSubmitter {
 
         Ok(Self {
             rpc_url: config.rpc_url.clone(),
-            key_manager_address: config.key_manager_address,
+            bridge_address: config.bridge_address,
             signer,
         })
     }
 
-    /// Get the relayer's address
-    pub(crate) const fn relayer_address(&self) -> Address {
-        self.signer.address()
-    }
-
-    /// Submit addKeyWithSignature to `TeeKeyManager`
-    ///
-    /// Returns the transaction hash.
-    pub(crate) async fn add_key_with_signature(
+    /// Register a sequencer key via signature
+    pub(crate) async fn register_sequencer_key(
         &self,
-        public_values: Bytes,
-        proof_bytes: Bytes,
+        public_values: Vec<u8>,
+        proof_bytes: Vec<u8>,
         deadline: u64,
-        signature: Bytes,
+        signature: Vec<u8>,
     ) -> anyhow::Result<B256> {
         let wallet = EthereumWallet::from(self.signer.clone());
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().wallet(wallet).connect_http(url);
 
         info!(
-            contract = %self.key_manager_address,
+            contract = %self.bridge_address,
             public_values_len = public_values.len(),
             proof_bytes_len = proof_bytes.len(),
             deadline = deadline,
-            "Submitting addKeyWithSignature"
+            "Submitting registerSequencerKeyWithSignature"
         );
 
-        let contract = ITeeKeyManager::new(self.key_manager_address, &provider);
+        let contract = IBridge::new(self.bridge_address, &provider);
 
-        let tx = contract.addKeyWithSignature(
-            public_values,
-            proof_bytes,
+        let tx = contract.registerSequencerKeyWithSignature(
+            Bytes::from(public_values),
+            Bytes::from(proof_bytes),
             alloy::primitives::U256::from(deadline),
-            signature,
+            Bytes::from(signature),
         );
 
         let pending = tx.send().await?;
         let tx_hash = *pending.tx_hash();
 
-        info!(tx_hash = %tx_hash, "addKeyWithSignature submitted");
+        info!(tx_hash = %tx_hash, "registerSequencerKeyWithSignature submitted");
         Ok(tx_hash)
     }
 
-    /// Submit fundKeyWithSignature to a specific `GasTreasury`
-    ///
-    /// Returns the transaction hash.
-    pub(crate) async fn fund_key_with_signature(
+    /// Register a validator key via signature
+    pub(crate) async fn register_validator_key(
         &self,
-        treasury_address: Address,
-        tee_key: Address,
+        public_values: Vec<u8>,
+        proof_bytes: Vec<u8>,
         deadline: u64,
-        signature: Bytes,
+        signature: Vec<u8>,
     ) -> anyhow::Result<B256> {
         let wallet = EthereumWallet::from(self.signer.clone());
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().wallet(wallet).connect_http(url);
 
         info!(
-            contract = %treasury_address,
-            tee_key = %tee_key,
+            contract = %self.bridge_address,
+            public_values_len = public_values.len(),
+            proof_bytes_len = proof_bytes.len(),
             deadline = deadline,
-            "Submitting fundKeyWithSignature"
+            "Submitting registerValidatorKeyWithSignature"
         );
 
-        let contract = IGasTreasury::new(treasury_address, &provider);
+        let contract = IBridge::new(self.bridge_address, &provider);
 
-        let tx = contract.fundKeyWithSignature(
-            tee_key,
+        let tx = contract.registerValidatorKeyWithSignature(
+            Bytes::from(public_values),
+            Bytes::from(proof_bytes),
             alloy::primitives::U256::from(deadline),
-            signature,
+            Bytes::from(signature),
         );
 
         let pending = tx.send().await?;
         let tx_hash = *pending.tx_hash();
 
-        info!(tx_hash = %tx_hash, "fundKeyWithSignature submitted");
+        info!(tx_hash = %tx_hash, "registerValidatorKeyWithSignature submitted");
         Ok(tx_hash)
     }
 
-    /// Get the funding amount from a specific treasury
-    pub(crate) async fn get_funding_amount(
-        &self,
-        treasury_address: Address,
-    ) -> anyhow::Result<u128> {
+    /// Check if a sequencer key is valid
+    pub(crate) async fn is_sequencer_key_valid(&self, address: Address) -> anyhow::Result<bool> {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
-        let contract = IGasTreasury::new(treasury_address, &provider);
-        let amount = contract.fundingAmount().call().await?;
+        let contract = ITeeKeyManager::new(self.bridge_address, &provider);
 
-        Ok(amount.to::<u128>())
+        match contract.isSequencerKeyValid(address).call().await {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("InvalidPublicKey") {
+                    Ok(false)
+                } else {
+                    Err(e.into())
+                }
+            }
+        }
     }
 
-    /// Check if a key is already registered
-    pub(crate) async fn is_key_valid(&self, address: Address) -> anyhow::Result<bool> {
+    /// Check if a validator key is valid
+    pub(crate) async fn is_validator_key_valid(&self, address: Address) -> anyhow::Result<bool> {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
-        let contract = ITeeKeyManager::new(self.key_manager_address, &provider);
+        let contract = ITeeKeyManager::new(self.bridge_address, &provider);
 
-        match contract.isKeyValid(address).call().await {
+        match contract.isValidatorKeyValid(address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
                 let err_str = e.to_string();

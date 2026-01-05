@@ -125,7 +125,8 @@ module "sequencer" {
 
   # TEE bootstrap (null = disabled)
   tee_bootstrap = var.tee_bootstrap != null ? {
-    key_manager_address  = var.tee_bootstrap.key_manager_address
+    bridge_address       = var.tee_bootstrap.bridge_address
+    relayer_url          = var.tee_bootstrap.relayer_url
     rpc_url              = var.tee_bootstrap.rpc_url
     chain_id             = var.tee_bootstrap.chain_id
     proof_service_url    = module.proof_service[0].service_url
@@ -156,7 +157,8 @@ module "validator" {
 
   # TEE bootstrap (null = disabled)
   tee_bootstrap = var.tee_bootstrap != null ? {
-    key_manager_address  = var.tee_bootstrap.key_manager_address
+    bridge_address       = var.tee_bootstrap.bridge_address
+    relayer_url          = var.tee_bootstrap.relayer_url
     rpc_url              = var.tee_bootstrap.rpc_url
     chain_id             = var.tee_bootstrap.chain_id
     proof_service_url    = module.proof_service[0].service_url
@@ -198,7 +200,8 @@ module "price_oracle" {
 
   # TEE bootstrap (same as sequencer/validator)
   tee_bootstrap = var.tee_bootstrap != null ? {
-    key_manager_address  = var.tee_bootstrap.key_manager_address
+    bridge_address       = var.tee_bootstrap.bridge_address
+    relayer_url          = var.tee_bootstrap.relayer_url
     rpc_url              = var.tee_bootstrap.rpc_url
     chain_id             = var.tee_bootstrap.chain_id
     proof_service_url    = module.proof_service[0].service_url
@@ -222,10 +225,9 @@ module "relayer" {
   service_account_email = module.iam.relayer_service_account_email
 
   # Blockchain configuration
-  rpc_url             = var.relayer_config.rpc_url
-  chain_id            = var.relayer_config.chain_id
-  key_manager_address = var.relayer_config.key_manager_address
-  treasury_address    = var.relayer_config.treasury_address
+  rpc_url        = var.relayer_config.rpc_url
+  chain_id       = var.relayer_config.chain_id
+  bridge_address = var.relayer_config.bridge_address
 
   # Application configuration
   required_audience      = var.relayer_config.required_audience

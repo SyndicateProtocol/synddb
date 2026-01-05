@@ -98,13 +98,8 @@ resource "google_cloud_run_v2_service" "relayer" {
       }
 
       env {
-        name  = "TEE_KEY_MANAGER_CONTRACT_ADDRESS"
-        value = var.key_manager_address
-      }
-
-      env {
-        name  = "GAS_TREASURY_CONTRACT_ADDRESS"
-        value = var.treasury_address
+        name  = "BRIDGE_CONTRACT_ADDRESS"
+        value = var.bridge_address
       }
 
       env {
@@ -115,16 +110,6 @@ resource "google_cloud_run_v2_service" "relayer" {
       env {
         name  = "ALLOWED_IMAGE_DIGESTS"
         value = join(",", var.allowed_image_digests)
-      }
-
-      env {
-        name  = "MAX_FUNDING_PER_DIGEST_DAILY"
-        value = var.max_funding_per_digest_daily
-      }
-
-      env {
-        name  = "MAX_FUNDING_PER_ADDRESS"
-        value = var.max_funding_per_address
       }
 
       # Private key from Secret Manager
