@@ -236,6 +236,7 @@ sequencer_port=9000
 - Use `tracing` macros (`info!`, `warn!`, `debug!`, `error!`) for logging
 - Structured logging with fields: `info!(sequence = seq, "Message")`
 - Ethereum address naming: EOA (wallet) addresses use `_ADDRESS` suffix, contract addresses use `_CONTRACT_ADDRESS` suffix
+- Doc comments: Use backticks around code identifiers, function calls, and technical terms to avoid `clippy::doc_markdown` warnings (e.g., write `` `keccak256(digest)` `` not `keccak256(digest)`)
 - Do not add self-explanatory comments that do not clarify code. Below is an example of useless comments:
 
 ```rust
