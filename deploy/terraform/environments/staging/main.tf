@@ -79,11 +79,12 @@ module "iam" {
   gcs_bucket_name              = module.storage.bucket_name
   artifact_registry_location   = var.artifact_registry_location
   artifact_registry_repository = var.artifact_registry_repository
+  # app_artifact_registry_project - leave empty, all images in synddb-infra for staging
 
   depends_on = [module.storage]
 }
 
-# Proof Service (deployed when TEE bootstrap is enabled)
+# Proof Service (CPU-based proof generation with AVX512 acceleration)
 module "proof_service" {
   count  = var.tee_bootstrap != null ? 1 : 0
   source = "../../modules/proof-service"

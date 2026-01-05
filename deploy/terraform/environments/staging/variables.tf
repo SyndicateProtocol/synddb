@@ -31,6 +31,12 @@ variable "proof_service_image" {
   type        = string
 }
 
+variable "enable_proof_service" {
+  description = "Enable proof service for SP1 attestation proofs (CPU-based with AVX512)"
+  type        = bool
+  default     = false
+}
+
 variable "relayer_image" {
   description = "Relayer container image URI"
   type        = string
