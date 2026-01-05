@@ -5,9 +5,9 @@
 #
 # Requirements:
 #   - oras CLI installed (https://oras.land)
-#   - For private registries: Docker credential helper configured
-#     (e.g., `gcloud auth configure-docker us-central1-docker.pkg.dev`)
-#   - For public registries: no authentication needed
+#
+# The synddb registry (us-central1-docker.pkg.dev/synddb-infra/synddb) is public,
+# so no authentication is needed.
 
 locals {
   # Path to the signature lookup script
