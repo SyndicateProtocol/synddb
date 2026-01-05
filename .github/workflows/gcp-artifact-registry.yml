@@ -262,6 +262,7 @@ jobs:
           fi
 
       - name: Build and push ${{ matrix.image }}
+        id: build
         env:
           SOURCE_DATE_EPOCH: 0
         run: |
@@ -306,13 +307,21 @@ jobs:
             echo "::notice::Pushed $TAG"
           done
 
-      - name: Sign images
+          # Get the digest from the registry for the first tag (all tags point to same digest)
+          FIRST_TAG="${TAGS[0]}"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $FIRST_TAG | cut -d'@' -f2)
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          echo "::notice::Image digest: $DIGEST"
+
+      - name: Sign image by digest
         run: |
-          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.tags }}"
-          for TAG in "${TAGS[@]}"; do
-            cosign sign --yes "$TAG"
-            echo "::notice::Signed $TAG"
-          done
+          # Sign by digest (not tag) to ensure signature binds to exact image content.
+          # Tags are mutable and could be reassigned; digests are immutable content hashes.
+          IMAGE="${{ steps.build.outputs.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+          cosign sign --yes "$IMAGE@$DIGEST"
+          echo "::notice::Signed $IMAGE@$DIGEST"
 
       - name: Summary
         run: |
@@ -320,6 +329,8 @@ jobs:
             echo "## Reproducible ${{ matrix.image }}"
             echo ""
             echo "Tags: \`${{ steps.tags.outputs.tags }}\`"
+            echo ""
+            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
             echo ""
             echo "Verified hash: \`${{ steps.hash.outputs.verified }}\`"
           } >> $GITHUB_STEP_SUMMARY
@@ -399,6 +410,7 @@ jobs:
           fi
 
       - name: Build and push ${{ matrix.image }}
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -411,13 +423,15 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Sign images
+      - name: Sign image by digest
         run: |
-          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.tags }}"
-          for TAG in "${TAGS[@]}"; do
-            cosign sign --yes "$TAG"
-            echo "::notice::Signed $TAG"
-          done
+          # Sign by digest (not tag) to ensure signature binds to exact image content.
+          # Tags are mutable and could be reassigned; digests are immutable content hashes.
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+          cosign sign --yes "$IMAGE@$DIGEST"
+          echo "::notice::Signed $IMAGE@$DIGEST"
 
       - name: Summary
         run: |
@@ -425,4 +439,6 @@ jobs:
             echo "## ${{ matrix.image }}"
             echo ""
             echo "Tags: \`${{ steps.tags.outputs.tags }}\`"
+            echo ""
+            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
           } >> $GITHUB_STEP_SUMMARY
