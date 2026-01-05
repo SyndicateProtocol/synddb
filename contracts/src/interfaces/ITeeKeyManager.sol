@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
+import {IAttestationVerifier} from "src/interfaces/IAttestationVerifier.sol";
+
 /**
  * @title ITeeKeyManager
  * @notice Interface for managing TEE signing keys for sequencers and validators
@@ -155,6 +157,12 @@ interface ITeeKeyManager {
      * @notice Revokes all registered keys
      */
     function revokeAllKeys() external;
+
+    /**
+     * @notice Updates the attestation verifier contract
+     * @param attestationVerifier The new attestation verifier
+     */
+    function updateAttestationVerifier(IAttestationVerifier attestationVerifier) external;
 
     /*//////////////////////////////////////////////////////////////
                             VIEW FUNCTIONS

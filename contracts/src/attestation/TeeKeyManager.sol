@@ -20,7 +20,7 @@ contract TeeKeyManager is ITeeKeyManager {
     using MessageHashUtils for bytes32;
 
     /// @notice The Bridge contract that controls this key manager
-    address public immutable BRIDGE;
+    address public bridge;
 
     /// @notice EIP-712 domain separator
     bytes32 public immutable DOMAIN_SEPARATOR;
@@ -40,6 +40,10 @@ contract TeeKeyManager is ITeeKeyManager {
     mapping(address key => bool isPending) public pendingSequencerKeys;
     mapping(address key => bool isPending) public pendingValidatorKeys;
 
+    /// @notice The deployer who can set the bridge address once
+    address private immutable deployer;
+
+    event BridgeSet(address indexed bridge);
     event SequencerKeyAdded(address indexed key, uint256 expiresAt);
     event ValidatorKeyAdded(address indexed key, uint256 expiresAt);
     event SequencerKeyPending(address indexed key);
@@ -56,22 +60,22 @@ contract TeeKeyManager is ITeeKeyManager {
     error InvalidSignature();
     error SignatureExpired();
     error OnlyBridge();
+    error OnlyDeployer();
+    error BridgeAlreadySet();
     error KeyNotPending(address publicKey);
     error ZeroAddress();
 
     modifier onlyBridge() {
-        if (msg.sender != BRIDGE) revert OnlyBridge();
+        if (msg.sender != bridge) revert OnlyBridge();
         _;
     }
 
     /**
      * @notice Constructs the TEE key manager
-     * @param bridge Address of the Bridge contract that will control this manager
      * @param _attestationVerifier Address of the attestation verifier contract
      */
-    constructor(address bridge, IAttestationVerifier _attestationVerifier) {
-        if (bridge == address(0)) revert ZeroAddress();
-        BRIDGE = bridge;
+    constructor(IAttestationVerifier _attestationVerifier) {
+        deployer = msg.sender;
         attestationVerifier = _attestationVerifier;
         DOMAIN_SEPARATOR = keccak256(
             abi.encode(
@@ -82,6 +86,19 @@ contract TeeKeyManager is ITeeKeyManager {
                 address(this)
             )
         );
+    }
+
+    /**
+     * @notice Sets the bridge address (can only be called once by deployer)
+     * @dev This allows for deployment ordering: TeeKeyManager first, then Bridge
+     * @param _bridge Address of the Bridge contract
+     */
+    function setBridge(address _bridge) external {
+        if (msg.sender != deployer) revert OnlyDeployer();
+        if (bridge != address(0)) revert BridgeAlreadySet();
+        if (_bridge == address(0)) revert ZeroAddress();
+        bridge = _bridge;
+        emit BridgeSet(_bridge);
     }
 
     /*//////////////////////////////////////////////////////////////
