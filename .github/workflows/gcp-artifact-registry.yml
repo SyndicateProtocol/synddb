@@ -334,7 +334,15 @@ jobs:
         if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
         env:
           PRIVATE_KEY: ${{ secrets.IMAGE_SIGNER_PRIVATE_KEY }}
+          EXPECTED_SIGNER: ${{ vars.IMAGE_SIGNER_ADDRESS }}
         run: |
+          # Verify private key matches expected signer address
+          DERIVED_ADDRESS=$(cast wallet address --private-key "$PRIVATE_KEY")
+          if [[ "$DERIVED_ADDRESS" != "$EXPECTED_SIGNER" ]]; then
+            echo "::error::IMAGE_SIGNER_ADDRESS ($EXPECTED_SIGNER) doesn't match private key (derives to $DERIVED_ADDRESS)"
+            exit 1
+          fi
+
           # Sign the image digest with secp256k1 for on-chain TEE bootstrap verification.
           # The signature is over keccak256(digest_string) where digest_string is "sha256:abc123..."
           DIGEST="${{ steps.build.outputs.digest }}"
@@ -345,27 +353,15 @@ jobs:
           # Sign the hash directly (no EIP-191 prefix)
           SIGNATURE=$(cast wallet sign --private-key "$PRIVATE_KEY" --no-hash "$MESSAGE_HASH")
 
-          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
-          echo "message_hash=$MESSAGE_HASH" >> $GITHUB_OUTPUT
-          echo "::notice::Image signature: $SIGNATURE"
-          echo "::notice::Signer address: ${{ vars.IMAGE_SIGNER_ADDRESS }}"
-
-      - name: Verify image signature (secp256k1)
-        if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
-        run: |
-          # Verify signature matches expected signer address before publishing
-          SIGNATURE="${{ steps.image_sig.outputs.signature }}"
-          MESSAGE_HASH="${{ steps.image_sig.outputs.message_hash }}"
-          EXPECTED_SIGNER="${{ vars.IMAGE_SIGNER_ADDRESS }}"
-
-          # cast wallet verify: --address <ADDR> <MESSAGE> <SIGNATURE>
-          # Use --no-hash since MESSAGE_HASH is already a keccak256 hash
+          # Verify signature before publishing
           if ! cast wallet verify --no-hash --address "$EXPECTED_SIGNER" "$MESSAGE_HASH" "$SIGNATURE"; then
-            echo "::error::Signature verification failed! Signature does not match expected signer $EXPECTED_SIGNER"
+            echo "::error::Signature verification failed!"
             exit 1
           fi
 
-          echo "::notice::Signature verified: signer matches $EXPECTED_SIGNER"
+          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          echo "::notice::Image signature: $SIGNATURE"
+          echo "::notice::Signer address: $EXPECTED_SIGNER (verified)"
 
       - name: Summary
         run: |
@@ -500,7 +496,15 @@ jobs:
         if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
         env:
           PRIVATE_KEY: ${{ secrets.IMAGE_SIGNER_PRIVATE_KEY }}
+          EXPECTED_SIGNER: ${{ vars.IMAGE_SIGNER_ADDRESS }}
         run: |
+          # Verify private key matches expected signer address
+          DERIVED_ADDRESS=$(cast wallet address --private-key "$PRIVATE_KEY")
+          if [[ "$DERIVED_ADDRESS" != "$EXPECTED_SIGNER" ]]; then
+            echo "::error::IMAGE_SIGNER_ADDRESS ($EXPECTED_SIGNER) doesn't match private key (derives to $DERIVED_ADDRESS)"
+            exit 1
+          fi
+
           # Sign the image digest with secp256k1 for on-chain TEE bootstrap verification.
           # The signature is over keccak256(digest_string) where digest_string is "sha256:abc123..."
           DIGEST="${{ steps.build.outputs.digest }}"
@@ -511,27 +515,15 @@ jobs:
           # Sign the hash directly (no EIP-191 prefix)
           SIGNATURE=$(cast wallet sign --private-key "$PRIVATE_KEY" --no-hash "$MESSAGE_HASH")
 
-          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
-          echo "message_hash=$MESSAGE_HASH" >> $GITHUB_OUTPUT
-          echo "::notice::Image signature: $SIGNATURE"
-          echo "::notice::Signer address: ${{ vars.IMAGE_SIGNER_ADDRESS }}"
-
-      - name: Verify image signature (secp256k1)
-        if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
-        run: |
-          # Verify signature matches expected signer address before publishing
-          SIGNATURE="${{ steps.image_sig.outputs.signature }}"
-          MESSAGE_HASH="${{ steps.image_sig.outputs.message_hash }}"
-          EXPECTED_SIGNER="${{ vars.IMAGE_SIGNER_ADDRESS }}"
-
-          # cast wallet verify: --address <ADDR> <MESSAGE> <SIGNATURE>
-          # Use --no-hash since MESSAGE_HASH is already a keccak256 hash
+          # Verify signature before publishing
           if ! cast wallet verify --no-hash --address "$EXPECTED_SIGNER" "$MESSAGE_HASH" "$SIGNATURE"; then
-            echo "::error::Signature verification failed! Signature does not match expected signer $EXPECTED_SIGNER"
+            echo "::error::Signature verification failed!"
             exit 1
           fi
 
-          echo "::notice::Signature verified: signer matches $EXPECTED_SIGNER"
+          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          echo "::notice::Image signature: $SIGNATURE"
+          echo "::notice::Signer address: $EXPECTED_SIGNER (verified)"
 
       - name: Summary
         run: |
