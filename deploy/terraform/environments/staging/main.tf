@@ -125,6 +125,7 @@ module "sequencer" {
   labels                = var.labels
 
   # TEE bootstrap (null = disabled, requires relayer to be deployed)
+  # Image signature is fetched automatically from OCI artifact referrers
   tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
     bridge_address       = var.bridge_contract_address
     relayer_url          = module.relayer[0].service_url
@@ -132,7 +133,7 @@ module "sequencer" {
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
-    image_signature      = var.tee_bootstrap.sequencer_image_signature
+    image_signature      = data.external.sequencer_signature[0].result.signature
   } : null
 
   depends_on = [module.iam, module.networking, module.proof_service, module.relayer]
@@ -158,6 +159,7 @@ module "validator" {
   labels                = var.labels
 
   # TEE bootstrap (null = disabled, requires relayer to be deployed)
+  # Image signature is fetched automatically from OCI artifact referrers
   tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
     bridge_address       = var.bridge_contract_address
     relayer_url          = module.relayer[0].service_url
@@ -165,7 +167,7 @@ module "validator" {
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
-    image_signature      = var.tee_bootstrap.validator_image_signature
+    image_signature      = data.external.validator_signature[0].result.signature
   } : null
 
   depends_on = [module.iam, module.networking, module.sequencer, module.proof_service, module.relayer]
@@ -202,6 +204,7 @@ module "price_oracle" {
   } : null
 
   # TEE bootstrap (same as sequencer/validator, requires relayer)
+  # Image signature is fetched automatically from OCI artifact referrers
   tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
     bridge_address       = var.bridge_contract_address
     relayer_url          = module.relayer[0].service_url
@@ -209,7 +212,7 @@ module "price_oracle" {
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
-    image_signature      = var.tee_bootstrap.price_oracle_image_signature
+    image_signature      = data.external.price_oracle_signature[0].result.signature
   } : null
 
   labels = var.labels
