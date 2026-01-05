@@ -246,7 +246,7 @@ mod tests {
             "--sequencer-pubkey",
             TEST_PUBKEY,
             "--bridge-signer",
-            "--bridge-contract",
+            "--bridge-address",
             "0x1234567890abcdef1234567890abcdef12345678",
             "--bridge-chain-id",
             "1",
