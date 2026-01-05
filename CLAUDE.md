@@ -268,3 +268,13 @@ Both sequencers and validators generate ephemeral signing keys at startup. This 
 - Keys are generated fresh inside the TEE on each startup
 
 When a service restarts with a new key, a new TEE attestation proof must be generated via the SP1 zkVM and submitted to the bridge contract. This registers the new public key on-chain, allowing the bridge to verify signatures from the new instance. This is the intended deployment model - keys are bound to TEE instances, not externally managed.
+
+### TEE Boundary Considerations
+The sequencer and validator run inside TEEs (Trusted Execution Environments). When suggesting refactors or architectural changes:
+
+- **Do NOT** move security-critical logic out of sequencer/validator without explicit approval
+- **Do NOT** extract signing, validation, or key management into separate services
+- Any logic that handles cryptographic operations must remain inside the TEE boundary
+- Be cautious when suggesting shared libraries or external dependencies that could execute outside the TEE
+
+If a proposed change could affect the TEE security boundary, flag the implications and confirm before proceeding.
