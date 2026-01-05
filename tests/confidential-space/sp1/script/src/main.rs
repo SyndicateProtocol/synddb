@@ -118,12 +118,33 @@ fn main() {
     let expected_evm_address = Address::from_slice(&pubkey_hash[12..]);
     println!("Mock EVM address: {}", expected_evm_address);
 
+    // Generate mock cosign signature and public key for testing
+    // In production, these would come from the cosign signature on the container image
+    let mock_cosign_signature: [u8; 64] = {
+        let mut sig = [0u8; 64];
+        for (i, byte) in sig.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(11).wrapping_add(17);
+        }
+        sig
+    };
+
+    let mock_cosign_pubkey: [u8; 65] = {
+        let mut pubkey = [0u8; 65];
+        pubkey[0] = 0x04; // Uncompressed point prefix
+        for (i, byte) in pubkey[1..].iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(13).wrapping_add(23);
+        }
+        pubkey
+    };
+
     // Prepare inputs for the zkVM
     let mut stdin = SP1Stdin::new();
     stdin.write(&sample.raw_token.as_bytes().to_vec());
     stdin.write(&jwk);
     stdin.write(&sample.audience);
     stdin.write(&mock_evm_public_key.to_vec());
+    stdin.write(&mock_cosign_signature.to_vec());
+    stdin.write(&mock_cosign_pubkey.to_vec());
 
     if args.execute {
         println!("\n=== Executing program (test mode) ===\n");
@@ -155,9 +176,26 @@ fn main() {
         );
         println!("tee_signing_key: {}", public_values.tee_signing_key);
         println!("secboot: {}", public_values.secboot);
+        println!("dbgstat_disabled: {}", public_values.dbgstat_disabled);
         println!(
             "audience_hash: 0x{}",
             hex::encode(public_values.audience_hash)
+        );
+        println!(
+            "cosign_signature_r: 0x{}",
+            hex::encode(public_values.cosign_signature_r)
+        );
+        println!(
+            "cosign_signature_s: 0x{}",
+            hex::encode(public_values.cosign_signature_s)
+        );
+        println!(
+            "cosign_pubkey_x: 0x{}",
+            hex::encode(public_values.cosign_pubkey_x)
+        );
+        println!(
+            "cosign_pubkey_y: 0x{}",
+            hex::encode(public_values.cosign_pubkey_y)
         );
 
         // Verify against local verification
