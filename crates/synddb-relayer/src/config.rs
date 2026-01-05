@@ -135,12 +135,7 @@ impl RelayerConfig {
 
         let mut applications = HashMap::new();
         for app in config.applications {
-            if app.allowed_image_digests.is_empty() {
-                anyhow::bail!(
-                    "Application {} must have at least one allowed_image_digest",
-                    app.audience
-                );
-            }
+            // Note: Empty allowed_image_digests means "allow all" (for staging/dev)
             let audience_hash = compute_audience_hash(&app.audience);
             applications.insert(audience_hash, app);
         }
@@ -176,15 +171,15 @@ impl RelayerConfig {
             .required_audience
             .ok_or_else(|| anyhow::anyhow!("REQUIRED_AUDIENCE is required"))?;
 
-        // Parse allowed digests
-        let allowed_image_digests: Vec<B256> = allowed_digests_str
-            .split(',')
-            .filter_map(|s| parse_b256(s.trim()))
-            .collect();
-
-        if allowed_image_digests.is_empty() {
-            anyhow::bail!("ALLOWED_IMAGE_DIGESTS must contain at least one valid digest");
-        }
+        // Parse allowed digests (empty string = allow all for staging)
+        let allowed_image_digests: Vec<B256> = if allowed_digests_str.is_empty() {
+            Vec::new() // Empty list = allow all
+        } else {
+            allowed_digests_str
+                .split(',')
+                .filter_map(|s| parse_b256(s.trim()))
+                .collect()
+        };
 
         // Validate private key
         let key = private_key.trim_start_matches("0x");
@@ -217,10 +212,13 @@ impl RelayerConfig {
     }
 
     /// Check if an image digest is allowed for a given audience
+    /// Returns true if:
+    /// - The audience exists AND the digest is in the allowed list, OR
+    /// - The audience exists AND the allowed list is empty (allow all mode)
     pub(crate) fn is_digest_allowed(&self, audience_hash: &B256, image_digest: &B256) -> bool {
-        self.applications
-            .get(audience_hash)
-            .is_some_and(|app| app.allowed_image_digests.contains(image_digest))
+        self.applications.get(audience_hash).is_some_and(|app| {
+            app.allowed_image_digests.is_empty() || app.allowed_image_digests.contains(image_digest)
+        })
     }
 }
 
