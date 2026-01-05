@@ -179,9 +179,9 @@ pub struct ValidatorConfig {
     #[arg(long, env = "BRIDGE_SIGNER")]
     pub bridge_signer: bool,
 
-    /// Bridge contract address (required if --bridge-signer)
+    /// Bridge contract address (required if --bridge-signer or --enable-key-bootstrap)
     #[arg(long, env = "BRIDGE_CONTRACT_ADDRESS")]
-    pub bridge_contract: Option<String>,
+    pub bridge_address: Option<String>,
 
     /// Chain ID for the bridge contract (required if --bridge-signer)
     #[arg(long, env = "BRIDGE_CHAIN_ID")]
@@ -233,7 +233,7 @@ pub struct ValidatorConfig {
     #[arg(long, env = "ENABLE_KEY_BOOTSTRAP", default_value = "false")]
     pub enable_key_bootstrap: bool,
 
-    // Note: Bridge contract address for bootstrap uses the same `bridge_contract` field
+    // Note: Bridge contract address for bootstrap uses the same `bridge_address` field
     // defined in the Bridge Signer Mode section above (env: BRIDGE_CONTRACT_ADDRESS)
     /// RPC URL for verifying key registration
     #[arg(long, env = "BOOTSTRAP_RPC_URL")]
@@ -289,7 +289,7 @@ impl ValidatorConfig {
             return Ok(());
         }
 
-        if self.bridge_contract.is_none() {
+        if self.bridge_address.is_none() {
             return Err(
                 "BRIDGE_CONTRACT_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true".into(),
             );
@@ -369,8 +369,8 @@ impl ValidatorConfig {
 
         let is_local = self.bridge_chain_id == Some(local_defaults::CHAIN_ID);
 
-        if self.bridge_contract.is_none() && !is_local {
-            return Err("--bridge-contract is required when --bridge-signer is enabled".into());
+        if self.bridge_address.is_none() && !is_local {
+            return Err("--bridge-address is required when --bridge-signer is enabled".into());
         }
 
         if self.bridge_chain_id.is_none() {
@@ -382,9 +382,9 @@ impl ValidatorConfig {
 
     /// Get bridge contract address, using local default for Anvil (chain ID 31337)
     ///
-    /// Returns `None` if `bridge_contract` is not set and not running on Anvil.
-    pub fn bridge_contract_with_local_fallback(&self) -> Option<String> {
-        self.bridge_contract.clone().or_else(|| {
+    /// Returns `None` if `bridge_address` is not set and not running on Anvil.
+    pub fn bridge_address_with_local_fallback(&self) -> Option<String> {
+        self.bridge_address.clone().or_else(|| {
             (self.bridge_chain_id == Some(local_defaults::CHAIN_ID))
                 .then(|| local_defaults::BRIDGE_CONTRACT.to_string())
         })
@@ -475,9 +475,9 @@ impl ValidatorConfig {
     ///
     /// Note: signing key is generated automatically inside the TEE.
     #[must_use]
-    pub fn with_bridge_signer(mut self, contract: impl Into<String>, chain_id: u64) -> Self {
+    pub fn with_bridge_signer(mut self, address: impl Into<String>, chain_id: u64) -> Self {
         self.bridge_signer = true;
-        self.bridge_contract = Some(contract.into());
+        self.bridge_address = Some(address.into());
         self.bridge_chain_id = Some(chain_id);
         self
     }
@@ -554,7 +554,7 @@ mod tests {
 
         assert!(config.bridge_signer);
         assert_eq!(
-            config.bridge_contract,
+            config.bridge_address,
             Some("0x1234567890abcdef1234567890abcdef12345678".to_string())
         );
         assert_eq!(config.bridge_chain_id, Some(1));
@@ -604,8 +604,8 @@ mod tests {
     }
 
     #[test]
-    fn test_bridge_contract_local_fallback_anvil() {
-        // When chain ID is 31337, bridge contract should use local default if not set
+    fn test_bridge_address_local_fallback_anvil() {
+        // When chain ID is 31337, bridge address should use local default if not set
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
             "--sequencer-pubkey",
@@ -616,19 +616,19 @@ mod tests {
         ]);
 
         assert_eq!(
-            config.bridge_contract_with_local_fallback(),
+            config.bridge_address_with_local_fallback(),
             Some(local_defaults::BRIDGE_CONTRACT.to_string())
         );
-        // Validation should pass for Anvil chain without explicit bridge-contract
+        // Validation should pass for Anvil chain without explicit bridge-address
         assert!(config.validate_bridge_config().is_ok());
     }
 
     #[test]
-    fn test_bridge_contract_local_fallback_non_anvil() {
+    fn test_bridge_address_local_fallback_non_anvil() {
         // Clear env vars that might be set by .env.defaults
         clear_bridge_env_vars();
 
-        // When chain ID is NOT 31337, bridge contract should NOT use local default
+        // When chain ID is NOT 31337, bridge address should NOT use local default
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
             "--sequencer-pubkey",
@@ -638,14 +638,14 @@ mod tests {
             "1", // Mainnet
         ]);
 
-        assert_eq!(config.bridge_contract_with_local_fallback(), None);
-        // Validation should fail for non-Anvil chain without explicit bridge-contract
+        assert_eq!(config.bridge_address_with_local_fallback(), None);
+        // Validation should fail for non-Anvil chain without explicit bridge-address
         assert!(config.validate_bridge_config().is_err());
     }
 
     #[test]
-    fn test_bridge_contract_explicit_overrides_fallback() {
-        // Explicitly set bridge contract should be used even on Anvil
+    fn test_bridge_address_explicit_overrides_fallback() {
+        // Explicitly set bridge address should be used even on Anvil
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
             "--sequencer-pubkey",
@@ -653,12 +653,12 @@ mod tests {
             "--bridge-signer",
             "--bridge-chain-id",
             "31337",
-            "--bridge-contract",
+            "--bridge-address",
             "0x1111111111111111111111111111111111111111",
         ]);
 
         assert_eq!(
-            config.bridge_contract_with_local_fallback(),
+            config.bridge_address_with_local_fallback(),
             Some("0x1111111111111111111111111111111111111111".to_string())
         );
     }

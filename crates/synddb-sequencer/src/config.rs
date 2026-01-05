@@ -211,7 +211,7 @@ pub struct SequencerConfig {
 
     /// Bridge contract address for key registration
     #[arg(long, env = "BRIDGE_CONTRACT_ADDRESS")]
-    pub bridge_contract_address: Option<String>,
+    pub bridge_address: Option<String>,
 
     /// RPC URL for verifying key registration
     #[arg(long, env = "BOOTSTRAP_RPC_URL")]
@@ -267,7 +267,7 @@ impl SequencerConfig {
             return Ok(());
         }
 
-        if self.bridge_contract_address.is_none() {
+        if self.bridge_address.is_none() {
             return Err(
                 "BRIDGE_CONTRACT_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true".into(),
             );

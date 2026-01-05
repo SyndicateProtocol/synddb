@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
 
             let bootstrap_config = BootstrapConfig {
                 enable_key_bootstrap: true,
-                bridge_address: config.bridge_contract_address.clone(),
+                bridge_address: config.bridge_address.clone(),
                 rpc_url: config.bootstrap_rpc_url.clone(),
                 chain_id: config.bootstrap_chain_id,
                 relayer_url: config.relayer_url.clone(),

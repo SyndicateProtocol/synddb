@@ -64,9 +64,9 @@ impl BridgeSigner {
     /// if not explicitly configured.
     pub fn new(config: &ValidatorConfig) -> Result<Self> {
         let bridge_contract: Address = config
-            .bridge_contract_with_local_fallback()
+            .bridge_address_with_local_fallback()
             .context(
-                "--bridge-contract is required (or use --bridge-chain-id 31337 for local default)",
+                "--bridge-address is required (or use --bridge-chain-id 31337 for local default)",
             )?
             .parse()
             .context("Invalid bridge contract address")?;
