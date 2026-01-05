@@ -329,6 +329,9 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
       - name: Sign image digest (secp256k1)
         id: image_sig
         if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
@@ -363,8 +366,37 @@ jobs:
           echo "::notice::Image signature: $SIGNATURE"
           echo "::notice::Signer address: $EXPECTED_SIGNER (verified)"
 
+      - name: Attach signature artifact
+        if: ${{ steps.image_sig.outputs.signature != '' }}
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/synddb-${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Create signature payload
+          cat > signature.json <<EOF
+          {
+            "digest": "$DIGEST",
+            "signature": "${{ steps.image_sig.outputs.signature }}",
+            "signer": "${{ vars.IMAGE_SIGNER_ADDRESS }}",
+            "signatureType": "secp256k1-keccak256"
+          }
+          EOF
+
+          # Attach as OCI artifact referrer (immutable, linked to digest)
+          oras attach \
+            "$IMAGE@$DIGEST" \
+            --artifact-type application/vnd.syndicate.image-signature.v1+json \
+            signature.json:application/json
+
+          echo "::notice::Attached signature artifact to $IMAGE@$DIGEST"
+
       - name: Summary
         run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/synddb-${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
           {
             echo "## Reproducible ${{ matrix.image }}"
             echo ""
@@ -377,13 +409,9 @@ jobs:
             if [[ -n "${{ steps.image_sig.outputs.signature }}" ]]; then
               echo "### Image Signature (secp256k1)"
               echo ""
-              echo "Use this signature in your Terraform config:"
-              echo ""
-              echo "\`\`\`"
-              echo "tee_bootstrap = {"
-              echo "  ..."
-              echo "  image_signature = \"${{ steps.image_sig.outputs.signature }}\""
-              echo "}"
+              echo "Discover signature artifacts:"
+              echo "\`\`\`bash"
+              echo "oras discover $IMAGE@$DIGEST"
               echo "\`\`\`"
               echo ""
               echo "Signer: \`${{ vars.IMAGE_SIGNER_ADDRESS }}\`"
@@ -491,6 +519,9 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
       - name: Sign image digest (secp256k1)
         id: image_sig
         if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
@@ -525,8 +556,37 @@ jobs:
           echo "::notice::Image signature: $SIGNATURE"
           echo "::notice::Signer address: $EXPECTED_SIGNER (verified)"
 
+      - name: Attach signature artifact
+        if: ${{ steps.image_sig.outputs.signature != '' }}
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Create signature payload
+          cat > signature.json <<EOF
+          {
+            "digest": "$DIGEST",
+            "signature": "${{ steps.image_sig.outputs.signature }}",
+            "signer": "${{ vars.IMAGE_SIGNER_ADDRESS }}",
+            "signatureType": "secp256k1-keccak256"
+          }
+          EOF
+
+          # Attach as OCI artifact referrer (immutable, linked to digest)
+          oras attach \
+            "$IMAGE@$DIGEST" \
+            --artifact-type application/vnd.syndicate.image-signature.v1+json \
+            signature.json:application/json
+
+          echo "::notice::Attached signature artifact to $IMAGE@$DIGEST"
+
       - name: Summary
         run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
           {
             echo "## ${{ matrix.image }}"
             echo ""
@@ -537,13 +597,9 @@ jobs:
             if [[ -n "${{ steps.image_sig.outputs.signature }}" ]]; then
               echo "### Image Signature (secp256k1)"
               echo ""
-              echo "Use this signature in your Terraform config:"
-              echo ""
-              echo "\`\`\`"
-              echo "tee_bootstrap = {"
-              echo "  ..."
-              echo "  image_signature = \"${{ steps.image_sig.outputs.signature }}\""
-              echo "}"
+              echo "Discover signature artifacts:"
+              echo "\`\`\`bash"
+              echo "oras discover $IMAGE@$DIGEST"
               echo "\`\`\`"
               echo ""
               echo "Signer: \`${{ vars.IMAGE_SIGNER_ADDRESS }}\`"
