@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {AttestationVerifier, PublicValuesStruct} from "src/attestation/AttestationVerifier.sol";
 import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
+import {Bridge} from "src/Bridge.sol";
 
 contract MockSP1Verifier {
     bool public shouldRevert;
@@ -27,7 +28,11 @@ contract MockSP1Verifier {
 contract AttestationVerifierTest is Test {
     AttestationVerifier public verifier;
     TeeKeyManager public keyManager;
+    Bridge public bridge;
     MockSP1Verifier public sp1Verifier;
+
+    address public admin;
+    address public weth;
 
     bytes32 public constant VKEY = 0x0098d80b4e7bbcd017b8ec2c9258eb22eef9abf5e56ea64eac11155e22abe2b2;
     bytes32 public constant TRUSTED_JWK_HASH = 0x9e2ff62c7d6b300a2d854ee77adb18a6b7b6c69619719a6f9866bca337581563;
@@ -41,11 +46,18 @@ contract AttestationVerifierTest is Test {
     event ImageDigestHashUpdated(bytes32 oldHash, bytes32 newHash);
 
     function setUp() public {
+        admin = address(this);
+        weth = makeAddr("weth");
+
         sp1Verifier = new MockSP1Verifier();
 
         verifier = new AttestationVerifier(address(sp1Verifier), VKEY, IMAGE_DIGEST_HASH, EXPIRATION_TOLERANCE);
 
         keyManager = new TeeKeyManager(verifier);
+
+        // Deploy bridge and connect to key manager
+        bridge = new Bridge(admin, weth, address(keyManager));
+        keyManager.setBridge(address(bridge));
     }
 
     function createValidPublicValues() internal view returns (PublicValuesStruct memory) {
@@ -269,34 +281,34 @@ contract AttestationVerifierTest is Test {
         verifier.verifyAttestationProof(publicValues, proof);
     }
 
-    function test_KeyManager_AddKey_Success() public {
+    function test_KeyManager_AddSequencerKey_Success() public {
         verifier.addTrustedJwkHash(TRUSTED_JWK_HASH);
 
         PublicValuesStruct memory values = createValidPublicValues();
         bytes memory publicValues = abi.encode(values);
         bytes memory proof = hex"";
 
-        keyManager.addKey(publicValues, proof);
+        bridge.registerSequencerKey(publicValues, proof);
 
-        assertTrue(keyManager.isKeyValid(TEE_SIGNING_KEY));
+        keyManager.isSequencerKeyValid(TEE_SIGNING_KEY); // Should not revert
     }
 
-    function test_KeyManager_AddKey_RevertsOnDuplicate() public {
+    function test_KeyManager_AddSequencerKey_RevertsOnDuplicate() public {
         verifier.addTrustedJwkHash(TRUSTED_JWK_HASH);
 
         PublicValuesStruct memory values = createValidPublicValues();
         bytes memory publicValues = abi.encode(values);
         bytes memory proof = hex"";
 
-        keyManager.addKey(publicValues, proof);
+        bridge.registerSequencerKey(publicValues, proof);
 
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.KeyAlreadyExists.selector, TEE_SIGNING_KEY));
-        keyManager.addKey(publicValues, proof);
+        bridge.registerSequencerKey(publicValues, proof);
     }
 
-    function test_KeyManager_IsKeyValid_RevertsOnInvalidKey() public {
+    function test_KeyManager_IsSequencerKeyValid_RevertsOnInvalidKey() public {
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.InvalidPublicKey.selector, TEE_SIGNING_KEY));
-        keyManager.isKeyValid(TEE_SIGNING_KEY);
+        keyManager.isSequencerKeyValid(TEE_SIGNING_KEY);
     }
 
     function test_KeyManager_RevokeAllKeys() public {
@@ -306,32 +318,33 @@ contract AttestationVerifierTest is Test {
         bytes memory publicValues = abi.encode(values);
         bytes memory proof = hex"";
 
-        keyManager.addKey(publicValues, proof);
-        assertTrue(keyManager.isKeyValid(TEE_SIGNING_KEY));
+        bridge.registerSequencerKey(publicValues, proof);
+        keyManager.isSequencerKeyValid(TEE_SIGNING_KEY); // Should not revert
 
-        keyManager.revokeAllKeys();
+        bridge.revokeAllKeys();
 
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.InvalidPublicKey.selector, TEE_SIGNING_KEY));
-        keyManager.isKeyValid(TEE_SIGNING_KEY);
+        keyManager.isSequencerKeyValid(TEE_SIGNING_KEY);
     }
 
-    function test_KeyManager_UpdateAttestationVerifier_RevokesKeys() public {
+    function test_KeyManager_UpdateAttestationVerifier() public {
         verifier.addTrustedJwkHash(TRUSTED_JWK_HASH);
 
         PublicValuesStruct memory values = createValidPublicValues();
         bytes memory publicValues = abi.encode(values);
         bytes memory proof = hex"";
 
-        keyManager.addKey(publicValues, proof);
-        assertTrue(keyManager.isKeyValid(TEE_SIGNING_KEY));
+        bridge.registerSequencerKey(publicValues, proof);
+        keyManager.isSequencerKeyValid(TEE_SIGNING_KEY); // Should not revert
 
         AttestationVerifier newVerifier =
             new AttestationVerifier(address(sp1Verifier), VKEY, IMAGE_DIGEST_HASH, EXPIRATION_TOLERANCE);
 
-        keyManager.updateAttestationVerifier(newVerifier);
+        bridge.updateAttestationVerifier(newVerifier);
 
-        vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.InvalidPublicKey.selector, TEE_SIGNING_KEY));
-        keyManager.isKeyValid(TEE_SIGNING_KEY);
+        // Keys are NOT automatically revoked when verifier is updated
+        // Existing keys remain valid
+        keyManager.isSequencerKeyValid(TEE_SIGNING_KEY); // Should still not revert
 
         assertEq(address(keyManager.attestationVerifier()), address(newVerifier));
     }

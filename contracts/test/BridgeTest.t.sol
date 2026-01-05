@@ -126,7 +126,8 @@ contract BridgeTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_Constructor_RevertsOnZeroAdminAddress() public {
-        vm.expectRevert(Bridge.ZeroAddressNotAllowed.selector);
+        // Ownable2Step rejects zero address owner before our check runs
+        vm.expectRevert(abi.encodeWithSignature("OwnableInvalidOwner(address)", address(0)));
         new Bridge(address(0), address(weth), address(teeKeyManager));
     }
 
@@ -141,7 +142,8 @@ contract BridgeTest is Test {
     }
 
     function test_Constructor_RevertsOnAllZeroAddresses() public {
-        vm.expectRevert(Bridge.ZeroAddressNotAllowed.selector);
+        // Ownable2Step rejects zero address owner before our check runs
+        vm.expectRevert(abi.encodeWithSignature("OwnableInvalidOwner(address)", address(0)));
         new Bridge(address(0), address(0), address(0));
     }
 

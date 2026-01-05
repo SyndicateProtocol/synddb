@@ -42,12 +42,18 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         // We need to create a separate TEE key manager for destBridge
         MockAttestationVerifier destAttestationVerifier = new MockAttestationVerifier();
         TeeKeyManager destTeeKeyManager = new TeeKeyManager(destAttestationVerifier);
-        bytes memory destPublicValues = abi.encode(destSequencer);
-        destTeeKeyManager.addKey(destPublicValues, "");
 
         WETH9 destWeth = new WETH9();
         destBridge = new Bridge(address(this), address(destWeth), address(destTeeKeyManager));
-        destBridge.grantRole(destBridge.MESSAGE_INITIALIZER_ROLE(), destSequencer);
+
+        // Set bridge on destTeeKeyManager
+        destTeeKeyManager.setBridge(address(destBridge));
+
+        // Register dest sequencer as a valid TEE key through bridge
+        bytes memory destPublicValues = abi.encode(destSequencer);
+        destBridge.registerSequencerKey(destPublicValues, "");
+
+        destBridge.setMessageInitializer(destSequencer, true);
 
         // Deploy ONFT with source bridge as the authorized bridge
         onft = new MockONFT("Omnichain NFT", "ONFT", address(sourceBridge));

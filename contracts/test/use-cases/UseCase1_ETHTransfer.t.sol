@@ -37,18 +37,24 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         attestationVerifier = new MockAttestationVerifier();
         teeKeyManager = new TeeKeyManager(attestationVerifier);
 
-        // Register sequencer as a valid TEE key
-        bytes memory publicValues = abi.encode(sequencer);
-        teeKeyManager.addKey(publicValues, "");
-
+        // Deploy bridge first
         bridge = new Bridge(admin, address(weth), address(teeKeyManager));
+
+        // Set bridge on TeeKeyManager
+        teeKeyManager.setBridge(address(bridge));
+
+        // Register sequencer as a valid TEE key through bridge
+        bytes memory publicValues = abi.encode(sequencer);
+        bridge.registerSequencerKey(publicValues, "");
+
         recipient = new ETHReceiver();
 
+        // Setup validators and module using TeeKeyManager
         setupValidators(bridge);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
+        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), 2);
         supplyCheckModule = new ERC20TotalSupplyCheckModule(address(weth), 1000000 ether);
 
-        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+        bridge.setMessageInitializer(sequencer, true);
         bridge.addPreModule(address(supplyCheckModule));
         bridge.addPreModule(address(validatorModule));
 

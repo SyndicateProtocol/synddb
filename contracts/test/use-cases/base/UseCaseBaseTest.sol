@@ -42,12 +42,18 @@ abstract contract UseCaseBaseTest is Test {
         attestationVerifier = new MockAttestationVerifier();
         teeKeyManager = new TeeKeyManager(attestationVerifier);
 
-        // Register sequencer as a valid TEE key
-        bytes memory publicValues = abi.encode(sequencer);
-        teeKeyManager.addKey(publicValues, "");
-
+        // Deploy bridge first
         bridge = new Bridge(admin, address(weth), address(teeKeyManager));
-        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+
+        // Set bridge on TeeKeyManager
+        teeKeyManager.setBridge(address(bridge));
+
+        // Register sequencer as a valid TEE key through bridge
+        bytes memory publicValues = abi.encode(sequencer);
+        bridge.registerSequencerKey(publicValues, "");
+
+        // Grant message initializer permission
+        bridge.setMessageInitializer(sequencer, true);
     }
 
     /// @notice Create a sequencer signature for a message
@@ -74,7 +80,7 @@ abstract contract UseCaseBaseTest is Test {
         returns (ValidatorSignatureThresholdModule validatorModule)
     {
         setupValidators(bridge);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, threshold);
+        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), threshold);
         bridge.addPreModule(address(validatorModule));
     }
 
@@ -91,7 +97,7 @@ abstract contract UseCaseBaseTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Setup validators with known private keys
-    /// @param bridge The bridge contract to grant validator roles
+    /// @param bridge The bridge contract to register validator keys
     /// @param validatorCount The number of validators to create (defaults to 3)
     function setupValidators(Bridge bridge, uint256 validatorCount) internal {
         for (uint256 i = 1; i <= validatorCount; i++) {
@@ -101,7 +107,9 @@ abstract contract UseCaseBaseTest is Test {
             validatorPrivateKeys.push(privateKey);
             validators.push(validatorAddr);
 
-            bridge.grantRole(bridge.VALIDATOR_ROLE(), validatorAddr);
+            // Register validator key through bridge
+            bytes memory publicValues = abi.encode(validatorAddr);
+            bridge.registerValidatorKey(publicValues, "");
         }
     }
 
