@@ -4,7 +4,7 @@
 # Run:   docker run -p 8082:8082 synddb-relayer
 
 # Build stage
-FROM rust:1.92-bookworm AS builder
+FROM rust:1.92-trixie AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
@@ -21,7 +21,7 @@ COPY tests/ ./tests/
 RUN cargo build --release --locked -p synddb-relayer
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
