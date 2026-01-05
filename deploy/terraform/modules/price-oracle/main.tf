@@ -37,15 +37,20 @@ locals {
       CHAIN_MONITOR_POLL     = tostring(var.chain_monitor.poll_interval)
     } : {},
     # TEE bootstrap configuration (if enabled)
-    var.tee_bootstrap != null ? {
-      ENABLE_KEY_BOOTSTRAP    = "true"
-      BRIDGE_CONTRACT_ADDRESS = var.tee_bootstrap.bridge_address
-      RELAYER_URL             = var.tee_bootstrap.relayer_url
-      BOOTSTRAP_RPC_URL       = var.tee_bootstrap.rpc_url
-      BOOTSTRAP_CHAIN_ID      = tostring(var.tee_bootstrap.chain_id)
-      PROOF_SERVICE_URL       = var.tee_bootstrap.proof_service_url
-      ATTESTATION_AUDIENCE    = var.tee_bootstrap.attestation_audience
-    } : {}
+    var.tee_bootstrap != null ? merge(
+      {
+        ENABLE_KEY_BOOTSTRAP    = "true"
+        BRIDGE_CONTRACT_ADDRESS = var.tee_bootstrap.bridge_address
+        RELAYER_URL             = var.tee_bootstrap.relayer_url
+        BOOTSTRAP_RPC_URL       = var.tee_bootstrap.rpc_url
+        BOOTSTRAP_CHAIN_ID      = tostring(var.tee_bootstrap.chain_id)
+        PROOF_SERVICE_URL       = var.tee_bootstrap.proof_service_url
+        ATTESTATION_AUDIENCE    = var.tee_bootstrap.attestation_audience
+      },
+      # Cosign signature and pubkey for on-chain verification (optional)
+      var.tee_bootstrap.cosign_signature != null ? { COSIGN_SIGNATURE = var.tee_bootstrap.cosign_signature } : {},
+      var.tee_bootstrap.cosign_pubkey != null ? { COSIGN_PUBKEY = var.tee_bootstrap.cosign_pubkey } : {}
+    ) : {}
   )
 }
 

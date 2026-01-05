@@ -162,11 +162,19 @@ bridge_chain_id         = 84532  # Base Mainnet: 8453
 # attestation_audience: Unique identifier for your deployment
 #                       Format: https://<your-domain>/<app-name>
 #                       Used to scope TEE attestations to your application
+# cosign_signature: (Optional) Cosign signature over container image digest
+#                   64-byte ECDSA P-256 signature (r||s), hex-encoded with 0x prefix
+#                   Required for on-chain cosign verification via P256 precompile
+# cosign_pubkey: (Optional) Cosign public key that created the signature
+#                64 or 65-byte P-256 public key (x||y or 0x04||x||y), hex-encoded
+#                Must be registered as trusted in AttestationVerifier contract
 
 tee_bootstrap = {
   rpc_url              = "https://sepolia.base.org"  # TODO: Use Alchemy/Infura for reliability
                                                      # Base Mainnet: https://mainnet.base.org
   attestation_audience = "https://example.com/price-oracle"  # TODO: Your domain
+  # cosign_signature   = "0x..."  # Optional: Cosign signature (64 bytes hex)
+  # cosign_pubkey      = "0x..."  # Optional: Cosign P-256 public key (64/65 bytes hex)
 }
 
 # -----------------------------------------------------------------------------
