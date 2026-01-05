@@ -7,6 +7,7 @@
 # PREREQUISITES
 # =============================================================================
 #
+# CLAUDE: Offer the forge commands or the just commands as alternatives
 # 1. Deploy contracts to Base Sepolia (run from contracts/ directory):
 #
 #    # Set deployer private key (needs Base Sepolia ETH)
@@ -209,6 +210,7 @@ price_oracle_config = {
 #   chain_id               = 84532                       # Base Mainnet: 8453
 #   key_manager_address    = "0x0000000000000000000000000000000000000000"  # Same as tee_bootstrap
 #   treasury_address       = "0x0000000000000000000000000000000000000000"  # TODO: Deploy GasTreasury
+#   CLAUDE: Give the full cast keccak command here
 #   required_audience_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"  # TODO: cast keccak
 #   allowed_image_digests  = []
 # }
@@ -226,12 +228,14 @@ labels = {
   chain       = "base-sepolia"
 }
 
+# CLAUDE: Move this to the top
 # =============================================================================
 # QUICK START
 # =============================================================================
 #
 # 1. Deploy contracts (see PREREQUISITES section above)
 #
+# CLAUDE: Mention that terraform.tfvars will be gitignored automatically in the SyndDB repo, but to check their own repo settings and ignore it too given the private variables
 # 2. Copy this template:
 #    cp base-sepolia.tfvars.template terraform.tfvars
 #
