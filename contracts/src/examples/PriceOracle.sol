@@ -25,13 +25,8 @@ contract PriceOracle is AccessControl {
     }
 
     /// @notice Mapping from asset symbol hash to price data
+    /// @dev Key is keccak256(bytes(asset)), e.g., keccak256("BTC")
     mapping(bytes32 => Price) public prices;
-
-    /// @notice Mapping from asset symbol hash to human-readable symbol
-    mapping(bytes32 => string) public assetSymbols;
-
-    /// @notice List of known asset hashes for enumeration
-    bytes32[] public knownAssets;
 
     /// @notice Nonce for request IDs to ensure uniqueness
     uint256 public requestNonce;
@@ -114,13 +109,6 @@ contract PriceOracle is AccessControl {
         if (timestamp > block.timestamp) revert FutureTimestamp(timestamp, block.timestamp);
 
         bytes32 assetHash = keccak256(bytes(asset));
-
-        // Track new assets
-        if (prices[assetHash].updatedAt == 0) {
-            knownAssets.push(assetHash);
-            assetSymbols[assetHash] = asset;
-        }
-
         prices[assetHash] = Price({price: price, timestamp: timestamp, updatedAt: block.timestamp});
 
         emit PriceUpdated(asset, price, timestamp, msg.sender);
@@ -142,13 +130,6 @@ contract PriceOracle is AccessControl {
         if (timestamp > block.timestamp) revert FutureTimestamp(timestamp, block.timestamp);
 
         bytes32 assetHash = keccak256(bytes(asset));
-
-        // Track new assets
-        if (prices[assetHash].updatedAt == 0) {
-            knownAssets.push(assetHash);
-            assetSymbols[assetHash] = asset;
-        }
-
         prices[assetHash] = Price({price: price, timestamp: timestamp, updatedAt: block.timestamp});
 
         emit PriceUpdated(asset, price, timestamp, msg.sender);
@@ -174,12 +155,6 @@ contract PriceOracle is AccessControl {
             if (timestamps[i] > block.timestamp) continue; // Skip future timestamps
 
             bytes32 assetHash = keccak256(bytes(assets[i]));
-
-            if (prices[assetHash].updatedAt == 0) {
-                knownAssets.push(assetHash);
-                assetSymbols[assetHash] = assets[i];
-            }
-
             prices[assetHash] = Price({price: priceValues[i], timestamp: timestamps[i], updatedAt: block.timestamp});
 
             emit PriceUpdated(assets[i], priceValues[i], timestamps[i], msg.sender);
@@ -265,24 +240,6 @@ contract PriceOracle is AccessControl {
         }
 
         return p.price;
-    }
-
-    /**
-     * @notice Get the number of known assets
-     */
-    function getAssetCount() external view returns (uint256) {
-        return knownAssets.length;
-    }
-
-    /**
-     * @notice Get all known asset symbols
-     */
-    function getAllAssets() external view returns (string[] memory) {
-        string[] memory symbols = new string[](knownAssets.length);
-        for (uint256 i = 0; i < knownAssets.length; i++) {
-            symbols[i] = assetSymbols[knownAssets[i]];
-        }
-        return symbols;
     }
 
     /**

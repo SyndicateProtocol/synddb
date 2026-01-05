@@ -60,12 +60,11 @@ contract PriceOracleTest is Test {
     }
 
     function test_UpdatePrice_TracksNewAsset() public {
-        assertEq(oracle.getAssetCount(), 0);
+        assertFalse(oracle.hasPrice("ETH"));
 
         vm.prank(bridge);
         oracle.updatePrice("ETH", 3000_00000000, 1703500000);
 
-        assertEq(oracle.getAssetCount(), 1);
         assertTrue(oracle.hasPrice("ETH"));
     }
 
@@ -99,9 +98,6 @@ contract PriceOracleTest is Test {
         (uint256 price, uint256 timestamp,) = oracle.getPrice("BTC");
         assertEq(price, 51000_00000000);
         assertEq(timestamp, 1703500100);
-
-        // Should still only have 1 asset
-        assertEq(oracle.getAssetCount(), 1);
     }
 
     // ============ Push Model: batchUpdatePrices Tests ============
@@ -125,7 +121,9 @@ contract PriceOracleTest is Test {
         vm.prank(bridge);
         oracle.batchUpdatePrices(assets, priceValues, timestamps);
 
-        assertEq(oracle.getAssetCount(), 3);
+        assertTrue(oracle.hasPrice("BTC"));
+        assertTrue(oracle.hasPrice("ETH"));
+        assertTrue(oracle.hasPrice("SOL"));
 
         (uint256 btcPrice,,) = oracle.getPrice("BTC");
         (uint256 ethPrice,,) = oracle.getPrice("ETH");
@@ -314,20 +312,6 @@ contract PriceOracleTest is Test {
         // maxAge = 0 means any age is acceptable
         uint256 price = oracle.getPriceIfFresh("BTC", 0);
         assertEq(price, 50000_00000000);
-    }
-
-    function test_GetAllAssets_ReturnsSymbols() public {
-        vm.startPrank(bridge);
-        oracle.updatePrice("BTC", 50000_00000000, 1703500000);
-        oracle.updatePrice("ETH", 3000_00000000, 1703500000);
-        oracle.updatePrice("SOL", 100_00000000, 1703500000);
-        vm.stopPrank();
-
-        string[] memory assets = oracle.getAllAssets();
-        assertEq(assets.length, 3);
-        assertEq(assets[0], "BTC");
-        assertEq(assets[1], "ETH");
-        assertEq(assets[2], "SOL");
     }
 
     // ============ Fuzz Tests ============
