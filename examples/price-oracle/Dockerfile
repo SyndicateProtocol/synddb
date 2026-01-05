@@ -1,4 +1,4 @@
-# Build stage for Rust components
+# Build stage for Rust FFI library
 FROM rust:1.92-trixie AS rust-builder
 
 # Install clang for bindgen (needed for rusqlite bundled feature)
@@ -12,10 +12,8 @@ COPY crates ./crates
 COPY examples ./examples
 COPY tests ./tests
 
-# Build the sequencer, FFI library, and validator
-RUN cargo build --release -p synddb-sequencer && \
-    cargo build --release -p synddb-client --features ffi && \
-    cargo build --release -p price-oracle-validator
+# Build only the FFI library for Python bindings
+RUN cargo build --release -p synddb-client --features ffi
 
 # Python application stage
 FROM python:3.12-slim-trixie
@@ -27,10 +25,6 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# Copy Rust binaries
-COPY --from=rust-builder /app/target/release/synddb-sequencer /usr/local/bin/
-COPY --from=rust-builder /app/target/release/price-oracle-validator /usr/local/bin/
 
 # Copy FFI library for Python bindings
 COPY --from=rust-builder /app/target/release/libsynddb_client.so /usr/local/lib/

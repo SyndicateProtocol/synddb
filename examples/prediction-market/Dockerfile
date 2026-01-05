@@ -12,8 +12,8 @@ COPY crates ./crates
 COPY examples ./examples
 COPY tests ./tests
 
-# Build the prediction-market binary and sequencer
-RUN cargo build --release -p prediction-market -p synddb-sequencer
+# Build the prediction-market binary
+RUN cargo build --release -p prediction-market
 
 # Runtime stage
 FROM debian:trixie-slim
@@ -27,6 +27,5 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY --from=builder /app/target/release/prediction-market /usr/local/bin/
-COPY --from=builder /app/target/release/synddb-sequencer /usr/local/bin/
 
 ENTRYPOINT ["prediction-market"]
