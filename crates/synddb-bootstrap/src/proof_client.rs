@@ -38,6 +38,7 @@ pub struct ProofClient {
     client: reqwest::Client,
     service_url: String,
     timeout: Duration,
+    health_check_timeout: Duration,
 }
 
 impl ProofClient {
@@ -60,6 +61,7 @@ impl ProofClient {
             client,
             service_url,
             timeout: config.proof_timeout,
+            health_check_timeout: config.proof_health_check_timeout,
         })
     }
 
@@ -144,7 +146,7 @@ impl ProofClient {
         let response = self
             .client
             .get(format!("{}/health", self.service_url))
-            .timeout(Duration::from_secs(10))
+            .timeout(self.health_check_timeout)
             .send()
             .await
             .map_err(|e| BootstrapError::ProofServiceUnavailable(e.to_string()))?;

@@ -117,6 +117,15 @@ pub struct ValidatorConfig {
     #[arg(long, env = "SEQUENCER_URL")]
     pub sequencer_url: Option<String>,
 
+    /// HTTP request timeout for fetcher operations
+    #[arg(long, env = "HTTP_FETCHER_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub http_fetcher_timeout: Duration,
+
+    /// Maximum retries for transient HTTP fetcher failures
+    #[arg(long, env = "HTTP_FETCHER_MAX_RETRIES", default_value = "3")]
+    pub http_fetcher_max_retries: u32,
+
     /// GCS bucket for fetching messages (required when `fetcher_type=gcs`)
     #[arg(long, env = "GCS_BUCKET")]
     pub gcs_bucket: Option<String>,
@@ -546,7 +555,7 @@ mod tests {
             "--sequencer-pubkey",
             "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5",
             "--bridge-signer",
-            "--bridge-contract",
+            "--bridge-address",
             "0x1234567890abcdef1234567890abcdef12345678",
             "--bridge-chain-id",
             "1",

@@ -44,6 +44,11 @@ pub struct BootstrapConfig {
     #[serde(with = "humantime_serde")]
     pub proof_timeout: Duration,
 
+    /// Timeout for proof service health checks (default: 10 seconds)
+    #[arg(long, env = "PROOF_HEALTH_CHECK_TIMEOUT", default_value = "10s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub proof_health_check_timeout: Duration,
+
     /// Total bootstrap timeout
     #[arg(long, env = "BOOTSTRAP_TIMEOUT", default_value = "15m", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
@@ -56,6 +61,14 @@ pub struct BootstrapConfig {
     /// Maximum retries for relayer requests
     #[arg(long, env = "RELAYER_MAX_RETRIES", default_value = "3")]
     pub relayer_max_retries: u32,
+
+    /// Timeout for relayer key registration requests (default: 3 minutes)
+    ///
+    /// This covers the time for the relayer to submit the transaction and
+    /// wait for on-chain confirmation.
+    #[arg(long, env = "RELAYER_TIMEOUT", default_value = "3m", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub relayer_timeout: Duration,
 
     /// Cosign signature over the image digest (64 bytes r||s, hex-encoded with 0x prefix)
     /// This is the ECDSA P-256 signature produced by cosign when signing the container image.
@@ -80,9 +93,11 @@ impl Default for BootstrapConfig {
             proof_service_url: None,
             attestation_audience: None,
             proof_timeout: Duration::from_secs(600),
+            proof_health_check_timeout: Duration::from_secs(10),
             bootstrap_timeout: Duration::from_secs(900),
             proof_max_retries: 3,
             relayer_max_retries: 3,
+            relayer_timeout: Duration::from_secs(180),
             cosign_signature: None,
             cosign_pubkey: None,
         }

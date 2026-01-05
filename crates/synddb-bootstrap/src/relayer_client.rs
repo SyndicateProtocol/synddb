@@ -9,7 +9,6 @@ use alloy::{
     signers::{local::PrivateKeySigner, Signer},
 };
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tracing::{debug, info};
 
 /// Type of key to register
@@ -26,6 +25,7 @@ pub struct RelayerClient {
     bridge_address: Address,
     chain_id: u64,
     http_client: reqwest::Client,
+    timeout: std::time::Duration,
 }
 
 impl std::fmt::Debug for RelayerClient {
@@ -68,12 +68,18 @@ pub struct RegisterKeyResponse {
 
 impl RelayerClient {
     /// Create a new relayer client
-    pub fn new(relayer_url: String, bridge_address: Address, chain_id: u64) -> Self {
+    pub fn new(
+        relayer_url: String,
+        bridge_address: Address,
+        chain_id: u64,
+        timeout: std::time::Duration,
+    ) -> Self {
         Self {
             relayer_url,
             bridge_address,
             chain_id,
             http_client: reqwest::Client::new(),
+            timeout,
         }
     }
 
@@ -124,7 +130,7 @@ impl RelayerClient {
             .http_client
             .post(&url)
             .json(&request)
-            .timeout(Duration::from_secs(180)) // 3 minutes for registration + confirmation
+            .timeout(self.timeout)
             .send()
             .await
             .map_err(|e| {

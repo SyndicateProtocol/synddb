@@ -168,6 +168,7 @@ impl BootstrapStateMachine {
             config.relayer_url.clone().unwrap(),
             bridge_address,
             config.chain_id.unwrap(),
+            config.relayer_timeout,
         );
 
         // Step 2: Fetch attestation token
@@ -263,6 +264,7 @@ impl BootstrapStateMachine {
     }
 
     /// Generate proof with retry
+    #[allow(clippy::too_many_arguments)]
     async fn generate_proof_with_retry(
         &self,
         client: &ProofClient,

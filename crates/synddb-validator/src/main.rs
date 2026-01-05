@@ -321,8 +321,17 @@ async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn StorageFetch
             let url = config.sequencer_url.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("SEQUENCER_URL is required when fetcher_type=http")
             })?;
-            info!(url = %url, "Using HTTP fetcher");
-            let fetcher = synddb_validator::sync::providers::http::HttpFetcher::new(url);
+            info!(
+                url = %url,
+                timeout_secs = config.http_fetcher_timeout.as_secs(),
+                max_retries = config.http_fetcher_max_retries,
+                "Using HTTP fetcher"
+            );
+            let fetcher = synddb_validator::sync::providers::http::HttpFetcher::with_config(
+                url,
+                config.http_fetcher_timeout,
+                config.http_fetcher_max_retries,
+            );
             Ok(Arc::new(fetcher))
         }
         FetcherType::Gcs => {
