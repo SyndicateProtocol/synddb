@@ -1,16 +1,19 @@
 # SyndDB Staging Environment - Base Sepolia
 #
-# This template includes deployed contract addresses for the price oracle example.
+# Template for deploying SyndDB infrastructure with the price oracle example.
 # Copy to terraform.tfvars and fill in values marked with TODO.
 #
 # =============================================================================
-# DEPLOYED CONTRACTS (Base Sepolia - 2026-01-04)
+# PREREQUISITES
 # =============================================================================
 #
-# AttestationVerifier: 0x820Da95B935AEE0A73919630B1cBf6C431802886
-# TeeKeyManager:       0xC47c31D85825670dE56F5770C3478b971DE6409e
-# Bridge:              0x0828C7E50880bdC777647a5BD2fD0649A0cbFE35
-# PriceOracle:         0x78dCB012BA4562E3226169B45DD393EbBbc07637
+# 1. Deploy contracts first (see contracts/README.md):
+#    - AttestationVerifier
+#    - TeeKeyManager
+#    - Bridge
+#    - PriceOracle (or your app contract)
+#
+# 2. Note down the deployed addresses for use in this config.
 #
 # Basescan: https://sepolia.basescan.org
 #
@@ -101,8 +104,11 @@ validator_machine_type = "n2d-standard-2"
 # When a TEE instance starts, it generates an ephemeral signing key and
 # registers it with the TeeKeyManager contract via an attestation proof.
 #
-# key_manager_address: TeeKeyManager contract (pre-deployed, don't change)
-# rpc_url: Base Sepolia RPC endpoint for bootstrap transactions
+# PREREQUISITE: Deploy contracts first. See contracts/README.md for instructions.
+# You'll deploy: AttestationVerifier, TeeKeyManager, Bridge, and your app contract.
+#
+# key_manager_address: Your deployed TeeKeyManager contract address
+# rpc_url: RPC endpoint for bootstrap transactions
 #          Public endpoint works, but use Alchemy/Infura for reliability
 # chain_id: Base Sepolia = 84532
 # attestation_audience: Unique identifier for your deployment
@@ -110,7 +116,7 @@ validator_machine_type = "n2d-standard-2"
 #                       Used to scope TEE attestations to your application
 
 tee_bootstrap = {
-  key_manager_address  = "0xC47c31D85825670dE56F5770C3478b971DE6409e"
+  key_manager_address  = "0x0000000000000000000000000000000000000000"  # TODO: Your TeeKeyManager
   rpc_url              = "https://sepolia.base.org"  # TODO: Use Alchemy/Infura for reliability
   chain_id             = 84532
   attestation_audience = "https://example.com/price-oracle"  # TODO: Your domain
@@ -121,10 +127,10 @@ tee_bootstrap = {
 # -----------------------------------------------------------------------------
 # Enables validators to sign bridge messages for cross-chain state sync.
 # The Bridge contract verifies these signatures before accepting state updates.
-# Pre-deployed contracts - no changes needed.
+# Deploy Bridge contract alongside TeeKeyManager (see contracts/README.md).
 
 enable_bridge_signer    = true
-bridge_contract_address = "0x0828C7E50880bdC777647a5BD2fD0649A0cbFE35"
+bridge_contract_address = "0x0000000000000000000000000000000000000000"  # TODO: Your Bridge contract
 bridge_chain_id         = 84532
 
 # -----------------------------------------------------------------------------
@@ -155,7 +161,7 @@ batch_flush_interval = "2s"
 #   chain_monitor_enabled: Watch for on-chain price requests
 
 price_oracle_image            = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle:edge"
-price_oracle_contract_address = "0x78dCB012BA4562E3226169B45DD393EbBbc07637"
+price_oracle_contract_address = "0x0000000000000000000000000000000000000000"  # TODO: Your PriceOracle contract
 
 price_oracle_config = {
   coingecko_api_key     = ""  # Optional: CoinGecko API key
@@ -183,7 +189,7 @@ price_oracle_config = {
 # relayer_config = {
 #   rpc_url                = "https://sepolia.base.org"
 #   chain_id               = 84532
-#   key_manager_address    = "0xC47c31D85825670dE56F5770C3478b971DE6409e"
+#   key_manager_address    = "0x0000000000000000000000000000000000000000"  # Same as tee_bootstrap
 #   treasury_address       = "0x0000000000000000000000000000000000000000"  # TODO: Deploy GasTreasury
 #   required_audience_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"  # TODO: cast keccak
 #   allowed_image_digests  = []
@@ -206,23 +212,29 @@ labels = {
 # QUICK START
 # =============================================================================
 #
-# 1. Copy this template:
+# 1. Deploy contracts (see contracts/README.md):
+#    just contracts::deploy-base-sepolia
+#
+# 2. Copy this template:
 #    cp base-sepolia.tfvars.template terraform.tfvars
 #
-# 2. Fill in required values:
+# 3. Fill in required values:
 #    - project_id: Your GCP project
 #    - sp1_network_private_key: Key with PROVE tokens
 #    - gcs_bucket_name: Globally unique bucket name
+#    - tee_bootstrap.key_manager_address: Your TeeKeyManager contract
 #    - tee_bootstrap.attestation_audience: Your domain
+#    - bridge_contract_address: Your Bridge contract
+#    - price_oracle_contract_address: Your PriceOracle contract
 #
-# 3. Deploy:
+# 4. Deploy infrastructure:
 #    terraform init
 #    terraform plan
 #    terraform apply
 #
-# 4. Test:
+# 5. Test:
 #    cast send --rpc-url https://sepolia.base.org \
-#        0x78dCB012BA4562E3226169B45DD393EbBbc07637 \
+#        <your-price-oracle-address> \
 #        "requestPrice(string,uint256)" "BTC" 0
 #
 # =============================================================================
