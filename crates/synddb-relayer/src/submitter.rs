@@ -31,6 +31,8 @@ sol! {
             uint256 deadline,
             bytes calldata signature
         ) external returns (address publicKey);
+
+        function teeKeyManager() external view returns (address);
     }
 
     #[sol(rpc)]
@@ -44,6 +46,7 @@ sol! {
 pub(crate) struct RelayerSubmitter {
     rpc_url: String,
     bridge_address: Address,
+    tee_key_manager_address: Address,
     signer: PrivateKeySigner,
 }
 
@@ -58,14 +61,27 @@ impl std::fmt::Debug for RelayerSubmitter {
 }
 
 impl RelayerSubmitter {
-    /// Create from config
-    pub(crate) fn from_config(config: &RelayerConfig) -> anyhow::Result<Self> {
+    /// Create from config, fetching `TeeKeyManager` address from Bridge contract
+    pub(crate) async fn from_config(config: &RelayerConfig) -> anyhow::Result<Self> {
         let key_bytes = hex::decode(config.private_key.trim_start_matches("0x"))?;
         let signer = PrivateKeySigner::from_slice(&key_bytes)?;
+
+        // Fetch TeeKeyManager address from Bridge contract
+        let url = Url::parse(&config.rpc_url)?;
+        let provider = ProviderBuilder::new().connect_http(url);
+        let bridge = IBridge::new(config.bridge_address, &provider);
+        let tee_key_manager_address = Address::from(bridge.teeKeyManager().call().await?.0);
+
+        info!(
+            bridge = %config.bridge_address,
+            tee_key_manager = %tee_key_manager_address,
+            "Fetched TeeKeyManager address from Bridge"
+        );
 
         Ok(Self {
             rpc_url: config.rpc_url.clone(),
             bridge_address: config.bridge_address,
+            tee_key_manager_address,
             signer,
         })
     }
@@ -147,7 +163,7 @@ impl RelayerSubmitter {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
-        let contract = ITeeKeyManager::new(self.bridge_address, &provider);
+        let contract = ITeeKeyManager::new(self.tee_key_manager_address, &provider);
 
         match contract.isSequencerKeyValid(address).call().await {
             Ok(_) => Ok(true),
@@ -167,7 +183,7 @@ impl RelayerSubmitter {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
-        let contract = ITeeKeyManager::new(self.bridge_address, &provider);
+        let contract = ITeeKeyManager::new(self.tee_key_manager_address, &provider);
 
         match contract.isValidatorKeyValid(address).call().await {
             Ok(_) => Ok(true),
