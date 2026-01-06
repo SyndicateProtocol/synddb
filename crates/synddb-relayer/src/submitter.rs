@@ -48,6 +48,7 @@ pub(crate) struct RelayerSubmitter {
     bridge_address: Address,
     tee_key_manager_address: Address,
     signer: PrivateKeySigner,
+    tx_confirmation_timeout: Duration,
 }
 
 impl std::fmt::Debug for RelayerSubmitter {
@@ -75,6 +76,7 @@ impl RelayerSubmitter {
         info!(
             bridge = %config.bridge_address,
             tee_key_manager = %tee_key_manager_address,
+            tx_confirmation_timeout_secs = config.tx_confirmation_timeout.as_secs(),
             "Fetched TeeKeyManager address from Bridge"
         );
 
@@ -83,6 +85,7 @@ impl RelayerSubmitter {
             bridge_address: config.bridge_address,
             tee_key_manager_address,
             signer,
+            tx_confirmation_timeout: config.tx_confirmation_timeout,
         })
     }
 
@@ -202,12 +205,15 @@ impl RelayerSubmitter {
         let provider = ProviderBuilder::new().connect_http(url);
 
         let poll_interval = Duration::from_secs(2);
-        let timeout = Duration::from_secs(120);
         let start = std::time::Instant::now();
 
         loop {
-            if start.elapsed() > timeout {
-                anyhow::bail!("Timeout waiting for tx confirmation: {}", tx_hash);
+            if start.elapsed() > self.tx_confirmation_timeout {
+                anyhow::bail!(
+                    "Timeout waiting for tx confirmation after {:?}: {}",
+                    self.tx_confirmation_timeout,
+                    tx_hash
+                );
             }
 
             match provider.get_transaction_receipt(tx_hash).await {
@@ -231,12 +237,12 @@ impl RelayerSubmitter {
     }
 }
 
-/// Check if an error string indicates an InvalidPublicKey error.
+/// Check if an error string indicates an `InvalidPublicKey` error.
 ///
-/// The TeeKeyManager contract reverts with `InvalidPublicKey(address)` when a key
+/// The `TeeKeyManager` contract reverts with `InvalidPublicKey(address)` when a key
 /// is not registered. This error can appear in two forms in error messages:
-/// - The decoded name: "InvalidPublicKey"
-/// - The hex selector: "0xffc44e88"
+/// - The decoded name: `InvalidPublicKey`
+/// - The hex selector: `0xffc44e88`
 fn is_invalid_public_key_error(err_str: &str) -> bool {
     err_str.contains("InvalidPublicKey") || err_str.contains("0xffc44e88")
 }
@@ -245,7 +251,7 @@ fn is_invalid_public_key_error(err_str: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Verify the InvalidPublicKey error selector is correctly identified.
+    /// Verify the `InvalidPublicKey` error selector is correctly identified.
     ///
     /// The selector 0xffc44e88 is keccak256("InvalidPublicKey(address)")[:4].
     /// This test ensures we catch both the decoded and hex forms.

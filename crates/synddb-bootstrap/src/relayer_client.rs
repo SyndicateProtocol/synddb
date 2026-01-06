@@ -6,24 +6,41 @@
 use crate::BootstrapError;
 use alloy::{
     primitives::{keccak256, Address, B256, U256},
+    providers::ProviderBuilder,
     signers::{local::PrivateKeySigner, Signer},
+    sol,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, info};
+use url::Url;
 
-/// Fetch an identity token from the GCP metadata server for authenticating to Cloud Run
-async fn fetch_identity_token(audience: &str) -> Result<String, BootstrapError> {
+// Bridge contract interface for fetching TeeKeyManager address
+sol! {
+    #[sol(rpc)]
+    interface IBridge {
+        function teeKeyManager() external view returns (address);
+    }
+}
+
+/// Timeout for GCP metadata requests
+const METADATA_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Fetch an identity token from the GCP metadata server for authenticating to Cloud Run.
+/// Uses the provided HTTP client to avoid creating new connections for each request.
+async fn fetch_identity_token(
+    client: &reqwest::Client,
+    audience: &str,
+) -> Result<String, BootstrapError> {
     let metadata_url = format!(
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience={}",
         audience
     );
 
-    let client = reqwest::Client::new();
     let response = client
         .get(&metadata_url)
         .header("Metadata-Flavor", "Google")
-        .timeout(Duration::from_secs(5))
+        .timeout(METADATA_TIMEOUT)
         .send()
         .await
         .map_err(|e| {
@@ -56,7 +73,7 @@ pub enum KeyType {
 /// Client for registering keys via the relayer
 pub struct RelayerClient {
     relayer_url: String,
-    bridge_address: Address,
+    tee_key_manager_address: Address,
     chain_id: u64,
     http_client: reqwest::Client,
 }
@@ -65,7 +82,7 @@ impl std::fmt::Debug for RelayerClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RelayerClient")
             .field("relayer_url", &self.relayer_url)
-            .field("bridge_address", &self.bridge_address)
+            .field("tee_key_manager_address", &self.tee_key_manager_address)
             .field("chain_id", &self.chain_id)
             .finish_non_exhaustive()
     }
@@ -101,23 +118,47 @@ pub struct RegisterKeyResponse {
 
 impl RelayerClient {
     /// Create a new relayer client
-    pub fn new(
+    ///
+    /// Fetches the `TeeKeyManager` address from the Bridge contract, which is needed
+    /// for EIP-712 signature verification (the domain separator uses the `TeeKeyManager` address).
+    pub async fn new(
         relayer_url: String,
         bridge_address: Address,
+        rpc_url: &str,
         chain_id: u64,
         timeout: Duration,
-    ) -> Self {
+    ) -> Result<Self, BootstrapError> {
         let http_client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
-            .expect("Failed to build HTTP client for relayer");
+            .map_err(|e| BootstrapError::Config(format!("Failed to build HTTP client: {e}")))?;
 
-        Self {
+        // Fetch TeeKeyManager address from Bridge contract
+        let url = Url::parse(rpc_url)
+            .map_err(|e| BootstrapError::Config(format!("Invalid RPC URL: {e}")))?;
+        let provider = ProviderBuilder::new().connect_http(url);
+        let bridge = IBridge::new(bridge_address, &provider);
+        let tee_key_manager_address = bridge
+            .teeKeyManager()
+            .call()
+            .await
+            .map(|r| Address::from(r.0))
+            .map_err(|e| {
+                BootstrapError::Config(format!("Failed to fetch TeeKeyManager address: {e}"))
+            })?;
+
+        info!(
+            bridge = %bridge_address,
+            tee_key_manager = %tee_key_manager_address,
+            "Fetched TeeKeyManager address for EIP-712 signing"
+        );
+
+        Ok(Self {
             relayer_url,
-            bridge_address,
+            tee_key_manager_address,
             chain_id,
             http_client,
-        }
+        })
     }
 
     /// Register a key via the relayer
@@ -142,8 +183,21 @@ impl RelayerClient {
             .as_secs()
             + 3600;
 
+        // Parse hex values for attestation hash computation
+        let public_values_bytes = hex::decode(public_values.trim_start_matches("0x"))
+            .map_err(|e| BootstrapError::Config(format!("Invalid public_values hex: {e}")))?;
+        let proof_bytes_bytes = hex::decode(proof_bytes.trim_start_matches("0x"))
+            .map_err(|e| BootstrapError::Config(format!("Invalid proof_bytes hex: {e}")))?;
+
         // Create EIP-712 signature for registration
-        let signature = self.create_registration_signature(signer, deadline).await?;
+        let signature = self
+            .create_registration_signature(
+                signer,
+                &public_values_bytes,
+                &proof_bytes_bytes,
+                deadline,
+            )
+            .await?;
 
         let request = RegisterKeyRequest {
             public_values: public_values.to_string(),
@@ -161,8 +215,8 @@ impl RelayerClient {
             "Registering key via relayer"
         );
 
-        // Fetch identity token for Cloud Run authentication
-        let identity_token = fetch_identity_token(&self.relayer_url).await?;
+        // Fetch identity token for Cloud Run authentication (reuses client connection pool)
+        let identity_token = fetch_identity_token(&self.http_client, &self.relayer_url).await?;
 
         let url = format!("{}/register-key", self.relayer_url);
 
@@ -209,28 +263,36 @@ impl RelayerClient {
     /// Create EIP-712 signature for key registration
     ///
     /// Signs the `AddKey` struct for the `TeeKeyManager` contract.
+    /// The signature format must match the on-chain verification in `TeeKeyManager._verifyKeySignature()`.
     async fn create_registration_signature(
         &self,
         signer: &PrivateKeySigner,
+        public_values: &[u8],
+        proof_bytes: &[u8],
         deadline: u64,
     ) -> Result<Vec<u8>, BootstrapError> {
         // EIP-712 domain for TeeKeyManager
+        // IMPORTANT: Domain uses TeeKeyManager address, not Bridge address
         let domain_separator = compute_domain_separator(
             "TeeKeyManager",
             "1",
             self.chain_id,
-            self.bridge_address, // Bridge proxies to TeeKeyManager
+            self.tee_key_manager_address,
         );
 
-        // AddKey(address signer,uint256 deadline)
-        let tee_key = signer.address();
-        let typehash = keccak256("AddKey(address signer,uint256 deadline)");
+        // AddKey(bytes32 attestationHash,uint256 deadline)
+        // attestationHash = keccak256(abi.encodePacked(publicValues, proofBytes))
+        let typehash = keccak256("AddKey(bytes32 attestationHash,uint256 deadline)");
 
+        // Compute attestation hash (same as Solidity's abi.encodePacked)
+        let attestation_hash = keccak256([public_values, proof_bytes].concat());
+
+        // Compute struct hash using ABI encoding
+        // abi.encode(typehash, attestationHash, deadline)
         let struct_hash = keccak256(
             [
                 typehash.as_slice(),
-                &[0u8; 12], // padding for address
-                tee_key.as_slice(),
+                attestation_hash.as_slice(),
                 &U256::from(deadline).to_be_bytes::<32>(),
             ]
             .concat(),
@@ -248,6 +310,7 @@ impl RelayerClient {
 
         debug!(
             domain_separator = %domain_separator,
+            attestation_hash = %attestation_hash,
             struct_hash = %struct_hash,
             digest = %digest,
             "Created EIP-712 digest for registration"

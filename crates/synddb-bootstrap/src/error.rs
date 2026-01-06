@@ -70,6 +70,7 @@ impl BootstrapError {
                 | Self::JwksFetchFailed(_)
                 | Self::ProofGenerationFailed(_)
                 | Self::ProofServiceUnavailable(_)
+                | Self::ProofGenerationTimeout(_) // Timeouts are often transient
                 | Self::ContractSubmissionFailed(_)
                 | Self::TransactionFailed(_)
                 | Self::TransactionConfirmationFailed(_)

@@ -6,18 +6,24 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-/// Fetch an identity token from the GCP metadata server for authenticating to Cloud Run
-async fn fetch_identity_token(audience: &str) -> Result<String, BootstrapError> {
+/// Timeout for GCP metadata requests
+const METADATA_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Fetch an identity token from the GCP metadata server for authenticating to Cloud Run.
+/// Uses the provided HTTP client to avoid creating new connections for each request.
+async fn fetch_identity_token(
+    client: &reqwest::Client,
+    audience: &str,
+) -> Result<String, BootstrapError> {
     let metadata_url = format!(
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience={}",
         audience
     );
 
-    let client = reqwest::Client::new();
     let response = client
         .get(&metadata_url)
         .header("Metadata-Flavor", "Google")
-        .timeout(Duration::from_secs(5))
+        .timeout(METADATA_TIMEOUT)
         .send()
         .await
         .map_err(|e| {
@@ -129,8 +135,8 @@ impl ProofClient {
             "Requesting proof generation"
         );
 
-        // Fetch identity token for Cloud Run authentication
-        let identity_token = fetch_identity_token(&self.service_url).await?;
+        // Fetch identity token for Cloud Run authentication (reuses client connection pool)
+        let identity_token = fetch_identity_token(&self.client, &self.service_url).await?;
 
         let response = self
             .client
@@ -176,8 +182,8 @@ impl ProofClient {
             return Ok(true);
         }
 
-        // Fetch identity token for Cloud Run authentication
-        let identity_token = fetch_identity_token(&self.service_url).await?;
+        // Fetch identity token for Cloud Run authentication (reuses client connection pool)
+        let identity_token = fetch_identity_token(&self.client, &self.service_url).await?;
 
         let response = self
             .client

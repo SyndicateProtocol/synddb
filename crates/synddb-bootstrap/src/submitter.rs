@@ -25,6 +25,16 @@ sol! {
     }
 }
 
+/// Check if an error string indicates an `InvalidPublicKey` error.
+///
+/// The `TeeKeyManager` contract reverts with `InvalidPublicKey(address)` when a key
+/// is not registered. This error can appear in two forms in error messages:
+/// - The decoded name: `InvalidPublicKey`
+/// - The hex selector: `0xffc44e88` (`keccak256("InvalidPublicKey(address)")[:4]`)
+fn is_invalid_public_key_error(err_str: &str) -> bool {
+    err_str.contains("InvalidPublicKey") || err_str.contains("0xffc44e88")
+}
+
 /// Contract submitter for key verification and draining
 #[derive(Debug)]
 pub struct ContractSubmitter {
@@ -75,17 +85,16 @@ impl ContractSubmitter {
 
         let provider = ProviderBuilder::new().connect_http(url);
 
-        // Bridge proxies to TeeKeyManager
-        let contract = ITeeKeyManager::new(self.bridge_address, &provider);
+        let tee_key_manager_address = self.fetch_tee_key_manager_address(&provider).await?;
+        let contract = ITeeKeyManager::new(tee_key_manager_address, &provider);
 
         match contract.isSequencerKeyValid(address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
-                let err_str = e.to_string();
-                if err_str.contains("InvalidPublicKey") {
+                if is_invalid_public_key_error(&e.to_string()) {
                     Ok(false)
                 } else {
-                    Err(BootstrapError::KeyVerificationFailed(err_str))
+                    Err(BootstrapError::KeyVerificationFailed(e.to_string()))
                 }
             }
         }
@@ -98,20 +107,37 @@ impl ContractSubmitter {
 
         let provider = ProviderBuilder::new().connect_http(url);
 
-        // Bridge proxies to TeeKeyManager
-        let contract = ITeeKeyManager::new(self.bridge_address, &provider);
+        let tee_key_manager_address = self.fetch_tee_key_manager_address(&provider).await?;
+        let contract = ITeeKeyManager::new(tee_key_manager_address, &provider);
 
         match contract.isValidatorKeyValid(address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
-                let err_str = e.to_string();
-                if err_str.contains("InvalidPublicKey") {
+                if is_invalid_public_key_error(&e.to_string()) {
                     Ok(false)
                 } else {
-                    Err(BootstrapError::KeyVerificationFailed(err_str))
+                    Err(BootstrapError::KeyVerificationFailed(e.to_string()))
                 }
             }
         }
+    }
+
+    /// Fetch `TeeKeyManager` address from Bridge contract
+    async fn fetch_tee_key_manager_address<P: Provider>(
+        &self,
+        provider: &P,
+    ) -> Result<Address, BootstrapError> {
+        let bridge = IBridge::new(self.bridge_address, provider);
+        bridge
+            .teeKeyManager()
+            .call()
+            .await
+            .map(|r| Address::from(r.0))
+            .map_err(|e| {
+                BootstrapError::KeyVerificationFailed(format!(
+                    "Failed to fetch TeeKeyManager address: {e}"
+                ))
+            })
     }
 
     /// Get current gas price
