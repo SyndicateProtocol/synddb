@@ -17,9 +17,14 @@ pub enum BootstrapError {
     #[error("Failed to fetch JWKS: {0}")]
     JwksFetchFailed(String),
 
-    /// Proof generation failed
+    /// Proof generation failed (transient, may retry)
     #[error("Proof generation failed: {0}")]
     ProofGenerationFailed(String),
+
+    /// Proof generation failed permanently (do NOT retry)
+    /// This includes insufficient PROVE tokens, quota exhaustion, invalid inputs
+    #[error("Permanent proof generation failure: {0}")]
+    ProofGenerationPermanent(String),
 
     /// Proof service unavailable
     #[error("Proof service unavailable: {0}")]
@@ -63,6 +68,9 @@ pub enum BootstrapError {
 
 impl BootstrapError {
     /// Whether this error is likely transient and worth retrying
+    ///
+    /// Note: `ProofGenerationPermanent` is NOT retryable - it indicates errors like
+    /// insufficient PROVE tokens or invalid inputs that won't resolve on retry.
     pub const fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -75,5 +83,6 @@ impl BootstrapError {
                 | Self::TransactionFailed(_)
                 | Self::TransactionConfirmationFailed(_)
         )
+        // Explicitly NOT retryable: ProofGenerationPermanent
     }
 }

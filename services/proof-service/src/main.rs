@@ -65,6 +65,9 @@ struct ProveResponse {
 struct ErrorResponse {
     error: String,
     details: Option<String>,
+    /// Whether this error is permanent (should not retry)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permanent: Option<bool>,
 }
 
 /// Health check response
@@ -160,17 +163,70 @@ async fn prove_handler(
     match result {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(e) => {
-            error!(error = %e, "Proof generation failed");
+            let error_msg = e.to_string();
+            let is_permanent = is_permanent_error(&error_msg);
+
+            if is_permanent {
+                error!(error = %e, "Permanent error encountered when requesting proof");
+            } else {
+                error!(error = %e, "Proof generation failed (transient, may retry)");
+            }
+
+            // Return 400 Bad Request for permanent errors (don't retry)
+            // Return 503 Service Unavailable for transient errors (may retry)
+            let status = if is_permanent {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
+
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                status,
                 Json(ErrorResponse {
                     error: "Proof generation failed".into(),
-                    details: Some(e.to_string()),
+                    details: Some(error_msg),
+                    permanent: Some(is_permanent),
                 }),
             )
                 .into_response()
         }
     }
+}
+
+/// Check if an error message indicates a permanent failure that should not be retried.
+///
+/// Permanent errors include:
+/// - Insufficient PROVE token balance
+/// - Resource exhaustion (quota exceeded)
+/// - Invalid inputs that won't change on retry
+fn is_permanent_error(error_msg: &str) -> bool {
+    let error_lower = error_msg.to_lowercase();
+
+    // SP1 Network balance/quota errors
+    if error_lower.contains("insufficient balance") {
+        return true;
+    }
+    if error_lower.contains("resource has been exhausted") {
+        return true;
+    }
+
+    // Input validation errors
+    if error_lower.contains("invalid") && error_lower.contains("key") {
+        return true;
+    }
+    if error_lower.contains("invalid") && error_lower.contains("signature") {
+        return true;
+    }
+
+    // JWT/attestation errors that won't change
+    if error_lower.contains("jwt") && error_lower.contains("expired") {
+        return true;
+    }
+    if error_lower.contains("jwk not found") {
+        return true;
+    }
+
+    false
 }
 
 /// Generate proof (separated for cleaner error handling)

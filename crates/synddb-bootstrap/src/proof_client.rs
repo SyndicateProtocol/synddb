@@ -158,6 +158,14 @@ impl ProofClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+
+            // HTTP 400 indicates a permanent error that should NOT be retried
+            // (e.g., insufficient PROVE tokens, invalid inputs)
+            if status == reqwest::StatusCode::BAD_REQUEST {
+                return Err(BootstrapError::ProofGenerationPermanent(body));
+            }
+
+            // Other errors (5xx) are transient and may be retried
             return Err(BootstrapError::ProofGenerationFailed(format!(
                 "HTTP {status}: {body}"
             )));
