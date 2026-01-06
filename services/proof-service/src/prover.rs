@@ -88,37 +88,6 @@ impl AttestationProver {
         info!("Proof generated and verified successfully");
         Ok(proof)
     }
-
-    /// Execute the program without generating a proof (for testing)
-    pub fn execute(
-        &self,
-        jwt_token: &str,
-        jwk: &JwkKey,
-        expected_audience: &str,
-        evm_public_key: &[u8; 64],
-        image_signature: &[u8],
-    ) -> Result<Vec<u8>> {
-        info!("Executing program in test mode");
-
-        let mut stdin = SP1Stdin::new();
-        stdin.write(&jwt_token.as_bytes().to_vec());
-        stdin.write(jwk);
-        stdin.write(&expected_audience.to_string());
-        stdin.write(&evm_public_key.to_vec());
-        stdin.write(&image_signature.to_vec());
-
-        let (output, report) = self
-            .client
-            .execute(GCP_CS_ATTESTATION_ELF, &stdin)
-            .run()
-            .context("Program execution failed")?;
-
-        info!(
-            cycles = report.total_instruction_count(),
-            "Program executed"
-        );
-        Ok(output.to_vec())
-    }
 }
 
 /// JWKS cache for fetching Google's public keys
