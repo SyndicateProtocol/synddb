@@ -25,7 +25,7 @@ gcp-cs-attestation-sp1-program = { path = "../../../../crates/synddb-bootstrap/s
 hex = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sp1-sdk = "5.0"
+sp1-sdk = "5.2"
 
 [build-dependencies]
-sp1-build = "5.0"
+sp1-build = "5.2"
