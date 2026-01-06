@@ -49,7 +49,7 @@ pub struct BootstrapConfig {
     #[serde(with = "humantime_serde")]
     pub proof_health_check_timeout: Duration,
 
-    /// Total bootstrap timeout (must exceed proof_timeout + registration time)
+    /// Total bootstrap timeout (must exceed `proof_timeout` + registration time)
     #[arg(long, env = "BOOTSTRAP_TIMEOUT", default_value = "30m", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub bootstrap_timeout: Duration,
