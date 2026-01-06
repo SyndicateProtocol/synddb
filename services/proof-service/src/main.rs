@@ -273,13 +273,13 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
     // Decode public values to get TEE address
     let public_values = decode_public_values(proof.public_values.as_slice())?;
 
-    // Serialize proof
-    let proof_bytes = bincode::serialize(&proof.proof)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize proof: {}", e))?;
+    // Get proof bytes in Solidity-compatible format for on-chain verification
+    // This includes the verifier route selector in the first 4 bytes
+    let proof_bytes = proof.bytes();
 
     Ok(ProveResponse {
         public_values: format!("0x{}", hex::encode(proof.public_values.as_slice())),
-        proof_bytes: format!("0x{}", hex::encode(&proof_bytes)),
+        proof_bytes: format!("0x{}", hex::encode(proof_bytes)),
         tee_address: format!("{}", public_values.tee_signing_key),
     })
 }

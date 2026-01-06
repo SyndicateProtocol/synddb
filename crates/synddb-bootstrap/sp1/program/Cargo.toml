@@ -26,8 +26,7 @@ zkvm = ["sp1-zkvm", "gcp-attestation"]
 alloy = { version = "1.0", default-features = false, features = ["sol-types"] }
 
 # zkVM runtime (only needed when building the SP1 program binary)
-# Using v5.0 for on-chain verifier compatibility (v5.2 verifiers not deployed to Base Sepolia yet)
-sp1-zkvm = { version = "5.0", optional = true }
+sp1-zkvm = { version = "5.2", optional = true }
 
 # Attestation verification (only needed when building the SP1 program binary)
 gcp-attestation = { path = "../../../gcp-attestation", default-features = false, optional = true }
