@@ -312,6 +312,23 @@ Infrastructure is managed via Terraform in `deploy/terraform/environments/`:
 - `staging/` - Test environment on Base Sepolia
 - `prod/` - Production environment
 
+### Updating Image Digests and Signatures
+When updating Terraform configurations with new image digests and signatures, use the `get-image-info` script:
+
+```bash
+# Get digest and signature for an image tag
+echo '{"image": "us-central1-docker.pkg.dev/synddb-infra/synddb/sequencer:latest"}' | \
+  ./deploy/terraform/scripts/get-image-info.sh
+
+# Get signature for a specific digest
+echo '{"image": "us-central1-docker.pkg.dev/synddb-infra/synddb/sequencer@sha256:abc123..."}' | \
+  ./deploy/terraform/scripts/get-image-info.sh
+```
+
+The script outputs JSON with `digest`, `signature`, and `found` fields. Use these values to update the corresponding Terraform variables.
+
+**Requirements:** `oras` CLI must be installed.
+
 ### Deleting Infrastructure
 Cloud Run v2 services have `deletion_protection = true` by default. To delete:
 
