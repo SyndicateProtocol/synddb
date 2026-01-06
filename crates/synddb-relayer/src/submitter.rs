@@ -169,7 +169,8 @@ impl RelayerSubmitter {
             Ok(_) => Ok(true),
             Err(e) => {
                 let err_str = e.to_string();
-                if err_str.contains("InvalidPublicKey") {
+                // InvalidPublicKey error selector is 0xffc44e88
+                if err_str.contains("InvalidPublicKey") || err_str.contains("0xffc44e88") {
                     Ok(false)
                 } else {
                     Err(e.into())
@@ -189,7 +190,8 @@ impl RelayerSubmitter {
             Ok(_) => Ok(true),
             Err(e) => {
                 let err_str = e.to_string();
-                if err_str.contains("InvalidPublicKey") {
+                // InvalidPublicKey error selector is 0xffc44e88
+                if err_str.contains("InvalidPublicKey") || err_str.contains("0xffc44e88") {
                     Ok(false)
                 } else {
                     Err(e.into())
