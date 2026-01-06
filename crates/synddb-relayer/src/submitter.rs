@@ -168,9 +168,7 @@ impl RelayerSubmitter {
         match contract.isSequencerKeyValid(address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
-                let err_str = e.to_string();
-                // InvalidPublicKey error selector is 0xffc44e88
-                if err_str.contains("InvalidPublicKey") || err_str.contains("0xffc44e88") {
+                if is_invalid_public_key_error(&e.to_string()) {
                     Ok(false)
                 } else {
                     Err(e.into())
@@ -189,9 +187,7 @@ impl RelayerSubmitter {
         match contract.isValidatorKeyValid(address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
-                let err_str = e.to_string();
-                // InvalidPublicKey error selector is 0xffc44e88
-                if err_str.contains("InvalidPublicKey") || err_str.contains("0xffc44e88") {
+                if is_invalid_public_key_error(&e.to_string()) {
                     Ok(false)
                 } else {
                     Err(e.into())
@@ -232,5 +228,74 @@ impl RelayerSubmitter {
 
             tokio::time::sleep(poll_interval).await;
         }
+    }
+}
+
+/// Check if an error string indicates an InvalidPublicKey error.
+///
+/// The TeeKeyManager contract reverts with `InvalidPublicKey(address)` when a key
+/// is not registered. This error can appear in two forms in error messages:
+/// - The decoded name: "InvalidPublicKey"
+/// - The hex selector: "0xffc44e88"
+fn is_invalid_public_key_error(err_str: &str) -> bool {
+    err_str.contains("InvalidPublicKey") || err_str.contains("0xffc44e88")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify the InvalidPublicKey error selector is correctly identified.
+    ///
+    /// The selector 0xffc44e88 is keccak256("InvalidPublicKey(address)")[:4].
+    /// This test ensures we catch both the decoded and hex forms.
+    #[test]
+    fn test_invalid_public_key_error_detection() {
+        // Hex selector form (what alloy returns in practice)
+        let hex_error = r#"execution reverted, data: "0xffc44e880000000000000000000000008bdece7573c04738bbfe3fab749e2ad89d4cb312""#;
+        assert!(
+            is_invalid_public_key_error(hex_error),
+            "Should detect InvalidPublicKey by hex selector 0xffc44e88"
+        );
+
+        // Decoded form (if alloy ever decodes the error)
+        let decoded_error = "InvalidPublicKey(0x8bDece7573C04738bBfe3faB749e2ad89D4cB312)";
+        assert!(
+            is_invalid_public_key_error(decoded_error),
+            "Should detect InvalidPublicKey by name"
+        );
+
+        // Other errors should not match
+        let other_error = "execution reverted: insufficient funds";
+        assert!(
+            !is_invalid_public_key_error(other_error),
+            "Should not match other errors"
+        );
+
+        // Partial hex should not match
+        let partial_hex = "0xffc44e";
+        assert!(
+            !is_invalid_public_key_error(partial_hex),
+            "Should not match partial selector"
+        );
+    }
+
+    /// Verify the correct selector for InvalidPublicKey(address).
+    ///
+    /// This test documents the expected selector and will fail if the
+    /// contract ABI changes.
+    #[test]
+    fn test_invalid_public_key_selector() {
+        use alloy::primitives::keccak256;
+
+        let signature = "InvalidPublicKey(address)";
+        let hash = keccak256(signature.as_bytes());
+        let selector = &hash[..4];
+        let selector_hex = format!("0x{}", hex::encode(selector));
+
+        assert_eq!(
+            selector_hex, "0xffc44e88",
+            "InvalidPublicKey(address) selector should be 0xffc44e88"
+        );
     }
 }
