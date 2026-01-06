@@ -180,6 +180,20 @@ variable "relayer_private_key" {
   sensitive   = true
 }
 
+# Contract Deployer (for updating AttestationVerifier image digest)
+variable "deployer_private_key" {
+  description = "Deployer private key for updating on-chain contracts (hex-encoded with 0x prefix)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "attestation_verifier_address" {
+  description = "AttestationVerifier contract address (for updating expected image digest)"
+  type        = string
+  default     = ""
+}
+
 # Labels
 variable "labels" {
   description = "Labels to apply to all resources"
