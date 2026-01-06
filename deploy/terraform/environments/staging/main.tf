@@ -100,8 +100,10 @@ module "proof_service" {
   allow_unauthenticated = false
   min_instances         = 0  # Scale to zero when idle
   max_instances         = 1
-  cpu_limit             = "2"
-  memory_limit          = "2Gi"
+  # SP1 Groth16 verification: 16GB+ memory per docs.succinct.xyz/docs/sp1/getting-started/hardware-requirements
+  # CPU requirement is lower for verification vs proving (we use network proving)
+  cpu_limit             = "4"
+  memory_limit          = "16Gi"
   labels                = var.labels
 
   # Allow sequencer, validator, and price oracle to invoke the proof service

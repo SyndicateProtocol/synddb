@@ -114,11 +114,12 @@ pub(crate) async fn register_key(
         }
     };
 
-    // Check image digest is in application's allowlist
-    if !app_config
-        .allowed_image_digests
-        .contains(&attestation.image_digest)
-    {
+    // Check image digest is in application's allowlist (empty list = allow all for staging)
+    let image_allowed = app_config.allowed_image_digests.is_empty()
+        || app_config
+            .allowed_image_digests
+            .contains(&attestation.image_digest);
+    if !image_allowed {
         warn!(
             image_digest = %attestation.image_digest,
             audience_hash = %attestation.audience_hash,
