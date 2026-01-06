@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {Bridge} from "src/Bridge.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
 
 /**
  * @title DeployBridge
@@ -36,12 +37,16 @@ contract DeployBridge is Script {
 
         Bridge bridge = new Bridge(admin, wrappedNativeToken, teeKeyManager);
 
+        // Link TeeKeyManager to Bridge (required for key registration to work)
+        TeeKeyManager(teeKeyManager).setBridge(address(bridge));
+
         vm.stopBroadcast();
 
         console.log("========================================");
         console.log("Deployment Successful!");
         console.log("========================================");
         console.log("Bridge Contract:", address(bridge));
+        console.log("TeeKeyManager.bridge set to:", address(bridge));
         console.log("========================================");
         console.log("");
         console.log("Next Steps:");
