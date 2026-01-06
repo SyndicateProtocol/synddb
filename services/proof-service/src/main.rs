@@ -140,6 +140,7 @@ async fn prove_handler(
                 Json(ErrorResponse {
                     error: "Prover is busy".into(),
                     details: Some("Another proof is currently being generated".into()),
+                    permanent: None, // Transient - retry after current proof completes
                 }),
             )
                 .into_response();
