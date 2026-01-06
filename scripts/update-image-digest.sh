@@ -5,8 +5,8 @@
 #
 # Requires:
 #   - DEPLOYER_PRIVATE_KEY env var
-#   - RPC_URL env var (defaults to Base Sepolia)
-#   - ATTESTATION_VERIFIER_ADDRESS env var (defaults to staging)
+#   - RPC_URL env var
+#   - ATTESTATION_VERIFIER_ADDRESS env var
 #   - foundry (cast)
 
 set -euo pipefail
@@ -21,12 +21,14 @@ if [[ -z "$IMAGE_DIGEST" ]]; then
     exit 1
 fi
 
-# Defaults (RPC_URL must be provided, no default to avoid leaking private URLs)
-ATTESTATION_VERIFIER_ADDRESS="${ATTESTATION_VERIFIER_ADDRESS:-0x820Da95B935AEE0A73919630B1cBf6C431802886}"
-
-# Validate RPC URL is set
+# Validate required environment variables
 if [[ -z "${RPC_URL:-}" ]]; then
     echo "Error: RPC_URL environment variable is required"
+    exit 1
+fi
+
+if [[ -z "${ATTESTATION_VERIFIER_ADDRESS:-}" ]]; then
+    echo "Error: ATTESTATION_VERIFIER_ADDRESS environment variable is required"
     exit 1
 fi
 
