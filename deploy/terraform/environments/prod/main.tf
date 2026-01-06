@@ -97,9 +97,15 @@ module "proof_service" {
   sp1_network_private_key = var.sp1_network_private_key
   ingress                 = "internal"
   allow_unauthenticated   = false
-  min_instances           = 0  # Scale to zero when idle
-  max_instances           = 1  # Only one proof at a time
+  min_instances           = 0 # Scale to zero when idle
+  max_instances           = 1 # Only one proof at a time
   labels                  = var.labels
+
+  # Allow sequencer and validator to invoke the proof service
+  invoker_service_accounts = [
+    module.iam.sequencer_service_account_email,
+    module.iam.validator_service_account_email,
+  ]
 
   depends_on = [module.iam]
 }
@@ -139,21 +145,21 @@ module "validator" {
   count  = var.validator_count
   source = "../../modules/validator"
 
-  project_id            = var.project_id
-  zone                  = var.zone
-  name_prefix           = "synddb-prod"
-  instance_index        = count.index
-  network_self_link     = module.networking.network_self_link
-  subnet_self_link      = module.networking.subnet_self_link
-  service_account_email = module.iam.validator_service_account_email
-  container_image       = var.validator_image
-  gcs_bucket            = module.storage.bucket_name
-  sequencer_url         = "http://${module.sequencer.internal_ip}:8433"
-  machine_type          = var.validator_machine_type
-  enable_bridge_signer  = var.enable_bridge_signer
+  project_id              = var.project_id
+  zone                    = var.zone
+  name_prefix             = "synddb-prod"
+  instance_index          = count.index
+  network_self_link       = module.networking.network_self_link
+  subnet_self_link        = module.networking.subnet_self_link
+  service_account_email   = module.iam.validator_service_account_email
+  container_image         = var.validator_image
+  gcs_bucket              = module.storage.bucket_name
+  sequencer_url           = "http://${module.sequencer.internal_ip}:8433"
+  machine_type            = var.validator_machine_type
+  enable_bridge_signer    = var.enable_bridge_signer
   bridge_contract_address = var.bridge_contract_address
-  bridge_chain_id       = var.bridge_chain_id
-  labels                = var.labels
+  bridge_chain_id         = var.bridge_chain_id
+  labels                  = var.labels
 
   # TEE bootstrap (null = disabled)
   tee_bootstrap = var.tee_bootstrap != null ? {
@@ -185,15 +191,21 @@ module "relayer" {
   bridge_address = var.bridge_contract_address
 
   # Application configuration
-  required_audience      = var.relayer_config.required_audience
-  allowed_image_digests  = var.relayer_config.allowed_image_digests
+  required_audience     = var.relayer_config.required_audience
+  allowed_image_digests = var.relayer_config.allowed_image_digests
 
   # Production settings
   ingress               = "internal"
   allow_unauthenticated = false
-  min_instances         = 1  # Keep one instance warm in production
+  min_instances         = 1 # Keep one instance warm in production
   max_instances         = 4
   labels                = var.labels
+
+  # Allow sequencer and validator to invoke the relayer
+  invoker_service_accounts = [
+    module.iam.sequencer_service_account_email,
+    module.iam.validator_service_account_email,
+  ]
 
   depends_on = [module.iam]
 }
