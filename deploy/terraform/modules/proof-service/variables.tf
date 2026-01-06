@@ -55,7 +55,7 @@ variable "timeout_seconds" {
 variable "max_instances" {
   description = "Maximum number of instances"
   type        = number
-  default     = 1
+  default     = 3
 }
 
 variable "min_instances" {
@@ -67,7 +67,7 @@ variable "min_instances" {
 variable "concurrency" {
   description = "Maximum concurrent requests per instance"
   type        = number
-  default     = 1
+  default     = 3
 }
 
 # Access Control

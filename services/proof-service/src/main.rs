@@ -23,7 +23,6 @@ use config::Config;
 use prover::{decode_public_values, get_jwt_kid, AttestationProver, JwksCache};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 
@@ -31,8 +30,6 @@ use tracing::{error, info};
 struct AppState {
     prover: AttestationProver,
     jwks_cache: JwksCache,
-    /// Flag to track if prover is currently busy
-    prover_busy: RwLock<bool>,
 }
 
 /// Request to generate a proof
@@ -74,7 +71,6 @@ struct ErrorResponse {
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: String,
-    prover_busy: bool,
 }
 
 #[tokio::main]
@@ -104,11 +100,7 @@ async fn main() -> anyhow::Result<()> {
         config.jwks_cache_ttl_secs,
     );
 
-    let state = Arc::new(AppState {
-        prover,
-        jwks_cache,
-        prover_busy: RwLock::new(false),
-    });
+    let state = Arc::new(AppState { prover, jwks_cache });
 
     // Build router
     let app = Router::new()
@@ -131,35 +123,7 @@ async fn prove_handler(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ProveRequest>,
 ) -> impl IntoResponse {
-    // Check if prover is busy
-    {
-        let busy = state.prover_busy.read().await;
-        if *busy {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Prover is busy".into(),
-                    details: Some("Another proof is currently being generated".into()),
-                    permanent: None, // Transient - retry after current proof completes
-                }),
-            )
-                .into_response();
-        }
-    }
-
-    // Mark prover as busy
-    {
-        let mut busy = state.prover_busy.write().await;
-        *busy = true;
-    }
-
-    // Ensure we mark prover as not busy when done
     let result = generate_proof(&state, &request).await;
-
-    {
-        let mut busy = state.prover_busy.write().await;
-        *busy = false;
-    }
 
     match result {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
@@ -285,10 +249,8 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
 }
 
 /// Handle health check requests
-async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let busy = *state.prover_busy.read().await;
+async fn health_handler() -> impl IntoResponse {
     Json(HealthResponse {
         status: "ready".into(),
-        prover_busy: busy,
     })
 }
