@@ -421,7 +421,8 @@ jobs:
   # Build and publish non-reproducible images (no TEE attestation required)
   publish-standard:
     name: Standard Publish ${{ matrix.image }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     permissions:
       contents: read
       id-token: write
@@ -432,15 +433,24 @@ jobs:
           - image: synddb-relayer
             dockerfile: docker/relayer.Dockerfile
             cache-scope: relayer
+            runner: ubuntu-latest
+            timeout: 30
           - image: proof-service
             dockerfile: services/proof-service/Dockerfile
             cache-scope: proof-service
+            # Larger runner for SP1 toolchain compilation (memory intensive)
+            runner: ubuntu-latest-16-cores
+            timeout: 60
           - image: price-oracle
             dockerfile: examples/price-oracle/Dockerfile
             cache-scope: price-oracle
+            runner: ubuntu-latest
+            timeout: 30
           - image: price-oracle-validator
             dockerfile: examples/price-oracle/validator.Dockerfile
             cache-scope: price-oracle-validator
+            runner: ubuntu-latest
+            timeout: 30
 
     steps:
       - name: Free disk space

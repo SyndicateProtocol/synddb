@@ -1,25 +1,16 @@
 name: SP1 CI
 
 on:
+  # PR-only: provides feedback before merge. Push to main is handled by artifact-registry.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "crates/synddb-bootstrap/sp1/**"
       - "crates/gcp-attestation/**"
       - "tests/confidential-space/sp1/**"
-      - "services/proof-service/**"
       - ".github/workflows/sp1-ci.yml"
 
-  push:
-    branches:
-      - main
-    paths:
-      - "crates/synddb-bootstrap/sp1/**"
-      - "crates/gcp-attestation/**"
-      - "tests/confidential-space/sp1/**"
-      - "services/proof-service/**"
-
-  # Allow manual trigger
+  # Allow manual trigger for debugging
   workflow_dispatch:
 
 concurrency:
@@ -34,8 +25,8 @@ jobs:
   sp1-build:
     if: github.event.pull_request.draft == false || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     name: SP1 Build & Execute
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 60
     outputs:
       vkey: ${{ steps.vkey.outputs.vkey }}
     steps:
