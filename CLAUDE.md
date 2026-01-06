@@ -84,6 +84,19 @@ If you need to fix a prior commit (typo, missing file, etc.), do not use `git co
 ### Hard Reset
 Never run `git reset --hard` without asking for explicit confirmation first. Hard resets discard all uncommitted changes in the working directory, which can permanently delete work from parallel sessions. Always ask the user before running any variant of `git reset --hard`.
 
+### Sensitive Data
+Never commit Ethereum private keys, private RPC URLs, API secrets, or similar sensitive information. Before committing any file that might contain secrets:
+1. Verify the file is listed in `.gitignore`
+2. Use `git check-ignore <file>` to confirm git will ignore it
+3. If the file must be committed, ensure all sensitive values are replaced with placeholders or loaded from environment variables
+
+**Exception:** Default Anvil private keys and keys explicitly marked as testing/placeholder keys are safe to commit. These are well-known test keys that hold no real value.
+
+Common files that should be gitignored:
+- `.env` files (use `.env.example` with placeholder values instead)
+- Terraform variable files with real values (`*.tfvars` with secrets)
+- Any file containing RPC URLs with API keys
+
 ### Documentation (SPEC and PLAN files)
 The `SPEC.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
 - After making major implementation changes, update the corresponding SPEC and PLAN files to reflect the new state
