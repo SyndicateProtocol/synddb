@@ -54,17 +54,23 @@ jobs:
       - name: Install SP1 toolchain
         run: |
           set -e
+          SP1_INSTALLED=false
           for i in {1..3}; do
             echo "Attempt $i to install SP1 toolchain..."
-            {
-              curl -L https://sp1up.succinct.xyz | bash &&
-              ~/.sp1/bin/sp1up &&
-              ~/.sp1/bin/cargo-prove prove --version
-            } && break || {
+            if curl -L https://sp1up.succinct.xyz | bash && \
+               ~/.sp1/bin/sp1up && \
+               ~/.sp1/bin/cargo-prove prove --version; then
+              SP1_INSTALLED=true
+              break
+            else
               echo "Attempt $i failed. Retrying in 5 seconds..."
               sleep 5
-            }
+            fi
           done
+          if [ "$SP1_INSTALLED" = false ]; then
+            echo "::error::Failed to install SP1 toolchain after 3 attempts"
+            exit 1
+          fi
 
       - name: Build SP1 program
         run: |
