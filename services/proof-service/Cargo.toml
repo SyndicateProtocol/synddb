@@ -38,8 +38,9 @@ hex = "0.4"
 # native-gnark is required for local verification of proofs returned from the network.
 # Without it, the SDK tries to use Docker for gnark verification, which fails on Cloud Run.
 #
-# Requires >= 5.2.2 for NetworkMode::Mainnet support
-sp1-sdk = { version = "5.2", features = ["network", "native-gnark"] }
+# Using v5.0 for on-chain verifier compatibility (v5.2 verifiers not deployed to Base Sepolia yet)
+# v5.0 uses NetworkClient instead of NetworkMode::Mainnet but still supports the prover network
+sp1-sdk = { version = "5.0", features = ["network", "native-gnark"] }
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
 gcp-attestation = { path = "../../crates/gcp-attestation" }
@@ -67,4 +68,4 @@ reqwest = { version = "0.12", features = ["json"] }
 bincode = "1.3"
 
 [build-dependencies]
-sp1-build = "5.2"
+sp1-build = "5.0"

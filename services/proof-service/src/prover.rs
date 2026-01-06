@@ -5,8 +5,7 @@ use anyhow::{Context, Result};
 use gcp_attestation::{extract_kid_from_jwt, JwkKey};
 use gcp_cs_attestation_sp1_program::PublicValuesStruct;
 use sp1_sdk::{
-    include_elf, network::NetworkMode, NetworkProver, Prover, ProverClient,
-    SP1ProofWithPublicValues, SP1Stdin,
+    include_elf, NetworkProver, Prover, ProverClient, SP1ProofWithPublicValues, SP1Stdin,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -21,19 +20,17 @@ pub struct AttestationProver {
 }
 
 impl AttestationProver {
-    /// Create a new prover using the Succinct Prover Network (Mainnet)
+    /// Create a new prover using the Succinct Prover Network
     ///
-    /// Uses the auction-based Mainnet mode where provers compete for proof requests.
+    /// Uses the network prover (production endpoint: rpc.production.succinct.xyz).
     /// Requires `NETWORK_PRIVATE_KEY` environment variable with PROVE tokens deposited.
     ///
     /// # Panics
     /// Panics if the `NETWORK_PRIVATE_KEY` environment variable is not set.
     pub fn new() -> Self {
-        info!("Initializing SP1 prover for Succinct Network Mainnet (auction mode)");
+        info!("Initializing SP1 prover for Succinct Network (production)");
         Self {
-            client: ProverClient::builder()
-                .network_for(NetworkMode::Mainnet)
-                .build(),
+            client: ProverClient::builder().network().build(),
         }
     }
 
