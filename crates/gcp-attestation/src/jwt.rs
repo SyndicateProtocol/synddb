@@ -91,8 +91,12 @@ impl GcpCsClaims {
     }
 
     /// Check if debug mode is disabled (production mode)
+    ///
+    /// Production VMs have `dbgstat: "disabled-since-boot"`.
+    /// Debug VMs have `dbgstat: "enabled"`.
+    /// We explicitly check for the production value to fail closed on unknown states.
     pub fn is_debug_disabled(&self) -> bool {
-        self.dbgstat.as_deref() == Some("disabled")
+        self.dbgstat.as_deref() == Some("disabled-since-boot")
     }
 }
 
