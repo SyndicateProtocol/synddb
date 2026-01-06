@@ -103,6 +103,7 @@ jobs:
           fi
 
           echo "vkey=$VKEY" >> "$GITHUB_OUTPUT"
+          echo "::notice::SP1 Verification Key: $VKEY"
 
           {
             echo "## SP1 Verification Key"
