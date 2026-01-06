@@ -64,8 +64,8 @@ cargo run --release --bin gcp-cs-prover -- --execute \
 cargo run --release --bin gcp-cs-prover -- --prove \
   --sample ../../samples/samples_*.json
 
-# Get verification key for Solidity contract
-cargo run --release --bin gcp-cs-vkey
+# Get verification key for Solidity contract (from proof-service)
+cd ../../services/proof-service && cargo run --release --bin sp1-vkey
 ```
 
 ---
@@ -126,7 +126,7 @@ The SP1 program verifies attestations inside a zkVM and produces public values f
 After running `--prove`, provide your colleague with:
 
 1. **Proof file**: `sp1/script/gcp_cs_attestation_proof.bin`
-2. **Verification key**: Output of `cargo run --release --bin gcp-cs-vkey`
+2. **Verification key**: Output of `cargo run --release --bin sp1-vkey` (from `services/proof-service/`)
 3. **PublicValuesStruct**: Defined in `crates/synddb-bootstrap/sp1/program/src/types.rs`
 
 ---

@@ -7,6 +7,7 @@ on:
       - "crates/synddb-bootstrap/sp1/**"
       - "crates/gcp-attestation/**"
       - "tests/confidential-space/sp1/**"
+      - "services/proof-service/**"
       - ".github/workflows/sp1-ci.yml"
 
   push:
@@ -16,6 +17,7 @@ on:
       - "crates/synddb-bootstrap/sp1/**"
       - "crates/gcp-attestation/**"
       - "tests/confidential-space/sp1/**"
+      - "services/proof-service/**"
 
   # Allow manual trigger
   workflow_dispatch:
@@ -50,6 +52,7 @@ jobs:
           workspaces: |
             crates/synddb-bootstrap/sp1/program
             tests/confidential-space/sp1/script
+            services/proof-service
 
       - name: Install SP1 toolchain
         run: |
@@ -90,8 +93,8 @@ jobs:
       - name: Generate verification key
         id: vkey
         run: |
-          cd tests/confidential-space/sp1/script
-          VKEY=$(cargo run --release --bin gcp-cs-vkey 2>/dev/null | grep "bytes32" | awk '{print $NF}')
+          cd services/proof-service
+          VKEY=$(cargo run --release --bin sp1-vkey 2>/dev/null | grep "bytes32" | awk '{print $NF}')
 
           # Validate vkey format (should be 0x followed by 64 hex chars)
           if [[ ! "$VKEY" =~ ^0x[a-fA-F0-9]{64}$ ]]; then

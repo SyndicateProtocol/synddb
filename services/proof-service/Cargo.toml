@@ -8,6 +8,14 @@ publish = false
 # Standalone service, not part of main workspace
 [workspace]
 
+[[bin]]
+name = "proof-service"
+path = "src/main.rs"
+
+[[bin]]
+name = "sp1-vkey"
+path = "src/vkey.rs"
+
 [dependencies]
 # Web framework
 axum = { version = "0.8", features = ["json"] }
