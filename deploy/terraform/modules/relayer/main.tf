@@ -174,3 +174,13 @@ resource "google_cloud_run_v2_service_iam_member" "allow_unauthenticated" {
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
+
+# IAM policy for service accounts that can invoke the relayer
+resource "google_cloud_run_v2_service_iam_member" "invoker" {
+  for_each = toset(var.invoker_service_accounts)
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.relayer.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${each.value}"
+}

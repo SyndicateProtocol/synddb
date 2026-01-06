@@ -258,5 +258,12 @@ module "relayer" {
   deletion_protection   = false  # Allow destruction in staging
   labels                = var.labels
 
+  # Allow sequencer, validator, and price oracle to invoke the relayer
+  invoker_service_accounts = [
+    module.iam.sequencer_service_account_email,
+    module.iam.validator_service_account_email,
+    module.iam.price_oracle_service_account_email,
+  ]
+
   depends_on = [module.iam]
 }
