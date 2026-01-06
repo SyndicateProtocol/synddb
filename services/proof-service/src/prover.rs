@@ -4,7 +4,10 @@ use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use gcp_attestation::{extract_kid_from_jwt, JwkKey};
 use gcp_cs_attestation_sp1_program::PublicValuesStruct;
-use sp1_sdk::{include_elf, EnvProver, Prover, ProverClient, SP1ProofWithPublicValues, SP1Stdin};
+use sp1_sdk::{
+    include_elf, NetworkMode, NetworkProver, Prover, ProverClient, SP1ProofWithPublicValues,
+    SP1Stdin,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -14,18 +17,23 @@ pub const GCP_CS_ATTESTATION_ELF: &[u8] = include_elf!("gcp-cs-attestation-sp1-p
 
 /// Wrapper around SP1 prover for attestation proofs
 pub struct AttestationProver {
-    client: EnvProver,
+    client: NetworkProver,
 }
 
 impl AttestationProver {
-    /// Create a new prover using environment configuration
+    /// Create a new prover using the Succinct Prover Network (Mainnet)
     ///
-    /// Uses the SP1 Network Prover which offloads proof generation to Succinct's
-    /// hosted infrastructure. Requires the `NETWORK_PRIVATE_KEY` environment variable.
+    /// Uses the auction-based Mainnet mode where provers compete for proof requests.
+    /// Requires `NETWORK_PRIVATE_KEY` environment variable with PROVE tokens deposited.
+    ///
+    /// # Panics
+    /// Panics if the `NETWORK_PRIVATE_KEY` environment variable is not set.
     pub fn new() -> Self {
-        info!("Initializing SP1 prover from environment");
+        info!("Initializing SP1 prover for Succinct Network Mainnet (auction mode)");
         Self {
-            client: ProverClient::from_env(),
+            client: ProverClient::builder()
+                .network_for(NetworkMode::Mainnet)
+                .build(),
         }
     }
 

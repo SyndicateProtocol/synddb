@@ -20,7 +20,8 @@ hex = "0.4"
 
 # SP1 SDK for proof generation
 # native-gnark: Compiles Groth16 prover natively (requires Go 1.22) instead of using Docker
-sp1-sdk = { version = "5.0", features = ["native-gnark"] }
+# Requires >= 5.2.2 for NetworkMode::Mainnet support
+sp1-sdk = { version = "5.2", features = ["native-gnark"] }
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
 gcp-attestation = { path = "../../crates/gcp-attestation" }
