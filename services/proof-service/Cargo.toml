@@ -26,10 +26,12 @@ hex = "0.4"
 #   See: https://docs.succinct.xyz/docs/provers/cluster-development/architecture#node
 # - CPU proving optimizations (RUSTFLAGS="-C target-cpu=native -C target-feature=+avx512f")
 #   are not needed for network proving since proof generation is offloaded
-# - native-gnark feature not needed since we don't run the local Groth16 prover
+#
+# native-gnark is required for local verification of proofs returned from the network.
+# Without it, the SDK tries to use Docker for gnark verification, which fails on Cloud Run.
 #
 # Requires >= 5.2.2 for NetworkMode::Mainnet support
-sp1-sdk = { version = "5.2", features = ["network"] }
+sp1-sdk = { version = "5.2", features = ["network", "native-gnark"] }
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
 gcp-attestation = { path = "../../crates/gcp-attestation" }
