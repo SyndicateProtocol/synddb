@@ -18,10 +18,10 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 serde = { version = "1.0", features = ["derive"] }
 hex = "0.4"
 
-# SP1 SDK for proof generation
-# native-gnark: Compiles Groth16 prover natively (requires Go 1.22) instead of using Docker
+# SP1 SDK for network proof generation
 # Requires >= 5.2.2 for NetworkMode::Mainnet support
-sp1-sdk = { version = "5.2", features = ["native-gnark"] }
+# Note: native-gnark not needed since we offload proving to Succinct's network
+sp1-sdk = { version = "5.2", features = ["network"] }
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
 gcp-attestation = { path = "../../crates/gcp-attestation" }
