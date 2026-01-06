@@ -104,6 +104,13 @@ module "proof_service" {
   memory_limit          = "2Gi"
   labels                = var.labels
 
+  # Allow sequencer, validator, and price oracle to invoke the proof service
+  invoker_service_accounts = [
+    module.iam.sequencer_service_account_email,
+    module.iam.validator_service_account_email,
+    module.iam.price_oracle_service_account_email,
+  ]
+
   depends_on = [module.iam]
 }
 

@@ -6,6 +6,39 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+/// Fetch an identity token from the GCP metadata server for authenticating to Cloud Run
+async fn fetch_identity_token(audience: &str) -> Result<String, BootstrapError> {
+    let metadata_url = format!(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience={}",
+        audience
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&metadata_url)
+        .header("Metadata-Flavor", "Google")
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| {
+            BootstrapError::ProofServiceUnavailable(format!(
+                "Failed to fetch identity token: {}",
+                e
+            ))
+        })?;
+
+    if !response.status().is_success() {
+        return Err(BootstrapError::ProofServiceUnavailable(format!(
+            "Failed to fetch identity token: HTTP {}",
+            response.status()
+        )));
+    }
+
+    response.text().await.map_err(|e| {
+        BootstrapError::ProofServiceUnavailable(format!("Failed to read identity token: {}", e))
+    })
+}
+
 /// Request to generate an attestation proof
 #[derive(Debug, Clone, Serialize)]
 struct ProofRequest {
@@ -96,9 +129,13 @@ impl ProofClient {
             "Requesting proof generation"
         );
 
+        // Fetch identity token for Cloud Run authentication
+        let identity_token = fetch_identity_token(&self.service_url).await?;
+
         let response = self
             .client
             .post(format!("{}/prove", self.service_url))
+            .header("Authorization", format!("Bearer {}", identity_token))
             .json(&request)
             .send()
             .await
@@ -139,9 +176,13 @@ impl ProofClient {
             return Ok(true);
         }
 
+        // Fetch identity token for Cloud Run authentication
+        let identity_token = fetch_identity_token(&self.service_url).await?;
+
         let response = self
             .client
             .get(format!("{}/health", self.service_url))
+            .header("Authorization", format!("Bearer {}", identity_token))
             .timeout(self.health_check_timeout)
             .send()
             .await

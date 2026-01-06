@@ -37,7 +37,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
       image = var.container_image
 
       ports {
-        container_port = 8080
+        container_port = 8083
       }
 
       resources {
@@ -72,7 +72,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
       startup_probe {
         http_get {
           path = "/health"
-          port = 8080
+          port = 8083
         }
         initial_delay_seconds = 10
         period_seconds        = 10
@@ -83,7 +83,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
       liveness_probe {
         http_get {
           path = "/health"
-          port = 8080
+          port = 8083
         }
         period_seconds    = 30
         timeout_seconds   = 5
@@ -119,4 +119,14 @@ resource "google_cloud_run_v2_service_iam_member" "allow_unauthenticated" {
   name     = google_cloud_run_v2_service.proof_service.name
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+# IAM policy for service accounts that can invoke the proof service
+resource "google_cloud_run_v2_service_iam_member" "invoker" {
+  for_each = toset(var.invoker_service_accounts)
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.proof_service.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${each.value}"
 }

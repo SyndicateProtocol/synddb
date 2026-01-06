@@ -106,3 +106,9 @@ variable "labels" {
   type        = map(string)
   default     = {}
 }
+
+variable "invoker_service_accounts" {
+  description = "List of service account emails allowed to invoke the proof service"
+  type        = list(string)
+  default     = []
+}
