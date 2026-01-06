@@ -439,7 +439,7 @@ jobs:
             dockerfile: services/proof-service/Dockerfile
             cache-scope: proof-service
             # Larger runner for SP1 toolchain compilation (memory intensive)
-            runner: ubuntu-latest-16-cores
+            runner: shared-large-01
             timeout: 60
           - image: price-oracle
             dockerfile: examples/price-oracle/Dockerfile
