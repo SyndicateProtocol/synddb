@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     clang \
     git \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
@@ -47,7 +48,11 @@ WORKDIR /app/crates/synddb-bootstrap/risc0/program
 RUN cargo build --release
 
 # Build the proof service with CUDA support
+# Target L4 GPU (Ada Lovelace, compute 8.9). The build doesn't have a GPU present
+# so -arch=native fails - we must specify the target explicitly.
+# Also include sm_80 (Ampere A100) for compatibility with other GPU types.
 WORKDIR /app/services/proof-service
+ENV NVCC_APPEND_FLAGS="-gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_89,code=sm_89"
 RUN cargo build --release --features cuda
 
 # Runtime stage - CUDA runtime image (minimal footprint)
