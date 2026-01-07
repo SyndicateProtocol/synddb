@@ -64,7 +64,7 @@ struct ProofRequest {
 pub struct ProofResponse {
     /// ABI-encoded `PublicValuesStruct` (hex)
     pub public_values: String,
-    /// SP1 proof bytes (hex)
+    /// RISC Zero proof bytes (hex)
     pub proof_bytes: String,
     /// Derived TEE address for verification
     pub tee_address: String,

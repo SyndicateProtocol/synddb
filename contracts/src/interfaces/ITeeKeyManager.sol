@@ -35,7 +35,7 @@ interface ITeeKeyManager {
     /**
      * @notice Registers a new sequencer key with an attestation proof
      * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The SP1 proof bytes
+     * @param proofBytes The ZK proof bytes
      * @param requiresApproval Whether the key needs owner approval
      * @param expiresAt Expiration timestamp (0 = never expires)
      * @return publicKey The registered key address
@@ -50,7 +50,7 @@ interface ITeeKeyManager {
     /**
      * @notice Registers a new validator key with an attestation proof
      * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The SP1 proof bytes
+     * @param proofBytes The ZK proof bytes
      * @param requiresApproval Whether the key needs owner approval
      * @param expiresAt Expiration timestamp (0 = never expires)
      * @return publicKey The registered key address
@@ -65,7 +65,7 @@ interface ITeeKeyManager {
     /**
      * @notice Registers a sequencer key via signature (for keys without gas)
      * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The SP1 proof bytes
+     * @param proofBytes The ZK proof bytes
      * @param deadline Timestamp after which the signature expires
      * @param signature EIP-712 signature from the TEE key
      * @param requiresApproval Whether the key needs owner approval
@@ -84,7 +84,7 @@ interface ITeeKeyManager {
     /**
      * @notice Registers a validator key via signature (for keys without gas)
      * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The SP1 proof bytes
+     * @param proofBytes The ZK proof bytes
      * @param deadline Timestamp after which the signature expires
      * @param signature EIP-712 signature from the TEE key
      * @param requiresApproval Whether the key needs owner approval

@@ -28,7 +28,7 @@ use risc0_zkvm::guest::env;
 risc0_zkvm::guest::entry!(main);
 
 pub fn main() {
-    // Read inputs from the prover (same order as SP1 program)
+    // Read inputs from the prover
     let jwt_bytes: Vec<u8> = env::read();
     let jwk: JwkKey = env::read();
     let expected_audience: String = env::read();
@@ -76,7 +76,7 @@ pub fn main() {
         image_signature_s: FixedBytes::from(sig_s),
     });
 
-    // Commit public values to the journal (RISC Zero's equivalent of SP1's commit_slice)
+    // Commit public values to the journal
     env::commit_slice(&bytes);
 }
 

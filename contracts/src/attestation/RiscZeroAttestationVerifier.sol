@@ -42,9 +42,8 @@ struct PublicValuesStruct {
  *      container image digests, secure boot status, validity windows, and
  *      image signatures using secp256k1 (Ethereum native).
  *
- *      This contract uses RISC Zero's Groth16 verification instead of SP1.
- *      Key difference: RISC Zero verification uses sha256(journal) as journalDigest,
- *      while SP1 verification passes publicValues directly.
+ *      This contract uses RISC Zero's Groth16 verification.
+ *      Key detail: RISC Zero verification uses sha256(journal) as journalDigest.
  */
 contract RiscZeroAttestationVerifier is IAttestationVerifier, Ownable {
     address public immutable verifier;

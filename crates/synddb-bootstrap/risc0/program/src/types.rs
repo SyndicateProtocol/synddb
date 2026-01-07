@@ -3,8 +3,6 @@
 //! This module contains the `PublicValuesStruct` that defines the interface between
 //! the RISC Zero zkVM proof and the Solidity verifier contract. The struct is ABI-encoded
 //! by the RISC Zero program and decoded on-chain.
-//!
-//! This is identical to the SP1 version to ensure both backends produce compatible outputs.
 
 use alloy_sol_types::sol;
 

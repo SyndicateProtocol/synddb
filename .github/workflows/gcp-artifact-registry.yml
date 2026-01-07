@@ -436,14 +436,8 @@ jobs:
             runner: ubuntu-latest
             timeout: 30
           - image: proof-service
-            dockerfile: services/proof-service/Dockerfile
-            cache-scope: proof-service
-            # Larger runner for SP1 toolchain compilation (memory intensive)
-            runner: shared-large-01
-            timeout: 60
-          - image: proof-service-risc0
             dockerfile: services/proof-service/Dockerfile.risc0
-            cache-scope: proof-service-risc0
+            cache-scope: proof-service
             # Larger runner for RISC Zero toolchain compilation (memory intensive)
             runner: shared-large-01
             timeout: 60
@@ -599,10 +593,10 @@ jobs:
 
           echo "::notice::Attached signature artifact to $IMAGE@$DIGEST"
 
-      # Generate SP1 verification key for proof-service (contains embedded SP1 ELF).
-      # This happens after signing since vkey is metadata, not security-critical.
+      # Generate RISC Zero image ID for proof-service (contains embedded RISC Zero ELF).
+      # This happens after signing since image ID is metadata, not security-critical.
       - name: Install Rust toolchain
-        if: ${{ matrix.image == 'proof-service' || matrix.image == 'proof-service-risc0' }}
+        if: ${{ matrix.image == 'proof-service' }}
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.92.0"
@@ -612,75 +606,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            tests/confidential-space/sp1/script
-
-      - name: Cache Cargo dependencies (RISC Zero)
-        if: ${{ matrix.image == 'proof-service-risc0' }}
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
             tests/confidential-space/risc0/script
 
-      - name: Install SP1 toolchain
-        if: ${{ matrix.image == 'proof-service' }}
-        run: |
-          set -e
-          for i in {1..3}; do
-            echo "Attempt $i to install SP1 toolchain..."
-            if curl -L https://sp1up.succinct.xyz | bash && \
-               ~/.sp1/bin/sp1up && \
-               ~/.sp1/bin/cargo-prove prove --version; then
-              break
-            else
-              echo "Attempt $i failed. Retrying in 5 seconds..."
-              sleep 5
-            fi
-          done
-
-      - name: Generate SP1 verification key
-        id: vkey
-        if: ${{ matrix.image == 'proof-service' }}
-        run: |
-          # Use the test script to generate vkey (same as sp1-ci.yml)
-          cd tests/confidential-space/sp1/script
-          VKEY=$(cargo run --release --bin sp1-vkey 2>/dev/null | grep "bytes32" | awk '{print $NF}')
-
-          # Validate vkey format (0x followed by 64 hex chars)
-          if [[ ! "$VKEY" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
-            echo "::error::Invalid vkey format: $VKEY"
-            exit 1
-          fi
-
-          echo "vkey=$VKEY" >> $GITHUB_OUTPUT
-          echo "::notice::SP1 Verification Key: $VKEY"
-
-      - name: Attach vkey artifact
-        if: ${{ matrix.image == 'proof-service' && steps.vkey.outputs.vkey != '' }}
-        run: |
-          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
-          IMAGE="$REGISTRY/${{ matrix.image }}"
-          DIGEST="${{ steps.build.outputs.digest }}"
-
-          # Create vkey payload
-          cat > vkey.json <<EOF
-          {
-            "vkey": "${{ steps.vkey.outputs.vkey }}",
-            "programName": "gcp-cs-attestation-sp1-program",
-            "sp1Version": "5.2"
-          }
-          EOF
-
-          # Attach as OCI artifact referrer (immutable, linked to digest)
-          oras attach \
-            "$IMAGE@$DIGEST" \
-            --artifact-type application/vnd.syndicate.sp1-vkey.v1+json \
-            vkey.json:application/json
-
-          echo "::notice::Attached vkey artifact to $IMAGE@$DIGEST"
-
-      # Generate RISC Zero image ID for proof-service-risc0 (contains embedded RISC Zero ELF).
       - name: Install RISC Zero toolchain
-        if: ${{ matrix.image == 'proof-service-risc0' }}
+        if: ${{ matrix.image == 'proof-service' }}
         run: |
           set -e
           for i in {1..3}; do
@@ -697,7 +626,7 @@ jobs:
 
       - name: Generate RISC Zero image ID
         id: image_id
-        if: ${{ matrix.image == 'proof-service-risc0' }}
+        if: ${{ matrix.image == 'proof-service' }}
         run: |
           # Use the test script to generate image ID (same as risc0-ci.yml)
           # The script's build.rs uses risc0-build::embed_methods() to compile the guest
@@ -714,7 +643,7 @@ jobs:
           echo "::notice::RISC Zero Image ID: $IMAGE_ID"
 
       - name: Attach image ID artifact
-        if: ${{ matrix.image == 'proof-service-risc0' && steps.image_id.outputs.image_id != '' }}
+        if: ${{ matrix.image == 'proof-service' && steps.image_id.outputs.image_id != '' }}
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
           IMAGE="$REGISTRY/${{ matrix.image }}"
@@ -750,14 +679,6 @@ jobs:
             echo ""
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
             echo ""
-            if [[ -n "${{ steps.vkey.outputs.vkey }}" ]]; then
-              echo "### SP1 Verification Key"
-              echo ""
-              echo "\`\`\`"
-              echo "${{ steps.vkey.outputs.vkey }}"
-              echo "\`\`\`"
-              echo ""
-            fi
             if [[ -n "${{ steps.image_id.outputs.image_id }}" ]]; then
               echo "### RISC Zero Image ID"
               echo ""

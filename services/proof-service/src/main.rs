@@ -1,9 +1,8 @@
 //! RISC Zero GPU proof generation service
 //!
 //! This service generates ZK proofs for GCP Confidential Space attestation tokens
-//! using RISC Zero's native GPU proving (CUDA). Unlike SP1 which requires network
-//! proving, RISC Zero compiles to a native binary that works directly on Cloud Run
-//! with L4 GPUs.
+//! using RISC Zero's native GPU proving (CUDA). RISC Zero compiles to a native
+//! binary that works directly on Cloud Run with L4 GPUs.
 //!
 //! # Endpoints
 //!
@@ -101,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Initializing proof service");
 
-    // Initialize prover (this loads the SP1 ELF)
+    // Initialize prover (this loads the RISC Zero ELF)
     let prover = AttestationProver::new();
 
     // Initialize JWKS cache

@@ -5,7 +5,7 @@
 //!
 //! 1. Generate ephemeral signing key inside TEE
 //! 2. Fetch attestation token from Confidential Space
-//! 3. Request SP1 proof from proof service
+//! 3. Request RISC Zero proof from proof service
 //! 4. Sign registration request (EIP-712)
 //! 5. Send to relayer for on-chain submission (relayer pays gas)
 //! 6. Verify key registration on-chain

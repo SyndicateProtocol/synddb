@@ -31,8 +31,8 @@ hex = "0.4"
 
 # RISC Zero SDK for local GPU proof generation
 #
-# Unlike SP1 which requires Docker-in-Docker for GPU proving, RISC Zero compiles
-# to a native CUDA binary that works directly on Cloud Run with L4 GPUs.
+# RISC Zero compiles to a native CUDA binary that works directly on Cloud Run
+# with L4 GPUs.
 #
 # Features:
 # - Default: CPU proving (slower but portable)

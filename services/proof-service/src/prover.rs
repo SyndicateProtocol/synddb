@@ -27,8 +27,7 @@ pub struct AttestationProver;
 impl AttestationProver {
     /// Create a new prover using local GPU (CUDA) or CPU proving
     ///
-    /// Unlike SP1 which requires network proving, RISC Zero supports native GPU proving
-    /// that works directly on Cloud Run with L4 GPUs.
+    /// RISC Zero supports native GPU proving that works directly on Cloud Run with L4 GPUs.
     pub fn new() -> Self {
         info!("Initializing RISC Zero prover (local GPU/CPU)");
         Self
@@ -55,7 +54,7 @@ impl AttestationProver {
     ) -> Result<ProofOutput> {
         info!("Starting RISC Zero proof generation");
 
-        // Build executor environment with inputs (same order as SP1)
+        // Build executor environment with inputs
         let env = ExecutorEnv::builder()
             .write(&jwt_token.as_bytes().to_vec())
             .context("Failed to write JWT token")?

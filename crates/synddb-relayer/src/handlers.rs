@@ -29,7 +29,7 @@ pub(crate) enum KeyType {
 pub(crate) struct RegisterKeyRequest {
     /// Hex-encoded public values from attestation
     pub public_values: String,
-    /// Hex-encoded SP1 proof bytes
+    /// Hex-encoded RISC Zero proof bytes
     pub proof_bytes: String,
     /// Signature deadline (Unix timestamp)
     pub deadline: u64,
@@ -360,7 +360,7 @@ struct AttestationFields {
 
 /// Extract attestation fields from ABI-encoded public values
 ///
-/// The `PublicValuesStruct` is ABI-encoded by the SP1 program, meaning each field
+/// The `PublicValuesStruct` is ABI-encoded by the RISC Zero program, meaning each field
 /// occupies a 32-byte slot regardless of its actual size:
 ///
 /// | Slot | Bytes     | Field                    | Notes                           |

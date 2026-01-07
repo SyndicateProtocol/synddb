@@ -1,7 +1,7 @@
 //! Confidential Space Attestation Sample Capture
 //!
 //! This workload runs inside GCP Confidential Space and captures attestation tokens
-//! for use in SP1 on-chain verification development.
+//! for use in RISC Zero on-chain verification development.
 //!
 //! Output: JSON containing raw JWT tokens, decoded claims, and Google's JWKS public keys.
 
@@ -73,7 +73,7 @@ impl AttestationResponse {
     }
 }
 
-/// A captured attestation sample with all data needed for SP1 verification
+/// A captured attestation sample with all data needed for RISC Zero verification
 #[derive(Debug, Serialize)]
 struct AttestationSample {
     /// The raw JWT token (header.payload.signature)
@@ -95,7 +95,7 @@ struct AttestationSample {
     nonces: Vec<String>,
 }
 
-/// Complete output bundle for SP1 development
+/// Complete output bundle for RISC Zero development
 #[derive(Debug, Serialize)]
 struct AttestationBundle {
     /// Captured attestation samples
@@ -104,7 +104,7 @@ struct AttestationBundle {
     jwks: serde_json::Value,
     /// OIDC discovery document
     oidc_discovery: serde_json::Value,
-    /// Instructions for SP1 developers
+    /// Instructions for developers
     instructions: Instructions,
 }
 
@@ -171,7 +171,7 @@ async fn main() -> Result<()> {
     }
 
     // Capture token with nonce (for replay protection demos)
-    let nonce = format!("sp1-test-nonce-{}", now_unix());
+    let nonce = format!("risc0-test-nonce-{}", now_unix());
     info!(nonce = %nonce, "Capturing attestation token with nonce...");
     match capture_attestation(&audience, vec![nonce]).await {
         Ok(sample) => {
@@ -199,7 +199,7 @@ async fn main() -> Result<()> {
         jwks,
         oidc_discovery,
         instructions: Instructions {
-            summary: "Use these samples to develop and test SP1 on-chain attestation verification"
+            summary: "Use these samples to develop and test RISC Zero on-chain attestation verification"
                 .to_string(),
             verification_steps: vec![
                 "1. Parse the JWT: split raw_token by '.' into [header, payload, signature]"

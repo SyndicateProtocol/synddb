@@ -4,8 +4,7 @@
 # Run:   docker run --gpus all -p 8083:8083 proof-service-risc0
 #
 # This Dockerfile builds the proof service to use RISC Zero's native GPU proving
-# with CUDA. Unlike SP1 which requires Docker-in-Docker for GPU proving, RISC Zero
-# compiles to a native CUDA binary that works directly on Cloud Run L4 GPUs.
+# with CUDA, compiling to a native binary that works directly on Cloud Run L4 GPUs.
 
 # Build stage - CUDA development image with Rust
 FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS builder
