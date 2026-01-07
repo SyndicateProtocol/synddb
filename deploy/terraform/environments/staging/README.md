@@ -49,7 +49,7 @@ export ADMIN_ADDRESS="0xYOUR_WALLET_ADDRESS"
 ATTESTATION_VERIFIER_VKEY="0x005d59c275cbbb6fb41f5ba96c0d6505bd09cf154ac890a0e001673c71a05fc7" \
 EXPECTED_IMAGE_DIGEST_HASH="$EXPECTED_IMAGE_DIGEST_HASH" \
 EXPIRATION_TOLERANCE="86400" \
-forge script script/DeployAttestationVerifier.s.sol:DeployAttestationVerifier \
+forge script script/DeployRiscZeroAttestationVerifier.s.sol:DeployRiscZeroAttestationVerifier \
     --rpc-url https://sepolia.base.org \
     --private-key $PRIVATE_KEY \
     --etherscan-api-key $BASESCAN_API_KEY \

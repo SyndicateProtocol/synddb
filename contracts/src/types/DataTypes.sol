@@ -7,6 +7,14 @@ pragma solidity 0.8.30;
  */
 
 /**
+ * @notice Types of TEE signing keys managed by the bridge
+ */
+enum KeyType {
+    Sequencer, // Keys used by sequencers to sign messages
+    Validator // Keys used by validators to co-sign messages
+}
+
+/**
  * @notice Represents the lifecycle stages of a cross-chain message
  * @dev Used to track message processing state and prevent re-entrancy
  */

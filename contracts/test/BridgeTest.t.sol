@@ -3,7 +3,7 @@ pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {Bridge} from "src/Bridge.sol";
-import {SequencerSignature} from "src/types/DataTypes.sol";
+import {SequencerSignature, KeyType} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
 import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
 import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
@@ -58,7 +58,7 @@ contract BridgeTest is Test {
 
         // Register sequencer as a valid TEE key through bridge
         bytes memory publicValues = abi.encode(sequencer);
-        bridge.registerSequencerKey(publicValues, "");
+        bridge.registerKey(KeyType.Sequencer, publicValues, "");
 
         // Setup validators and register them
         setupValidators(3);
@@ -84,7 +84,7 @@ contract BridgeTest is Test {
 
             // Register validator key through bridge
             bytes memory publicValues = abi.encode(validatorAddr);
-            bridge.registerValidatorKey(publicValues, "");
+            bridge.registerKey(KeyType.Validator, publicValues, "");
         }
     }
 
@@ -414,7 +414,7 @@ contract BridgeTest is Test {
 
         // Register sequencer key and grant permission
         bytes memory publicValues = abi.encode(sequencer);
-        sequencerOnlyBridge.registerSequencerKey(publicValues, "");
+        sequencerOnlyBridge.registerKey(KeyType.Sequencer, publicValues, "");
         sequencerOnlyBridge.setMessageInitializer(sequencer, true);
 
         bytes32 messageId = keccak256("sequencer-only");

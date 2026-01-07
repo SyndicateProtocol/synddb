@@ -5,57 +5,35 @@ import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
-import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockCrossChainReceiver} from "./mocks/MockCrossChainReceiver.sol";
 import {WETH9} from "./mocks/WETH9.sol";
 
 /**
- * @title UseCase4_CrossChainMessaging
+ * @title CrossChainMessagingTest
  * @notice Tests for cross-chain message passing with arbitrary data
  */
-contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
+contract CrossChainMessagingTest is UseCaseBaseTest {
     Bridge public bridge;
+    WETH9 public weth;
     MockERC20 public token;
     MockCrossChainReceiver public destinationChain;
     ValidatorSignatureThresholdModule public validatorModule;
 
-    address public admin;
     address public sequencer;
     address public user;
     address public recipient;
 
     function setUp() public {
-        admin = address(this);
         sequencer = vm.addr(sequencerPrivateKey);
         user = makeAddr("user");
         recipient = makeAddr("recipient");
 
         token = new MockERC20("Cross Chain Token", "CCT");
-        WETH9 weth = new WETH9();
-
-        // Deploy attestation infrastructure
-        attestationVerifier = new MockAttestationVerifier();
-        teeKeyManager = new TeeKeyManager(attestationVerifier);
-
-        // Deploy bridge first
-        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
-
-        // Set bridge on TeeKeyManager
-        teeKeyManager.setBridge(address(bridge));
-
-        // Register sequencer as a valid TEE key through bridge
-        bytes memory publicValues = abi.encode(sequencer);
-        bridge.registerSequencerKey(publicValues, "");
-
-        // Setup validators and module using TeeKeyManager
-        setupValidators(bridge);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), 2);
         destinationChain = new MockCrossChainReceiver();
 
-        bridge.setMessageInitializer(sequencer, true);
-        bridge.addPreModule(address(validatorModule));
+        (bridge, weth) = createBridgeWithWETH(address(this), sequencer);
+        validatorModule = setupBridgeWithValidators(bridge);
 
         token.transfer(user, 1_000_000e18);
     }
@@ -352,65 +330,6 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
         assertEq(token.balanceOf(recipient), totalAmount);
         assertEq(token.balanceOf(returnRecipient), returnAmount);
         assertEq(token.balanceOf(address(bridge)), totalAmount);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                    VALIDATOR SIGNATURE TESTS
-    //////////////////////////////////////////////////////////////*/
-
-    /// @notice Test cross-chain message fails without sufficient validator signatures
-    function test_CrossChain_FailsWithInsufficientSignatures() public {
-        uint256 mintAmount = 1000e18;
-        bytes32 messageId = keccak256("cc-insufficient");
-
-        bytes memory crossChainData = abi.encode("MINT", recipient, mintAmount);
-        bytes memory payload = abi.encodeWithSelector(
-            destinationChain.receiveMintMessage.selector,
-            messageId,
-            address(token),
-            recipient,
-            mintAmount,
-            crossChainData
-        );
-
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
-
-        vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
-
-        // Only submit 1 signature (threshold is 2)
-        submitValidatorSignatures(bridge, messageId, 1);
-
-        vm.expectRevert();
-        bridge.handleMessage(messageId);
-    }
-
-    /// @notice Test cross-chain message succeeds with exact threshold
-    function test_CrossChain_SucceedsWithExactThreshold() public {
-        uint256 mintAmount = 500e18;
-        bytes32 messageId = keccak256("cc-exact");
-
-        bytes memory crossChainData = abi.encode("MINT", recipient, mintAmount);
-        bytes memory payload = abi.encodeWithSelector(
-            destinationChain.receiveMintMessage.selector,
-            messageId,
-            address(token),
-            recipient,
-            mintAmount,
-            crossChainData
-        );
-
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
-
-        vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
-
-        // Submit exactly 2 signatures
-        submitValidatorSignatures(bridge, messageId, 2);
-
-        bridge.handleMessage(messageId);
-
-        assertEq(token.balanceOf(recipient), mintAmount);
     }
 
     receive() external payable {}

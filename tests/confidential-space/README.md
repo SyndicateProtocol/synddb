@@ -21,7 +21,7 @@ tests/confidential-space/
 # Related crates:
 crates/gcp-attestation/                    # Core attestation verification library
 crates/synddb-bootstrap/risc0/program/     # RISC Zero zkVM program
-services/proof-service/                    # GPU proof generation service
+crates/proof-service/                      # GPU proof generation service
 ```
 
 ## Quick Start
@@ -52,7 +52,7 @@ cargo test -p gcp-attestation
 
 ### 3. Generate RISC Zero ZK Proof
 
-The proof generation is done by the proof-service. See `services/proof-service/README.md` for details.
+The proof generation is done by the proof-service. See `crates/proof-service/README.md` for details.
 
 ---
 

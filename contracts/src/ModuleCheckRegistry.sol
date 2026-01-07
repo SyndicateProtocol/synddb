@@ -2,7 +2,7 @@
 pragma solidity 0.8.30;
 
 import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
-import {ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
+import {ProcessingStage, SequencerSignature, KeyType} from "src/types/DataTypes.sol";
 import {IModuleCheckRegistry} from "src/interfaces/IModuleCheckRegistry.sol";
 import {IValidatorSigningAndQuery} from "src/interfaces/IValidatorSigningAndQuery.sol";
 import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
@@ -188,7 +188,7 @@ abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigning
     function signMessage(bytes32 messageId) external {
         // Validator must be registered in TeeKeyManager
         // This will revert if not a valid validator key
-        teeKeyManager.isValidatorKeyValid(msg.sender);
+        teeKeyManager.isKeyValid(KeyType.Validator, msg.sender);
 
         validatorSignatures[messageId][msg.sender] = true;
         emit MessageSigned(messageId, msg.sender, msg.sender);
@@ -202,7 +202,7 @@ abstract contract ModuleCheckRegistry is IModuleCheckRegistry, IValidatorSigning
 
         // Validator must be registered in TeeKeyManager
         // This will revert if not a valid validator key
-        teeKeyManager.isValidatorKeyValid(validator);
+        teeKeyManager.isKeyValid(KeyType.Validator, validator);
 
         validatorSignatures[messageId][validator] = true;
         emit MessageSigned(messageId, validator, msg.sender);

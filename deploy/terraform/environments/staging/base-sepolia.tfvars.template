@@ -42,7 +42,9 @@
 #   #   ETHERSCAN_API_KEY=<your-basescan-api-key>
 #
 #   # 2. Deploy contracts:
-#   just contracts::deploy-base-sepolia
+#   cd contracts && forge script script/DeployBridge.s.sol:DeployBridge \
+#       --rpc-url base_sepolia --private-key $PRIVATE_KEY \
+#       --etherscan-api-key $ETHERSCAN_API_KEY --verify --broadcast -vvv
 #
 # Note down the deployed addresses for use in this config.
 # Basescan: https://sepolia.basescan.org

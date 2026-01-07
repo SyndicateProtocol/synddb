@@ -436,7 +436,7 @@ jobs:
             runner: ubuntu-latest
             timeout: 30
           - image: proof-service
-            dockerfile: services/proof-service/Dockerfile.risc0
+            dockerfile: crates/proof-service/Dockerfile.risc0
             cache-scope: proof-service
             # Larger runner for RISC Zero toolchain compilation (memory intensive)
             runner: shared-large-01

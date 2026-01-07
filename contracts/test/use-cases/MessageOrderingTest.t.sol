@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {Test} from "forge-std/Test.sol";
+import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 import {Bridge} from "src/Bridge.sol";
 import {MessageOrderingModule} from "src/modules/MessageOrderingModule.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
-import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
-import {WETH9} from "test/use-cases/mocks/WETH9.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {WETH9} from "./mocks/WETH9.sol";
 
 /**
- * @title UseCase6_MessageOrdering
+ * @title MessageOrderingTest
  * @notice Demonstrates how to use MessageOrderingModule to enforce sequential message processing
  * @dev This use case shows:
  *      1. Setting up a bridge with message ordering enforcement
@@ -20,106 +17,37 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
  *      3. Preventing out-of-order execution
  *      4. Handling multiple senders with independent nonce sequences
  */
-contract UseCase6_MessageOrdering is Test {
+contract MessageOrderingTest is UseCaseBaseTest {
     Bridge public bridge;
     WETH9 public weth;
     MessageOrderingModule public orderingModule;
     ValidatorSignatureThresholdModule public validatorModule;
-    TeeKeyManager public teeKeyManager;
-    MockAttestationVerifier public attestationVerifier;
 
-    address public admin;
     address public sequencer;
-    uint256 public sequencerPrivateKey = 0xA11CE;
     address public user1;
     address public user2;
     address public receiver;
 
-    // Validators
-    uint256[] public validatorPrivateKeys;
-    address[] public validators;
-
     function setUp() public {
-        admin = address(this);
         sequencer = vm.addr(sequencerPrivateKey);
         user1 = makeAddr("user1");
         user2 = makeAddr("user2");
         receiver = makeAddr("receiver");
 
-        // Deploy infrastructure
-        weth = new WETH9();
-
-        // Deploy attestation infrastructure
-        attestationVerifier = new MockAttestationVerifier();
-        teeKeyManager = new TeeKeyManager(attestationVerifier);
-
-        // Deploy bridge first
-        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
-
-        // Set bridge on TeeKeyManager
-        teeKeyManager.setBridge(address(bridge));
-
-        // Register sequencer as a valid TEE key through bridge
-        bytes memory publicValues = abi.encode(sequencer);
-        bridge.registerSequencerKey(publicValues, "");
-
-        // Setup validators
-        setupValidators(3);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), 2);
+        (bridge, weth) = createBridgeWithWETH(address(this), sequencer);
+        validatorModule = setupBridgeWithValidators(bridge);
 
         // Deploy and configure ordering module
-        orderingModule = new MessageOrderingModule(admin);
-
-        // Configure bridge
-        bridge.setMessageInitializer(sequencer, true);
-        bridge.addPreModule(address(validatorModule));
-        bridge.addPreModule(address(orderingModule)); // Add ordering check before execution
+        orderingModule = new MessageOrderingModule(address(this));
+        bridge.addPreModule(address(orderingModule));
 
         vm.deal(sequencer, type(uint128).max);
         vm.deal(user1, type(uint128).max);
         vm.deal(user2, type(uint128).max);
     }
 
-    function setupValidators(uint256 count) internal {
-        for (uint256 i = 1; i <= count; i++) {
-            uint256 privateKey = i;
-            address validatorAddr = vm.addr(privateKey);
-
-            validatorPrivateKeys.push(privateKey);
-            validators.push(validatorAddr);
-
-            // Register validator key through bridge
-            bytes memory publicValues = abi.encode(validatorAddr);
-            bridge.registerValidatorKey(publicValues, "");
-        }
-    }
-
-    function signMessage(bytes32 messageId, uint256 validatorPrivateKey) internal pure returns (bytes memory) {
-        bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageId);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(validatorPrivateKey, ethSignedMessageHash);
-        return abi.encodePacked(r, s, v);
-    }
-
-    /// @notice Create a sequencer signature for a message
-    function createSequencerSignature(
-        bytes32 messageId,
-        address targetAddress,
-        bytes memory payload,
-        uint256 nativeTokenAmount
-    ) internal view returns (SequencerSignature memory) {
-        bytes32 messageHash = keccak256(
-            abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount)
-        );
-        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
-        return SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
-    }
-
-    function submitValidatorSignatures(bytes32 messageId) internal {
-        for (uint256 i = 0; i < 2; i++) {
-            bytes memory sig = signMessage(messageId, validatorPrivateKeys[i]);
-            bridge.signMessageWithSignature(messageId, sig);
-        }
+    function _submitValidatorSignatures(bytes32 messageId) internal {
+        submitValidatorSignatures(bridge, messageId);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -145,7 +73,7 @@ contract UseCase6_MessageOrdering is Test {
             bridge.initializeMessage(messageId, receiver, payload, sig, 0);
 
             // Submit validator signatures
-            submitValidatorSignatures(messageId);
+            _submitValidatorSignatures(messageId);
 
             // Handle message
             bridge.handleMessage(messageId);
@@ -182,7 +110,7 @@ contract UseCase6_MessageOrdering is Test {
 
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, receiver, payload, sig, 0);
-            submitValidatorSignatures(messageId);
+            _submitValidatorSignatures(messageId);
             bridge.handleMessage(messageId);
         }
 
@@ -196,7 +124,7 @@ contract UseCase6_MessageOrdering is Test {
 
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, receiver, payload, sig, 0);
-            submitValidatorSignatures(messageId);
+            _submitValidatorSignatures(messageId);
             bridge.handleMessage(messageId);
         }
 
@@ -299,7 +227,7 @@ contract UseCase6_MessageOrdering is Test {
             // Initialize and execute
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, receiver, payload, sig, 0);
-            submitValidatorSignatures(messageId);
+            _submitValidatorSignatures(messageId);
             bridge.handleMessage(messageId);
 
             assertTrue(bridge.isMessageCompleted(messageId));

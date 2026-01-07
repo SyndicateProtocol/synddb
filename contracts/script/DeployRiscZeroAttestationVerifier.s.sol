@@ -103,8 +103,8 @@ contract DeployRiscZeroAttestationVerifier is Script {
         console.log("4. Add trusted image signers (if not already added):");
         console.log("   attestationVerifier.addTrustedImageSigner(<signer_address>)");
         console.log("");
-        console.log("5. Register TEE keys through Bridge:");
-        console.log("   bridge.registerSequencerKey(<publicValues>, <proofBytes>)");
+        console.log("5. Register TEE keys through Bridge (0 = Sequencer, 1 = Validator):");
+        console.log("   bridge.registerKey(0, <publicValues>, <proofBytes>)");
         console.log("========================================");
 
         return (attestationVerifier, keyManager);

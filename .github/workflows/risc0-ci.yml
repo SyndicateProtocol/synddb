@@ -1,17 +1,12 @@
 name: RISC Zero CI
 
-on:
-  # PR-only: provides feedback before merge. Push to main is handled by artifact-registry.
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "crates/synddb-bootstrap/risc0/**"
-      - "crates/gcp-attestation/**"
-      - "tests/confidential-space/risc0/**"
-      - "services/proof-service/**"
-      - ".github/workflows/risc0-ci.yml"
+# Expensive job (~120 min on large runner). Only runs when explicitly requested.
+# Main branch builds are handled by gcp-artifact-registry.yml.
 
-  # Allow manual trigger for debugging
+on:
+  pull_request:
+    types: [labeled]
+
   workflow_dispatch:
 
 concurrency:
@@ -24,7 +19,7 @@ env:
 
 jobs:
   risc0-build:
-    if: github.event.pull_request.draft == false || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event.label.name == 'run-risc0' || github.event_name == 'workflow_dispatch'
     name: RISC Zero Build & Execute
     runs-on: shared-large-02
     timeout-minutes: 120

@@ -6,6 +6,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
 import {IAttestationVerifier} from "src/interfaces/IAttestationVerifier.sol";
+import {KeyType} from "src/types/DataTypes.sol";
 
 /**
  * @title TeeKeyManager
@@ -44,11 +45,9 @@ contract TeeKeyManager is ITeeKeyManager {
     address private immutable deployer;
 
     event BridgeSet(address indexed bridge);
-    event SequencerKeyAdded(address indexed key, uint256 expiresAt);
-    event ValidatorKeyAdded(address indexed key, uint256 expiresAt);
-    event SequencerKeyPending(address indexed key);
-    event ValidatorKeyPending(address indexed key);
-    event KeyRemoved(address indexed key);
+    event KeyAdded(KeyType indexed keyType, address indexed key, uint256 expiresAt);
+    event KeyPending(KeyType indexed keyType, address indexed key);
+    event KeyRemoved(KeyType indexed keyType, address indexed key);
     event KeysRevoked();
     event KeyExpirationUpdated(address indexed key, uint256 expiresAt);
     event AttestationVerifierUpdated(address indexed oldVerifier, address indexed newVerifier);
@@ -102,34 +101,47 @@ contract TeeKeyManager is ITeeKeyManager {
     }
 
     /*//////////////////////////////////////////////////////////////
+                            INTERNAL HELPERS
+    //////////////////////////////////////////////////////////////*/
+
+    function _getKeySet(KeyType keyType) internal view returns (EnumerableSet.AddressSet storage) {
+        return keyType == KeyType.Sequencer ? sequencerKeys : validatorKeys;
+    }
+
+    function _getPendingKeys(KeyType keyType, address key) internal view returns (bool) {
+        return keyType == KeyType.Sequencer ? pendingSequencerKeys[key] : pendingValidatorKeys[key];
+    }
+
+    function _setPendingKey(KeyType keyType, address key, bool value) internal {
+        if (keyType == KeyType.Sequencer) {
+            pendingSequencerKeys[key] = value;
+        } else {
+            pendingValidatorKeys[key] = value;
+        }
+    }
+
+    function _deletePendingKey(KeyType keyType, address key) internal {
+        if (keyType == KeyType.Sequencer) {
+            delete pendingSequencerKeys[key];
+        } else {
+            delete pendingValidatorKeys[key];
+        }
+    }
+
+    /*//////////////////////////////////////////////////////////////
                             KEY VALIDATION
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Checks if a sequencer key is valid
+     * @notice Checks if a key is valid for the given type
      * @dev Reverts with InvalidPublicKey if key not registered, KeyExpired if expired
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicKey The address to check
      * @return True if the key is valid
      */
-    function isSequencerKeyValid(address publicKey) external view override returns (bool) {
-        if (!sequencerKeys.contains(publicKey)) {
-            revert InvalidPublicKey(publicKey);
-        }
-        uint256 expiry = keyExpiration[publicKey];
-        if (expiry != 0 && block.timestamp > expiry) {
-            revert KeyExpired(publicKey);
-        }
-        return true;
-    }
-
-    /**
-     * @notice Checks if a validator key is valid
-     * @dev Reverts with InvalidPublicKey if key not registered, KeyExpired if expired
-     * @param publicKey The address to check
-     * @return True if the key is valid
-     */
-    function isValidatorKeyValid(address publicKey) external view override returns (bool) {
-        if (!validatorKeys.contains(publicKey)) {
+    function isKeyValid(KeyType keyType, address publicKey) external view override returns (bool) {
+        EnumerableSet.AddressSet storage keys = _getKeySet(keyType);
+        if (!keys.contains(publicKey)) {
             revert InvalidPublicKey(publicKey);
         }
         uint256 expiry = keyExpiration[publicKey];
@@ -144,15 +156,17 @@ contract TeeKeyManager is ITeeKeyManager {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Registers a sequencer key (called by Bridge)
+     * @notice Registers a key (called by Bridge)
      * @dev If registration is open, key is added directly. Otherwise, goes to pending.
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicValues The encoded public values from the attestation
      * @param proofBytes The ZK proof bytes
      * @param requiresApproval Whether the key needs owner approval
      * @param expiresAt Expiration timestamp (0 = never expires)
      * @return publicKey The registered key address
      */
-    function addSequencerKey(
+    function addKey(
+        KeyType keyType,
         bytes calldata publicValues,
         bytes calldata proofBytes,
         bool requiresApproval,
@@ -160,49 +174,22 @@ contract TeeKeyManager is ITeeKeyManager {
     ) external onlyBridge returns (address publicKey) {
         publicKey = attestationVerifier.verifyAttestationProof(publicValues, proofBytes);
 
-        if (sequencerKeys.contains(publicKey)) revert KeyAlreadyExists(publicKey);
+        EnumerableSet.AddressSet storage keys = _getKeySet(keyType);
+        if (keys.contains(publicKey)) revert KeyAlreadyExists(publicKey);
 
         if (requiresApproval) {
-            pendingSequencerKeys[publicKey] = true;
-            emit SequencerKeyPending(publicKey);
+            _setPendingKey(keyType, publicKey, true);
+            emit KeyPending(keyType, publicKey);
         } else {
-            sequencerKeys.add(publicKey);
+            keys.add(publicKey);
             keyExpiration[publicKey] = expiresAt;
-            emit SequencerKeyAdded(publicKey, expiresAt);
+            emit KeyAdded(keyType, publicKey, expiresAt);
         }
     }
 
     /**
-     * @notice Registers a validator key (called by Bridge)
-     * @dev If registration is open, key is added directly. Otherwise, goes to pending.
-     * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The ZK proof bytes
-     * @param requiresApproval Whether the key needs owner approval
-     * @param expiresAt Expiration timestamp (0 = never expires)
-     * @return publicKey The registered key address
-     */
-    function addValidatorKey(
-        bytes calldata publicValues,
-        bytes calldata proofBytes,
-        bool requiresApproval,
-        uint256 expiresAt
-    ) external onlyBridge returns (address publicKey) {
-        publicKey = attestationVerifier.verifyAttestationProof(publicValues, proofBytes);
-
-        if (validatorKeys.contains(publicKey)) revert KeyAlreadyExists(publicKey);
-
-        if (requiresApproval) {
-            pendingValidatorKeys[publicKey] = true;
-            emit ValidatorKeyPending(publicKey);
-        } else {
-            validatorKeys.add(publicKey);
-            keyExpiration[publicKey] = expiresAt;
-            emit ValidatorKeyAdded(publicKey, expiresAt);
-        }
-    }
-
-    /**
-     * @notice Registers a sequencer key via signature (for keys without gas)
+     * @notice Registers a key via signature (for keys without gas)
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicValues The encoded public values from the attestation
      * @param proofBytes The ZK proof bytes
      * @param deadline Timestamp after which the signature expires
@@ -211,7 +198,8 @@ contract TeeKeyManager is ITeeKeyManager {
      * @param expiresAt Expiration timestamp (0 = never expires)
      * @return publicKey The registered key address
      */
-    function addSequencerKeyWithSignature(
+    function addKeyWithSignature(
+        KeyType keyType,
         bytes calldata publicValues,
         bytes calldata proofBytes,
         uint256 deadline,
@@ -224,50 +212,16 @@ contract TeeKeyManager is ITeeKeyManager {
         publicKey = attestationVerifier.verifyAttestationProof(publicValues, proofBytes);
         _verifyKeySignature(publicValues, proofBytes, deadline, signature, publicKey);
 
-        if (sequencerKeys.contains(publicKey)) revert KeyAlreadyExists(publicKey);
+        EnumerableSet.AddressSet storage keys = _getKeySet(keyType);
+        if (keys.contains(publicKey)) revert KeyAlreadyExists(publicKey);
 
         if (requiresApproval) {
-            pendingSequencerKeys[publicKey] = true;
-            emit SequencerKeyPending(publicKey);
+            _setPendingKey(keyType, publicKey, true);
+            emit KeyPending(keyType, publicKey);
         } else {
-            sequencerKeys.add(publicKey);
+            keys.add(publicKey);
             keyExpiration[publicKey] = expiresAt;
-            emit SequencerKeyAdded(publicKey, expiresAt);
-        }
-    }
-
-    /**
-     * @notice Registers a validator key via signature (for keys without gas)
-     * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The ZK proof bytes
-     * @param deadline Timestamp after which the signature expires
-     * @param signature EIP-712 signature from the TEE key
-     * @param requiresApproval Whether the key needs owner approval
-     * @param expiresAt Expiration timestamp (0 = never expires)
-     * @return publicKey The registered key address
-     */
-    function addValidatorKeyWithSignature(
-        bytes calldata publicValues,
-        bytes calldata proofBytes,
-        uint256 deadline,
-        bytes calldata signature,
-        bool requiresApproval,
-        uint256 expiresAt
-    ) external onlyBridge returns (address publicKey) {
-        if (block.timestamp > deadline) revert SignatureExpired();
-
-        publicKey = attestationVerifier.verifyAttestationProof(publicValues, proofBytes);
-        _verifyKeySignature(publicValues, proofBytes, deadline, signature, publicKey);
-
-        if (validatorKeys.contains(publicKey)) revert KeyAlreadyExists(publicKey);
-
-        if (requiresApproval) {
-            pendingValidatorKeys[publicKey] = true;
-            emit ValidatorKeyPending(publicKey);
-        } else {
-            validatorKeys.add(publicKey);
-            keyExpiration[publicKey] = expiresAt;
-            emit ValidatorKeyAdded(publicKey, expiresAt);
+            emit KeyAdded(keyType, publicKey, expiresAt);
         }
     }
 
@@ -294,49 +248,29 @@ contract TeeKeyManager is ITeeKeyManager {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Approves a pending sequencer key
+     * @notice Approves a pending key
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicKey The pending key to approve
      * @param expiresAt Expiration timestamp (0 = never expires)
      */
-    function approveSequencerKey(address publicKey, uint256 expiresAt) external onlyBridge {
-        if (!pendingSequencerKeys[publicKey]) revert KeyNotPending(publicKey);
+    function approveKey(KeyType keyType, address publicKey, uint256 expiresAt) external onlyBridge {
+        if (!_getPendingKeys(keyType, publicKey)) revert KeyNotPending(publicKey);
 
-        delete pendingSequencerKeys[publicKey];
-        sequencerKeys.add(publicKey);
+        _deletePendingKey(keyType, publicKey);
+        EnumerableSet.AddressSet storage keys = _getKeySet(keyType);
+        keys.add(publicKey);
         keyExpiration[publicKey] = expiresAt;
-        emit SequencerKeyAdded(publicKey, expiresAt);
+        emit KeyAdded(keyType, publicKey, expiresAt);
     }
 
     /**
-     * @notice Approves a pending validator key
-     * @param publicKey The pending key to approve
-     * @param expiresAt Expiration timestamp (0 = never expires)
-     */
-    function approveValidatorKey(address publicKey, uint256 expiresAt) external onlyBridge {
-        if (!pendingValidatorKeys[publicKey]) revert KeyNotPending(publicKey);
-
-        delete pendingValidatorKeys[publicKey];
-        validatorKeys.add(publicKey);
-        keyExpiration[publicKey] = expiresAt;
-        emit ValidatorKeyAdded(publicKey, expiresAt);
-    }
-
-    /**
-     * @notice Rejects a pending sequencer key
+     * @notice Rejects a pending key
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicKey The pending key to reject
      */
-    function rejectSequencerKey(address publicKey) external onlyBridge {
-        if (!pendingSequencerKeys[publicKey]) revert KeyNotPending(publicKey);
-        delete pendingSequencerKeys[publicKey];
-    }
-
-    /**
-     * @notice Rejects a pending validator key
-     * @param publicKey The pending key to reject
-     */
-    function rejectValidatorKey(address publicKey) external onlyBridge {
-        if (!pendingValidatorKeys[publicKey]) revert KeyNotPending(publicKey);
-        delete pendingValidatorKeys[publicKey];
+    function rejectKey(KeyType keyType, address publicKey) external onlyBridge {
+        if (!_getPendingKeys(keyType, publicKey)) revert KeyNotPending(publicKey);
+        _deletePendingKey(keyType, publicKey);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -344,23 +278,15 @@ contract TeeKeyManager is ITeeKeyManager {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Removes a sequencer key
+     * @notice Removes a key
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicKey The key to remove
      */
-    function removeSequencerKey(address publicKey) external onlyBridge {
-        if (!sequencerKeys.remove(publicKey)) revert InvalidPublicKey(publicKey);
+    function removeKey(KeyType keyType, address publicKey) external onlyBridge {
+        EnumerableSet.AddressSet storage keys = _getKeySet(keyType);
+        if (!keys.remove(publicKey)) revert InvalidPublicKey(publicKey);
         delete keyExpiration[publicKey];
-        emit KeyRemoved(publicKey);
-    }
-
-    /**
-     * @notice Removes a validator key
-     * @param publicKey The key to remove
-     */
-    function removeValidatorKey(address publicKey) external onlyBridge {
-        if (!validatorKeys.remove(publicKey)) revert InvalidPublicKey(publicKey);
-        delete keyExpiration[publicKey];
-        emit KeyRemoved(publicKey);
+        emit KeyRemoved(keyType, publicKey);
     }
 
     /**
@@ -412,52 +338,30 @@ contract TeeKeyManager is ITeeKeyManager {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Gets all currently valid sequencer keys
-     * @return Array of valid sequencer key addresses
+     * @notice Gets all currently valid keys of a given type
+     * @param keyType The type of keys to retrieve
+     * @return Array of valid key addresses
      */
-    function getSequencerKeys() external view returns (address[] memory) {
-        return sequencerKeys.values();
+    function getKeys(KeyType keyType) external view override returns (address[] memory) {
+        return _getKeySet(keyType).values();
     }
 
     /**
-     * @notice Gets all currently valid validator keys
-     * @return Array of valid validator key addresses
+     * @notice Gets the count of valid keys of a given type
+     * @param keyType The type of keys to count
+     * @return Number of currently valid keys
      */
-    function getValidatorKeys() external view override returns (address[] memory) {
-        return validatorKeys.values();
+    function keyCount(KeyType keyType) external view override returns (uint256) {
+        return _getKeySet(keyType).length();
     }
 
     /**
-     * @notice Gets the count of valid sequencer keys
-     * @return Number of currently valid sequencer keys
-     */
-    function sequencerKeyCount() external view returns (uint256) {
-        return sequencerKeys.length();
-    }
-
-    /**
-     * @notice Gets the count of valid validator keys
-     * @return Number of currently valid validator keys
-     */
-    function validatorKeyCount() external view returns (uint256) {
-        return validatorKeys.length();
-    }
-
-    /**
-     * @notice Checks if a key is a pending sequencer key
+     * @notice Checks if a key is pending approval
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicKey The key to check
      * @return True if pending
      */
-    function isSequencerKeyPending(address publicKey) external view returns (bool) {
-        return pendingSequencerKeys[publicKey];
-    }
-
-    /**
-     * @notice Checks if a key is a pending validator key
-     * @param publicKey The key to check
-     * @return True if pending
-     */
-    function isValidatorKeyPending(address publicKey) external view returns (bool) {
-        return pendingValidatorKeys[publicKey];
+    function isKeyPending(KeyType keyType, address publicKey) external view override returns (bool) {
+        return _getPendingKeys(keyType, publicKey);
     }
 }
