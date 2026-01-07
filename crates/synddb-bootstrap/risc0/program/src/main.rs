@@ -13,12 +13,7 @@
 //! by an authorized Ethereum key (e.g., from CI).
 
 #![no_main]
-#![no_std]
 
-extern crate alloc;
-
-use alloc::string::String;
-use alloc::vec::Vec;
 use alloy::{
     primitives::{keccak256, Address, FixedBytes},
     sol_types::SolType,
