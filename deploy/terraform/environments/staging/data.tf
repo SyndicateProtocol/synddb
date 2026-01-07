@@ -52,7 +52,7 @@ data "external" "price_oracle_signature" {
 # expected image digest hash when a new sequencer image is deployed.
 #
 # The digest is extracted from the sequencer image reference and hashed with
-# keccak256 to match what the SP1 program commits in the attestation proof.
+# keccak256 to match what the RISC Zero program commits in the attestation proof.
 #
 # Requirements:
 #   - deployer_private_key must be set in tfvars (not committed to git!)

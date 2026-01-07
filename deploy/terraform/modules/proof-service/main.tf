@@ -7,14 +7,7 @@ terraform {
   }
 }
 
-# Local variable to determine if GPU should be enabled
-locals {
-  use_gpu = var.prover_backend == "risc0" || var.enable_gpu
-}
-
-# Cloud Run v2 service for proof generation
-# - SP1: Network prover (offloads proving to Succinct)
-# - RISC Zero: GPU proving (local CUDA on Cloud Run L4 GPUs)
+# Cloud Run v2 service for RISC Zero GPU proof generation
 resource "google_cloud_run_v2_service" "proof_service" {
   name     = var.service_name
   location = var.region
@@ -54,30 +47,13 @@ resource "google_cloud_run_v2_service" "proof_service" {
             memory = var.memory_limit
           },
           # Add GPU resource limit for RISC Zero proving
-          local.use_gpu ? { "nvidia.com/gpu" = tostring(var.gpu_count) } : {}
+          var.enable_gpu ? { "nvidia.com/gpu" = tostring(var.gpu_count) } : {}
         )
         cpu_idle          = false
         startup_cpu_boost = true
       }
 
-      # SP1-specific environment variables
-      dynamic "env" {
-        for_each = var.prover_backend == "sp1" ? [1] : []
-        content {
-          name  = "SP1_PROVER"
-          value = "network"
-        }
-      }
-
-      dynamic "env" {
-        for_each = var.prover_backend == "sp1" ? [1] : []
-        content {
-          name  = "NETWORK_PRIVATE_KEY"
-          value = var.sp1_network_private_key
-        }
-      }
-
-      # Common environment variables
+      # Environment variables
       env {
         name  = "LOG_JSON"
         value = "true"
@@ -85,7 +61,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
 
       env {
         name  = "RUST_LOG"
-        value = var.prover_backend == "risc0" ? "info,risc0_zkvm=debug" : "info"
+        value = "info,risc0_zkvm=debug"
       }
 
       startup_probe {
@@ -112,7 +88,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
 
     # GPU node selector for RISC Zero proving
     dynamic "node_selector" {
-      for_each = local.use_gpu ? [1] : []
+      for_each = var.enable_gpu ? [1] : []
       content {
         accelerator = var.gpu_type
       }

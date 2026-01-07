@@ -25,31 +25,11 @@ variable "service_account_email" {
   type        = string
 }
 
-# Prover Backend Selection
-variable "prover_backend" {
-  description = "Prover backend: sp1 (network prover) or risc0 (GPU proving)"
-  type        = string
-  default     = "risc0"
-
-  validation {
-    condition     = contains(["sp1", "risc0"], var.prover_backend)
-    error_message = "Prover backend must be one of: sp1, risc0."
-  }
-}
-
-# SP1 Network Prover (required only when prover_backend = "sp1")
-variable "sp1_network_private_key" {
-  description = "SP1 Network private key for proof generation (Secp256k1 key with PROVE tokens). Only required when prover_backend = sp1."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
 # GPU Configuration (for RISC Zero)
 variable "enable_gpu" {
-  description = "Enable GPU for RISC Zero proving. Automatically set to true when prover_backend = risc0."
+  description = "Enable GPU for RISC Zero proving. Defaults to true."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "gpu_type" {
@@ -65,8 +45,7 @@ variable "gpu_count" {
 }
 
 # Resource Limits
-# For SP1 (network prover): small instance, heavy work offloaded to Succinct
-# For RISC Zero (GPU): larger instance with GPU resources
+# RISC Zero GPU proving requires larger instances with GPU resources
 variable "cpu_limit" {
   description = "CPU limit. For GPU instances, minimum 4 cores recommended."
   type        = string
@@ -81,7 +60,7 @@ variable "memory_limit" {
 
 # Scaling
 variable "timeout_seconds" {
-  description = "Request timeout in seconds (max 3600 for Groth16/PLONK proofs)"
+  description = "Request timeout in seconds (max 3600 for Groth16 proofs)"
   type        = number
   default     = 3600
 }
@@ -99,7 +78,7 @@ variable "min_instances" {
 }
 
 variable "concurrency" {
-  description = "Maximum concurrent requests per instance. For SP1 (network prover), can be high since work is offloaded. For RISC Zero (GPU), set to 1 since GPU proving is resource-intensive."
+  description = "Maximum concurrent requests per instance. For RISC Zero GPU proving, set to 1 since GPU proving is resource-intensive."
   type        = number
   default     = 1
 }

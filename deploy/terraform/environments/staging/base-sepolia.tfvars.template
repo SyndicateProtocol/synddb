@@ -16,7 +16,6 @@
 #
 # 3. Fill in required values:
 #    - project_id: Your GCP project
-#    - sp1_network_private_key: Key with PROVE tokens
 #    - gcs_bucket_name: Globally unique bucket name
 #    - bridge_contract_address: Your Bridge contract
 #    - tee_bootstrap.attestation_audience: Your domain
@@ -61,22 +60,6 @@ project_id = "my-gcp-project"  # TODO: Your GCP project ID
 
 region = "us-central1"
 zone   = "us-central1-a"
-
-# -----------------------------------------------------------------------------
-# SP1 Network Prover
-# -----------------------------------------------------------------------------
-# Offloads ZK proof generation to Succinct's hosted infrastructure.
-# Required for TEE attestation proofs.
-#
-# Setup:
-#   1. Generate a key: cast wallet new
-#   2. Fund with PROVE tokens on Ethereum mainnet: https://explorer.succinct.xyz
-#   3. Docs: https://docs.succinct.xyz/docs/sp1/prover-network/quickstart
-#
-# The private key authenticates proof requests to the SP1 Network.
-# PROVE tokens are consumed per proof generated.
-
-sp1_network_private_key = ""  # TODO: Secp256k1 private key (0x prefixed, 64 hex chars)
 
 # -----------------------------------------------------------------------------
 # Container Images
