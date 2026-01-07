@@ -5,10 +5,6 @@ name: Build FFI Libraries
 # 2. Main branch: Build dev platforms and commit to repo - enable cross-language dev
 # 3. Release tags: Build all platforms and create GitHub Release - production distribution
 #
-# COST OPTIMIZATION:
-# Expensive runners (macOS Intel, Windows) are only provisioned for releases or
-# manual "all-platforms" triggers. A cheap Linux runner determines this first.
-#
 # BRANCH PROTECTION NOTE:
 # If you have branch protection rules requiring PRs for the main branch, the
 # commit-dev-libs job will fail with an error like:
@@ -88,7 +84,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Determine which platforms need to build BEFORE spinning up expensive runners
+  # Expensive runners (macOS Intel, Windows) only provision for releases.
   check-platforms:
     name: Check Build Requirements
     runs-on: ubuntu-latest
