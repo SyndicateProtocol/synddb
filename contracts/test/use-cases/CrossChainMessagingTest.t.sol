@@ -10,10 +10,10 @@ import {MockCrossChainReceiver} from "./mocks/MockCrossChainReceiver.sol";
 import {WETH9} from "./mocks/WETH9.sol";
 
 /**
- * @title UseCase4_CrossChainMessaging
+ * @title CrossChainMessagingTest
  * @notice Tests for cross-chain message passing with arbitrary data
  */
-contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
+contract CrossChainMessagingTest is UseCaseBaseTest {
     Bridge public bridge;
     WETH9 public weth;
     MockERC20 public token;

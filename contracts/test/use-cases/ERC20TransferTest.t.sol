@@ -9,10 +9,10 @@ import {WETH9} from "./mocks/WETH9.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 
 /**
- * @title UseCase3_ERC20Transfer
+ * @title ERC20TransferTest
  * @notice Tests for ERC-20 token transfers through the bridge with validator signatures
  */
-contract UseCase3_ERC20Transfer is UseCaseBaseTest {
+contract ERC20TransferTest is UseCaseBaseTest {
     Bridge public bridge;
     MockERC20 public usdc;
     MockERC20 public dai;

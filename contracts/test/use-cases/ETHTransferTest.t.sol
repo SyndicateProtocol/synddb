@@ -10,10 +10,10 @@ import {ETHReceiver} from "./mocks/ETHReceiver.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 
 /**
- * @title UseCase1_ETHTransfer
+ * @title ETHTransferTest
  * @notice Tests for ETH transfer through the bridge with validator signatures
  */
-contract UseCase1_ETHTransfer is UseCaseBaseTest {
+contract ETHTransferTest is UseCaseBaseTest {
     Bridge public bridge;
     WETH9 public weth;
     ETHReceiver public recipient;

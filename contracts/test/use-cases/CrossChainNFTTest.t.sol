@@ -13,11 +13,11 @@ import {WETH9} from "./mocks/WETH9.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
- * @title UseCase5_CrossChainNFT
+ * @title CrossChainNFTTest
  * @notice Tests cross-chain NFT transfers using ONFT (LayerZero) standard
  * @dev Demonstrates burn-and-mint pattern for omnichain NFTs
  */
-contract UseCase5_CrossChainNFT is UseCaseBaseTest {
+contract CrossChainNFTTest is UseCaseBaseTest {
     Bridge public sourceBridge;
     Bridge public destBridge;
     ValidatorSignatureThresholdModule public validatorModule;

@@ -9,10 +9,10 @@ import {MockNFT} from "./mocks/MockNFT.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 
 /**
- * @title UseCase2_NFTMinting
+ * @title NFTMintingTest
  * @notice Tests for NFT minting through the bridge with validator signature verification
  */
-contract UseCase2_NFTMinting is UseCaseBaseTest {
+contract NFTMintingTest is UseCaseBaseTest {
     Bridge public bridge;
     WETH9 public weth;
     MockNFT public freeNFT;

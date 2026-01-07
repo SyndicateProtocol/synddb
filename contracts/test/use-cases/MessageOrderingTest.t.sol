@@ -9,7 +9,7 @@ import {SequencerSignature} from "src/types/DataTypes.sol";
 import {WETH9} from "./mocks/WETH9.sol";
 
 /**
- * @title UseCase6_MessageOrdering
+ * @title MessageOrderingTest
  * @notice Demonstrates how to use MessageOrderingModule to enforce sequential message processing
  * @dev This use case shows:
  *      1. Setting up a bridge with message ordering enforcement
@@ -17,7 +17,7 @@ import {WETH9} from "./mocks/WETH9.sol";
  *      3. Preventing out-of-order execution
  *      4. Handling multiple senders with independent nonce sequences
  */
-contract UseCase6_MessageOrdering is UseCaseBaseTest {
+contract MessageOrderingTest is UseCaseBaseTest {
     Bridge public bridge;
     WETH9 public weth;
     MessageOrderingModule public orderingModule;
