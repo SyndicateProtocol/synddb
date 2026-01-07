@@ -118,7 +118,14 @@ impl RelayerSubmitter {
             Bytes::from(signature),
         );
 
-        let pending = tx.send().await?;
+        let pending = tx.send().await.map_err(|e| {
+            warn!(
+                error = %e,
+                contract = %self.bridge_address,
+                "registerSequencerKeyWithSignature transaction failed"
+            );
+            e
+        })?;
         let tx_hash = *pending.tx_hash();
 
         info!(tx_hash = %tx_hash, "registerSequencerKeyWithSignature submitted");
@@ -154,7 +161,14 @@ impl RelayerSubmitter {
             Bytes::from(signature),
         );
 
-        let pending = tx.send().await?;
+        let pending = tx.send().await.map_err(|e| {
+            warn!(
+                error = %e,
+                contract = %self.bridge_address,
+                "registerValidatorKeyWithSignature transaction failed"
+            );
+            e
+        })?;
         let tx_hash = *pending.tx_hash();
 
         info!(tx_hash = %tx_hash, "registerValidatorKeyWithSignature submitted");
