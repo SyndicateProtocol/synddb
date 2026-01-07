@@ -98,8 +98,8 @@ resource "google_cloud_run_v2_service" "proof_service" {
     }
 
     annotations = {
-      "run.googleapis.com/startup-cpu-boost" = "true"
       # Force new revision when image changes - use digest as annotation value
+      # Note: startup_cpu_boost is set in resources block, not as annotation
       "synddb.io/image-digest" = regex("sha256:[a-f0-9]+", var.container_image)
     }
 
