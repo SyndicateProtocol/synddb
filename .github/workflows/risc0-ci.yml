@@ -53,9 +53,18 @@ jobs:
             echo "Attempt $i to install RISC Zero toolchain..."
             if curl -L https://risczero.com/install | bash && \
                ~/.risc0/bin/rzup install; then
-              # Only add rzup bin to PATH (not the cpp toolchain which interferes with system cc)
+              # Add rzup bin directory to PATH for subsequent steps
               echo "$HOME/.risc0/bin" >> $GITHUB_PATH
-              # Verify installation
+              # Add all toolchain bin directories (rust, r0vm, cargo-risczero)
+              # but NOT cpp which interferes with system cc
+              for dir in ~/.risc0/toolchains/*/bin; do
+                if [[ "$dir" != *"cpp"* ]]; then
+                  echo "$dir" >> $GITHUB_PATH
+                fi
+              done
+              # Export CC to use system compiler explicitly
+              echo "CC=/usr/bin/cc" >> $GITHUB_ENV
+              # Verify installation using absolute paths
               if ~/.risc0/bin/rzup --version; then
                 RISC0_INSTALLED=true
                 break
