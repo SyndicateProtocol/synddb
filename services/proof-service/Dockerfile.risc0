@@ -42,12 +42,9 @@ WORKDIR /app
 # Copy the entire repo context (needed for workspace dependencies)
 COPY . .
 
-# Build the RISC Zero guest program first
-# This generates the ELF and image ID that will be embedded in the service
-WORKDIR /app/crates/synddb-bootstrap/risc0/program
-RUN cargo build --release
-
 # Build the proof service with CUDA support
+# The proof-service's build.rs uses risc0-build::embed_methods() which compiles
+# the guest program for the riscv32im-risc0-zkvm-elf target automatically.
 # Target L4 GPU (Ada Lovelace, compute 8.9). The build doesn't have a GPU present
 # so -arch=native fails - we must specify the target explicitly.
 # Also include sm_80 (Ampere A100) for compatibility with other GPU types.
