@@ -33,6 +33,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Version must match the risc0-zkvm crate version in Cargo.toml.
 # See: https://dev.risczero.com/api/zkvm/install
 RUN curl -L https://risczero.com/install | bash && \
+    /root/.risc0/bin/rzup install rust && \
     /root/.risc0/bin/rzup install cargo-risczero 3.0.4 && \
     /root/.risc0/bin/rzup install risc0-groth16
 
