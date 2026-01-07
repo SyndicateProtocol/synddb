@@ -77,9 +77,15 @@ git add path/to/file1.rs path/to/file2.rs
 Similarly, avoid `git restore .` or `git checkout .` to discard changes. Other files in the working directory may contain work from parallel sessions that should be preserved. Only restore specific files you intend to discard.
 
 ### Force Pushing
-Never force push (`git push --force` or `git push -f`) if there is any alternative. Force pushing rewrites history and can cause problems for collaborators who have already pulled the branch.
+Never force push (`git push --force`, `git push -f`, or `git push --force-with-lease`) under any circumstances. Force pushing rewrites history and causes problems for collaborators. It also destroys valuable context about what was tried and why.
 
-If you need to fix a prior commit (typo, missing file, etc.), do not use `git commit --amend` followed by force push. Instead, make the correction and create a new commit. This preserves history and avoids the need for force pushing.
+**CRITICAL**: Even when the user asks you to "revert" or "undo" a change, do NOT use `git commit --amend` followed by force push. Instead, create a NEW commit that makes the correction. This preserves the history of what was tried.
+
+Example - if you added something in commit A and the user says "remove that, it wasn't needed":
+- **WRONG**: `git commit --amend` + `git push --force`
+- **RIGHT**: Create a new commit B that removes the change
+
+The commit history showing "we tried X, then removed it because Y" is valuable context that should be preserved.
 
 ### Hard Reset
 Never run `git reset --hard` without asking for explicit confirmation first. Hard resets discard all uncommitted changes in the working directory, which can permanently delete work from parallel sessions. Always ask the user before running any variant of `git reset --hard`.
