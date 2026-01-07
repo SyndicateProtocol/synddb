@@ -1,12 +1,12 @@
 name: Performance Benchmarks
 
-# COST OPTIMIZATION:
-# Benchmarks are expensive (~30 min). On PRs, they only run when the
-# 'run-benchmarks' label is added. On main pushes, they always run.
+# Benchmarks only run on main to track performance over time.
+# They compare each commit against its parent.
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  push:
+    branches:
+      - main
     paths:
       - "crates/**"
       - "Cargo.toml"
@@ -14,33 +14,19 @@ on:
       - "rust-toolchain.toml"
       - ".github/workflows/benchmarks.yml"
 
-  # Run on main pushes
-  push:
-    branches:
-      - main
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  # Make sure CI fails on all warnings, including Clippy lints
   RUSTFLAGS: "-Dwarnings"
-  # Benchmark configuration
   BENCHMARK_SIMPLE_BATCH_SIZE: 5000
   BENCHMARK_FULL_BATCH_SIZE: 1000
   REGRESSION_THRESHOLD: -20
 
 jobs:
   benchmarks:
-    # On PRs: only run if 'run-benchmarks' label is present
-    # On main pushes: always run
-    if: |
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.draft == false &&
-       contains(github.event.pull_request.labels.*.name, 'run-benchmarks'))
     name: Performance Benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -107,13 +93,8 @@ jobs:
       - name: Get baseline commit SHA
         id: baseline-sha
         run: |
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            BASELINE_SHA=$(git rev-parse origin/main)
-            echo "Baseline: main branch ($BASELINE_SHA)"
-          else
-            BASELINE_SHA=$(git rev-parse HEAD~1)
-            echo "Baseline: previous commit ($BASELINE_SHA)"
-          fi
+          BASELINE_SHA=$(git rev-parse HEAD~1)
+          echo "Baseline: previous commit ($BASELINE_SHA)"
           echo "sha=$BASELINE_SHA" >> $GITHUB_OUTPUT
 
       - name: Restore cached baseline benchmarks
@@ -177,21 +158,13 @@ jobs:
           CURRENT_FULL_PEAK=${{ steps.current-bench.outputs.full_peak }}
           CURRENT_FULL_SUSTAINED=${{ steps.current-bench.outputs.full_sustained }}
 
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            BASELINE_LABEL="Baseline (main)"
-            CURRENT_LABEL="Current (PR)"
-          else
-            BASELINE_LABEL="Previous commit"
-            CURRENT_LABEL="Current commit"
-          fi
-
           echo "=== Performance Comparison ==="
           echo "Simple mode:"
-          echo "  $BASELINE_LABEL - Peak: $BASELINE_SIMPLE_PEAK ops/sec, Sustained: $BASELINE_SIMPLE_SUSTAINED ops/sec"
-          echo "  $CURRENT_LABEL - Peak: $CURRENT_SIMPLE_PEAK ops/sec, Sustained: $CURRENT_SIMPLE_SUSTAINED ops/sec"
+          echo "  Previous commit - Peak: $BASELINE_SIMPLE_PEAK ops/sec, Sustained: $BASELINE_SIMPLE_SUSTAINED ops/sec"
+          echo "  Current commit - Peak: $CURRENT_SIMPLE_PEAK ops/sec, Sustained: $CURRENT_SIMPLE_SUSTAINED ops/sec"
           echo "Full mode:"
-          echo "  $BASELINE_LABEL - Peak: $BASELINE_FULL_PEAK ops/sec, Sustained: $BASELINE_FULL_SUSTAINED ops/sec"
-          echo "  $CURRENT_LABEL - Peak: $CURRENT_FULL_PEAK ops/sec, Sustained: $CURRENT_FULL_SUSTAINED ops/sec"
+          echo "  Previous commit - Peak: $BASELINE_FULL_PEAK ops/sec, Sustained: $BASELINE_FULL_SUSTAINED ops/sec"
+          echo "  Current commit - Peak: $CURRENT_FULL_PEAK ops/sec, Sustained: $CURRENT_FULL_SUSTAINED ops/sec"
 
           CHANGE_SIMPLE=$(echo "scale=2; (($CURRENT_SIMPLE_SUSTAINED - $BASELINE_SIMPLE_SUSTAINED) / $BASELINE_SIMPLE_SUSTAINED) * 100" | bc)
           CHANGE_FULL=$(echo "scale=2; (($CURRENT_FULL_SUSTAINED - $BASELINE_FULL_SUSTAINED) / $BASELINE_FULL_SUSTAINED) * 100" | bc)
@@ -203,15 +176,15 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Simple Mode (Insert-Only)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | $BASELINE_LABEL | $CURRENT_LABEL | Change |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|------------------|----------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Previous | Current | Change |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|----------|---------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Peak achieved | $BASELINE_SIMPLE_PEAK ops/sec | $CURRENT_SIMPLE_PEAK ops/sec | - |" >> $GITHUB_STEP_SUMMARY
           echo "| Sustained stable | $BASELINE_SIMPLE_SUSTAINED ops/sec | $CURRENT_SIMPLE_SUSTAINED ops/sec | $CHANGE_SIMPLE% |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Full Mode (Mixed Operations)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | $BASELINE_LABEL | $CURRENT_LABEL | Change |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|------------------|----------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Previous | Current | Change |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|----------|---------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Peak achieved | $BASELINE_FULL_PEAK ops/sec | $CURRENT_FULL_PEAK ops/sec | - |" >> $GITHUB_STEP_SUMMARY
           echo "| Sustained stable | $BASELINE_FULL_SUSTAINED ops/sec | $CURRENT_FULL_SUSTAINED ops/sec | $CHANGE_FULL% |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -261,19 +234,3 @@ jobs:
             bench-current-*.db
             bench-baseline-*.log
             bench-baseline-*.db
-
-  # Provide instructions when benchmarks are skipped on PRs
-  benchmark-skip-notice:
-    if: |
-      github.event_name == 'pull_request' &&
-      !contains(github.event.pull_request.labels.*.name, 'run-benchmarks')
-    name: Benchmarks Skipped
-    runs-on: ubuntu-latest
-    steps:
-      - name: Notice
-        run: |
-          echo "## Benchmarks Skipped" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Performance benchmarks are opt-in for PRs to save CI resources." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "To run benchmarks, add the \`run-benchmarks\` label to this PR." >> $GITHUB_STEP_SUMMARY
