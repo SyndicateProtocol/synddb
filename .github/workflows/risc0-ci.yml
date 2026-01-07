@@ -59,15 +59,16 @@ jobs:
                ~/.risc0/bin/rzup install risc0-groth16; then
               # Add rzup bin directory to PATH for subsequent steps
               echo "$HOME/.risc0/bin" >> $GITHUB_PATH
-              # Add all toolchain bin directories (rust, r0vm, cargo-risczero)
-              # but NOT cpp which interferes with system cc
-              for dir in ~/.risc0/toolchains/*/bin; do
-                if [[ "$dir" != *"cpp"* ]]; then
-                  echo "$dir" >> $GITHUB_PATH
-                fi
-              done
-              # Export CC to use system compiler explicitly
+              # Add toolchain bin directories explicitly
+              # These provide rustc for riscv32im-risc0-zkvm-elf target
+              echo "$HOME/.risc0/toolchains/rust/bin" >> $GITHUB_PATH
+              echo "$HOME/.risc0/toolchains/r0vm/bin" >> $GITHUB_PATH
+              echo "$HOME/.risc0/toolchains/cargo-risczero/bin" >> $GITHUB_PATH
+              # Export CC to use system compiler explicitly (avoid RISC Zero's bundled cpp)
               echo "CC=/usr/bin/cc" >> $GITHUB_ENV
+              # Debug: list installed toolchains
+              echo "Installed RISC Zero toolchains:"
+              ls -la ~/.risc0/toolchains/ || true
               # Verify installation using absolute paths
               if ~/.risc0/bin/rzup --version; then
                 RISC0_INSTALLED=true
