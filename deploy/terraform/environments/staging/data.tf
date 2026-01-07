@@ -45,6 +45,16 @@ data "external" "price_oracle_signature" {
   }
 }
 
+# Proof service image info (includes RISC Zero image ID)
+data "external" "proof_service_info" {
+  count   = var.tee_bootstrap != null ? 1 : 0
+  program = ["bash", local.image_info_script]
+
+  query = {
+    image = var.proof_service_image
+  }
+}
+
 # -----------------------------------------------------------------------------
 # AttestationVerifier Image Digest Update
 # -----------------------------------------------------------------------------
@@ -119,4 +129,10 @@ output "resolved_signatures" {
       signature = try(data.external.price_oracle_signature[0].result.signature, "")
     } : null
   } : null
+}
+
+# Output the RISC Zero image ID for contract deployment
+output "risc0_image_id" {
+  description = "RISC Zero program image ID from proof-service (use for RiscZeroAttestationVerifier deployment)"
+  value       = var.tee_bootstrap != null ? try(data.external.proof_service_info[0].result.image_id, "") : ""
 }
