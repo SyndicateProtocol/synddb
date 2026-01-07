@@ -13,6 +13,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "gcp-cs-attestation-risc0-program"
 path = "src/main.rs"
+# Only build the binary when zkvm feature is enabled (built by risc0-build for zkVM target)
+required-features = ["zkvm"]
 
 [features]
 default = ["zkvm"]

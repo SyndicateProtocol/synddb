@@ -608,11 +608,18 @@ jobs:
           toolchain: "1.92.0"
 
       - name: Cache Cargo dependencies
-        if: ${{ matrix.image == 'proof-service' || matrix.image == 'proof-service-risc0' }}
+        if: ${{ matrix.image == 'proof-service' }}
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            services/proof-service
+            tests/confidential-space/sp1/script
+
+      - name: Cache Cargo dependencies (RISC Zero)
+        if: ${{ matrix.image == 'proof-service-risc0' }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            tests/confidential-space/risc0/script
 
       - name: Install SP1 toolchain
         if: ${{ matrix.image == 'proof-service' }}
@@ -634,7 +641,8 @@ jobs:
         id: vkey
         if: ${{ matrix.image == 'proof-service' }}
         run: |
-          cd services/proof-service
+          # Use the test script to generate vkey (same as sp1-ci.yml)
+          cd tests/confidential-space/sp1/script
           VKEY=$(cargo run --release --bin sp1-vkey 2>/dev/null | grep "bytes32" | awk '{print $NF}')
 
           # Validate vkey format (0x followed by 64 hex chars)
@@ -691,19 +699,10 @@ jobs:
         id: image_id
         if: ${{ matrix.image == 'proof-service-risc0' }}
         run: |
-          cd services/proof-service
-          # Build with default features (no GPU needed for image ID extraction)
-          cargo build --release
-
-          # Run the service briefly to get the image ID from the /image-id endpoint
-          # Start service in background, query endpoint, then kill
-          timeout 30 cargo run --release &
-          SERVICE_PID=$!
-          sleep 5
-
-          IMAGE_ID=$(curl -s http://localhost:8083/image-id 2>/dev/null | jq -r '.image_id' || echo "")
-
-          kill $SERVICE_PID 2>/dev/null || true
+          # Use the test script to generate image ID (same as risc0-ci.yml)
+          # The script's build.rs uses risc0-build::embed_methods() to compile the guest
+          cd tests/confidential-space/risc0/script
+          IMAGE_ID=$(cargo run --release --bin risc0-prover -- --execute --sample ../../samples/samples_*.json 2>&1 | grep "Image ID (bytes32)" | awk '{print $NF}')
 
           # Validate image_id format (0x followed by 64 hex chars)
           if [[ ! "$IMAGE_ID" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
