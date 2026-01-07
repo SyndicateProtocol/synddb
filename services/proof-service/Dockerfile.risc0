@@ -82,6 +82,8 @@ ENV RUST_LOG=info,risc0_zkvm=debug
 # Cloud Run automatically provides GPU access when configured
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+# CUDA library path for RISC Zero Groth16 proving
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
 
 EXPOSE 8083
 
