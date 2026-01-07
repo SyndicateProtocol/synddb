@@ -6,7 +6,7 @@ use std::default::Default;
 /// Returns a `&'static Connection` which is required by `SyndDB::attach()`.
 /// The connection is intentionally leaked since tests are short-lived.
 fn test_conn() -> &'static Connection {
-    test_conn()
+    Box::leak(Box::new(Connection::open_in_memory().unwrap()))
 }
 
 #[test]
