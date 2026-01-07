@@ -4,7 +4,7 @@ pragma solidity 0.8.30;
 import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
 import {IValidatorSigningAndQuery} from "src/interfaces/IValidatorSigningAndQuery.sol";
 import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
-import {ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
+import {KeyType, ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
@@ -69,7 +69,7 @@ contract ValidatorSignatureThresholdModule is IModuleCheck, Ownable {
     {
         if (stage == ProcessingStage.PreExecution) {
             // Get current validators from TeeKeyManager
-            address[] memory validators = TEE_KEY_MANAGER.getValidatorKeys();
+            address[] memory validators = TEE_KEY_MANAGER.getKeys(KeyType.Validator);
 
             // If no validators registered, fail the check
             if (validators.length == 0) {
@@ -93,6 +93,6 @@ contract ValidatorSignatureThresholdModule is IModuleCheck, Ownable {
      * @return Number of registered validator keys
      */
     function getValidatorCount() external view returns (uint256) {
-        return TEE_KEY_MANAGER.validatorKeyCount();
+        return TEE_KEY_MANAGER.keyCount(KeyType.Validator);
     }
 }
