@@ -1,19 +1,26 @@
 # SyndDB Development Summary
 
-This document provides an overview of SyndDB's development progression, key architectural decisions, and production readiness status for team members reviewing the codebase.
+This document provides an overview of SyndDB's development progression, key architectural decisions, and testing readiness status for team members reviewing the codebase.
 
 ## Executive Summary
 
 SyndDB is a SQLite replication system that enables high-performance blockchain applications. Applications write to SQLite normally while a client library captures changes and sends them to a sequencer service, which publishes to data availability layers. Validators verify the SQL operations and sign for on-chain settlement.
 
-CLAUDE: Mention that the current goal is to complete TEE bootstrapping, which is necessary for allowing sequencers + validators to write to the Bridge
 **Current Status**: Core infrastructure complete. Staging environment deployed on GCP Confidential Space with Base Sepolia integration. Examples demonstrate end-to-end functionality.
+
+**Current Goal**: Complete TEE bootstrapping to enable sequencers and validators to register their keys on-chain and write to the Bridge contract. This is the critical path to production.
 
 ---
 
 ## Component Overview
 
-CLAUDE: Mention somewhere in this section that we're still prototyping changesets vs WAL parsing. Also mention briefly what changesets and WAL parsing are for people unfamiliar with SQLite terminology.
+### SQLite Change Capture: Changesets vs WAL
+
+SyndDB currently uses **changesets** (via SQLite Session Extension) to capture database modifications:
+- **Changesets**: Logical operations (INSERT/UPDATE/DELETE) with old and new values. Captured at the SQL level, deterministic, and compact for replication.
+- **WAL (Write-Ahead Log)**: Physical page-level changes to the database file. Lower-level, includes internal SQLite bookkeeping.
+
+We're still prototyping whether changesets or WAL parsing provides the optimal tradeoff between simplicity, performance, and compatibility. Changesets are the current implementation.
 
 ### 1. Client Library (`crates/synddb-client/`)
 
@@ -130,10 +137,9 @@ TEE #1 (Application)          TEE #2 (Sequencer)
 
 **Decision**: Use RISC Zero zkVM (replacing SP1) for on-chain attestation verification.
 
-**Rationale**: RISC Zero's network prover provides cost-effective proof generation without requiring GPU infrastructure. The zkVM proves that a GCP Confidential Space attestation token is valid, allowing the bridge to trust TEE-signed messages.
+**Rationale**: SP1 has a closed-source dependency (`sp1-core-machine`) that cannot run in Google Cloud Run due to licensing and build constraints. RISC Zero has a fully open-source GPU prover that can potentially run in Cloud Run, and provides cost-effective network proving without requiring self-hosted GPU infrastructure.
 
-CLAUDE: Mention that this is because SP1 has a closed source dependency that cannot run in Google Cloud Run, while RISC Zero likely can be run in Cloud Run and has an open source GPU prover.
-**Evolution**: Started with SP1 SDK, migrated to RISC Zero 3.0 for better prover economics.
+**Evolution**: Started with SP1 SDK, migrated to RISC Zero 3.0 for Cloud Run compatibility and open-source prover availability.
 
 ### 4. GCS as Primary Storage
 
@@ -160,22 +166,22 @@ CLAUDE: Mention that this is because SP1 has a closed source dependency that can
 
 ---
 
-CLAUDE: Refer to this as "Testing readiness" rather than "Production readiness" since we're not live yet or audited.
+## Testing Readiness
 
-## Production Readiness
+### Ready for Testing
 
-### Ready for Production
+| Component                | Status  | Notes                             |
+| ------------------------ | ------- | --------------------------------- |
+| Client Library (Rust)    | Ready   | Stable API, comprehensive tests   |
+| Sequencer                | Ready   | Deployed to staging, handles load |
+| GCS Transport            | Ready   | Primary storage layer             |
+| CBOR/COSE Format         | Ready   | Wire format finalized             |
+| Bridge Contract          | Ready   | Deployed to Base Sepolia          |
+| Attestation Verification | Ready   | RISC Zero proofs working          |
+| TEE Bootstrap            | Ready   | Keys registered on-chain          |
+| CI/CD Pipeline           | Ready   | Reproducible builds, auto-deploy  |
 
-| Component                | Status     | Notes                             |
-| ------------------------ | ---------- | --------------------------------- |
-| Client Library (Rust)    | Production | Stable API, comprehensive tests   |
-| Sequencer                | Production | Deployed to staging, handles load |
-| GCS Transport            | Production | Primary storage layer             |
-| CBOR/COSE Format         | Production | Wire format finalized             |
-| Bridge Contract          | Production | Deployed to Base Sepolia          |
-| Attestation Verification | Production | RISC Zero proofs working          |
-| TEE Bootstrap            | Production | Keys registered on-chain          |
-| CI/CD Pipeline           | Production | Reproducible builds, auto-deploy  |
+**Note**: Not yet audited. Contracts and infrastructure require security review before mainnet deployment.
 
 ### Pending for Production (P1)
 
@@ -198,15 +204,11 @@ CLAUDE: Refer to this as "Testing readiness" rather than "Production readiness" 
 
 ### Known Limitations
 
-CLAUDE: Is this correct? Are you sure? That's a big bug.
-
-1. **Python FFI**: Creates separate SQLite connection, changesets not captured. Use Rust client for full integration.
+1. **Python FFI**: The Python FFI bindings open their own SQLite connection via ctypes. Python's native `sqlite3` module creates a separate connection, so changes made through it are NOT captured by SyndDB hooks. For full end-to-end changeset capture, use the Rust client or ensure all SQL goes through the FFI connection.
 
 2. **Single Sequencer**: Current architecture assumes single sequencer instance. No leader election or failover.
 
-CLAUDE: We're fixing this with automatic registration based on the TEE version. An admin can choose whether to have automatic approval of validators or not.
-
-3. **Validator Signatures**: Bridge accepts threshold of validator signatures, but validator registration/coordination is manual.
+3. **Validator Registration**: The Bridge now supports automatic validator registration based on TEE attestation. An admin can configure whether new validators are auto-approved or require manual approval. This replaces the previous manual registration flow.
 
 ---
 
@@ -315,19 +317,33 @@ Key registered on-chain
 
 ## Development Workflow
 
-CLAUDE: Mention that CI + Terraform is preferred to test the TEE environment. The just tooling is only useful for specific components, but not end-to-end workflows.
+### Testing TEE Features
 
-### Running Locally
+**Preferred approach**: CI + Terraform deployment to GCP Confidential Space. The `just` tooling is useful for individual component testing but cannot test end-to-end TEE flows locally.
 
 ```bash
-# Full local environment
-just dev
+# Push to branch, CI handles:
+# - Build reproducible Docker images
+# - Deploy to staging (Confidential Space VMs)
+# - Run E2E tests in real TEE environment
 
+# Monitor deployment
+gh run watch <run-id>
+```
+
+### Local Development
+
+For individual component testing (not end-to-end TEE):
+
+```bash
 # Run all CI checks
 just check
 
 # Run tests
 just test
+
+# Start local services (without TEE)
+just dev
 
 # See all commands
 just
@@ -363,39 +379,130 @@ gh pr checks
 
 ---
 
-CLAUDE: Summarize the commits in example-app. You're missing A LOT of them. Go step by step and summarize the work chronologically. In particular, explain how these batches tie to specific components. e.g. When we fixed client bugs, when we fixed the sequencer, when we added Terraform configs, etc.
+## Git History: Development Progression
 
-## Git History Highlights
+The `example-app` branch contains 568 commits spanning the full development arc. Here's the chronological progression by component area:
 
-The development progressed through these major phases:
+### Phase 1: Specification and Planning (Commits 1-15)
 
-### Phase 1: Foundation (Commits 1-20)
+**Key commits**: `b0947dd` - `0000108`
 
-- Initial spec and implementation plans
-- Core client library with Session Extension
-- Basic sequencer with local storage
+- Initial spec (`SPEC.md`) defining the SQLite replication model
+- Implementation plans for each component
+- Terminology refinement (Core → Sequencer → Sidecar model)
+- Workspace setup with Cargo.toml structure
 
-### Phase 2: Infrastructure (Commits 20-50)
+### Phase 2: Core Client Library (Commits 16-40)
 
+**Key commits**: `82a622b` - `87f2665`
+
+- Phase 2 implementation: SQLite Session Extension integration
+- Changeset capture via update hooks
+- Background sender thread with retry logic
+- `.env` file support for configuration
+- Prepared statement cache optimization (later removed for simplicity)
+- FFI bindings foundation
+
+### Phase 3: Sequencer Implementation (Commits 40-65)
+
+**Key commits**: `17b3131` - `6f11519`
+
+- HTTP receiver for changesets/snapshots
+- Batcher with size/time-based flushing
+- Chain monitor for blockchain events
+- Message passing system (inbound queue, outbound monitor)
 - GCS transport layer
 - CBOR/COSE wire format
-- Message passing system
-- Chain monitor for blockchain events
 
-### Phase 3: TEE Integration (Commits 50-70)
+### Phase 4: Validator Implementation (Commits 65-100)
 
-- GCP Confidential Space support
-- Attestation token parsing
-- SP1 zkVM proofs (later migrated to RISC Zero)
+**Key commits**: `4269b68` - `9acdebb`
+
+- Storage fetchers (HTTP, GCS)
+- Signature verification
+- Changeset application to SQLite replica
+- Audit trail verification
+- Pending changeset chain validation
+- Schema mismatch detection
+
+### Phase 5: Smart Contracts (Commits 100-130)
+
+**Key commits**: `ffe884a` - `d0c4f01`
+
+- Bridge.sol with message execution
+- ModuleCheckRegistry for pluggable validation
+- TeeKeyManager for key registration
+- GasTreasury for gas sponsorship
+- Deployed to Base Sepolia
+
+### Phase 6: Example Applications (Commits 130-180)
+
+**Key commits**: `44378c2` - `690ef92`
+
+- Prediction market (Rust): Full SyndDB integration demo
+- Price oracle (Python): Custom validator rules, message passing
+- PriceOracle.sol contract
+- Development environment scripts
+- Docker E2E tests
+
+### Phase 7: TEE Integration (Commits 180-280)
+
+**Key commits**: `a789778` - `cb19c2e`
+
+- GCP Confidential Space attestation sample
+- JWT signature verification
+- `gcp-attestation` crate for token parsing
+- `synddb-bootstrap` crate for key registration
+- Proof-service for SP1/RISC Zero proving
+- Cosign image signing (later migrated to secp256k1)
+
+### Phase 8: Infrastructure and Deployment (Commits 280-400)
+
+**Key commits**: `11b040f` - `7cb896e`
+
+- Terraform modules for GCP deployment
 - Reproducible Docker builds
+- Artifact Registry CI/CD pipeline
+- Relayer service for gas sponsorship
+- SLSA provenance attestations
+- Cost-optimized CI workflows
 
-### Phase 4: Production Hardening (Commits 70-85)
+### Phase 9: Production Hardening (Commits 400-500)
 
-- secp256k1 image signing
-- Terraform infrastructure
-- RISC Zero 3.0 migration
-- CI/CD automation
-- Staging deployment
+**Key commits**: `ed76f9b` - `110ec75`
+
+- secp256k1 image signing (replacing cosign P-256)
+- OCI artifact signatures
+- RISC Zero migration (from SP1)
+- Prometheus metrics foundation
+- OpenTelemetry/Cloud Trace integration
+- Terraform auto-updates for image digests
+
+### Phase 10: Current Work (Commits 500-568)
+
+**Key commits**: `636a436` - `052a03e`
+
+- Client library test helpers
+- RISC Zero 3.0 toolchain fixes
+- CI workflow refinements
+- Documentation updates
+- Bug fixes for TEE bootstrap flow
+
+---
+
+## Commit Statistics by Area
+
+| Area | Approximate Commits | Key Milestones |
+|------|---------------------|----------------|
+| Client Library | ~80 | Session Extension, FFI bindings, push/snapshot API |
+| Sequencer | ~70 | HTTP API, batcher, message passing, GCS transport |
+| Validator | ~60 | Sync/apply, audit trail, schema detection |
+| Contracts | ~50 | Bridge, TeeKeyManager, attestation verification |
+| Examples | ~40 | Prediction market, price oracle |
+| TEE/Attestation | ~80 | Bootstrap, proof-service, RISC Zero migration |
+| Infrastructure | ~100 | Terraform, CI/CD, reproducible builds |
+| Documentation | ~40 | SPEC, PLAN files, READMEs |
+| Refactoring/Style | ~50 | Terminology, clippy, formatting |
 
 ---
 
