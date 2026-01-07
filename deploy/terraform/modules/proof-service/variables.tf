@@ -25,24 +25,58 @@ variable "service_account_email" {
   type        = string
 }
 
-# SP1 Network Prover
-variable "sp1_network_private_key" {
-  description = "SP1 Network private key for proof generation (Secp256k1 key with PROVE tokens)"
+# Prover Backend Selection
+variable "prover_backend" {
+  description = "Prover backend: sp1 (network prover) or risc0 (GPU proving)"
   type        = string
-  sensitive   = true
+  default     = "risc0"
+
+  validation {
+    condition     = contains(["sp1", "risc0"], var.prover_backend)
+    error_message = "Prover backend must be one of: sp1, risc0."
+  }
 }
 
-# Resource Limits (small instance - heavy work offloaded to SP1 Network)
-variable "cpu_limit" {
-  description = "CPU limit"
+# SP1 Network Prover (required only when prover_backend = "sp1")
+variable "sp1_network_private_key" {
+  description = "SP1 Network private key for proof generation (Secp256k1 key with PROVE tokens). Only required when prover_backend = sp1."
   type        = string
-  default     = "1"
+  sensitive   = true
+  default     = ""
+}
+
+# GPU Configuration (for RISC Zero)
+variable "enable_gpu" {
+  description = "Enable GPU for RISC Zero proving. Automatically set to true when prover_backend = risc0."
+  type        = bool
+  default     = false
+}
+
+variable "gpu_type" {
+  description = "GPU type for RISC Zero proving (nvidia-l4, nvidia-tesla-t4)"
+  type        = string
+  default     = "nvidia-l4"
+}
+
+variable "gpu_count" {
+  description = "Number of GPUs to attach"
+  type        = number
+  default     = 1
+}
+
+# Resource Limits
+# For SP1 (network prover): small instance, heavy work offloaded to Succinct
+# For RISC Zero (GPU): larger instance with GPU resources
+variable "cpu_limit" {
+  description = "CPU limit. For GPU instances, minimum 4 cores recommended."
+  type        = string
+  default     = "8"
 }
 
 variable "memory_limit" {
-  description = "Memory limit"
+  description = "Memory limit. For GPU instances, 32Gi recommended."
   type        = string
-  default     = "512Mi"
+  default     = "32Gi"
 }
 
 # Scaling
@@ -65,9 +99,9 @@ variable "min_instances" {
 }
 
 variable "concurrency" {
-  description = "Maximum concurrent requests per instance. Set high since most request time is spent waiting on SP1 Network. Cloud Run auto-scales based on CPU utilization (~60% target) during verification."
+  description = "Maximum concurrent requests per instance. For SP1 (network prover), can be high since work is offloaded. For RISC Zero (GPU), set to 1 since GPU proving is resource-intensive."
   type        = number
-  default     = 10
+  default     = 1
 }
 
 # Access Control

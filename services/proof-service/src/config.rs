@@ -2,7 +2,7 @@
 
 use clap::Parser;
 
-/// GPU-accelerated SP1 proof generation service
+/// RISC Zero GPU proof generation service
 #[derive(Debug, Clone, Parser)]
 #[command(author, version, about)]
 pub struct Config {

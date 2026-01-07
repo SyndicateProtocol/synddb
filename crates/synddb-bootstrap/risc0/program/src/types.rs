@@ -1,0 +1,39 @@
+//! RISC Zero public values for on-chain verification
+//!
+//! This module contains the `PublicValuesStruct` that defines the interface between
+//! the RISC Zero zkVM proof and the Solidity verifier contract. The struct is ABI-encoded
+//! by the RISC Zero program and decoded on-chain.
+//!
+//! This is identical to the SP1 version to ensure both backends produce compatible outputs.
+
+use alloy::sol;
+
+// Public values committed by the RISC Zero program for on-chain verification.
+// Must match the Solidity definition in the verifier contract.
+sol! {
+    struct PublicValuesStruct {
+        /// Hash of the JWKS key that signed this token (keccak256 of kid)
+        bytes32 jwk_key_hash;
+        /// Token validity window start (iat - issued at)
+        uint64 validity_window_start;
+        /// Token validity window end (exp - expiration)
+        uint64 validity_window_end;
+        /// Container image digest (keccak256 of the sha256:... string)
+        bytes32 image_digest_hash;
+        /// TEE signing key address (derived from public key in token, if any)
+        address tee_signing_key;
+        /// Whether secure boot was enabled
+        bool secboot;
+        /// Whether debug mode is disabled (dbgstat == "disabled")
+        bool dbgstat_disabled;
+        /// Audience hash (keccak256 of audience string)
+        bytes32 audience_hash;
+        /// Image signature V component (secp256k1 / Ethereum native)
+        /// Signature is over keccak256(image_digest_hash) using Ethereum signed message format
+        uint8 image_signature_v;
+        /// Image signature R component (secp256k1 / Ethereum native)
+        bytes32 image_signature_r;
+        /// Image signature S component (secp256k1 / Ethereum native)
+        bytes32 image_signature_s;
+    }
+}

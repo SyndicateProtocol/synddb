@@ -7,7 +7,14 @@ terraform {
   }
 }
 
-# Cloud Run v2 service for SP1 Network Prover (offloads proving to Succinct)
+# Local variable to determine if GPU should be enabled
+locals {
+  use_gpu = var.prover_backend == "risc0" || var.enable_gpu
+}
+
+# Cloud Run v2 service for proof generation
+# - SP1: Network prover (offloads proving to Succinct)
+# - RISC Zero: GPU proving (local CUDA on Cloud Run L4 GPUs)
 resource "google_cloud_run_v2_service" "proof_service" {
   name     = var.service_name
   location = var.region
@@ -41,24 +48,36 @@ resource "google_cloud_run_v2_service" "proof_service" {
       }
 
       resources {
-        limits = {
-          cpu    = var.cpu_limit
-          memory = var.memory_limit
-        }
+        limits = merge(
+          {
+            cpu    = var.cpu_limit
+            memory = var.memory_limit
+          },
+          # Add GPU resource limit for RISC Zero proving
+          local.use_gpu ? { "nvidia.com/gpu" = tostring(var.gpu_count) } : {}
+        )
         cpu_idle          = false
         startup_cpu_boost = true
       }
 
-      env {
-        name  = "SP1_PROVER"
-        value = "network"
+      # SP1-specific environment variables
+      dynamic "env" {
+        for_each = var.prover_backend == "sp1" ? [1] : []
+        content {
+          name  = "SP1_PROVER"
+          value = "network"
+        }
       }
 
-      env {
-        name  = "NETWORK_PRIVATE_KEY"
-        value = var.sp1_network_private_key
+      dynamic "env" {
+        for_each = var.prover_backend == "sp1" ? [1] : []
+        content {
+          name  = "NETWORK_PRIVATE_KEY"
+          value = var.sp1_network_private_key
+        }
       }
 
+      # Common environment variables
       env {
         name  = "LOG_JSON"
         value = "true"
@@ -66,7 +85,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
 
       env {
         name  = "RUST_LOG"
-        value = "info"
+        value = var.prover_backend == "risc0" ? "info,risc0_zkvm=debug" : "info"
       }
 
       startup_probe {
@@ -91,8 +110,18 @@ resource "google_cloud_run_v2_service" "proof_service" {
       }
     }
 
+    # GPU node selector for RISC Zero proving
+    dynamic "node_selector" {
+      for_each = local.use_gpu ? [1] : []
+      content {
+        accelerator = var.gpu_type
+      }
+    }
+
     annotations = {
       "run.googleapis.com/startup-cpu-boost" = "true"
+      # Force new revision when image changes - use digest as annotation value
+      "synddb.io/image-digest" = regex("sha256:[a-f0-9]+", var.container_image)
     }
 
     max_instance_request_concurrency = var.concurrency
