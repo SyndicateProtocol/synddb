@@ -24,3 +24,6 @@ risc0-zkvm = { version = "3.0", features = ["prove"] }
 
 [build-dependencies]
 risc0-build = "3.0"
+
+[package.metadata.risc0]
+methods = ["../../../../crates/synddb-bootstrap/risc0/program"]
