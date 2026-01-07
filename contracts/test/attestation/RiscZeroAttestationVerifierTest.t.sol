@@ -38,8 +38,10 @@ contract RiscZeroAttestationVerifierTest is Test {
 
     event TrustedJwkHashAdded(bytes32 indexed jwkHash);
     event TrustedJwkHashRemoved(bytes32 indexed jwkHash);
-    event ImageDigestHashUpdated(bytes32 oldHash, bytes32 newHash);
+    event AllowedImageDigestHashAdded(bytes32 indexed digestHash);
+    event AllowedImageDigestHashRemoved(bytes32 indexed digestHash);
     event TrustedImageSignerAdded(address indexed signer);
+    event TrustedImageSignerRemoved(address indexed signer);
 
     // Image signer (secp256k1) test constants
     // Using a known private key for deterministic signature generation
@@ -55,9 +57,10 @@ contract RiscZeroAttestationVerifierTest is Test {
 
         riscZeroVerifier = new MockRiscZeroVerifier();
 
-        verifier = new RiscZeroAttestationVerifier(
-            address(riscZeroVerifier), IMAGE_ID, IMAGE_DIGEST_HASH, EXPIRATION_TOLERANCE
-        );
+        verifier = new RiscZeroAttestationVerifier(address(riscZeroVerifier), IMAGE_ID, EXPIRATION_TOLERANCE);
+
+        // Add allowed image digest hash for tests
+        verifier.addAllowedImageDigestHash(IMAGE_DIGEST_HASH);
 
         // Add trusted image signer for tests
         verifier.addTrustedImageSigner(IMAGE_SIGNER_ADDRESS);
@@ -85,7 +88,6 @@ contract RiscZeroAttestationVerifierTest is Test {
     function test_Constructor_SetsCorrectValues() public view {
         assertEq(verifier.verifier(), address(riscZeroVerifier));
         assertEq(verifier.imageId(), IMAGE_ID);
-        assertEq(verifier.expectedImageDigestHash(), IMAGE_DIGEST_HASH);
         assertEq(verifier.expirationTolerance(), EXPIRATION_TOLERANCE);
     }
 
@@ -123,38 +125,59 @@ contract RiscZeroAttestationVerifierTest is Test {
         verifier.removeTrustedJwkHash(TRUSTED_JWK_HASH);
     }
 
-    function test_UpdateImageDigestHash() public {
+    function test_AddAllowedImageDigestHash() public {
         bytes32 newHash = keccak256("new_image_digest");
 
-        vm.expectEmit(false, false, false, true);
-        emit ImageDigestHashUpdated(IMAGE_DIGEST_HASH, newHash);
+        vm.expectEmit(true, false, false, false);
+        emit AllowedImageDigestHashAdded(newHash);
 
-        verifier.updateImageDigestHash(newHash);
+        verifier.addAllowedImageDigestHash(newHash);
 
-        assertEq(verifier.expectedImageDigestHash(), newHash);
+        assertTrue(verifier.allowedImageDigestHashes(newHash));
     }
 
-    function test_UpdateImageDigestHash_RevertsWhenNotOwner() public {
+    function test_AddAllowedImageDigestHash_RevertsWhenNotOwner() public {
         bytes32 newHash = keccak256("new_image_digest");
 
         vm.prank(address(0x123));
         vm.expectRevert();
-        verifier.updateImageDigestHash(newHash);
+        verifier.addAllowedImageDigestHash(newHash);
+    }
+
+    function test_RemoveAllowedImageDigestHash() public {
+        bytes32 newHash = keccak256("new_image_digest");
+        verifier.addAllowedImageDigestHash(newHash);
+
+        vm.expectEmit(true, false, false, false);
+        emit AllowedImageDigestHashRemoved(newHash);
+
+        verifier.removeAllowedImageDigestHash(newHash);
+
+        assertFalse(verifier.allowedImageDigestHashes(newHash));
+    }
+
+    function test_RemoveAllowedImageDigestHash_RevertsWhenNotOwner() public {
+        bytes32 newHash = keccak256("new_image_digest");
+        verifier.addAllowedImageDigestHash(newHash);
+
+        vm.prank(address(0x123));
+        vm.expectRevert();
+        verifier.removeAllowedImageDigestHash(newHash);
     }
 
     function test_Constructor_RevertsOnInvalidVerifier() public {
         vm.expectRevert(RiscZeroAttestationVerifier.InvalidVerifierAddress.selector);
-        new RiscZeroAttestationVerifier(address(0), IMAGE_ID, IMAGE_DIGEST_HASH, EXPIRATION_TOLERANCE);
+        new RiscZeroAttestationVerifier(address(0), IMAGE_ID, EXPIRATION_TOLERANCE);
     }
 
     function test_Constructor_RevertsOnInvalidImageId() public {
         vm.expectRevert(RiscZeroAttestationVerifier.InvalidImageId.selector);
-        new RiscZeroAttestationVerifier(address(riscZeroVerifier), bytes32(0), IMAGE_DIGEST_HASH, EXPIRATION_TOLERANCE);
+        new RiscZeroAttestationVerifier(address(riscZeroVerifier), bytes32(0), EXPIRATION_TOLERANCE);
     }
 
     function test_Constructor_RevertsOnExcessiveTolerance() public {
         vm.expectRevert(RiscZeroAttestationVerifier.ToleranceExceedsOneDay.selector);
-        new RiscZeroAttestationVerifier(address(riscZeroVerifier), IMAGE_ID, IMAGE_DIGEST_HASH, 86401);
+        new RiscZeroAttestationVerifier(address(riscZeroVerifier), IMAGE_ID, 86401);
     }
 
     function test_VerifyAttestationProof_Success() public {
@@ -263,20 +286,17 @@ contract RiscZeroAttestationVerifierTest is Test {
         verifier.verifyAttestationProof(publicValues, proof);
     }
 
-    function test_VerifyAttestationProof_RevertsOnImageDigestMismatch() public {
+    function test_VerifyAttestationProof_RevertsOnUntrustedImageDigest() public {
         verifier.addTrustedJwkHash(TRUSTED_JWK_HASH);
 
         PublicValuesStruct memory values = createValidPublicValues();
-        values.image_digest_hash = keccak256("wrong_image");
+        bytes32 wrongDigest = keccak256("wrong_image");
+        values.image_digest_hash = wrongDigest;
 
         bytes memory publicValues = abi.encode(values);
         bytes memory proof = hex"";
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                RiscZeroAttestationVerifier.ImageDigestMismatch.selector, IMAGE_DIGEST_HASH, values.image_digest_hash
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(RiscZeroAttestationVerifier.UntrustedImageDigest.selector, wrongDigest));
         verifier.verifyAttestationProof(publicValues, proof);
     }
 
@@ -316,9 +336,15 @@ contract RiscZeroAttestationVerifierTest is Test {
         assertTrue(verifier.trustedJwkHashes(jwkHash));
     }
 
-    function testFuzz_UpdateImageDigestHash(bytes32 newHash) public {
-        verifier.updateImageDigestHash(newHash);
-        assertEq(verifier.expectedImageDigestHash(), newHash);
+    function testFuzz_AddAllowedImageDigestHash(bytes32 digestHash) public {
+        verifier.addAllowedImageDigestHash(digestHash);
+        assertTrue(verifier.allowedImageDigestHashes(digestHash));
+    }
+
+    function testFuzz_RemoveAllowedImageDigestHash(bytes32 digestHash) public {
+        verifier.addAllowedImageDigestHash(digestHash);
+        verifier.removeAllowedImageDigestHash(digestHash);
+        assertFalse(verifier.allowedImageDigestHashes(digestHash));
     }
 
     function testFuzz_VerifyAttestationProof_WithVariousTimestamps(uint64 timestampOffset) public {

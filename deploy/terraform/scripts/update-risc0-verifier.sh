@@ -13,9 +13,13 @@
 #   ATTESTATION_VERIFIER_ADDRESS: Current AttestationVerifier contract address
 #   BRIDGE_ADDRESS: Bridge contract address
 #   PROOF_SERVICE_IMAGE: Proof service image reference (tag or digest)
-#   SEQUENCER_IMAGE_DIGEST: Sequencer container image digest (sha256:...)
 #   TRUSTED_IMAGE_SIGNERS: Comma-separated list of trusted image signer addresses
 #   TFVARS_FILE: Path to terraform.tfvars file to update (optional)
+#
+# Image digest variables (at least one required):
+#   SEQUENCER_IMAGE_DIGEST: Sequencer container image digest (sha256:...)
+#   VALIDATOR_IMAGE_DIGEST: Validator container image digest (sha256:...)
+#   PRICE_ORACLE_IMAGE_DIGEST: Price oracle container image digest (sha256:...)
 #
 # Environment variables (optional):
 #   TRUSTED_JWK_HASHES: Comma-separated list of trusted JWK hashes
@@ -42,12 +46,48 @@ fi
 : "${ATTESTATION_VERIFIER_ADDRESS:?ATTESTATION_VERIFIER_ADDRESS is required}"
 : "${BRIDGE_ADDRESS:?BRIDGE_ADDRESS is required}"
 : "${PROOF_SERVICE_IMAGE:?PROOF_SERVICE_IMAGE is required}"
-: "${SEQUENCER_IMAGE_DIGEST:?SEQUENCER_IMAGE_DIGEST is required}"
 : "${TRUSTED_IMAGE_SIGNERS:?TRUSTED_IMAGE_SIGNERS is required}"
 
 # Optional variables with defaults
 EXPIRATION_TOLERANCE="${EXPIRATION_TOLERANCE:-3600}"
 TRUSTED_JWK_HASHES="${TRUSTED_JWK_HASHES:-0xc4339aa224c54c5dcad4bf4d0183fd5a7d4eb346b3064b0c3ea938c415b19b5f}"
+
+# Collect all image digests and compute their hashes
+echo "Computing allowed image digest hashes..." >&2
+ALLOWED_HASHES=""
+
+if [[ -n "${SEQUENCER_IMAGE_DIGEST:-}" ]]; then
+    HASH=$(cast keccak "$SEQUENCER_IMAGE_DIGEST")
+    echo "  Sequencer: $SEQUENCER_IMAGE_DIGEST -> $HASH" >&2
+    ALLOWED_HASHES="$HASH"
+fi
+
+if [[ -n "${VALIDATOR_IMAGE_DIGEST:-}" ]]; then
+    HASH=$(cast keccak "$VALIDATOR_IMAGE_DIGEST")
+    echo "  Validator: $VALIDATOR_IMAGE_DIGEST -> $HASH" >&2
+    if [[ -n "$ALLOWED_HASHES" ]]; then
+        ALLOWED_HASHES="$ALLOWED_HASHES,$HASH"
+    else
+        ALLOWED_HASHES="$HASH"
+    fi
+fi
+
+if [[ -n "${PRICE_ORACLE_IMAGE_DIGEST:-}" ]]; then
+    HASH=$(cast keccak "$PRICE_ORACLE_IMAGE_DIGEST")
+    echo "  Price Oracle: $PRICE_ORACLE_IMAGE_DIGEST -> $HASH" >&2
+    if [[ -n "$ALLOWED_HASHES" ]]; then
+        ALLOWED_HASHES="$ALLOWED_HASHES,$HASH"
+    else
+        ALLOWED_HASHES="$HASH"
+    fi
+fi
+
+if [[ -z "$ALLOWED_HASHES" ]]; then
+    echo "Error: At least one image digest is required (SEQUENCER_IMAGE_DIGEST, VALIDATOR_IMAGE_DIGEST, or PRICE_ORACLE_IMAGE_DIGEST)" >&2
+    exit 1
+fi
+
+echo "Allowed image digest hashes: $ALLOWED_HASHES" >&2
 
 # Fetch RISC Zero image ID from proof-service OCI artifact
 echo "Fetching RISC Zero image ID from proof-service..." >&2
@@ -98,12 +138,6 @@ if [[ "$DRY_RUN" == "true" ]]; then
     exit 0
 fi
 
-# Compute keccak256 hash of the sequencer image digest
-# The contract expects keccak256(digest) as bytes32
-echo "Computing expected image digest hash..." >&2
-EXPECTED_IMAGE_DIGEST_HASH=$(cast keccak "$SEQUENCER_IMAGE_DIGEST")
-echo "Expected image digest hash: $EXPECTED_IMAGE_DIGEST_HASH" >&2
-
 # Deploy new RiscZeroAttestationVerifier
 echo "Deploying new RiscZeroAttestationVerifier..." >&2
 
@@ -117,7 +151,7 @@ fi
 # Run forge script and capture output
 DEPLOY_OUTPUT=$(
     RISC_ZERO_IMAGE_ID="$NEW_IMAGE_ID" \
-    EXPECTED_IMAGE_DIGEST_HASH="$EXPECTED_IMAGE_DIGEST_HASH" \
+    ALLOWED_IMAGE_DIGEST_HASHES="$ALLOWED_HASHES" \
     EXPIRATION_TOLERANCE="$EXPIRATION_TOLERANCE" \
     TRUSTED_JWK_HASHES="$TRUSTED_JWK_HASHES" \
     TRUSTED_IMAGE_SIGNERS="$TRUSTED_IMAGE_SIGNERS" \

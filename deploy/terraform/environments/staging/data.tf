@@ -74,16 +74,28 @@ locals {
   # Path to the update script
   update_digest_script = "${path.module}/../../scripts/update-image-digest.sh"
 
-  # Extract the digest from the sequencer image reference (sha256:...)
+  # Extract the digest from each image reference (sha256:...)
   # Image format: registry/repo@sha256:abc123... or registry/repo:tag
   sequencer_digest = var.tee_bootstrap != null ? (
     can(regex("@(sha256:[a-f0-9]+)$", var.sequencer_image)) ?
     regex("@(sha256:[a-f0-9]+)$", var.sequencer_image)[0] :
     try(data.external.sequencer_signature[0].result.digest, "")
   ) : ""
+
+  validator_digest = var.tee_bootstrap != null ? (
+    can(regex("@(sha256:[a-f0-9]+)$", var.validator_image)) ?
+    regex("@(sha256:[a-f0-9]+)$", var.validator_image)[0] :
+    try(data.external.validator_signature[0].result.digest, "")
+  ) : ""
+
+  price_oracle_digest = var.tee_bootstrap != null && var.price_oracle_config != null ? (
+    can(regex("@(sha256:[a-f0-9]+)$", var.price_oracle_image)) ?
+    regex("@(sha256:[a-f0-9]+)$", var.price_oracle_image)[0] :
+    try(data.external.price_oracle_signature[0].result.digest, "")
+  ) : ""
 }
 
-resource "null_resource" "update_attestation_verifier" {
+resource "null_resource" "update_attestation_verifier_sequencer" {
   count = (
     var.tee_bootstrap != null &&
     var.deployer_private_key != "" &&
@@ -109,6 +121,65 @@ resource "null_resource" "update_attestation_verifier" {
 
   depends_on = [
     data.external.sequencer_signature,
+  ]
+}
+
+resource "null_resource" "update_attestation_verifier_validator" {
+  count = (
+    var.tee_bootstrap != null &&
+    var.deployer_private_key != "" &&
+    var.attestation_verifier_address != "" &&
+    local.validator_digest != ""
+  ) ? 1 : 0
+
+  # Re-run when the validator image changes
+  triggers = {
+    validator_digest             = local.validator_digest
+    attestation_verifier_address = var.attestation_verifier_address
+  }
+
+  provisioner "local-exec" {
+    command = "${local.update_digest_script} ${local.validator_digest}"
+
+    environment = {
+      DEPLOYER_PRIVATE_KEY         = var.deployer_private_key
+      RPC_URL                      = var.tee_bootstrap.rpc_url
+      ATTESTATION_VERIFIER_ADDRESS = var.attestation_verifier_address
+    }
+  }
+
+  depends_on = [
+    data.external.validator_signature,
+  ]
+}
+
+resource "null_resource" "update_attestation_verifier_price_oracle" {
+  count = (
+    var.tee_bootstrap != null &&
+    var.price_oracle_config != null &&
+    var.deployer_private_key != "" &&
+    var.attestation_verifier_address != "" &&
+    local.price_oracle_digest != ""
+  ) ? 1 : 0
+
+  # Re-run when the price oracle image changes
+  triggers = {
+    price_oracle_digest          = local.price_oracle_digest
+    attestation_verifier_address = var.attestation_verifier_address
+  }
+
+  provisioner "local-exec" {
+    command = "${local.update_digest_script} ${local.price_oracle_digest}"
+
+    environment = {
+      DEPLOYER_PRIVATE_KEY         = var.deployer_private_key
+      RPC_URL                      = var.tee_bootstrap.rpc_url
+      ATTESTATION_VERIFIER_ADDRESS = var.attestation_verifier_address
+    }
+  }
+
+  depends_on = [
+    data.external.price_oracle_signature,
   ]
 }
 
@@ -198,6 +269,8 @@ resource "null_resource" "update_risc0_verifier" {
       BRIDGE_ADDRESS               = var.bridge_contract_address
       PROOF_SERVICE_IMAGE          = var.proof_service_image
       SEQUENCER_IMAGE_DIGEST       = local.sequencer_digest
+      VALIDATOR_IMAGE_DIGEST       = local.validator_digest
+      PRICE_ORACLE_IMAGE_DIGEST    = local.price_oracle_digest
       TRUSTED_IMAGE_SIGNERS        = local.trusted_image_signers
       TFVARS_FILE                  = "${path.module}/terraform.tfvars"
       ETHERSCAN_API_KEY            = var.etherscan_api_key
@@ -207,5 +280,7 @@ resource "null_resource" "update_risc0_verifier" {
   depends_on = [
     data.external.proof_service_info,
     data.external.sequencer_signature,
+    data.external.validator_signature,
+    data.external.price_oracle_signature,
   ]
 }

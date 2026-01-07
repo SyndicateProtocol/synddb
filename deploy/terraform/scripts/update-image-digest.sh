@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Update the AttestationVerifier contract with a new image digest hash
+# Add an allowed image digest hash to the AttestationVerifier contract
 #
 # Usage: ./update-image-digest.sh <digest>
 #
@@ -40,16 +40,29 @@ fi
 # The contract expects keccak256(digest) as bytes32
 DIGEST_HASH=$(cast keccak "$DIGEST")
 
-echo "Updating AttestationVerifier image digest hash..."
+echo "Checking if image digest hash is already allowed..."
 echo "  Contract: $ATTESTATION_VERIFIER_ADDRESS"
 echo "  Digest: $DIGEST"
 echo "  Hash: $DIGEST_HASH"
 
-# Call updateImageDigestHash on the contract
+# Check if the digest is already allowed
+ALREADY_ALLOWED=$(cast call "$ATTESTATION_VERIFIER_ADDRESS" \
+    "isImageDigestHashAllowed(bytes32)(bool)" \
+    "$DIGEST_HASH" \
+    --rpc-url "$RPC_URL")
+
+if [[ "$ALREADY_ALLOWED" == "true" ]]; then
+    echo "Image digest hash is already allowed, skipping..."
+    exit 0
+fi
+
+echo "Adding allowed image digest hash..."
+
+# Call addAllowedImageDigestHash on the contract
 cast send "$ATTESTATION_VERIFIER_ADDRESS" \
-    "updateImageDigestHash(bytes32)" \
+    "addAllowedImageDigestHash(bytes32)" \
     "$DIGEST_HASH" \
     --private-key "$DEPLOYER_PRIVATE_KEY" \
     --rpc-url "$RPC_URL"
 
-echo "Successfully updated image digest hash"
+echo "Successfully added allowed image digest hash"

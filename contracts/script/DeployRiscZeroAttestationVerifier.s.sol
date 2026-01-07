@@ -26,7 +26,7 @@ string constant DEFAULT_TRUSTED_JWK_HASHES = "0xc4339aa224c54c5dcad4bf4d0183fd5a
  *      Environment variables:
  *      - RISC_ZERO_VERIFIER_CONTRACT_ADDRESS: Optional, defaults to Base Sepolia router
  *      - RISC_ZERO_IMAGE_ID: Required, RISC Zero program image ID
- *      - EXPECTED_IMAGE_DIGEST_HASH: Required, expected container image digest hash
+ *      - ALLOWED_IMAGE_DIGEST_HASHES: Required, comma-separated list of allowed image digest hashes
  *      - EXPIRATION_TOLERANCE: Required, grace period in seconds
  *      - TRUSTED_JWK_HASHES: Optional, comma-separated list of JWK hashes
  *      - TRUSTED_IMAGE_SIGNERS: Optional, comma-separated list of trusted image signer addresses
@@ -35,7 +35,7 @@ contract DeployRiscZeroAttestationVerifier is Script {
     function run() external returns (RiscZeroAttestationVerifier, TeeKeyManager) {
         address verifier = vm.envOr("RISC_ZERO_VERIFIER_CONTRACT_ADDRESS", RISC_ZERO_VERIFIER_ROUTER_BASE_SEPOLIA);
         bytes32 imageId = vm.envBytes32("RISC_ZERO_IMAGE_ID");
-        bytes32 expectedImageDigestHash = vm.envBytes32("EXPECTED_IMAGE_DIGEST_HASH");
+        string memory allowedImageDigestHashesStr = vm.envString("ALLOWED_IMAGE_DIGEST_HASHES");
         uint64 expirationTolerance = uint64(vm.envUint("EXPIRATION_TOLERANCE"));
         string memory trustedJwkHashesStr = vm.envOr("TRUSTED_JWK_HASHES", DEFAULT_TRUSTED_JWK_HASHES);
         string memory trustedImageSignersStr = vm.envOr("TRUSTED_IMAGE_SIGNERS", string(""));
@@ -45,20 +45,29 @@ contract DeployRiscZeroAttestationVerifier is Script {
         console.log("========================================");
         console.log("RISC Zero Verifier:", verifier);
         console.log("Image ID:", vm.toString(imageId));
-        console.log("Expected Image Digest Hash:", vm.toString(expectedImageDigestHash));
+        console.log("Allowed Image Digest Hashes:", allowedImageDigestHashesStr);
         console.log("Expiration Tolerance:", expirationTolerance);
         console.log("========================================");
 
         vm.startBroadcast();
 
         RiscZeroAttestationVerifier attestationVerifier =
-            new RiscZeroAttestationVerifier(verifier, imageId, expectedImageDigestHash, expirationTolerance);
+            new RiscZeroAttestationVerifier(verifier, imageId, expirationTolerance);
 
         TeeKeyManager keyManager = new TeeKeyManager(attestationVerifier);
 
+        // Add allowed image digest hashes (required)
+        if (bytes(allowedImageDigestHashesStr).length > 0) {
+            bytes32[] memory digestHashes = _parseBytes32Array(allowedImageDigestHashesStr);
+            for (uint256 i = 0; i < digestHashes.length; i++) {
+                attestationVerifier.addAllowedImageDigestHash(digestHashes[i]);
+                console.log("Added allowed image digest hash:", vm.toString(digestHashes[i]));
+            }
+        }
+
         // Add trusted JWK hashes if provided
         if (bytes(trustedJwkHashesStr).length > 0) {
-            bytes32[] memory jwkHashes = _parseJwkHashes(trustedJwkHashesStr);
+            bytes32[] memory jwkHashes = _parseBytes32Array(trustedJwkHashesStr);
             for (uint256 i = 0; i < jwkHashes.length; i++) {
                 attestationVerifier.addTrustedJwkHash(jwkHashes[i]);
                 console.log("Added trusted JWK hash:", vm.toString(jwkHashes[i]));
@@ -102,7 +111,7 @@ contract DeployRiscZeroAttestationVerifier is Script {
     }
 
     /// @dev Parse comma-separated hex strings into bytes32 array
-    function _parseJwkHashes(string memory input) internal pure returns (bytes32[] memory) {
+    function _parseBytes32Array(string memory input) internal pure returns (bytes32[] memory) {
         // Count commas to determine array size
         bytes memory inputBytes = bytes(input);
         uint256 count = 1;

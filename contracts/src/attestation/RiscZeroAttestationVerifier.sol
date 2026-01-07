@@ -48,10 +48,13 @@ struct PublicValuesStruct {
 contract RiscZeroAttestationVerifier is IAttestationVerifier, Ownable {
     address public immutable verifier;
     bytes32 public immutable imageId;
-    bytes32 public expectedImageDigestHash;
     uint64 public immutable expirationTolerance;
 
     mapping(bytes32 jwkHash => bool isTrusted) public trustedJwkHashes;
+
+    /// @notice Mapping from image digest hash to whether it's allowed
+    /// @dev Supports multiple TEE applications (sequencer, validator, price-oracle) with different images
+    mapping(bytes32 digestHash => bool isAllowed) public allowedImageDigestHashes;
 
     /// @notice Mapping from image signer address to whether it's trusted
     /// @dev Image signers are Ethereum addresses that sign container image digests
@@ -59,7 +62,8 @@ contract RiscZeroAttestationVerifier is IAttestationVerifier, Ownable {
 
     event TrustedJwkHashAdded(bytes32 indexed jwkHash);
     event TrustedJwkHashRemoved(bytes32 indexed jwkHash);
-    event ImageDigestHashUpdated(bytes32 oldHash, bytes32 newHash);
+    event AllowedImageDigestHashAdded(bytes32 indexed digestHash);
+    event AllowedImageDigestHashRemoved(bytes32 indexed digestHash);
     event TrustedImageSignerAdded(address indexed signer);
     event TrustedImageSignerRemoved(address indexed signer);
 
@@ -71,7 +75,7 @@ contract RiscZeroAttestationVerifier is IAttestationVerifier, Ownable {
     error ValidityWindowExpired(uint64 end, uint64 current);
     error SecureBootRequired();
     error DebugModeNotAllowed();
-    error ImageDigestMismatch(bytes32 expected, bytes32 actual);
+    error UntrustedImageDigest(bytes32 digestHash);
     error UntrustedImageSigner(address signer);
     error ImageSignatureInvalid();
 
@@ -79,19 +83,15 @@ contract RiscZeroAttestationVerifier is IAttestationVerifier, Ownable {
      * @notice Constructs the attestation verifier
      * @param _verifier Address of the RISC Zero verifier contract (RiscZeroVerifierRouter)
      * @param _imageId RISC Zero program image ID
-     * @param _expectedImageDigestHash Expected container image digest hash
      * @param _expirationTolerance Grace period in seconds after token expiration (max 1 day recommended)
      */
-    constructor(address _verifier, bytes32 _imageId, bytes32 _expectedImageDigestHash, uint64 _expirationTolerance)
-        Ownable(msg.sender)
-    {
+    constructor(address _verifier, bytes32 _imageId, uint64 _expirationTolerance) Ownable(msg.sender) {
         if (_verifier == address(0)) revert InvalidVerifierAddress();
         if (_imageId == bytes32(0)) revert InvalidImageId();
         if (_expirationTolerance > 86400) revert ToleranceExceedsOneDay();
 
         verifier = _verifier;
         imageId = _imageId;
-        expectedImageDigestHash = _expectedImageDigestHash;
         expirationTolerance = _expirationTolerance;
     }
 
@@ -135,8 +135,8 @@ contract RiscZeroAttestationVerifier is IAttestationVerifier, Ownable {
             revert DebugModeNotAllowed();
         }
 
-        if (values.image_digest_hash != expectedImageDigestHash) {
-            revert ImageDigestMismatch(expectedImageDigestHash, values.image_digest_hash);
+        if (!allowedImageDigestHashes[values.image_digest_hash]) {
+            revert UntrustedImageDigest(values.image_digest_hash);
         }
 
         // Recover signer from image signature using ecrecover
@@ -182,15 +182,33 @@ contract RiscZeroAttestationVerifier is IAttestationVerifier, Ownable {
     }
 
     /**
-     * @notice Updates the expected container image digest hash
-     * @dev Used when deploying new container versions.
-     *      Only callable by contract owner to prevent unauthorized image digest changes.
-     * @param newHash The new expected image digest hash
+     * @notice Adds an allowed container image digest hash
+     * @dev Used to allow new container versions for TEE applications (sequencer, validator, etc.).
+     *      Only callable by contract owner to prevent unauthorized additions.
+     * @param digestHash The keccak256 hash of the container image digest (sha256:...)
      */
-    function updateImageDigestHash(bytes32 newHash) external onlyOwner {
-        bytes32 oldHash = expectedImageDigestHash;
-        expectedImageDigestHash = newHash;
-        emit ImageDigestHashUpdated(oldHash, newHash);
+    function addAllowedImageDigestHash(bytes32 digestHash) external onlyOwner {
+        allowedImageDigestHashes[digestHash] = true;
+        emit AllowedImageDigestHashAdded(digestHash);
+    }
+
+    /**
+     * @notice Removes an allowed container image digest hash
+     * @dev Used to revoke old container versions. Only callable by contract owner.
+     * @param digestHash The digest hash to remove
+     */
+    function removeAllowedImageDigestHash(bytes32 digestHash) external onlyOwner {
+        allowedImageDigestHashes[digestHash] = false;
+        emit AllowedImageDigestHashRemoved(digestHash);
+    }
+
+    /**
+     * @notice Checks if an image digest hash is allowed
+     * @param digestHash The digest hash to check
+     * @return True if the digest hash is allowed
+     */
+    function isImageDigestHashAllowed(bytes32 digestHash) external view returns (bool) {
+        return allowedImageDigestHashes[digestHash];
     }
 
     /**
