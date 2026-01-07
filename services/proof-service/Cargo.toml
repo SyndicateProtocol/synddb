@@ -38,7 +38,7 @@ hex = "0.4"
 # - Default: CPU proving (slower but portable)
 # - cuda: Enable NVIDIA GPU acceleration (use for production)
 # - metal: Enable Apple GPU acceleration (for local dev on Mac)
-risc0-zkvm = { version = "3.0", features = ["prove"] }
+risc0-zkvm = { version = "3.0.4", features = ["prove"] }
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
 gcp-attestation = { path = "../../crates/gcp-attestation" }
@@ -63,7 +63,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 reqwest = { version = "0.12", features = ["json"] }
 
 [build-dependencies]
-risc0-build = "3.0"
+risc0-build = "3.0.4"
 
 [package.metadata.risc0]
 methods = ["../../crates/synddb-bootstrap/risc0/program"]

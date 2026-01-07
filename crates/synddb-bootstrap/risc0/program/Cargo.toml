@@ -30,7 +30,7 @@ alloy-sol-types = { version = "1.4", default-features = false }
 
 # zkVM runtime (only needed when building the RISC Zero program binary)
 # default-features = false is REQUIRED for guest programs
-risc0-zkvm = { version = "3.0", default-features = false, optional = true }
+risc0-zkvm = { version = "3.0.4", default-features = false, optional = true }
 
 # Attestation verification (only needed when building the RISC Zero program binary)
 gcp-attestation = { path = "../../../gcp-attestation", default-features = false, optional = true }

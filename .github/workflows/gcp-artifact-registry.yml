@@ -654,7 +654,7 @@ jobs:
           {
             "imageId": "${{ steps.image_id.outputs.image_id }}",
             "programName": "gcp-cs-attestation-risc0-program",
-            "risc0Version": "3.0"
+            "risc0Version": "3.0.4"
           }
           EOF
 
