@@ -226,7 +226,7 @@ export EXPECTED_IMAGE_DIGEST_HASH=$(cast keccak "sha256:<your-image-digest>")
 export EXPIRATION_TOLERANCE=3600  # 1 hour
 
 # Deploy AttestationVerifier and TeeKeyManager
-forge script script/DeployAttestationVerifier.s.sol \
+forge script script/DeployRiscZeroAttestationVerifier.s.sol \
   --rpc-url $RPC_URL \
   --broadcast \
   --verify
