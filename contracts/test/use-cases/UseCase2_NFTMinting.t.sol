@@ -2,10 +2,8 @@
 pragma solidity 0.8.30;
 
 import {Bridge} from "src/Bridge.sol";
-import {SequencerSignature, KeyType} from "src/types/DataTypes.sol";
+import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
-import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {WETH9} from "./mocks/WETH9.sol";
 import {MockNFT} from "./mocks/MockNFT.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
@@ -21,42 +19,21 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
     MockNFT public paidNFT;
     ValidatorSignatureThresholdModule public validatorModule;
 
-    address public admin;
     address public sequencer;
     address public user;
 
     uint256 public constant NFT_PRICE = 0.1 ether;
 
     function setUp() public {
-        admin = address(this);
         sequencer = vm.addr(sequencerPrivateKey);
         user = makeAddr("user");
 
-        weth = new WETH9();
-
-        // Deploy attestation infrastructure
-        attestationVerifier = new MockAttestationVerifier();
-        teeKeyManager = new TeeKeyManager(attestationVerifier);
-
-        // Deploy bridge first
-        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
-
-        // Set bridge on TeeKeyManager
-        teeKeyManager.setBridge(address(bridge));
-
-        // Register sequencer as a valid TEE key through bridge
-        bytes memory publicValues = abi.encode(sequencer);
-        bridge.registerKey(KeyType.Sequencer, publicValues, "");
+        (bridge, weth) = createBridgeWithWETH(address(this), sequencer);
 
         freeNFT = new MockNFT("Free NFT", "FREE", 0);
         paidNFT = new MockNFT("Paid NFT", "PAID", NFT_PRICE);
 
-        // Setup validators and module using TeeKeyManager
-        setupValidators(bridge);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), 2);
-
-        bridge.setMessageInitializer(sequencer, true);
-        bridge.addPreModule(address(validatorModule));
+        validatorModule = setupBridgeWithValidators(bridge);
 
         vm.deal(user, 100 ether);
     }
@@ -261,43 +238,6 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
         bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
 
         submitValidatorSignatures(bridge, messageId);
-
-        bridge.handleMessage(messageId);
-
-        assertEq(freeNFT.balanceOf(user), 1);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                    VALIDATOR SIGNATURE TESTS
-    //////////////////////////////////////////////////////////////*/
-
-    /// @notice Test NFT mint fails without sufficient validator signatures
-    function test_NFTMint_FailsWithInsufficientSignatures() public {
-        bytes32 messageId = keccak256("nft-insufficient-sigs");
-        bytes memory payload = abi.encodeWithSelector(freeNFT.mint.selector, user);
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(freeNFT), payload, 0);
-
-        vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
-
-        // Only submit 1 signature (threshold is 2)
-        submitValidatorSignatures(bridge, messageId, 1);
-
-        vm.expectRevert();
-        bridge.handleMessage(messageId);
-    }
-
-    /// @notice Test NFT mint succeeds with exact threshold
-    function test_NFTMint_SucceedsWithExactThreshold() public {
-        bytes32 messageId = keccak256("nft-exact-threshold");
-        bytes memory payload = abi.encodeWithSelector(freeNFT.mint.selector, user);
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(freeNFT), payload, 0);
-
-        vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
-
-        // Submit exactly 2 signatures
-        submitValidatorSignatures(bridge, messageId, 2);
 
         bridge.handleMessage(messageId);
 

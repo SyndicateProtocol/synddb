@@ -2,11 +2,9 @@
 pragma solidity 0.8.30;
 
 import {Bridge} from "src/Bridge.sol";
-import {SequencerSignature, KeyType} from "src/types/DataTypes.sol";
+import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ERC20TotalSupplyCheckModule} from "src/modules/ERC20TotalSupplyCheckModule.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
-import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {WETH9} from "./mocks/WETH9.sol";
 import {ETHReceiver} from "./mocks/ETHReceiver.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
@@ -22,41 +20,19 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
     ERC20TotalSupplyCheckModule public supplyCheckModule;
     ValidatorSignatureThresholdModule public validatorModule;
 
-    address public admin;
     address public sequencer;
     address public user;
 
     function setUp() public {
-        admin = address(this);
         sequencer = vm.addr(sequencerPrivateKey);
         user = makeAddr("user");
 
-        weth = new WETH9();
-
-        // Deploy attestation infrastructure
-        attestationVerifier = new MockAttestationVerifier();
-        teeKeyManager = new TeeKeyManager(attestationVerifier);
-
-        // Deploy bridge first
-        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
-
-        // Set bridge on TeeKeyManager
-        teeKeyManager.setBridge(address(bridge));
-
-        // Register sequencer as a valid TEE key through bridge
-        bytes memory publicValues = abi.encode(sequencer);
-        bridge.registerKey(KeyType.Sequencer, publicValues, "");
-
+        (bridge, weth) = createBridgeWithWETH(address(this), sequencer);
         recipient = new ETHReceiver();
 
-        // Setup validators and module using TeeKeyManager
-        setupValidators(bridge);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), 2);
+        validatorModule = setupBridgeWithValidators(bridge);
         supplyCheckModule = new ERC20TotalSupplyCheckModule(address(weth), 1000000 ether);
-
-        bridge.setMessageInitializer(sequencer, true);
         bridge.addPreModule(address(supplyCheckModule));
-        bridge.addPreModule(address(validatorModule));
 
         vm.deal(user, 100 ether);
     }

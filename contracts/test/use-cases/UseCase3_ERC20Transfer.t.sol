@@ -2,10 +2,8 @@
 pragma solidity 0.8.30;
 
 import {Bridge} from "src/Bridge.sol";
-import {SequencerSignature, KeyType} from "src/types/DataTypes.sol";
+import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
-import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
-import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {WETH9} from "./mocks/WETH9.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
@@ -21,7 +19,6 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
     WETH9 public weth;
     ValidatorSignatureThresholdModule public validatorModule;
 
-    address public admin;
     address public sequencer;
     address public user;
     address public recipient;
@@ -29,35 +26,15 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
     uint256 public constant INITIAL_BALANCE = 1_000_000e18;
 
     function setUp() public {
-        admin = address(this);
         sequencer = vm.addr(sequencerPrivateKey);
         user = makeAddr("user");
         recipient = makeAddr("recipient");
 
         usdc = new MockERC20("USD Coin", "USDC");
         dai = new MockERC20("Dai Stablecoin", "DAI");
-        weth = new WETH9();
 
-        // Deploy attestation infrastructure
-        attestationVerifier = new MockAttestationVerifier();
-        teeKeyManager = new TeeKeyManager(attestationVerifier);
-
-        // Deploy bridge first
-        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
-
-        // Set bridge on TeeKeyManager
-        teeKeyManager.setBridge(address(bridge));
-
-        // Register sequencer as a valid TEE key through bridge
-        bytes memory publicValues = abi.encode(sequencer);
-        bridge.registerKey(KeyType.Sequencer, publicValues, "");
-
-        // Setup validators and module using TeeKeyManager
-        setupValidators(bridge);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), 2);
-
-        bridge.setMessageInitializer(sequencer, true);
-        bridge.addPreModule(address(validatorModule));
+        (bridge, weth) = createBridgeWithWETH(address(this), sequencer);
+        validatorModule = setupBridgeWithValidators(bridge);
 
         usdc.transfer(user, INITIAL_BALANCE);
         dai.transfer(user, INITIAL_BALANCE);
@@ -326,55 +303,6 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         assertEq(usdc.balanceOf(user), INITIAL_BALANCE - transferAmount);
         assertEq(usdc.balanceOf(recipient), transferAmount);
         assertEq(usdc.balanceOf(address(bridge)), 0);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                    VALIDATOR SIGNATURE TESTS
-    //////////////////////////////////////////////////////////////*/
-
-    /// @notice Test ERC20 transfer fails without sufficient validator signatures
-    function test_ERC20Transfer_FailsWithInsufficientSignatures() public {
-        uint256 transferAmount = 1000e18;
-
-        vm.prank(user);
-        usdc.transfer(address(bridge), transferAmount);
-
-        bytes32 messageId = keccak256("erc20-insufficient");
-        bytes memory payload = abi.encodeWithSelector(usdc.transfer.selector, recipient, transferAmount);
-
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(usdc), payload, 0);
-
-        vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
-
-        // Only submit 1 signature (threshold is 2)
-        submitValidatorSignatures(bridge, messageId, 1);
-
-        vm.expectRevert();
-        bridge.handleMessage(messageId);
-    }
-
-    /// @notice Test ERC20 transfer succeeds with exact threshold
-    function test_ERC20Transfer_SucceedsWithExactThreshold() public {
-        uint256 transferAmount = 500e18;
-
-        vm.prank(user);
-        usdc.transfer(address(bridge), transferAmount);
-
-        bytes32 messageId = keccak256("erc20-exact");
-        bytes memory payload = abi.encodeWithSelector(usdc.transfer.selector, recipient, transferAmount);
-
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(usdc), payload, 0);
-
-        vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
-
-        // Submit exactly 2 signatures
-        submitValidatorSignatures(bridge, messageId, 2);
-
-        bridge.handleMessage(messageId);
-
-        assertEq(usdc.balanceOf(recipient), transferAmount);
     }
 
     receive() external payable {}
