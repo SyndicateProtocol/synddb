@@ -1,0 +1,119 @@
+name: RISC Zero CI
+
+on:
+  # PR-only: provides feedback before merge. Push to main is handled by artifact-registry.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "crates/synddb-bootstrap/risc0/**"
+      - "crates/gcp-attestation/**"
+      - "tests/confidential-space/risc0/**"
+      - "services/proof-service/**"
+      - ".github/workflows/risc0-ci.yml"
+
+  # Allow manual trigger for debugging
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  risc0-build:
+    if: github.event.pull_request.draft == false || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    name: RISC Zero Build & Execute
+    runs-on: shared-large-02
+    timeout-minutes: 60
+    outputs:
+      image_id: ${{ steps.image_id.outputs.image_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.92.0"
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/synddb-bootstrap/risc0/program
+            tests/confidential-space/risc0/script
+            services/proof-service
+
+      - name: Install RISC Zero toolchain
+        run: |
+          set -e
+          RISC0_INSTALLED=false
+          for i in {1..3}; do
+            echo "Attempt $i to install RISC Zero toolchain..."
+            if curl -L https://risczero.com/install | bash && \
+               ~/.risc0/bin/rzup install && \
+               ~/.risc0/bin/r0vm --version; then
+              RISC0_INSTALLED=true
+              break
+            else
+              echo "Attempt $i failed. Retrying in 5 seconds..."
+              sleep 5
+            fi
+          done
+          if [ "$RISC0_INSTALLED" = false ]; then
+            echo "::error::Failed to install RISC Zero toolchain after 3 attempts"
+            exit 1
+          fi
+
+      - name: Build RISC Zero guest program
+        run: |
+          cd crates/synddb-bootstrap/risc0/program
+          cargo build --release
+
+      - name: Build RISC Zero script
+        run: |
+          cd tests/confidential-space/risc0/script
+          cargo build --release
+
+      - name: Run RISC Zero execute (test mode)
+        run: |
+          cd tests/confidential-space/risc0/script
+          cargo run --release --bin risc0-prover -- --execute --sample ../../samples/samples_*.json
+
+      - name: Generate image ID
+        id: image_id
+        run: |
+          cd services/proof-service
+          # Build the proof service which embeds the RISC Zero ELF
+          cargo build --release
+
+          # Get the image ID from the /image-id endpoint
+          # Since we can't run the service in CI easily, extract from the binary output
+          IMAGE_ID=$(cargo run --release 2>&1 | grep -oP 'image_id.*0x[a-fA-F0-9]{64}' | grep -oP '0x[a-fA-F0-9]{64}' || true)
+
+          # Fallback: compute from the test script output
+          if [[ -z "$IMAGE_ID" || ! "$IMAGE_ID" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
+            cd ../../tests/confidential-space/risc0/script
+            IMAGE_ID=$(cargo run --release --bin risc0-prover -- --execute --sample ../../samples/samples_*.json 2>&1 | grep "Image ID (bytes32)" | awk '{print $NF}')
+          fi
+
+          # Validate image_id format (should be 0x followed by 64 hex chars)
+          if [[ ! "$IMAGE_ID" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
+            echo "::error::Invalid image_id format: $IMAGE_ID"
+            exit 1
+          fi
+
+          echo "image_id=$IMAGE_ID" >> "$GITHUB_OUTPUT"
+          echo "::notice::RISC Zero Image ID: $IMAGE_ID"
+
+          {
+            echo "## RISC Zero Image ID"
+            echo ""
+            echo "Use this value for \`RISC_ZERO_IMAGE_ID\` in contract deployment:"
+            echo ""
+            echo "\`\`\`"
+            echo "$IMAGE_ID"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

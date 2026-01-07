@@ -441,6 +441,12 @@ jobs:
             # Larger runner for SP1 toolchain compilation (memory intensive)
             runner: shared-large-01
             timeout: 60
+          - image: proof-service-risc0
+            dockerfile: services/proof-service/Dockerfile.risc0
+            cache-scope: proof-service-risc0
+            # Larger runner for RISC Zero toolchain compilation (memory intensive)
+            runner: shared-large-01
+            timeout: 60
           - image: price-oracle
             dockerfile: examples/price-oracle/Dockerfile
             cache-scope: price-oracle
@@ -596,13 +602,13 @@ jobs:
       # Generate SP1 verification key for proof-service (contains embedded SP1 ELF).
       # This happens after signing since vkey is metadata, not security-critical.
       - name: Install Rust toolchain
-        if: ${{ matrix.image == 'proof-service' }}
+        if: ${{ matrix.image == 'proof-service' || matrix.image == 'proof-service-risc0' }}
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.92.0"
 
       - name: Cache Cargo dependencies
-        if: ${{ matrix.image == 'proof-service' }}
+        if: ${{ matrix.image == 'proof-service' || matrix.image == 'proof-service-risc0' }}
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -664,6 +670,74 @@ jobs:
 
           echo "::notice::Attached vkey artifact to $IMAGE@$DIGEST"
 
+      # Generate RISC Zero image ID for proof-service-risc0 (contains embedded RISC Zero ELF).
+      - name: Install RISC Zero toolchain
+        if: ${{ matrix.image == 'proof-service-risc0' }}
+        run: |
+          set -e
+          for i in {1..3}; do
+            echo "Attempt $i to install RISC Zero toolchain..."
+            if curl -L https://risczero.com/install | bash && \
+               ~/.risc0/bin/rzup install && \
+               ~/.risc0/bin/r0vm --version; then
+              break
+            else
+              echo "Attempt $i failed. Retrying in 5 seconds..."
+              sleep 5
+            fi
+          done
+
+      - name: Generate RISC Zero image ID
+        id: image_id
+        if: ${{ matrix.image == 'proof-service-risc0' }}
+        run: |
+          cd services/proof-service
+          # Build with default features (no GPU needed for image ID extraction)
+          cargo build --release
+
+          # Run the service briefly to get the image ID from the /image-id endpoint
+          # Start service in background, query endpoint, then kill
+          timeout 30 cargo run --release &
+          SERVICE_PID=$!
+          sleep 5
+
+          IMAGE_ID=$(curl -s http://localhost:8083/image-id 2>/dev/null | jq -r '.image_id' || echo "")
+
+          kill $SERVICE_PID 2>/dev/null || true
+
+          # Validate image_id format (0x followed by 64 hex chars)
+          if [[ ! "$IMAGE_ID" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
+            echo "::error::Invalid image_id format: $IMAGE_ID"
+            exit 1
+          fi
+
+          echo "image_id=$IMAGE_ID" >> $GITHUB_OUTPUT
+          echo "::notice::RISC Zero Image ID: $IMAGE_ID"
+
+      - name: Attach image ID artifact
+        if: ${{ matrix.image == 'proof-service-risc0' && steps.image_id.outputs.image_id != '' }}
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Create image ID payload
+          cat > image_id.json <<EOF
+          {
+            "imageId": "${{ steps.image_id.outputs.image_id }}",
+            "programName": "gcp-cs-attestation-risc0-program",
+            "risc0Version": "3.0"
+          }
+          EOF
+
+          # Attach as OCI artifact referrer (immutable, linked to digest)
+          oras attach \
+            "$IMAGE@$DIGEST" \
+            --artifact-type application/vnd.syndicate.risc0-image-id.v1+json \
+            image_id.json:application/json
+
+          echo "::notice::Attached image ID artifact to $IMAGE@$DIGEST"
+
       - name: Summary
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
@@ -682,6 +756,14 @@ jobs:
               echo ""
               echo "\`\`\`"
               echo "${{ steps.vkey.outputs.vkey }}"
+              echo "\`\`\`"
+              echo ""
+            fi
+            if [[ -n "${{ steps.image_id.outputs.image_id }}" ]]; then
+              echo "### RISC Zero Image ID"
+              echo ""
+              echo "\`\`\`"
+              echo "${{ steps.image_id.outputs.image_id }}"
               echo "\`\`\`"
               echo ""
             fi
