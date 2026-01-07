@@ -79,8 +79,6 @@ examples/price-oracle/
 │       ├── mock.py           # Mock API for testing
 │       ├── coingecko.py      # CoinGecko implementation
 │       └── coinmarketcap.py  # CoinMarketCap implementation
-├── scripts/
-│   └── dev-env.sh            # Development environment script
 └── data/                     # Runtime data (gitignored)
     ├── sequencer/            # Sequencer state
     ├── validator/            # Validator state
@@ -105,56 +103,13 @@ contracts/                    # Solidity contracts (project root)
 - Rust toolchain (1.70+)
 - Python 3.10+
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) (for Anvil and contract deployment)
-- [just](https://github.com/casey/just) command runner (optional, for easier setup)
 
-### Run the Demo
-
-The easiest way to run the price oracle example is using `just` from the project root:
-
-```bash
-# From the SyndDB root directory
-just examples::price-oracle
-```
-
-This command:
-1. Builds the price-oracle-validator binary
-2. Sets up the Python virtual environment
-3. Deploys contracts to Anvil (starts Anvil if needed)
-4. Starts the sequencer and validator
-5. Runs the price fetcher with mock data
-
-Alternatively, use the dev environment script for more options:
-
-```bash
-cd examples/price-oracle
-
-# Run with consistent mock APIs (validator accepts)
-./scripts/dev-env.sh
-
-# Run with divergent mock APIs (validator rejects!)
-./scripts/dev-env.sh --divergent
-
-# Run with real APIs
-export COINGECKO_API_KEY="your-key"  # Optional, free tier works
-export CMC_API_KEY="your-key"         # Required for CMC
-./scripts/dev-env.sh --real
-
-# Skip Anvil and contract deployment (off-chain only)
-./scripts/dev-env.sh --no-anvil
-```
-
-When running with Anvil, the script will:
-1. Start Anvil on port 8545
-2. Deploy MockWETH, Bridge, and PriceOracle contracts
-3. Grant `MESSAGE_INITIALIZER_ROLE` to the sequencer on Bridge
-4. Grant `UPDATER_ROLE` to Bridge on PriceOracle
-5. Save deployed addresses to `data/contracts/addresses.json`
-
-### Manual Setup
+### Setup
 
 1. **Deploy contracts** (starts Anvil if needed):
    ```bash
-   just deploy
+   # From the SyndDB root directory
+   ./scripts/deploy-local.sh
    ```
 
 2. **Build the custom validator:**
@@ -256,19 +211,11 @@ CREATE TABLE prices (
 
 ### Scenario 1: Prices Agree (Validator Accepts)
 
-```bash
-./scripts/dev-env.sh  # Uses consistent mock APIs
-```
-
-The mock APIs return prices that differ by < 1%. The validator accepts all changesets.
+When running with consistent mock APIs (the default), prices differ by < 1% and the validator accepts all changesets.
 
 ### Scenario 2: Prices Diverge (Validator Rejects)
 
-```bash
-./scripts/dev-env.sh --divergent --divergence 5.0
-```
-
-The mock APIs return prices that differ by ~5%. The validator **rejects** the changesets:
+When running the Python fetcher with `--divergent`, the mock APIs return prices that differ significantly. The validator **rejects** the changesets:
 
 ```
 WARN Validation rule 'price_consistency' failed at sequence 1:
@@ -399,7 +346,7 @@ bridge.initializeAndHandleMessage(
 
 ### Contract Addresses
 
-After running `dev-env.sh`, deployed addresses are saved to `data/contracts/addresses.json`:
+After running `./scripts/deploy-local.sh`, deployed addresses are saved to `.synddb/local-addresses.json`:
 
 ```json
 {

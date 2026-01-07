@@ -42,20 +42,33 @@ prediction-market/
 │   ├── chain_monitor.rs # L1 event handlers (optional)
 │   ├── lib.rs
 │   └── main.rs          # CLI
-├── scripts/
-│   └── dev-env.sh       # Runs the full stack locally
 └── Cargo.toml
 ```
 
 ## Quick Start
 
-```bash
-# Run everything locally with HTTP server (recommended)
-./examples/prediction-market/scripts/dev-env.sh --http
+### Prerequisites
 
-# Or run with CLI demo
-./examples/prediction-market/scripts/dev-env.sh
-```
+- Rust toolchain (1.70+)
+- [Foundry](https://book.getfoundry.sh/getting-started/installation) (for Anvil)
+
+### Running Locally
+
+1. **Start Anvil and deploy contracts:**
+   ```bash
+   # From the SyndDB root directory
+   ./scripts/deploy-local.sh
+   ```
+
+2. **Start the sequencer:**
+   ```bash
+   cargo run -p synddb-sequencer --release
+   ```
+
+3. **Run the prediction market** (in a new terminal):
+   ```bash
+   cargo run -p prediction-market -- serve --port 8080
+   ```
 
 ### HTTP Server (Production Pattern)
 

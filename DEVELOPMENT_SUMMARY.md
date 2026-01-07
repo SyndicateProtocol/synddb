@@ -235,10 +235,7 @@ TEE #1 (Application)          TEE #2 (Sequencer)
 - Python application fetching crypto prices
 - Custom validator with price consistency rules
 - Demonstrates bidirectional message passing
-
-```bash
-just examples::price-oracle
-```
+- See `examples/price-oracle/README.md` for setup instructions
 
 **Prediction Market** (`examples/prediction-market/`):
 
