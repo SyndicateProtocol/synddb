@@ -27,7 +27,7 @@ jobs:
     if: github.event.pull_request.draft == false || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     name: RISC Zero Build & Execute
     runs-on: shared-large-02
-    timeout-minutes: 60
+    timeout-minutes: 360
     outputs:
       image_id: ${{ steps.image_id.outputs.image_id }}
     steps:
