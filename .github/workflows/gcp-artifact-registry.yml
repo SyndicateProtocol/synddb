@@ -618,6 +618,7 @@ jobs:
             echo "Attempt $i to install RISC Zero toolchain v${RISC0_VERSION}..."
             if curl -L https://risczero.com/install | bash && \
                ~/.risc0/bin/rzup install rust && \
+               ~/.risc0/bin/rzup install r0vm ${RISC0_VERSION} && \
                ~/.risc0/bin/rzup install cargo-risczero ${RISC0_VERSION} && \
                ~/.risc0/bin/rzup install risc0-groth16 && \
                ~/.risc0/bin/r0vm --version; then

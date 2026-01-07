@@ -38,7 +38,8 @@ hex = "0.4"
 # - Default: CPU proving (slower but portable)
 # - cuda: Enable NVIDIA GPU acceleration (use for production)
 # - metal: Enable Apple GPU acceleration (for local dev on Mac)
-risc0-zkvm = { version = "3.0.4", features = ["prove"] }
+# - disable-dev-mode: Prevent RISC0_DEV_MODE from bypassing proof generation
+risc0-zkvm = { version = "3.0.4", features = ["prove", "disable-dev-mode"] }
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
 gcp-attestation = { path = "../../crates/gcp-attestation" }
