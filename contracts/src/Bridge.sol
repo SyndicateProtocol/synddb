@@ -6,7 +6,7 @@ import {IBridge} from "src/interfaces/IBridge.sol";
 import {IWrappedNativeToken} from "src/interfaces/IWrappedNativeToken.sol";
 import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
 import {IAttestationVerifier} from "src/interfaces/IAttestationVerifier.sol";
-import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataTypes.sol";
+import {ProcessingStage, MessageState, SequencerSignature, KeyType} from "src/types/DataTypes.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
@@ -21,11 +21,8 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
     IWrappedNativeToken public immutable wrappedNativeToken;
 
-    /// @notice Whether sequencer key registration requires owner approval
-    bool public sequencerKeyRegistrationRestricted;
-
-    /// @notice Whether validator key registration requires owner approval
-    bool public validatorKeyRegistrationRestricted;
+    /// @notice Whether key registration requires owner approval (per key type)
+    mapping(KeyType => bool) public keyRegistrationRestricted;
 
     /// @notice Default expiration duration for new keys (0 = never expires)
     uint256 public defaultKeyExpiration;
@@ -35,8 +32,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     event NativeTokenWrapped(address indexed sender, uint256 amount);
     event NativeTokenUnwrapped(uint256 amount, address indexed target);
     event TeeKeyManagerUpdated(address indexed oldKeyManager, address indexed newKeyManager);
-    event SequencerKeyRegistrationRestrictionUpdated(bool restricted);
-    event ValidatorKeyRegistrationRestrictionUpdated(bool restricted);
+    event KeyRegistrationRestrictionUpdated(KeyType indexed keyType, bool restricted);
     event DefaultKeyExpirationUpdated(uint256 expiration);
 
     error ZeroAddressNotAllowed();
@@ -94,21 +90,13 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     }
 
     /**
-     * @notice Sets whether sequencer key registration requires owner approval
-     * @param restricted If true, new sequencer keys require approval
+     * @notice Sets whether key registration requires owner approval
+     * @param keyType The type of key (Sequencer or Validator)
+     * @param restricted If true, new keys require approval
      */
-    function setSequencerKeyRegistrationRestricted(bool restricted) external onlyOwner {
-        sequencerKeyRegistrationRestricted = restricted;
-        emit SequencerKeyRegistrationRestrictionUpdated(restricted);
-    }
-
-    /**
-     * @notice Sets whether validator key registration requires owner approval
-     * @param restricted If true, new validator keys require approval
-     */
-    function setValidatorKeyRegistrationRestricted(bool restricted) external onlyOwner {
-        validatorKeyRegistrationRestricted = restricted;
-        emit ValidatorKeyRegistrationRestrictionUpdated(restricted);
+    function setKeyRegistrationRestricted(KeyType keyType, bool restricted) external onlyOwner {
+        keyRegistrationRestricted[keyType] = restricted;
+        emit KeyRegistrationRestrictionUpdated(keyType, restricted);
     }
 
     /**
@@ -121,123 +109,69 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     }
 
     /**
-     * @notice Registers a new sequencer key with attestation proof
+     * @notice Registers a new key with attestation proof
      * @dev Anyone can call this. If registration is restricted, key goes to pending state.
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicValues The encoded public values from the attestation
      * @param proofBytes The ZK proof bytes
      * @return publicKey The registered key address
      */
-    function registerSequencerKey(bytes calldata publicValues, bytes calldata proofBytes)
+    function registerKey(KeyType keyType, bytes calldata publicValues, bytes calldata proofBytes)
         external
         returns (address publicKey)
     {
         uint256 expiresAt = defaultKeyExpiration == 0 ? 0 : block.timestamp + defaultKeyExpiration;
-        return teeKeyManager.addSequencerKey(publicValues, proofBytes, sequencerKeyRegistrationRestricted, expiresAt);
+        return teeKeyManager.addKey(keyType, publicValues, proofBytes, keyRegistrationRestricted[keyType], expiresAt);
     }
 
     /**
-     * @notice Registers a new validator key with attestation proof
-     * @dev Anyone can call this. If registration is restricted, key goes to pending state.
-     * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The ZK proof bytes
-     * @return publicKey The registered key address
-     */
-    function registerValidatorKey(bytes calldata publicValues, bytes calldata proofBytes)
-        external
-        returns (address publicKey)
-    {
-        uint256 expiresAt = defaultKeyExpiration == 0 ? 0 : block.timestamp + defaultKeyExpiration;
-        return teeKeyManager.addValidatorKey(publicValues, proofBytes, validatorKeyRegistrationRestricted, expiresAt);
-    }
-
-    /**
-     * @notice Registers a sequencer key via signature (for keys without gas)
+     * @notice Registers a key via signature (for keys without gas)
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicValues The encoded public values from the attestation
      * @param proofBytes The ZK proof bytes
      * @param deadline Timestamp after which the signature expires
      * @param signature EIP-712 signature from the TEE key
      * @return publicKey The registered key address
      */
-    function registerSequencerKeyWithSignature(
+    function registerKeyWithSignature(
+        KeyType keyType,
         bytes calldata publicValues,
         bytes calldata proofBytes,
         uint256 deadline,
         bytes calldata signature
     ) external returns (address publicKey) {
         uint256 expiresAt = defaultKeyExpiration == 0 ? 0 : block.timestamp + defaultKeyExpiration;
-        return teeKeyManager.addSequencerKeyWithSignature(
-            publicValues, proofBytes, deadline, signature, sequencerKeyRegistrationRestricted, expiresAt
+        return teeKeyManager.addKeyWithSignature(
+            keyType, publicValues, proofBytes, deadline, signature, keyRegistrationRestricted[keyType], expiresAt
         );
     }
 
     /**
-     * @notice Registers a validator key via signature (for keys without gas)
-     * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The ZK proof bytes
-     * @param deadline Timestamp after which the signature expires
-     * @param signature EIP-712 signature from the TEE key
-     * @return publicKey The registered key address
-     */
-    function registerValidatorKeyWithSignature(
-        bytes calldata publicValues,
-        bytes calldata proofBytes,
-        uint256 deadline,
-        bytes calldata signature
-    ) external returns (address publicKey) {
-        uint256 expiresAt = defaultKeyExpiration == 0 ? 0 : block.timestamp + defaultKeyExpiration;
-        return teeKeyManager.addValidatorKeyWithSignature(
-            publicValues, proofBytes, deadline, signature, validatorKeyRegistrationRestricted, expiresAt
-        );
-    }
-
-    /**
-     * @notice Approves a pending sequencer key
+     * @notice Approves a pending key
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicKey The pending key to approve
      * @param expiresAt Expiration timestamp (0 = never expires)
      */
-    function approveSequencerKey(address publicKey, uint256 expiresAt) external onlyOwner {
-        teeKeyManager.approveSequencerKey(publicKey, expiresAt);
+    function approveKey(KeyType keyType, address publicKey, uint256 expiresAt) external onlyOwner {
+        teeKeyManager.approveKey(keyType, publicKey, expiresAt);
     }
 
     /**
-     * @notice Approves a pending validator key
-     * @param publicKey The pending key to approve
-     * @param expiresAt Expiration timestamp (0 = never expires)
-     */
-    function approveValidatorKey(address publicKey, uint256 expiresAt) external onlyOwner {
-        teeKeyManager.approveValidatorKey(publicKey, expiresAt);
-    }
-
-    /**
-     * @notice Rejects a pending sequencer key
+     * @notice Rejects a pending key
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicKey The pending key to reject
      */
-    function rejectSequencerKey(address publicKey) external onlyOwner {
-        teeKeyManager.rejectSequencerKey(publicKey);
+    function rejectKey(KeyType keyType, address publicKey) external onlyOwner {
+        teeKeyManager.rejectKey(keyType, publicKey);
     }
 
     /**
-     * @notice Rejects a pending validator key
-     * @param publicKey The pending key to reject
-     */
-    function rejectValidatorKey(address publicKey) external onlyOwner {
-        teeKeyManager.rejectValidatorKey(publicKey);
-    }
-
-    /**
-     * @notice Removes a sequencer key
+     * @notice Removes a key
+     * @param keyType The type of key (Sequencer or Validator)
      * @param publicKey The key to remove
      */
-    function removeSequencerKey(address publicKey) external onlyOwner {
-        teeKeyManager.removeSequencerKey(publicKey);
-    }
-
-    /**
-     * @notice Removes a validator key
-     * @param publicKey The key to remove
-     */
-    function removeValidatorKey(address publicKey) external onlyOwner {
-        teeKeyManager.removeValidatorKey(publicKey);
+    function removeKey(KeyType keyType, address publicKey) external onlyOwner {
+        teeKeyManager.removeKey(keyType, publicKey);
     }
 
     /**
@@ -322,7 +256,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         address signer = ECDSA.recover(ethSignedHash, sequencerSignature.signature);
 
         // This will revert with InvalidPublicKey if the signer is not a registered TEE sequencer key
-        if (!teeKeyManager.isSequencerKeyValid(signer)) {
+        if (!teeKeyManager.isKeyValid(KeyType.Sequencer, signer)) {
             revert InvalidSequencerSignature(signer);
         }
 

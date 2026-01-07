@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
 import {Bridge} from "src/Bridge.sol";
+import {KeyType} from "src/types/DataTypes.sol";
 
 contract MockAttestationVerifierTest is Test {
     MockAttestationVerifier public verifier;
@@ -59,20 +60,20 @@ contract MockAttestationVerifierTest is Test {
         bytes memory publicValues = abi.encode(signerAddress);
 
         // Add the key through bridge - should succeed with mock verifier
-        bridge.registerSequencerKey(publicValues, "");
+        bridge.registerKey(KeyType.Sequencer, publicValues, "");
 
         // Verify the key is now valid (should not revert)
-        keyManager.isSequencerKeyValid(signerAddress);
+        keyManager.isKeyValid(KeyType.Sequencer, signerAddress);
     }
 
     function test_TeeKeyManager_AddSequencerKeyWithMockVerifier_EmitsEvent() public {
         address signerAddress = makeAddr("sequencer-signer");
         bytes memory publicValues = abi.encode(signerAddress);
 
-        vm.expectEmit(true, false, false, false);
-        emit TeeKeyManager.SequencerKeyAdded(signerAddress, 0);
+        vm.expectEmit(true, true, false, false);
+        emit TeeKeyManager.KeyAdded(KeyType.Sequencer, signerAddress, 0);
 
-        bridge.registerSequencerKey(publicValues, "");
+        bridge.registerKey(KeyType.Sequencer, publicValues, "");
     }
 
     function test_TeeKeyManager_RejectsInvalidKey() public {
@@ -81,11 +82,11 @@ contract MockAttestationVerifierTest is Test {
 
         // Add one key
         bytes memory publicValues = abi.encode(signerAddress);
-        bridge.registerSequencerKey(publicValues, "");
+        bridge.registerKey(KeyType.Sequencer, publicValues, "");
 
         // Query for a different key should revert
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.InvalidPublicKey.selector, otherAddress));
-        keyManager.isSequencerKeyValid(otherAddress);
+        keyManager.isKeyValid(KeyType.Sequencer, otherAddress);
     }
 
     function test_TeeKeyManager_RejectsDuplicateSequencerKey() public {
@@ -93,11 +94,11 @@ contract MockAttestationVerifierTest is Test {
         bytes memory publicValues = abi.encode(signerAddress);
 
         // Add key first time
-        bridge.registerSequencerKey(publicValues, "");
+        bridge.registerKey(KeyType.Sequencer, publicValues, "");
 
         // Try to add same key again - should revert
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.KeyAlreadyExists.selector, signerAddress));
-        bridge.registerSequencerKey(publicValues, "");
+        bridge.registerKey(KeyType.Sequencer, publicValues, "");
     }
 
     function test_TeeKeyManager_AddValidatorKeyWithMockVerifier() public {
@@ -107,10 +108,10 @@ contract MockAttestationVerifierTest is Test {
         bytes memory publicValues = abi.encode(signerAddress);
 
         // Add the key through bridge - should succeed with mock verifier
-        bridge.registerValidatorKey(publicValues, "");
+        bridge.registerKey(KeyType.Validator, publicValues, "");
 
         // Verify the key is now valid (should not revert)
-        keyManager.isValidatorKeyValid(signerAddress);
+        keyManager.isKeyValid(KeyType.Validator, signerAddress);
     }
 
     function test_TeeKeyManager_RejectsDuplicateValidatorKey() public {
@@ -118,10 +119,10 @@ contract MockAttestationVerifierTest is Test {
         bytes memory publicValues = abi.encode(signerAddress);
 
         // Add key first time
-        bridge.registerValidatorKey(publicValues, "");
+        bridge.registerKey(KeyType.Validator, publicValues, "");
 
         // Try to add same key again - should revert
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.KeyAlreadyExists.selector, signerAddress));
-        bridge.registerValidatorKey(publicValues, "");
+        bridge.registerKey(KeyType.Validator, publicValues, "");
     }
 }

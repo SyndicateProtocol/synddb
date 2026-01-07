@@ -2,7 +2,7 @@
 pragma solidity 0.8.30;
 
 import {Bridge} from "src/Bridge.sol";
-import {SequencerSignature} from "src/types/DataTypes.sol";
+import {SequencerSignature, KeyType} from "src/types/DataTypes.sol";
 import {ERC20TotalSupplyCheckModule} from "src/modules/ERC20TotalSupplyCheckModule.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
 import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
@@ -45,7 +45,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
 
         // Register sequencer as a valid TEE key through bridge
         bytes memory publicValues = abi.encode(sequencer);
-        bridge.registerSequencerKey(publicValues, "");
+        bridge.registerKey(KeyType.Sequencer, publicValues, "");
 
         recipient = new ETHReceiver();
 

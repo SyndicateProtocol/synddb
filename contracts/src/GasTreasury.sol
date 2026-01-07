@@ -6,6 +6,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
 import {IGasTreasury} from "src/interfaces/IGasTreasury.sol";
+import {KeyType} from "src/types/DataTypes.sol";
 
 /**
  * @title GasTreasury
@@ -85,12 +86,12 @@ contract GasTreasury is IGasTreasury, Ownable {
 
         // Verify key is registered as either sequencer or validator
         bool isValidKey = false;
-        try keyManager.isSequencerKeyValid(teeKey) {
+        try keyManager.isKeyValid(KeyType.Sequencer, teeKey) {
             isValidKey = true;
         } catch {}
 
         if (!isValidKey) {
-            try keyManager.isValidatorKeyValid(teeKey) {
+            try keyManager.isKeyValid(KeyType.Validator, teeKey) {
                 isValidKey = true;
             } catch {}
         }

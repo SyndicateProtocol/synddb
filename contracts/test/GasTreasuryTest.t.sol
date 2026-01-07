@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {GasTreasury} from "src/GasTreasury.sol";
 import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
+import {KeyType} from "src/types/DataTypes.sol";
 
 contract MockKeyManagerForTreasury {
     mapping(address => bool) public validSequencerKeys;
@@ -17,16 +18,15 @@ contract MockKeyManagerForTreasury {
         validValidatorKeys[key] = valid;
     }
 
-    function isSequencerKeyValid(address key) external view returns (bool) {
-        if (!validSequencerKeys[key]) {
-            revert("Key not valid");
-        }
-        return true;
-    }
-
-    function isValidatorKeyValid(address key) external view returns (bool) {
-        if (!validValidatorKeys[key]) {
-            revert("Key not valid");
+    function isKeyValid(KeyType keyType, address key) external view returns (bool) {
+        if (keyType == KeyType.Sequencer) {
+            if (!validSequencerKeys[key]) {
+                revert("Key not valid");
+            }
+        } else {
+            if (!validValidatorKeys[key]) {
+                revert("Key not valid");
+            }
         }
         return true;
     }
