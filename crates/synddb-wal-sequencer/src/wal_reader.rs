@@ -19,8 +19,8 @@ pub enum WalError {
 // https://www.sqlite.org/fileformat.html#the_write_ahead_log
 #[derive(Debug)]
 pub struct WalState {
-    header: WalHeader,
-    frames: Vec<WalFrame>,
+    pub header: WalHeader,
+    pub frames: Vec<WalFrame>,
 }
 
 const WAL_HEADER_SIZE: usize = 32;
@@ -123,15 +123,15 @@ fn wal_checksum(byte_order: &Order, mut s0: u32, mut s1: u32, data: &[u8]) -> (u
 
 #[derive(Debug, FromBytes, Immutable, KnownLayout)]
 #[repr(C)]
-struct WalHeader {
-    magic_number: U32<BE>,
-    file_format_version: U32<BE>,
-    page_size: U32<BE>,
-    checkpoint_seq: U32<BE>,
-    salt_1: U32<BE>,
-    salt_2: U32<BE>,
-    checksum_1: U32<BE>,
-    checksum_2: U32<BE>,
+pub struct WalHeader {
+    pub magic_number: U32<BE>,
+    pub file_format_version: U32<BE>,
+    pub page_size: U32<BE>,
+    pub checkpoint_seq: U32<BE>,
+    pub salt_1: U32<BE>,
+    pub salt_2: U32<BE>,
+    pub checksum_1: U32<BE>,
+    pub checksum_2: U32<BE>,
 }
 
 impl WalHeader {
@@ -171,37 +171,7 @@ mod tests {
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
     };
-
-    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDir(PathBuf);
-
-    impl TestDir {
-        fn new(name: &str) -> Self {
-            let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-            let dir = std::env::temp_dir().join("synddb-wal-tests").join(format!(
-                "{}-{}-{}",
-                name,
-                std::process::id(),
-                counter
-            ));
-            std::fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-    }
-
-    impl Deref for TestDir {
-        type Target = Path;
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use synddb_shared::utils::tmp_dir;
 
     #[test]
     fn test_wal_checksum_little_endian() {
@@ -254,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_read_wal_file_with_sqlite() {
-        let dir = TestDir::new("read_wal_file_with_sqlite");
+        let dir = tmp_dir("read_wal_file_with_sqlite", None);
         let db_path = dir.join("test.db");
         let wal_path = dir.join("test.db-wal");
 

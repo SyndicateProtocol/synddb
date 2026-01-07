@@ -67,6 +67,7 @@ base64 = "0.22"
 zstd = "0.13"
 sha2 = "0.10"
 sha3 = "0.10"
+zerocopy = "0.8.31"
 
 # CBOR/COSE serialization
 ciborium = "0.2"
