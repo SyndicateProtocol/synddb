@@ -345,6 +345,15 @@ The script outputs JSON with `digest`, `signature`, and `found` fields. Use thes
 
 **Requirements:** `oras` CLI must be installed.
 
+### Updating Terraform tfvars Files
+When modifying private tfvars files (e.g., `terraform.tfvars`), check if the corresponding template file (e.g., `base-sepolia.tfvars.template`) needs updating:
+
+1. **Update keys only in templates** - Add new variable names to template files, but use placeholder values (e.g., `"0x0000..."`, `""`, `"your-value-here"`)
+2. **Protect private data** - Never copy actual values from `terraform.tfvars` into templates. Templates are committed to the repo and must not contain secrets, API keys, private keys, or real contract addresses
+3. **Confirm before adding** - Always ask for confirmation before adding a variable to a template file. The variable may be intentionally private and should not appear in the template at all
+
+Template files (like `base-sepolia.tfvars.template`) serve as documentation for required variables while `terraform.tfvars` holds the actual private values.
+
 ### Deleting Infrastructure
 Cloud Run v2 services have `deletion_protection = true` by default. To delete:
 
