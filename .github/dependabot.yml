@@ -52,3 +52,14 @@ updates:
       prefix: "chore(deps)"
     labels:
       - "dependencies"
+
+  # Docker base images (reproducible builds)
+  - package-ecosystem: docker
+    directory: "/docker/reproducible"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
