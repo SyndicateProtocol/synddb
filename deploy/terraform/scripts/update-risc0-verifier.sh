@@ -18,8 +18,8 @@
 #
 # Image digest variables (at least one required):
 #   SEQUENCER_IMAGE_DIGEST: Sequencer container image digest (sha256:...)
-#   VALIDATOR_IMAGE_DIGEST: Validator container image digest (sha256:...)
-#   PRICE_ORACLE_IMAGE_DIGEST: Price oracle container image digest (sha256:...)
+#   PRICE_ORACLE_VALIDATOR_IMAGE_DIGEST: Price oracle validator container image digest (sha256:...)
+#   PRICE_ORACLE_IMAGE_DIGEST: Price oracle application container image digest (sha256:...)
 #
 # Environment variables (optional):
 #   TRUSTED_JWK_HASHES: Comma-separated list of trusted JWK hashes
@@ -62,9 +62,9 @@ if [[ -n "${SEQUENCER_IMAGE_DIGEST:-}" ]]; then
     ALLOWED_HASHES="$HASH"
 fi
 
-if [[ -n "${VALIDATOR_IMAGE_DIGEST:-}" ]]; then
-    HASH=$(cast keccak "$VALIDATOR_IMAGE_DIGEST")
-    echo "  Validator: $VALIDATOR_IMAGE_DIGEST -> $HASH" >&2
+if [[ -n "${PRICE_ORACLE_VALIDATOR_IMAGE_DIGEST:-}" ]]; then
+    HASH=$(cast keccak "$PRICE_ORACLE_VALIDATOR_IMAGE_DIGEST")
+    echo "  Price Oracle Validator: $PRICE_ORACLE_VALIDATOR_IMAGE_DIGEST -> $HASH" >&2
     if [[ -n "$ALLOWED_HASHES" ]]; then
         ALLOWED_HASHES="$ALLOWED_HASHES,$HASH"
     else
@@ -83,7 +83,7 @@ if [[ -n "${PRICE_ORACLE_IMAGE_DIGEST:-}" ]]; then
 fi
 
 if [[ -z "$ALLOWED_HASHES" ]]; then
-    echo "Error: At least one image digest is required (SEQUENCER_IMAGE_DIGEST, VALIDATOR_IMAGE_DIGEST, or PRICE_ORACLE_IMAGE_DIGEST)" >&2
+    echo "Error: At least one image digest is required (SEQUENCER_IMAGE_DIGEST, PRICE_ORACLE_VALIDATOR_IMAGE_DIGEST, or PRICE_ORACLE_IMAGE_DIGEST)" >&2
     exit 1
 fi
 

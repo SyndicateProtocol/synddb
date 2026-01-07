@@ -82,12 +82,15 @@ locals {
     try(data.external.sequencer_signature[0].result.digest, "")
   ) : ""
 
-  validator_digest = var.tee_bootstrap != null ? (
+  # Price oracle validator digest - only used when price oracle example is enabled
+  # This is the application-specific validator (price-oracle-validator), not a generic validator
+  price_oracle_validator_digest = var.tee_bootstrap != null && var.price_oracle_config != null ? (
     can(regex("@(sha256:[a-f0-9]+)$", var.validator_image)) ?
     regex("@(sha256:[a-f0-9]+)$", var.validator_image)[0] :
     try(data.external.validator_signature[0].result.digest, "")
   ) : ""
 
+  # Price oracle application digest - only used when price oracle example is enabled
   price_oracle_digest = var.tee_bootstrap != null && var.price_oracle_config != null ? (
     can(regex("@(sha256:[a-f0-9]+)$", var.price_oracle_image)) ?
     regex("@(sha256:[a-f0-9]+)$", var.price_oracle_image)[0] :
@@ -124,22 +127,23 @@ resource "null_resource" "update_attestation_verifier_sequencer" {
   ]
 }
 
-resource "null_resource" "update_attestation_verifier_validator" {
+resource "null_resource" "update_attestation_verifier_price_oracle_validator" {
   count = (
     var.tee_bootstrap != null &&
+    var.price_oracle_config != null &&
     var.deployer_private_key != "" &&
     var.attestation_verifier_address != "" &&
-    local.validator_digest != ""
+    local.price_oracle_validator_digest != ""
   ) ? 1 : 0
 
-  # Re-run when the validator image changes
+  # Re-run when the price oracle validator image changes
   triggers = {
-    validator_digest             = local.validator_digest
-    attestation_verifier_address = var.attestation_verifier_address
+    price_oracle_validator_digest = local.price_oracle_validator_digest
+    attestation_verifier_address  = var.attestation_verifier_address
   }
 
   provisioner "local-exec" {
-    command = "${local.update_digest_script} ${local.validator_digest}"
+    command = "${local.update_digest_script} ${local.price_oracle_validator_digest}"
 
     environment = {
       DEPLOYER_PRIVATE_KEY         = var.deployer_private_key
@@ -263,17 +267,17 @@ resource "null_resource" "update_risc0_verifier" {
     command = local.update_risc0_script
 
     environment = {
-      DEPLOYER_PRIVATE_KEY         = var.deployer_private_key
-      RPC_URL                      = var.tee_bootstrap.rpc_url
-      ATTESTATION_VERIFIER_ADDRESS = var.attestation_verifier_address
-      BRIDGE_ADDRESS               = var.bridge_contract_address
-      PROOF_SERVICE_IMAGE          = var.proof_service_image
-      SEQUENCER_IMAGE_DIGEST       = local.sequencer_digest
-      VALIDATOR_IMAGE_DIGEST       = local.validator_digest
-      PRICE_ORACLE_IMAGE_DIGEST    = local.price_oracle_digest
-      TRUSTED_IMAGE_SIGNERS        = local.trusted_image_signers
-      TFVARS_FILE                  = "${path.module}/terraform.tfvars"
-      ETHERSCAN_API_KEY            = var.etherscan_api_key
+      DEPLOYER_PRIVATE_KEY                = var.deployer_private_key
+      RPC_URL                             = var.tee_bootstrap.rpc_url
+      ATTESTATION_VERIFIER_ADDRESS        = var.attestation_verifier_address
+      BRIDGE_ADDRESS                      = var.bridge_contract_address
+      PROOF_SERVICE_IMAGE                 = var.proof_service_image
+      SEQUENCER_IMAGE_DIGEST              = local.sequencer_digest
+      PRICE_ORACLE_VALIDATOR_IMAGE_DIGEST = local.price_oracle_validator_digest
+      PRICE_ORACLE_IMAGE_DIGEST           = local.price_oracle_digest
+      TRUSTED_IMAGE_SIGNERS               = local.trusted_image_signers
+      TFVARS_FILE                         = "${path.module}/terraform.tfvars"
+      ETHERSCAN_API_KEY                   = var.etherscan_api_key
     }
   }
 
