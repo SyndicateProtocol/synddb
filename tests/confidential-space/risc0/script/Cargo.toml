@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# Standalone workspace: test script for RISC Zero proving (uses risc0-build)
 [workspace]
 
 [[bin]]

@@ -5,7 +5,8 @@ edition = "2021"
 description = "RISC Zero GPU proof generation service for TEE attestation"
 publish = false
 
-# Standalone service, not part of main workspace
+# Standalone workspace: uses risc0-build to compile the zkVM guest program
+# Kept separate to isolate RISC Zero SDK dependencies and simplify CI builds
 [workspace]
 
 [[bin]]
