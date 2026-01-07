@@ -59,7 +59,7 @@ COPY . .
 # Target L4 GPU (Ada Lovelace, compute 8.9). The build doesn't have a GPU present
 # so -arch=native fails - we must specify the target explicitly.
 # Also include sm_80 (Ampere A100) for compatibility with other GPU types.
-WORKDIR /app/services/proof-service
+WORKDIR /app/crates/proof-service
 ENV NVCC_APPEND_FLAGS="-gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_89,code=sm_89"
 RUN cargo build --release --features cuda
 
@@ -74,7 +74,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy the built binary
-COPY --from=builder /app/services/proof-service/target/release/proof-service /app/proof-service
+COPY --from=builder /app/crates/proof-service/target/release/proof-service /app/proof-service
 
 # Copy RISC Zero Groth16 prover data files
 # These are required at runtime for GPU Groth16 proving (installed via rzup install risc0-groth16)

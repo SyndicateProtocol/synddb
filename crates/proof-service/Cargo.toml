@@ -48,10 +48,10 @@ risc0-zkvm = { version = "3.0.4", features = ["prove", "disable-dev-mode"] }
 risc0-ethereum-contracts = "3.0.1"
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
-gcp-attestation = { path = "../../crates/gcp-attestation" }
+gcp-attestation = { path = "../gcp-attestation" }
 
 # RISC Zero program types (PublicValuesStruct for decoding proof outputs)
-gcp-cs-attestation-risc0-program = { path = "../../crates/synddb-bootstrap/risc0/program", default-features = false }
+gcp-cs-attestation-risc0-program = { path = "../synddb-bootstrap/risc0/program", default-features = false }
 
 # Solidity types
 alloy = { version = "1.0", default-features = false, features = ["sol-types"] }
@@ -73,4 +73,4 @@ reqwest = { version = "0.12", features = ["json"] }
 risc0-build = "3.0.4"
 
 [package.metadata.risc0]
-methods = ["../../crates/synddb-bootstrap/risc0/program"]
+methods = ["../synddb-bootstrap/risc0/program"]

@@ -241,7 +241,7 @@ cast send $ATTESTATION_VERIFIER "addTrustedJwkHash(bytes32)" $(cast keccak "<jwk
 The GPU proof service generates SP1 proofs from attestation tokens:
 
 ```bash
-cd services/proof-service
+cd crates/proof-service
 
 # Build container
 docker build -t gcr.io/$PROJECT_ID/proof-service .
@@ -253,7 +253,7 @@ docker push gcr.io/$PROJECT_ID/proof-service
 gcloud run services replace deploy/cloud-run.yaml --region=us-central1
 ```
 
-See `services/proof-service/README.md` for detailed configuration.
+See `crates/proof-service/README.md` for detailed configuration.
 
 #### 3. Build TEE Services with Bootstrap
 
