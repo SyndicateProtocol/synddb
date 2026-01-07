@@ -49,7 +49,7 @@ prediction-market/
 
 ### Prerequisites
 
-- Rust toolchain (1.70+)
+- Rust toolchain (1.92+)
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) (for Anvil)
 
 ### Running Locally

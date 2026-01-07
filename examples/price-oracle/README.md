@@ -100,7 +100,7 @@ contracts/                    # Solidity contracts (project root)
 
 ### Prerequisites
 
-- Rust toolchain (1.70+)
+- Rust toolchain (1.92+)
 - Python 3.10+
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) (for Anvil and contract deployment)
 
