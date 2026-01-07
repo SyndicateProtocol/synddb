@@ -440,7 +440,7 @@ jobs:
             cache-scope: proof-service
             # Larger runner for RISC Zero toolchain compilation (memory intensive)
             runner: shared-large-01
-            timeout: 360
+            timeout: 120
           - image: price-oracle
             dockerfile: examples/price-oracle/Dockerfile
             cache-scope: price-oracle
