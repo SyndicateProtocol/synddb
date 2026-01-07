@@ -200,25 +200,7 @@ cargo test -p synddb-sequencer
 
 ## Justfile
 
-The project uses [just](https://github.com/casey/just) as a command runner for CI workflows. The justfile contains recipes used by GitHub Actions for linting, testing, and reproducible builds.
-
-**Available commands:**
-```bash
-just              # Show all available commands
-just check        # Run all lints (CI uses this)
-just test         # Run unit tests
-just test-stress  # Run stress tests with sequencer
-just repro-all    # Build reproducible Docker images
-```
-
-**For local development:** Use cargo/forge commands directly:
-```bash
-cargo build --workspace
-cargo test --workspace
-cd contracts && forge test
-```
-
-**For infrastructure:** See `deploy/terraform/` for staging/production configuration.
+The project uses [just](https://github.com/casey/just) as a command runner. The justfile is primarily used by CI workflows for linting, testing, and reproducible builds. For local development, use cargo/forge commands directly.
 
 ## Code Style
 
@@ -302,22 +284,21 @@ When adding a new env var:
 ### Terraform Environments
 Infrastructure is managed via Terraform in `deploy/terraform/environments/`:
 - `staging/` - Test environment on Base Sepolia
-- `prod/` - Production environment
 
-### Updating Image Digests and Signatures
-When updating Terraform configurations with new image digests and signatures, use the `get-image-info` script:
+### Automated Updates
+- **Docker base image digests**: Dependabot monitors `docker/reproducible/` and opens PRs when base images have updates
+- **Image signatures and RISC Zero image IDs**: The `gcp-artifact-registry.yml` workflow automatically generates these when building and pushing images
+
+### Manual Image Info Lookup
+When manually updating Terraform configurations with image digests and signatures, use the `get-image-info` script:
 
 ```bash
 # Get digest and signature for an image tag
 echo '{"image": "us-central1-docker.pkg.dev/synddb-infra/synddb/sequencer:latest"}' | \
   ./deploy/terraform/scripts/get-image-info.sh
-
-# Get signature for a specific digest
-echo '{"image": "us-central1-docker.pkg.dev/synddb-infra/synddb/sequencer@sha256:abc123..."}' | \
-  ./deploy/terraform/scripts/get-image-info.sh
 ```
 
-The script outputs JSON with `digest`, `signature`, and `found` fields. Use these values to update the corresponding Terraform variables.
+The script outputs JSON with `digest`, `signature`, and `found` fields.
 
 **Requirements:** `oras` CLI must be installed.
 
