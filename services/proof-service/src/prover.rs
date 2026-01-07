@@ -4,7 +4,8 @@ use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use gcp_attestation::{extract_kid_from_jwt, JwkKey};
 use gcp_cs_attestation_risc0_program::PublicValuesStruct;
-use risc0_zkvm::{default_prover, sha::Digestible, ExecutorEnv, ProverOpts, Receipt};
+use risc0_ethereum_contracts::encode_seal;
+use risc0_zkvm::{default_prover, ExecutorEnv, ProverOpts};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -90,13 +91,11 @@ impl AttestationProver {
         // Extract journal (public values) and seal (proof bytes)
         let journal = receipt.journal.bytes.clone();
 
-        // Get the Groth16 seal for on-chain verification
-        let seal = receipt
-            .inner
-            .groth16()
-            .context("Failed to get Groth16 proof - receipt may not be Groth16 format")?
-            .seal
-            .clone();
+        // Encode the seal for on-chain verification
+        // This prepends the 4-byte verifier selector derived from Groth16 vkey and control IDs
+        // The selector is required by RiscZeroVerifierRouter to route to the correct verifier
+        let seal = encode_seal(&receipt)
+            .context("Failed to encode seal for on-chain verification")?;
 
         Ok(ProofOutput {
             public_values: journal,
