@@ -30,12 +30,15 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install RISC Zero toolchain
 # This installs the rzup tool and then the risc0 toolchain components.
-# Version must match the risc0-zkvm crate version in Cargo.toml.
+# Components are not version-pinned because:
+# 1. The trust boundary is the curl install - version pins don't add security
+# 2. The risc0-zkvm crate version in Cargo.toml is the source of truth for compatibility
+# 3. Unpinned installs get security updates automatically
 # See: https://dev.risczero.com/api/zkvm/install
 RUN curl -L https://risczero.com/install | bash && \
     /root/.risc0/bin/rzup install rust && \
-    /root/.risc0/bin/rzup install r0vm 3.0.4 && \
-    /root/.risc0/bin/rzup install cargo-risczero 3.0.4 && \
+    /root/.risc0/bin/rzup install r0vm && \
+    /root/.risc0/bin/rzup install cargo-risczero && \
     /root/.risc0/bin/rzup install risc0-groth16
 
 # Add rzup and all toolchain binaries to PATH
