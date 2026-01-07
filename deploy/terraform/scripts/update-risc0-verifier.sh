@@ -185,7 +185,8 @@ cast send "$BRIDGE_ADDRESS" \
     "updateAttestationVerifier(address)" \
     "$NEW_VERIFIER_ADDRESS" \
     --private-key "$DEPLOYER_PRIVATE_KEY" \
-    --rpc-url "$RPC_URL" >&2
+    --rpc-url "$RPC_URL" \
+    --confirmations 1 >&2
 
 echo "Bridge updated successfully" >&2
 

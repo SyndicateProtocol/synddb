@@ -160,6 +160,9 @@ resource "null_resource" "update_attestation_verifier_sequencer" {
   ]
 }
 
+# Note: These resources are chained via depends_on to run sequentially,
+# preventing nonce collisions when multiple transactions hit the same wallet.
+
 resource "null_resource" "update_attestation_verifier_price_oracle_validator" {
   count = (
     var.tee_bootstrap != null &&
@@ -187,6 +190,7 @@ resource "null_resource" "update_attestation_verifier_price_oracle_validator" {
 
   depends_on = [
     data.external.validator_signature,
+    null_resource.update_attestation_verifier_sequencer,
   ]
 }
 
@@ -217,6 +221,7 @@ resource "null_resource" "update_attestation_verifier_price_oracle" {
 
   depends_on = [
     data.external.price_oracle_signature,
+    null_resource.update_attestation_verifier_price_oracle_validator,
   ]
 }
 

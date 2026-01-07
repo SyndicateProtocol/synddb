@@ -59,10 +59,16 @@ fi
 echo "Adding allowed image digest hash..."
 
 # Call addAllowedImageDigestHash on the contract
-cast send "$ATTESTATION_VERIFIER_ADDRESS" \
+# Use --confirmations to ensure we wait for the transaction to be mined
+# This prevents nonce collisions when multiple scripts run sequentially
+TX_OUTPUT=$(cast send "$ATTESTATION_VERIFIER_ADDRESS" \
     "addAllowedImageDigestHash(bytes32)" \
     "$DIGEST_HASH" \
     --private-key "$DEPLOYER_PRIVATE_KEY" \
-    --rpc-url "$RPC_URL"
+    --rpc-url "$RPC_URL" \
+    --confirmations 1 \
+    --json)
 
+TX_HASH=$(echo "$TX_OUTPUT" | jq -r '.transactionHash')
+echo "Transaction hash: $TX_HASH"
 echo "Successfully added allowed image digest hash"
