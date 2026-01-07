@@ -64,3 +64,6 @@ reqwest = { version = "0.12", features = ["json"] }
 
 [build-dependencies]
 risc0-build = "3.0"
+
+[package.metadata.risc0]
+methods = ["../../crates/synddb-bootstrap/risc0/program"]
