@@ -29,11 +29,14 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install RISC Zero toolchain
-# This installs the rzup tool and then the risc0 toolchain
+# This installs the rzup tool and then the risc0 toolchain components.
+# Version must match the risc0-zkvm crate version in Cargo.toml.
+# See: https://dev.risczero.com/api/zkvm/install
 RUN curl -L https://risczero.com/install | bash && \
-    /root/.risc0/bin/rzup install
+    /root/.risc0/bin/rzup install cargo-risczero 3.0.4 && \
+    /root/.risc0/bin/rzup install risc0-groth16
 
-# Add rzup to PATH
+# Add rzup and toolchain binaries to PATH
 ENV PATH="/root/.risc0/bin:${PATH}"
 
 WORKDIR /app
