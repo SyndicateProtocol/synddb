@@ -22,8 +22,9 @@ std = []
 zkvm = ["risc0-zkvm", "gcp-attestation"]
 
 [dependencies]
-# Solidity types for PublicValuesStruct
-alloy = { version = "1.0", default-features = false, features = ["sol-types"] }
+# Solidity types for PublicValuesStruct (no_std compatible core crates)
+alloy-primitives = { version = "1.5", default-features = false }
+alloy-sol-types = { version = "1.4", default-features = false }
 
 # zkVM runtime (only needed when building the RISC Zero program binary)
 # default-features = false is REQUIRED for guest programs

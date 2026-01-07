@@ -21,25 +21,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "alloy"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf23ee5a0d40c75ade22bf33f117058461fc30a95e84d48b01c845c28f4ea7c5"
-dependencies = [
- "alloy-core",
-]
-
-[[package]]
-name = "alloy-core"
-version = "1.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d4087016b0896051dd3d03e0bedda2f4d4d1689af8addc8450288c63a9e5f68"
-dependencies = [
- "alloy-primitives",
- "alloy-sol-types",
-]
-
-[[package]]
 name = "alloy-primitives"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -707,7 +688,8 @@ dependencies = [
 name = "gcp-cs-attestation-risc0-program"
 version = "0.1.0"
 dependencies = [
- "alloy",
+ "alloy-primitives",
+ "alloy-sol-types",
  "gcp-attestation",
  "risc0-zkvm",
 ]

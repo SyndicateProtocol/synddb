@@ -13,11 +13,14 @@
 //! by an authorized Ethereum key (e.g., from CI).
 
 #![no_main]
+#![no_std]
 
-use alloy::{
-    primitives::{keccak256, Address, FixedBytes},
-    sol_types::SolType,
-};
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use alloy_primitives::{keccak256, Address, FixedBytes};
+use alloy_sol_types::SolType;
 use gcp_attestation::{verify_attestation, JwkKey};
 use gcp_cs_attestation_risc0_program::PublicValuesStruct;
 use risc0_zkvm::guest::env;

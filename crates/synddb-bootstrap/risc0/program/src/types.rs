@@ -6,7 +6,7 @@
 //!
 //! This is identical to the SP1 version to ensure both backends produce compatible outputs.
 
-use alloy::sol;
+use alloy_sol_types::sol;
 
 // Public values committed by the RISC Zero program for on-chain verification.
 // Must match the Solidity definition in the verifier contract.
