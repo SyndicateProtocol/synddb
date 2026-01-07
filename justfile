@@ -191,31 +191,3 @@ repro-validator: repro-setup
 # Build all reproducible images
 [group('reproducible')]
 repro-all: repro-sequencer repro-validator
-
-# ============================================================================
-# Release
-# ============================================================================
-
-# Generate changelog from conventional commits
-[group('release')]
-changelog:
-    git cliff --unreleased
-
-# Dry-run release (shows what would happen)
-[group('release')]
-release-dry version:
-    cargo release {{ version }} --no-publish --no-tag --no-push
-
-# Execute release (requires cargo-release)
-[group('release')]
-release version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -z "${CI:-}" ] && [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
-        echo "Error: Not running in CI and no CARGO_REGISTRY_TOKEN set."
-        echo "Use 'just release-dry {{ version }}' to test locally."
-        exit 1
-    fi
-    echo "This will publish to crates.io. Press Ctrl+C to cancel, or Enter to continue..."
-    read -r
-    cargo release {{ version }} --execute
