@@ -42,7 +42,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            crates/synddb-bootstrap/risc0/program
             tests/confidential-space/risc0/script
 
       - name: Install RISC Zero toolchain
@@ -78,12 +77,10 @@ jobs:
             exit 1
           fi
 
-      - name: Build RISC Zero guest program
-        run: |
-          cd crates/synddb-bootstrap/risc0/program
-          cargo build --release
-
       - name: Build RISC Zero script
+        # The script's build.rs uses risc0-build::embed_methods() which compiles
+        # the guest program for the riscv32im-risc0-zkvm-elf target. The guest
+        # binary cannot be built directly on the host (no_std requires zkVM runtime).
         run: |
           cd tests/confidential-space/risc0/script
           cargo build --release
