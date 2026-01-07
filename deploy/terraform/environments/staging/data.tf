@@ -136,3 +136,76 @@ output "risc0_image_id" {
   description = "RISC Zero program image ID from proof-service (use for RiscZeroAttestationVerifier deployment)"
   value       = var.tee_bootstrap != null ? try(data.external.proof_service_info[0].result.image_id, "") : ""
 }
+
+# -----------------------------------------------------------------------------
+# RiscZeroAttestationVerifier Image ID Update
+# -----------------------------------------------------------------------------
+# Automatically deploys a new RiscZeroAttestationVerifier and updates the Bridge
+# when the RISC Zero image ID changes. This happens when the guest program is
+# modified (rare, but requires contract redeployment since imageId is immutable).
+#
+# Requirements:
+#   - deployer_private_key must be set in tfvars
+#   - attestation_verifier_address must be set
+#   - bridge_contract_address must be set
+#   - trusted_image_signers must be set
+#   - foundry (forge, cast) must be installed
+#   - oras CLI must be installed
+
+locals {
+  # Path to the RISC Zero verifier update script
+  update_risc0_script = "${path.module}/../../scripts/update-risc0-verifier.sh"
+
+  # Get the RISC Zero image ID from proof-service (empty string if not available)
+  proof_service_risc0_image_id = var.tee_bootstrap != null ? try(
+    data.external.proof_service_info[0].result.image_id, ""
+  ) : ""
+
+  # Comma-separated list of trusted image signers from the sequencer signature
+  trusted_image_signers = var.tee_bootstrap != null ? try(
+    # For now use the signer from the signature artifact
+    # This could be extended to support multiple signers
+    jsondecode(data.external.sequencer_signature[0].result.signature != "" ?
+      "{\"signer\": \"${var.trusted_image_signer}\"}" : "{}")["signer"],
+    var.trusted_image_signer
+  ) : var.trusted_image_signer
+}
+
+resource "null_resource" "update_risc0_verifier" {
+  count = (
+    var.tee_bootstrap != null &&
+    var.deployer_private_key != "" &&
+    var.attestation_verifier_address != "" &&
+    var.bridge_contract_address != "" &&
+    var.trusted_image_signer != "" &&
+    local.proof_service_risc0_image_id != ""
+  ) ? 1 : 0
+
+  # Re-run when the RISC Zero image ID changes
+  triggers = {
+    risc0_image_id               = local.proof_service_risc0_image_id
+    attestation_verifier_address = var.attestation_verifier_address
+    bridge_contract_address      = var.bridge_contract_address
+  }
+
+  provisioner "local-exec" {
+    command = local.update_risc0_script
+
+    environment = {
+      DEPLOYER_PRIVATE_KEY         = var.deployer_private_key
+      RPC_URL                      = var.tee_bootstrap.rpc_url
+      ATTESTATION_VERIFIER_ADDRESS = var.attestation_verifier_address
+      BRIDGE_ADDRESS               = var.bridge_contract_address
+      PROOF_SERVICE_IMAGE          = var.proof_service_image
+      SEQUENCER_IMAGE_DIGEST       = local.sequencer_digest
+      TRUSTED_IMAGE_SIGNERS        = local.trusted_image_signers
+      TFVARS_FILE                  = "${path.module}/terraform.tfvars"
+      ETHERSCAN_API_KEY            = var.etherscan_api_key
+    }
+  }
+
+  depends_on = [
+    data.external.proof_service_info,
+    data.external.sequencer_signature,
+  ]
+}

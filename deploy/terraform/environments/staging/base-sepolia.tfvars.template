@@ -254,6 +254,23 @@ deployer_private_key = ""  # TODO: Same key used to deploy contracts (0x prefixe
 attestation_verifier_address = "0x0000000000000000000000000000000000000000"  # TODO: Your AttestationVerifier contract
 
 # -----------------------------------------------------------------------------
+# TEE Attestation Configuration
+# -----------------------------------------------------------------------------
+# Settings for TEE attestation verification on-chain.
+#
+# trusted_image_signer: Address that signs container images during CI builds.
+#   The RiscZeroAttestationVerifier checks image signatures come from this address.
+#   For synddb-infra images: 0x7276f217e12550455579586629EfEDCA4a5de84E
+#   For custom images: generate your own signer key and configure in CI.
+#
+# etherscan_api_key: (Optional) Basescan API key for contract verification.
+#   Get key at https://basescan.org/apis
+#   Used when auto-deploying new RiscZeroAttestationVerifier contracts.
+
+trusted_image_signer = "0x7276f217e12550455579586629EfEDCA4a5de84E"  # synddb-infra CI signer
+etherscan_api_key    = ""  # Optional: Basescan API key for contract verification
+
+# -----------------------------------------------------------------------------
 # Labels
 # -----------------------------------------------------------------------------
 # Resource labels for organization and cost tracking in GCP.
