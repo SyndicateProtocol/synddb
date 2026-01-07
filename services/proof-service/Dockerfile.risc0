@@ -85,11 +85,8 @@ COPY --from=builder /root/.risc0 /root/.risc0
 ENV BIND_ADDRESS=0.0.0.0:8083
 ENV RUST_LOG=info,risc0_zkvm=debug
 
-# GPU compute requires NVIDIA Container Toolkit at runtime
-# Cloud Run automatically provides GPU access when configured
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 # CUDA library path for RISC Zero Groth16 proving
+# Cloud Run automatically mounts NVIDIA driver libs and sets LD_LIBRARY_PATH
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
 
 EXPOSE 8083
