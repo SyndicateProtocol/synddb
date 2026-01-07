@@ -9,6 +9,39 @@
 #
 # The synddb registry (us-central1-docker.pkg.dev/synddb-infra/synddb) is public,
 # so no authentication is needed.
+#
+# =============================================================================
+# KNOWN LIMITATIONS / TODOs
+# =============================================================================
+#
+# TODO(security): Digest accumulation - the update-image-digest.sh script only
+#   ADDS new digest hashes, never removes old ones. Over time, the contract will
+#   accumulate many allowed digests. This may be intentional (for rollbacks) but
+#   creates a security concern if old vulnerable images remain allowed. Consider:
+#   - Periodic manual review of allowed digests
+#   - Automated removal of digests older than N versions
+#   - Alert when digest count exceeds threshold
+#
+# TODO(operations): JWK key rotation alerting - Google rotates their attestation
+#   signing keys (JWK) periodically. Rotation frequency is not publicly documented
+#   (Google says "regularly"). The JWKS endpoint typically has 2+ active keys to
+#   allow transition periods. JWK rotation does NOT affect running instances with
+#   already-registered keys - it only impacts NEW key registrations (instance
+#   restarts or new deployments). If we haven't added the new JWK hash to the
+#   contract, new registrations will fail with UntrustedJwkHash. Consider:
+#   - Weekly scheduled job to fetch JWKS from the well-known endpoint
+#   - Compare key IDs against on-chain trustedJwkHashes mapping
+#   - Alert when new keys appear (so we can add them before instances restart)
+#   - JWKS endpoint: https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com
+#   - See: https://cloud.google.com/confidential-computing/confidential-space/docs/connect-external-resources
+#
+# TODO(operations): Digest review alerting - no notification when image digests
+#   are updated on-chain. Consider:
+#   - Monitor AllowedImageDigestHashAdded/Removed events on-chain
+#   - Alert to Slack/PagerDuty when digests change
+#   - Include human-readable image tag in alert (requires reverse lookup)
+#
+# =============================================================================
 
 locals {
   # Path to the image info lookup script
