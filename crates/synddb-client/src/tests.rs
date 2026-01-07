@@ -1,10 +1,18 @@
 use super::*;
 use std::default::Default;
 
+/// Create a leaked in-memory connection for testing.
+///
+/// Returns a `&'static Connection` which is required by `SyndDB::attach()`.
+/// The connection is intentionally leaked since tests are short-lived.
+fn test_conn() -> &'static Connection {
+    test_conn()
+}
+
 #[test]
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_attach() {
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
         .unwrap();
 
@@ -20,7 +28,7 @@ fn test_attach() {
 #[test]
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_drop_graceful_shutdown() {
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
         .unwrap();
 
@@ -37,7 +45,7 @@ fn test_drop_graceful_shutdown() {
 #[test]
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_drop_with_pending_changesets() {
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
         .unwrap();
 
@@ -59,7 +67,7 @@ fn test_drop_with_pending_changesets() {
 #[test]
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_explicit_shutdown() {
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
         .unwrap();
 
@@ -77,7 +85,7 @@ fn test_explicit_shutdown() {
 fn test_concurrent_transactions() {
     // This test simulates the orderbook benchmark usage pattern
     // where transactions are run repeatedly while SyndDB is pushing
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute(
         "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount INTEGER)",
         [],
@@ -125,7 +133,7 @@ fn test_concurrent_transactions() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_with_automatic_snapshots() {
     // Test with automatic snapshot enabled (like Docker config)
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute(
         "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount INTEGER)",
         [],
@@ -207,7 +215,7 @@ fn test_is_ddl() {
 #[test]
 fn test_has_existing_tables() {
     // Empty database has no tables
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     assert!(!SyndDB::has_existing_tables(conn));
 
     // Create a table
@@ -219,7 +227,7 @@ fn test_has_existing_tables() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_attach_with_existing_tables_auto_snapshots() {
     // Create a database with existing tables before attaching SyndDB
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute(
         "CREATE TABLE preexisting (id INTEGER PRIMARY KEY, data TEXT)",
         [],
@@ -259,7 +267,7 @@ fn test_multiple_push_cycles_independent() {
     //
     // Before the fix: Each push would include ALL previous changes.
     // After the fix: Each push only includes changes since last push.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
         .unwrap();
 
@@ -304,7 +312,7 @@ fn test_preexisting_data_then_modifications() {
     //
     // The changesets should only contain the NEW modifications, not the
     // pre-existing data (which is in the snapshot).
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     // Step 1: Create schema and insert initial data BEFORE SyndDB
     conn.execute(
@@ -352,7 +360,7 @@ fn test_transaction_batch_then_individual_ops() {
     // 3. Multiple push cycles
     //
     // This pattern was causing duplicate changesets before the fix.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
         .unwrap();
     conn.execute(
@@ -422,7 +430,7 @@ fn test_transaction_batch_then_individual_ops() {
 fn test_rapid_push_cycles() {
     // Test rapid succession of changes and pushes.
     // This stress tests the session recreation mechanism.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute(
         "CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER)",
         [],
@@ -455,7 +463,7 @@ fn test_mixed_ddl_and_dml() {
     // Test interleaving DDL (schema changes) and DML (data changes).
     // DDL always triggers a snapshot, which should play nicely
     // with the session recreation mechanism.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
@@ -498,7 +506,7 @@ fn test_mixed_ddl_and_dml() {
 fn test_empty_push_cycles() {
     // Test that push() with no changes doesn't cause issues.
     // The session should handle empty extractions gracefully.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)", [])
         .unwrap();
 
@@ -528,7 +536,7 @@ fn test_empty_push_cycles() {
 fn test_large_batch_single_transaction() {
     // Test a large batch in a single transaction.
     // This is common in data import scenarios.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, data TEXT)", [])
         .unwrap();
 
@@ -575,7 +583,7 @@ fn test_large_batch_single_transaction() {
 fn test_rollback_not_captured() {
     // Verify that rolled-back transactions are NOT captured in changesets.
     // This is important for data integrity - only committed changes should replicate.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
         .unwrap();
 
@@ -621,7 +629,7 @@ fn test_rollback_not_captured() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_delete_operations() {
     // Verify DELETE operations are captured correctly.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)", [])
         .unwrap();
 
@@ -657,7 +665,7 @@ fn test_delete_operations() {
 fn test_insert_or_replace_pattern() {
     // Test INSERT OR REPLACE (used in orderbook benchmark for balance updates).
     // This generates DELETE + INSERT changesets, not UPDATE.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute(
         "CREATE TABLE balances (user_id INTEGER PRIMARY KEY, amount INTEGER)",
         [],
@@ -698,7 +706,7 @@ fn test_insert_or_replace_pattern() {
 fn test_preexisting_data_then_ddl() {
     // Attach to database with existing data, then perform DDL.
     // Tests auto snapshot on attach combined with DDL snapshots.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     // Pre-existing schema and data
     conn.execute("CREATE TABLE t1 (id INTEGER PRIMARY KEY, val TEXT)", [])
@@ -739,7 +747,7 @@ fn test_preexisting_data_then_ddl() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_large_text_values() {
     // Test handling of large TEXT values (edge case for changeset size).
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute(
         "CREATE TABLE docs (id INTEGER PRIMARY KEY, content TEXT)",
         [],
@@ -778,7 +786,7 @@ fn test_large_text_values() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_blob_values() {
     // Test handling of BLOB values.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE files (id INTEGER PRIMARY KEY, data BLOB)", [])
         .unwrap();
 
@@ -805,7 +813,7 @@ fn test_blob_values() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_multiple_tables_single_transaction() {
     // Test modifications to multiple tables in a single transaction.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
         .unwrap();
     conn.execute(
@@ -861,7 +869,7 @@ fn test_multiple_tables_single_transaction() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_null_values() {
     // Test handling of NULL values in changesets.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     conn.execute(
         "CREATE TABLE nullable (id INTEGER PRIMARY KEY, val1 TEXT, val2 INTEGER)",
         [],
@@ -902,7 +910,7 @@ fn test_null_values() {
 fn test_empty_database_then_schema() {
     // Attach to completely empty database, then create schema.
     // Opposite of pre-existing data pattern.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     // Attach to empty DB - auto snapshot won't trigger (no tables)
     let config = Config {
@@ -1132,7 +1140,7 @@ fn test_execute_ddl_clears_marker_after_snapshot() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_ddl_recovery_in_memory_db_no_marker() {
     // Test that in-memory databases don't use markers (no path)
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
         ..Default::default()
@@ -1163,7 +1171,7 @@ fn test_direct_ddl_then_dml_local_state_ok() {
     // The problem only manifests when validators try to apply changesets.
     //
     // This test documents that the app developer sees no errors locally.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // MISTAKE: Using connection().execute() instead of execute_ddl()
@@ -1199,7 +1207,7 @@ fn test_direct_ddl_changeset_contains_dml_not_ddl() {
     // Demonstrates that changesets ONLY contain DML operations.
     // DDL (CREATE/ALTER/DROP) is never captured in changesets.
     // This is a fundamental SQLite Session Extension limitation.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // DDL via direct connection (WRONG way, but common mistake)
@@ -1227,7 +1235,7 @@ fn test_recovery_via_manual_snapshot() {
     // 1. Developer notices validator errors ("no such table")
     // 2. Developer calls snapshot() to capture current schema
     // 3. Validators receive snapshot and can now apply subsequent changesets
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // MISTAKE: Direct DDL without execute_ddl()
@@ -1266,7 +1274,7 @@ fn test_recovery_via_manual_snapshot() {
 fn test_recovery_with_multiple_missing_tables() {
     // Recovery still works even if multiple tables were created via direct DDL.
     // One snapshot captures all schema and data.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // Multiple direct DDL operations (all wrong, but recoverable)
@@ -1298,7 +1306,7 @@ fn test_recovery_with_multiple_missing_tables() {
 fn test_recovery_captures_current_state() {
     // Verifies that recovery snapshot captures the CURRENT state,
     // including all data inserted after the schema change.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // Direct DDL
@@ -1349,7 +1357,7 @@ fn test_compare_correct_vs_incorrect_ddl_flow() {
     // results in validators being able to reconstruct state.
 
     // === CORRECT: Using execute_ddl() ===
-    let conn1 = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn1 = test_conn();
     let synddb1 = SyndDB::attach(conn1, "http://localhost:8433").unwrap();
 
     synddb1
@@ -1364,7 +1372,7 @@ fn test_compare_correct_vs_incorrect_ddl_flow() {
     // ^ Validator can apply this because it received the schema snapshot
 
     // === INCORRECT: Using connection().execute() ===
-    let conn2 = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn2 = test_conn();
     let synddb2 = SyndDB::attach(conn2, "http://localhost:8433").unwrap();
 
     conn2
@@ -1388,7 +1396,7 @@ fn test_compare_correct_vs_incorrect_ddl_flow() {
 fn test_alter_table_without_execute_ddl() {
     // ALTER TABLE is also DDL and requires a snapshot.
     // This test documents the ALTER TABLE recovery scenario.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // Correct initial setup
@@ -1427,7 +1435,7 @@ fn test_alter_table_without_execute_ddl() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_drop_table_without_execute_ddl() {
     // DROP TABLE is also DDL. This documents what happens.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // Setup tables correctly
@@ -1460,7 +1468,7 @@ fn test_drop_table_without_execute_ddl() {
 fn test_recovery_recommended_after_any_direct_ddl() {
     // Best practice: If you accidentally used direct DDL, call snapshot()
     // immediately. Don't wait for validator errors.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // Oops, used direct DDL
@@ -1479,7 +1487,7 @@ fn test_recovery_recommended_after_any_direct_ddl() {
 fn test_snapshot_is_idempotent_for_recovery() {
     // Multiple snapshots are fine - each one is a complete database state.
     // Validators just use the most recent one.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     conn.execute("CREATE TABLE t (id INTEGER, val TEXT)", [])
@@ -1502,7 +1510,7 @@ fn test_snapshot_is_idempotent_for_recovery() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_typical_migration_workflow_wrong_way() {
     // Documents the common mistake in migration workflows
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // Initial setup (correct)
@@ -1546,7 +1554,7 @@ fn test_typical_migration_workflow_wrong_way() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_typical_migration_workflow_right_way() {
     // Documents the correct migration workflow
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
     let synddb = SyndDB::attach(conn, "http://localhost:8433").unwrap();
 
     // Initial setup
@@ -1604,7 +1612,7 @@ fn test_typical_migration_workflow_right_way() {
 fn test_auto_schema_detection_create_table() {
     // When a table is created via direct DDL, the next push should
     // automatically detect the schema change and send a snapshot first.
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     // Enable snapshot_interval so snapshot channel exists
     let config = Config {
@@ -1636,7 +1644,7 @@ fn test_auto_schema_detection_create_table() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_auto_schema_detection_alter_table() {
     // ALTER TABLE changes schema hash too
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
@@ -1677,7 +1685,7 @@ fn test_auto_schema_detection_alter_table() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_auto_schema_detection_multiple_ddl() {
     // Multiple DDL operations before push - only one snapshot needed
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
@@ -1708,7 +1716,7 @@ fn test_auto_schema_detection_multiple_ddl() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_auto_schema_detection_no_false_positives() {
     // Verify that identical schemas don't trigger false positive detection
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
@@ -1738,7 +1746,7 @@ fn test_auto_schema_detection_no_false_positives() {
 #[ignore] // Requires running sequencer: cargo test -p synddb-client -- --ignored
 fn test_auto_schema_detection_drop_table() {
     // DROP TABLE also changes schema hash
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
@@ -1773,7 +1781,7 @@ fn test_auto_schema_detection_drop_table() {
 
 #[test]
 fn test_config_validation_rejects_zero_snapshot_interval() {
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
@@ -1790,7 +1798,7 @@ fn test_config_validation_rejects_zero_snapshot_interval() {
 
 #[test]
 fn test_config_validation_rejects_zero_buffer_size() {
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
@@ -1807,7 +1815,7 @@ fn test_config_validation_rejects_zero_buffer_size() {
 
 #[test]
 fn test_config_validation_rejects_zero_push_interval() {
-    let conn = Box::leak(Box::new(Connection::open_in_memory().unwrap()));
+    let conn = test_conn();
 
     let config = Config {
         sequencer_url: "http://localhost:8433".parse().unwrap(),
