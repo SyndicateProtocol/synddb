@@ -97,6 +97,9 @@ Common files that should be gitignored:
 - Terraform variable files with real values (`*.tfvars` with secrets)
 - Any file containing RPC URLs with API keys
 
+### Version Numbers
+Claude tends to use outdated versions of libraries and packages. When specifying a version number anywhere (Cargo.toml, package.json, Dockerfile, documentation, etc.), always verify it is the latest version by searching the web. Do not rely on training data for version information.
+
 ### Documentation (SPEC and PLAN files)
 The `SPEC.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
 - After making major implementation changes, update the corresponding SPEC and PLAN files to reflect the new state
