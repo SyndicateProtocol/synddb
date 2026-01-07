@@ -93,7 +93,6 @@ On-chain components for message passing and attestation verification.
 | `Bridge.sol`              | Cross-chain message execution with validator signatures |
 | `AttestationVerifier.sol` | Verify RISC Zero proofs of GCP attestation tokens       |
 | `TeeKeyManager.sol`       | Register/deregister TEE public keys                     |
-| `GasTreasury.sol`         | Gas sponsorship for relayer transactions                |
 | `ModuleCheckRegistry.sol` | Pluggable validation modules                            |
 
 **Deployed**: Base Sepolia testnet at `0x7ddE947a7DF980fD00887371C527cBbcB4E92a4E`
@@ -430,7 +429,6 @@ The `example-app` branch contains 568 commits spanning the full development arc.
 - Bridge.sol with message execution
 - ModuleCheckRegistry for pluggable validation
 - TeeKeyManager for key registration
-- GasTreasury for gas sponsorship
 - Deployed to Base Sepolia
 
 ### Phase 6: Example Applications (Commits 130-180)

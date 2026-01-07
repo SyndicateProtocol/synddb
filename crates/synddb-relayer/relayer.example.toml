@@ -24,27 +24,16 @@ listen_addr = "0.0.0.0:8082"
 # Audience hash identifies this application (extracted from TEE attestation)
 audience_hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-# GasTreasury contract address for this application
-treasury_address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
-
 # Allowed image digests for this application
 # Only TEEs running these code versions will be funded
 allowed_image_digests = [
     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 ]
 
-# Optional: Override per-application rate limits
-# max_funding_per_digest_daily = "1000000000000000000"  # 1 ETH (default)
-# max_funding_per_address = "50000000000000000"         # 0.05 ETH (default)
-
 # Application 2: Another SyndDB deployment
 [[application]]
 audience_hash = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-treasury_address = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
 allowed_image_digests = [
     "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
 ]
-# Lower limits for this application
-max_funding_per_digest_daily = "500000000000000000"  # 0.5 ETH
-max_funding_per_address = "25000000000000000"        # 0.025 ETH

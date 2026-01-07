@@ -635,7 +635,6 @@ This section tracks the accuracy of each PLAN/SPEC file compared to actual imple
 | **Attestation (not in original plan)** | | |
 | └─ AttestationVerifier.sol | N/A | ✅ Implemented (newer) |
 | └─ TeeKeyManager.sol | N/A | ✅ Implemented (newer) |
-| └─ GasTreasury.sol | N/A | ✅ Implemented (newer) |
 
 **Status**: Implementation has EXCEEDED the plan - more contracts exist than documented.
 
