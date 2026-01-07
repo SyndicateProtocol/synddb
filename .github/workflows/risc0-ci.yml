@@ -44,7 +44,6 @@ jobs:
           workspaces: |
             crates/synddb-bootstrap/risc0/program
             tests/confidential-space/risc0/script
-            services/proof-service
 
       - name: Install RISC Zero toolchain
         run: |
@@ -54,7 +53,7 @@ jobs:
             echo "Attempt $i to install RISC Zero toolchain..."
             if curl -L https://risczero.com/install | bash && \
                ~/.risc0/bin/rzup install && \
-               ~/.risc0/bin/r0vm --version; then
+               ~/.risc0/bin/cargo-risczero risczero --version; then
               RISC0_INSTALLED=true
               break
             else
@@ -85,19 +84,9 @@ jobs:
       - name: Generate image ID
         id: image_id
         run: |
-          cd services/proof-service
-          # Build the proof service which embeds the RISC Zero ELF
-          cargo build --release
-
-          # Get the image ID from the /image-id endpoint
-          # Since we can't run the service in CI easily, extract from the binary output
-          IMAGE_ID=$(cargo run --release 2>&1 | grep -oP 'image_id.*0x[a-fA-F0-9]{64}' | grep -oP '0x[a-fA-F0-9]{64}' || true)
-
-          # Fallback: compute from the test script output
-          if [[ -z "$IMAGE_ID" || ! "$IMAGE_ID" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
-            cd ../../tests/confidential-space/risc0/script
-            IMAGE_ID=$(cargo run --release --bin risc0-prover -- --execute --sample ../../samples/samples_*.json 2>&1 | grep "Image ID (bytes32)" | awk '{print $NF}')
-          fi
+          cd tests/confidential-space/risc0/script
+          # Extract image ID from the execute output (already ran above)
+          IMAGE_ID=$(cargo run --release --bin risc0-prover -- --execute --sample ../../samples/samples_*.json 2>&1 | grep "Image ID (bytes32)" | awk '{print $NF}')
 
           # Validate image_id format (should be 0x followed by 64 hex chars)
           if [[ ! "$IMAGE_ID" =~ ^0x[a-fA-F0-9]{64}$ ]]; then

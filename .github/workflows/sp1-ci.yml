@@ -43,7 +43,6 @@ jobs:
           workspaces: |
             crates/synddb-bootstrap/sp1/program
             tests/confidential-space/sp1/script
-            services/proof-service
 
       - name: Install SP1 toolchain
         run: |
@@ -84,7 +83,7 @@ jobs:
       - name: Generate verification key
         id: vkey
         run: |
-          cd services/proof-service
+          cd tests/confidential-space/sp1/script
           VKEY=$(cargo run --release --bin sp1-vkey 2>/dev/null | grep "bytes32" | awk '{print $NF}')
 
           # Validate vkey format (should be 0x followed by 64 hex chars)
