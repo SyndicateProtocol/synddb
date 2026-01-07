@@ -73,8 +73,12 @@ WORKDIR /app
 # Copy the built binary
 COPY --from=builder /app/services/proof-service/target/release/proof-service /app/proof-service
 
+# Copy RISC Zero Groth16 prover data files
+# These are required at runtime for GPU Groth16 proving (installed via rzup install risc0-groth16)
+COPY --from=builder /root/.risc0 /root/.risc0
+
 # RISC Zero configuration
-# No external prover configuration needed - uses local GPU
+# Point to the copied risc0 data directory for Groth16 artifacts
 ENV BIND_ADDRESS=0.0.0.0:8083
 ENV RUST_LOG=info,risc0_zkvm=debug
 
