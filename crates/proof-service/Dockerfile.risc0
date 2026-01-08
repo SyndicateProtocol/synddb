@@ -86,4 +86,7 @@ ENV RUST_LOG=info,risc0_zkvm=debug
 
 EXPOSE 8083
 
+# Clear the NVIDIA entrypoint so our binary runs directly
+# (required for --print-image-id to work in CI)
+ENTRYPOINT []
 CMD ["/app/proof-service"]
