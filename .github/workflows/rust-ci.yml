@@ -57,17 +57,11 @@ jobs:
       - name: Check Rust formatting
         run: just lint-fmt
 
-      - name: Check Rust formatting (tests/confidential-space)
-        run: cargo +nightly fmt --all --check --manifest-path tests/confidential-space/Cargo.toml
-
       - name: Check TOML formatting
         run: just lint-toml
 
       - name: Check for unused dependencies
         run: just lint-deps
-
-      - name: Check for unused dependencies (tests/confidential-space)
-        run: cargo machete tests/confidential-space
 
       - name: Validate justfile syntax
         run: just --unstable --fmt --check
@@ -93,9 +87,6 @@ jobs:
 
       - name: Run Clippy
         run: just lint
-
-      - name: Run Clippy (tests/confidential-space)
-        run: cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/Cargo.toml
 
       - name: Check documentation builds
         run: just lint-docs
