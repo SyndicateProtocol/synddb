@@ -38,8 +38,8 @@ sol! {
 
     #[sol(rpc)]
     interface ITeeKeyManager {
-        function isSequencerKeyValid(address publicKey) external view returns (bool);
-        function isValidatorKeyValid(address publicKey) external view returns (bool);
+        /// KeyType enum: 0 = Sequencer, 1 = Validator
+        function isKeyValid(uint8 keyType, address publicKey) external view returns (bool);
     }
 }
 
@@ -212,31 +212,24 @@ impl RelayerSubmitter {
 
     /// Check if a sequencer key is valid
     pub(crate) async fn is_sequencer_key_valid(&self, address: Address) -> anyhow::Result<bool> {
-        let url = Url::parse(&self.rpc_url)?;
-        let provider = ProviderBuilder::new().connect_http(url);
-
-        let contract = ITeeKeyManager::new(self.tee_key_manager_address, &provider);
-
-        match contract.isSequencerKeyValid(address).call().await {
-            Ok(_) => Ok(true),
-            Err(e) => {
-                if is_invalid_public_key_error(&e.to_string()) {
-                    Ok(false)
-                } else {
-                    Err(e.into())
-                }
-            }
-        }
+        // KeyType::Sequencer = 0
+        self.is_key_valid(0, address).await
     }
 
     /// Check if a validator key is valid
     pub(crate) async fn is_validator_key_valid(&self, address: Address) -> anyhow::Result<bool> {
+        // KeyType::Validator = 1
+        self.is_key_valid(1, address).await
+    }
+
+    /// Check if a key is valid for a given key type
+    async fn is_key_valid(&self, key_type: u8, address: Address) -> anyhow::Result<bool> {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
         let contract = ITeeKeyManager::new(self.tee_key_manager_address, &provider);
 
-        match contract.isValidatorKeyValid(address).call().await {
+        match contract.isKeyValid(key_type, address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
                 if is_invalid_public_key_error(&e.to_string()) {
