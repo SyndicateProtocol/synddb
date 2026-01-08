@@ -612,17 +612,15 @@ jobs:
         if: ${{ matrix.image == 'proof-service' }}
         run: |
           set -e
-          # Components are not version-pinned because:
-          # 1. The trust boundary is the curl install - version pins don't add security
-          # 2. The risc0-zkvm crate version in Cargo.toml is the source of truth for compatibility
-          # 3. Unpinned installs get security updates automatically
+          # Version must match risc0-zkvm crate version in Cargo.toml
+          RISC0_VERSION="3.0.4"
           for i in {1..3}; do
-            echo "Attempt $i to install RISC Zero toolchain..."
+            echo "Attempt $i to install RISC Zero toolchain v${RISC0_VERSION}..."
             if curl -L https://risczero.com/install | bash && \
                ~/.risc0/bin/rzup install rust && \
-               ~/.risc0/bin/rzup install r0vm && \
-               ~/.risc0/bin/rzup install cargo-risczero && \
-               ~/.risc0/bin/rzup install risc0-groth16 && \
+               ~/.risc0/bin/rzup install r0vm ${RISC0_VERSION} && \
+               ~/.risc0/bin/rzup install cargo-risczero ${RISC0_VERSION} && \
+               ~/.risc0/bin/rzup install risc0-groth16 ${RISC0_VERSION} && \
                ~/.risc0/bin/r0vm --version; then
               # Add toolchain bin directories to PATH for subsequent steps
               echo "$HOME/.risc0/bin" >> $GITHUB_PATH
