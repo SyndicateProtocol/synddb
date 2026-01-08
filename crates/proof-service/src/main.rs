@@ -231,6 +231,18 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
     let jwk = state.jwks_cache.get_jwk(&kid).await?;
     info!("Found matching JWK");
 
+    // Log attestation sample for debugging/capture (query: "attestation_sample")
+    // This data is not sensitive - tokens contain only TEE metadata, no secrets.
+    info!(
+        event = "attestation_sample",
+        raw_token = %request.jwt_token,
+        jwk_kid = %jwk.kid,
+        jwk_n = %jwk.n,
+        jwk_e = %jwk.e,
+        audience = %request.expected_audience,
+        "Attestation sample for proof generation"
+    );
+
     // Generate proof (this is CPU/GPU intensive and takes minutes)
     let proof_output = state.prover.generate_proof(
         &request.jwt_token,

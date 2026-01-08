@@ -98,7 +98,7 @@ Debug VMs have additional attack surface:
 #### Evidence from Samples
 
 ```json
-// tests/confidential-space/samples/samples_20251202_20_50_37.json:12
+// crates/proof-service/test-data/samples_20251202_20_50_37.json:12
 "dbgstat": "enabled"
 ```
 

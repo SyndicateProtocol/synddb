@@ -276,7 +276,7 @@ mod tests {
         // Load sample attestation data
         let sample_path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/confidential-space/samples/samples_20251202_20_50_37.json"
+            "/test-data/samples_20251202_20_50_37.json"
         );
         let content = std::fs::read_to_string(sample_path)
             .expect("Failed to read sample file - run from repo root");
