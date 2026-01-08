@@ -612,15 +612,28 @@ jobs:
           # The container exposes port 8083 by default
           CONTAINER_ID=$(docker run -d -p 8083:8083 "$IMAGE@$DIGEST")
 
-          # Wait for the service to be ready (up to 30 seconds)
-          for i in {1..30}; do
+          # Wait for the service to be ready (up to 60 seconds)
+          # The service may take time to initialize RISC Zero components
+          SERVICE_READY=false
+          for i in {1..60}; do
             if curl -sf http://localhost:8083/health > /dev/null 2>&1; then
               echo "Service is ready"
+              SERVICE_READY=true
               break
             fi
-            echo "Waiting for service to be ready... ($i/30)"
+            echo "Waiting for service to be ready... ($i/60)"
             sleep 1
           done
+
+          # If service didn't become ready, show container logs and fail
+          if [ "$SERVICE_READY" = false ]; then
+            echo "::error::Service failed to become ready within 60 seconds"
+            echo "Container logs:"
+            docker logs "$CONTAINER_ID" 2>&1
+            docker stop "$CONTAINER_ID" > /dev/null 2>&1 || true
+            docker rm "$CONTAINER_ID" > /dev/null 2>&1 || true
+            exit 1
+          fi
 
           # Get the image ID from the running container
           IMAGE_ID=$(curl -sf http://localhost:8083/image-id | jq -r '.image_id')
