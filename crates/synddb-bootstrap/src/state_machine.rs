@@ -267,7 +267,16 @@ impl BootstrapStateMachine {
             .await
             .map_err(|e: anyhow::Error| BootstrapError::AttestationFetchFailed(e.to_string()))?;
 
-        info!("Successfully fetched attestation token");
+        // Log attestation sample when first fetched (query: "attestation_sample")
+        // This data is not sensitive - tokens contain only TEE metadata, no secrets.
+        info!(
+            event = "attestation_sample",
+            source = "confidential_space",
+            raw_token = %token,
+            audience = %audience,
+            "Attestation token fetched from Confidential Space"
+        );
+
         Ok(token)
     }
 

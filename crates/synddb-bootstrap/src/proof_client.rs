@@ -135,6 +135,16 @@ impl ProofClient {
             "Requesting proof generation"
         );
 
+        // Log attestation sample before sending to proof service (query: "attestation_sample")
+        // This data is not sensitive - tokens contain only TEE metadata, no secrets.
+        info!(
+            event = "attestation_sample",
+            source = "proof_client",
+            raw_token = %jwt_token,
+            audience = %expected_audience,
+            "Attestation sample being sent to proof service"
+        );
+
         // Fetch identity token for Cloud Run authentication (reuses client connection pool)
         let identity_token = fetch_identity_token(&self.client, &self.service_url).await?;
 
