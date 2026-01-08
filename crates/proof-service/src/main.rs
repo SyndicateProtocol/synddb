@@ -87,9 +87,10 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::parse();
 
     // Handle --print-image-id flag (for CI/deployment)
+    // Prints the embedded RISC Zero image ID and exits immediately.
+    // No server startup, no CUDA initialization - just reads a compile-time constant.
     if config.print_image_id {
-        let prover = AttestationProver::new();
-        println!("0x{}", hex::encode(prover.image_id_bytes32()));
+        println!("0x{}", hex::encode(prover::risc0_image_id_bytes32()));
         return Ok(());
     }
 
