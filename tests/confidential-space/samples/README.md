@@ -56,37 +56,18 @@ These samples are used for developing and testing RISC Zero on-chain attestation
 
 ## Verifying Samples
 
-### Option 1: Standalone verify binary
-
-```bash
-cd tests/confidential-space
-cargo run --bin verify-sample
-```
-
-### Option 2: Using the gcp-attestation library
+### Option 1: Using the gcp-attestation library
 
 ```bash
 cargo test -p gcp-attestation
 ```
 
+### Option 2: Proof-service tests (includes guest program execution)
+
+```bash
+cargo test -p proof-service --release
+```
+
 ### Option 3: RISC Zero proof generation
 
 Use the proof-service to generate proofs from these attestation samples. See `crates/proof-service/README.md` for details.
-
-## Example Output
-
-```
-=== Confidential Space Attestation Verifier ===
-
-Loading sample: samples/samples_20251202_20_50_37.json
-Found 2 sample(s) and 2 JWKS key(s)
-
---- Sample 1 ---
-  Audience: https://synddb-sequencer.example.com
-  Algorithm: RS256
-  Key ID: d6d5071ab75246a42acfa46d29316311cdab51f7
-  Result: VALID
-  ...
-
-=== All samples verified successfully ===
-```

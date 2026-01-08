@@ -11,8 +11,7 @@ This directory contains tooling for GCP Confidential Space TEE attestation:
 ```
 tests/confidential-space/
 ├── src/
-│   ├── main.rs          # Attestation capture workload (runs in GCP CS VM)
-│   └── verify.rs        # Local verification binary
+│   └── main.rs          # Attestation capture workload (runs in GCP CS VM)
 ├── samples/             # Captured attestation tokens
 ├── deploy.sh            # Build and deploy to GCP
 ├── setup-gcp.sh         # One-time GCP infrastructure setup
@@ -43,11 +42,11 @@ gcloud storage cp 'gs://<your-project-id>-cs-attestation-samples/attestation-sam
 ### 2. Verify Samples Locally
 
 ```bash
-# Using the standalone verify binary
-cargo run --bin verify-sample
-
-# Or using the gcp-attestation library tests
+# Run gcp-attestation library tests
 cargo test -p gcp-attestation
+
+# Or run proof-service tests (includes guest program execution)
+cargo test -p proof-service --release
 ```
 
 ### 3. Generate RISC Zero ZK Proof
