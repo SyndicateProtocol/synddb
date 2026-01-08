@@ -7,6 +7,7 @@ members = [
   "crates/synddb-client",
   "crates/synddb-chain-monitor",
   "crates/synddb-shared",
+  "crates/synddb-wal-sequencer",
   "tests/e2e/runner",
   "tests/e2e-gcs/runner",
 ]
@@ -66,6 +67,7 @@ base64 = "0.22"
 zstd = "0.13"
 sha2 = "0.10"
 sha3 = "0.10"
+zerocopy = "0.8.31"
 
 # CBOR/COSE serialization
 ciborium = "0.2"

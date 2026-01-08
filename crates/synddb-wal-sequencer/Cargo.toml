@@ -1,0 +1,28 @@
+[package]
+name = "synddb-wal-sequencer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "synddb-wal-sequencer"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["env"] }
+humantime = { workspace = true }
+rusqlite = { workspace = true, features = ["bundled", "session", "hooks"] }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zerocopy = { workspace = true, features = ["derive"] }
+synddb-shared = { path = "../synddb-shared/" }
+
+[dev-dependencies]
+tracing-test = "0.2"
