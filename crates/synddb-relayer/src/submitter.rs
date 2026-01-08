@@ -10,6 +10,7 @@ use alloy::{
     signers::local::PrivateKeySigner,
     sol,
 };
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -101,12 +102,29 @@ impl RelayerSubmitter {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().wallet(wallet).connect_http(url);
 
+        // Compute journalDigest for debugging (same as on-chain sha256(publicValues))
+        let journal_digest = Sha256::digest(&public_values);
+        let selector = if proof_bytes.len() >= 4 {
+            format!("0x{}", hex::encode(&proof_bytes[..4]))
+        } else {
+            "invalid".to_string()
+        };
+
         info!(
             contract = %self.bridge_address,
             public_values_len = public_values.len(),
             proof_bytes_len = proof_bytes.len(),
             deadline = deadline,
             "Submitting registerSequencerKeyWithSignature"
+        );
+
+        // Debug logging for RISC Zero verification parameters
+        debug!(
+            public_values_hex = %format!("0x{}", hex::encode(&public_values)),
+            proof_bytes_hex = %format!("0x{}", hex::encode(&proof_bytes)),
+            journal_digest = %format!("0x{}", hex::encode(journal_digest)),
+            selector = %selector,
+            "RISC Zero verification parameters"
         );
 
         let contract = IBridge::new(self.bridge_address, &provider);
@@ -144,12 +162,29 @@ impl RelayerSubmitter {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().wallet(wallet).connect_http(url);
 
+        // Compute journalDigest for debugging (same as on-chain sha256(publicValues))
+        let journal_digest = Sha256::digest(&public_values);
+        let selector = if proof_bytes.len() >= 4 {
+            format!("0x{}", hex::encode(&proof_bytes[..4]))
+        } else {
+            "invalid".to_string()
+        };
+
         info!(
             contract = %self.bridge_address,
             public_values_len = public_values.len(),
             proof_bytes_len = proof_bytes.len(),
             deadline = deadline,
             "Submitting registerValidatorKeyWithSignature"
+        );
+
+        // Debug logging for RISC Zero verification parameters
+        debug!(
+            public_values_hex = %format!("0x{}", hex::encode(&public_values)),
+            proof_bytes_hex = %format!("0x{}", hex::encode(&proof_bytes)),
+            journal_digest = %format!("0x{}", hex::encode(journal_digest)),
+            selector = %selector,
+            "RISC Zero verification parameters"
         );
 
         let contract = IBridge::new(self.bridge_address, &provider);

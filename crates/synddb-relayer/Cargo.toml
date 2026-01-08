@@ -40,6 +40,9 @@ alloy = { workspace = true, features = [
 # URL parsing
 url = { workspace = true }
 
+# Crypto (for computing journalDigest for debugging)
+sha2 = { workspace = true }
+
 [[bin]]
 name = "synddb-relayer"
 path = "src/main.rs"
