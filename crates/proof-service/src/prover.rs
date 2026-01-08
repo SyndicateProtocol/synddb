@@ -262,35 +262,66 @@ mod tests {
         keys: Vec<JwkKey>,
     }
 
-    /// Test guest program execution with sample attestation data.
+    /// Test guest program execution with all sample attestation data files.
     ///
     /// This test validates that the guest program correctly:
     /// 1. Parses and verifies JWT attestation tokens
     /// 2. Extracts claims from the token
     /// 3. Produces correct public values for on-chain verification
     ///
+    /// Automatically tests all samples_*.json files in test-data/.
+    ///
     /// Run locally with: `cargo test -p proof-service --release`
     /// Note: Requires RISC Zero toolchain installed.
     #[test]
-    fn test_guest_execution_with_sample_attestation() {
-        // Load sample attestation data
-        let sample_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/test-data/samples_20251202_20_50_37.json"
+    fn test_guest_execution_with_sample_attestations() {
+        let test_data_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/test-data");
+
+        // Find all sample files
+        let sample_files: Vec<_> = std::fs::read_dir(test_data_dir)
+            .expect("Failed to read test-data directory")
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if path.extension()?.to_str()? == "json"
+                    && path.file_name()?.to_str()?.starts_with("samples_")
+                {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            !sample_files.is_empty(),
+            "No sample files found in test-data/"
         );
-        let content = std::fs::read_to_string(sample_path)
-            .expect("Failed to read sample file - run from repo root");
-        let bundle: AttestationBundle =
-            serde_json::from_str(&content).expect("Failed to parse sample JSON");
 
-        let sample = &bundle.samples[0];
+        println!("Found {} sample file(s)", sample_files.len());
 
+        for sample_path in sample_files {
+            println!("Testing: {}", sample_path.display());
+
+            let content = std::fs::read_to_string(&sample_path)
+                .unwrap_or_else(|e| panic!("Failed to read {}: {}", sample_path.display(), e));
+            let bundle: AttestationBundle = serde_json::from_str(&content)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", sample_path.display(), e));
+
+            // Test each sample in the bundle
+            for (i, sample) in bundle.samples.iter().enumerate() {
+                println!("  Sample {}: audience={}", i, sample.audience);
+                run_guest_execution_test(sample, &bundle.jwks.keys);
+            }
+        }
+    }
+
+    /// Run guest execution test for a single sample
+    fn run_guest_execution_test(sample: &AttestationSample, jwks: &[JwkKey]) {
         // Find the JWK for this token
         let kid = extract_kid_from_jwt(sample.raw_token.as_bytes())
             .expect("Failed to extract kid from JWT");
-        let jwk = bundle
-            .jwks
-            .keys
+        let jwk = jwks
             .iter()
             .find(|k| k.kid == kid)
             .expect("JWK not found for token's key ID")
@@ -343,8 +374,8 @@ mod tests {
         let output = receipt.journal.bytes.clone();
 
         // Decode and verify public values
-        let public_values =
-            PublicValuesStruct::abi_decode_validate(output.as_slice()).expect("Failed to decode output");
+        let public_values = PublicValuesStruct::abi_decode_validate(output.as_slice())
+            .expect("Failed to decode output");
 
         // Verify against local attestation verification
         let expected = verify_attestation(
