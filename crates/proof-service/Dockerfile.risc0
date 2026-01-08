@@ -86,4 +86,6 @@ ENV RUST_LOG=info,risc0_zkvm=debug
 
 EXPOSE 8083
 
-CMD ["/app/proof-service"]
+# Use ENTRYPOINT so arguments passed to docker run go to the binary
+# (e.g., docker run image --print-image-id)
+ENTRYPOINT ["/app/proof-service"]
