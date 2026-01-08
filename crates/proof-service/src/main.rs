@@ -235,6 +235,7 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
     // This data is not sensitive - tokens contain only TEE metadata, no secrets.
     info!(
         event = "attestation_sample",
+        source = "proof_service",
         raw_token = %request.jwt_token,
         jwk_kid = %jwk.kid,
         jwk_n = %jwk.n,
