@@ -609,7 +609,8 @@ jobs:
           docker pull "$IMAGE@$DIGEST"
 
           # Run with --print-image-id flag to get the embedded image ID and exit
-          IMAGE_ID=$(docker run --rm "$IMAGE@$DIGEST" --print-image-id)
+          # Use --entrypoint to bypass NVIDIA's entrypoint script (which interferes with CLI args)
+          IMAGE_ID=$(docker run --rm --entrypoint /app/proof-service "$IMAGE@$DIGEST" --print-image-id)
 
           # Validate image_id format (0x followed by 64 hex chars)
           if [[ ! "$IMAGE_ID" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
