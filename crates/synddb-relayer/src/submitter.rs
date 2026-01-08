@@ -19,14 +19,9 @@ use url::Url;
 sol! {
     #[sol(rpc)]
     interface IBridge {
-        function registerSequencerKeyWithSignature(
-            bytes calldata publicValues,
-            bytes calldata proofBytes,
-            uint256 deadline,
-            bytes calldata signature
-        ) external returns (address publicKey);
-
-        function registerValidatorKeyWithSignature(
+        /// KeyType enum: 0 = Sequencer, 1 = Validator
+        function registerKeyWithSignature(
+            uint8 keyType,
             bytes calldata publicValues,
             bytes calldata proofBytes,
             uint256 deadline,
@@ -98,56 +93,9 @@ impl RelayerSubmitter {
         deadline: u64,
         signature: Vec<u8>,
     ) -> anyhow::Result<B256> {
-        let wallet = EthereumWallet::from(self.signer.clone());
-        let url = Url::parse(&self.rpc_url)?;
-        let provider = ProviderBuilder::new().wallet(wallet).connect_http(url);
-
-        // Compute journalDigest for debugging (same as on-chain sha256(publicValues))
-        let journal_digest = Sha256::digest(&public_values);
-        let selector = if proof_bytes.len() >= 4 {
-            format!("0x{}", hex::encode(&proof_bytes[..4]))
-        } else {
-            "invalid".to_string()
-        };
-
-        info!(
-            contract = %self.bridge_address,
-            public_values_len = public_values.len(),
-            proof_bytes_len = proof_bytes.len(),
-            deadline = deadline,
-            "Submitting registerSequencerKeyWithSignature"
-        );
-
-        // Debug logging for RISC Zero verification parameters
-        debug!(
-            public_values_hex = %format!("0x{}", hex::encode(&public_values)),
-            proof_bytes_hex = %format!("0x{}", hex::encode(&proof_bytes)),
-            journal_digest = %format!("0x{}", hex::encode(journal_digest)),
-            selector = %selector,
-            "RISC Zero verification parameters"
-        );
-
-        let contract = IBridge::new(self.bridge_address, &provider);
-
-        let tx = contract.registerSequencerKeyWithSignature(
-            Bytes::from(public_values),
-            Bytes::from(proof_bytes),
-            alloy::primitives::U256::from(deadline),
-            Bytes::from(signature),
-        );
-
-        let pending = tx.send().await.map_err(|e| {
-            warn!(
-                error = %e,
-                contract = %self.bridge_address,
-                "registerSequencerKeyWithSignature transaction failed"
-            );
-            e
-        })?;
-        let tx_hash = *pending.tx_hash();
-
-        info!(tx_hash = %tx_hash, "registerSequencerKeyWithSignature submitted");
-        Ok(tx_hash)
+        // KeyType::Sequencer = 0
+        self.register_key(0, public_values, proof_bytes, deadline, signature)
+            .await
     }
 
     /// Register a validator key via signature
@@ -158,6 +106,26 @@ impl RelayerSubmitter {
         deadline: u64,
         signature: Vec<u8>,
     ) -> anyhow::Result<B256> {
+        // KeyType::Validator = 1
+        self.register_key(1, public_values, proof_bytes, deadline, signature)
+            .await
+    }
+
+    /// Register a key via signature for a given key type
+    async fn register_key(
+        &self,
+        key_type: u8,
+        public_values: Vec<u8>,
+        proof_bytes: Vec<u8>,
+        deadline: u64,
+        signature: Vec<u8>,
+    ) -> anyhow::Result<B256> {
+        let key_type_name = if key_type == 0 {
+            "Sequencer"
+        } else {
+            "Validator"
+        };
+
         let wallet = EthereumWallet::from(self.signer.clone());
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().wallet(wallet).connect_http(url);
@@ -172,10 +140,11 @@ impl RelayerSubmitter {
 
         info!(
             contract = %self.bridge_address,
+            key_type = key_type_name,
             public_values_len = public_values.len(),
             proof_bytes_len = proof_bytes.len(),
             deadline = deadline,
-            "Submitting registerValidatorKeyWithSignature"
+            "Submitting registerKeyWithSignature"
         );
 
         // Debug logging for RISC Zero verification parameters
@@ -189,7 +158,8 @@ impl RelayerSubmitter {
 
         let contract = IBridge::new(self.bridge_address, &provider);
 
-        let tx = contract.registerValidatorKeyWithSignature(
+        let tx = contract.registerKeyWithSignature(
+            key_type,
             Bytes::from(public_values),
             Bytes::from(proof_bytes),
             alloy::primitives::U256::from(deadline),
@@ -199,14 +169,15 @@ impl RelayerSubmitter {
         let pending = tx.send().await.map_err(|e| {
             warn!(
                 error = %e,
+                key_type = key_type_name,
                 contract = %self.bridge_address,
-                "registerValidatorKeyWithSignature transaction failed"
+                "registerKeyWithSignature transaction failed"
             );
             e
         })?;
         let tx_hash = *pending.tx_hash();
 
-        info!(tx_hash = %tx_hash, "registerValidatorKeyWithSignature submitted");
+        info!(tx_hash = %tx_hash, key_type = key_type_name, "registerKeyWithSignature submitted");
         Ok(tx_hash)
     }
 
