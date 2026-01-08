@@ -86,6 +86,13 @@ struct HealthResponse {
 async fn main() -> anyhow::Result<()> {
     let config = Config::parse();
 
+    // Handle --print-image-id flag (for CI/deployment)
+    if config.print_image_id {
+        let prover = AttestationProver::new();
+        println!("0x{}", hex::encode(prover.image_id_bytes32()));
+        return Ok(());
+    }
+
     // Initialize logging
     if config.log_json {
         tracing_subscriber::fmt().json().init();
