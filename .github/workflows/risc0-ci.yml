@@ -28,7 +28,7 @@ env:
 jobs:
   risc0-build:
     name: RISC Zero Build & Execute
-    runs-on: shared-large-01
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
