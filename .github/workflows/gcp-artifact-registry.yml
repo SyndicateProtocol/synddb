@@ -595,20 +595,20 @@ jobs:
 
       # Generate RISC Zero image ID for proof-service (contains embedded RISC Zero ELF).
       # This happens after signing since image ID is metadata, not security-critical.
-      - name: Install Rust toolchain
+      - name: (proof-service) Install Rust toolchain
         if: ${{ matrix.image == 'proof-service' }}
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.92.0"
 
-      - name: Cache Cargo dependencies
+      - name: (proof-service) Cache Cargo dependencies
         if: ${{ matrix.image == 'proof-service' }}
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             tests/confidential-space/risc0/script
 
-      - name: Install RISC Zero toolchain
+      - name: (proof-service) Install RISC Zero toolchain
         if: ${{ matrix.image == 'proof-service' }}
         run: |
           set -e
@@ -638,7 +638,7 @@ jobs:
             fi
           done
 
-      - name: Generate RISC Zero image ID
+      - name: (proof-service) Generate RISC Zero image ID
         id: image_id
         if: ${{ matrix.image == 'proof-service' }}
         run: |
@@ -656,7 +656,7 @@ jobs:
           echo "image_id=$IMAGE_ID" >> $GITHUB_OUTPUT
           echo "::notice::RISC Zero Image ID: $IMAGE_ID"
 
-      - name: Attach image ID artifact
+      - name: (proof-service) Attach image ID artifact
         if: ${{ matrix.image == 'proof-service' && steps.image_id.outputs.image_id != '' }}
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
