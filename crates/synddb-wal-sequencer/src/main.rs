@@ -78,7 +78,10 @@ mod tests {
 
     use rusqlite::Connection;
     use synddb_shared::utils::tmp_dir;
-    use synddb_wal_sequencer::storage_layer::StorageLayer;
+    use synddb_wal_sequencer::{
+        storage_layer::StorageLayer,
+        wal_monitor::{JOURNAL_MODE, WAL, WAL_AUTOCHECKPOINT},
+    };
     use tracing_test::traced_test;
 
     use crate::Config;
@@ -103,7 +106,6 @@ mod tests {
         let new_db_dir = tmp_dir("new_db", None);
 
         let db_path = db_dir.join("test.db");
-        let new_db_path = new_db_dir.join("test.db");
 
         // start monitor and storage sync in background threads
         let config = Box::leak(Box::new(Config {
@@ -115,11 +117,12 @@ mod tests {
         }));
         let _handle = thread::spawn(move || start(config));
 
-        thread::sleep(Duration::from_millis(1100));
+        thread::sleep(Duration::from_millis(20));
 
         // simulate an application writing to the DB
         {
             let conn = Connection::open(&db_path).unwrap();
+            conn.pragma_update(None, WAL_AUTOCHECKPOINT, 0).unwrap();
 
             conn.execute(
                 "CREATE TABLE syndicate (id INTEGER PRIMARY KEY, value TEXT)",
@@ -136,42 +139,34 @@ mod tests {
             }
         }
 
-        thread::sleep(Duration::from_millis(5100));
-
-        // // wait for WAL files to appear in storage
-        // let mut attempts = 0;
-        // loop {
-        //     let files: Vec<_> = fs::read_dir(&*storage_dir)
-        //         .unwrap()
-        //         .filter_map(|e| e.ok())
-        //         .collect();
-        //     if !files.is_empty() {
-        //         break;
-        //     }
-        //     attempts += 1;
-        //     if attempts > 50 {
-        //         panic!("timeout waiting for WAL files in storage");
-        //     }
-        //     thread::sleep(Duration::from_millis(100));
-        // }
-        //
         // collect and sort WAL files from storage
-        let mut wal_files: Vec<_> = fs::read_dir(&*storage_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .collect();
+        let mut attempts = 0u64;
+        let mut wal_files = vec![];
+        loop {
+            wal_files = fs::read_dir(&*storage_dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .collect();
+            if !wal_files.is_empty() {
+                break;
+            };
+            attempts += 1;
+            assert!(attempts <= 50, "timeout waiting for WAL files in storage");
+            thread::sleep(Duration::from_millis(100));
+        }
+
         wal_files.sort();
 
-        assert!(!wal_files.is_empty());
-
         // apply WAL files to new database
+        let new_db_path = new_db_dir.join("test.db");
+        let new_conn = Connection::open(&new_db_path).unwrap();
+        new_conn.pragma_update(None, JOURNAL_MODE, WAL).unwrap();
         for wal_file in &wal_files {
             apply_wal(wal_file, &new_db_path);
         }
 
         // verify data consistency
-        let new_conn = Connection::open(&new_db_path).unwrap();
         let mut stmt = new_conn
             .prepare("SELECT id, value FROM syndicate ORDER BY id")
             .unwrap();
