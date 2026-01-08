@@ -108,9 +108,12 @@ jobs:
           echo "::notice::RISC Zero Image ID: $IMAGE_ID"
 
           {
-            echo "## RISC Zero Image ID"
+            echo "## RISC Zero Image ID (Test Build)"
             echo ""
-            echo "Use this value for \`RISC_ZERO_IMAGE_ID\` in contract deployment:"
+            echo "This imageId was generated on the CI runner and may differ from the Docker container's imageId."
+            echo ""
+            echo "**For production**, use the imageId attached to the proof-service Docker image in Artifact Registry."
+            echo "The authoritative imageId is extracted from the container via the \`/image-id\` endpoint."
             echo ""
             echo "\`\`\`"
             echo "$IMAGE_ID"
