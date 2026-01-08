@@ -62,6 +62,15 @@ WORKDIR /app/crates/proof-service
 ENV NVCC_APPEND_FLAGS="-gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_89,code=sm_89"
 RUN cargo build --release --features cuda
 
+# Extract the RISC Zero image ID during build using CUDA stubs.
+# The binary needs libcuda.so.1 to start, but we don't have a real GPU during build.
+# CUDA stubs provide a fake libcuda.so that allows the binary to load and run
+# non-GPU operations like printing the compile-time image ID constant.
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 && \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs \
+    ./target/release/proof-service --print-image-id > /app/risc0_image_id.txt && \
+    cat /app/risc0_image_id.txt
+
 # Runtime stage - CUDA runtime image (minimal footprint)
 FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
@@ -72,8 +81,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy the built binary
+# Copy the built binary and image ID file
 COPY --from=builder /app/crates/proof-service/target/release/proof-service /app/proof-service
+COPY --from=builder /app/risc0_image_id.txt /app/risc0_image_id.txt
 
 # Copy RISC Zero Groth16 prover data files
 # These are required at runtime for GPU Groth16 proving (installed via rzup install risc0-groth16)

@@ -596,7 +596,7 @@ jobs:
       # Extract RISC Zero image ID from the built proof-service container.
       # CRITICAL: The imageId must come from the exact Docker container that was built,
       # not from a separate build on the CI runner. The guest ELF is compiled inside
-      # the Docker container, so the imageId is embedded in that binary.
+      # the Docker container, and the imageId is extracted during build and saved to a file.
       - name: (proof-service) Extract RISC Zero image ID from container
         id: image_id
         if: ${{ matrix.image == 'proof-service' }}
@@ -608,8 +608,9 @@ jobs:
           # Pull the just-pushed image
           docker pull "$IMAGE@$DIGEST"
 
-          # Run with --print-image-id flag to get the embedded image ID and exit
-          IMAGE_ID=$(docker run --rm "$IMAGE@$DIGEST" --print-image-id)
+          # Read the image ID file (created during Docker build using CUDA stubs)
+          # This avoids needing a GPU to run the binary just to read a compile-time constant
+          IMAGE_ID=$(docker run --rm --entrypoint cat "$IMAGE@$DIGEST" /app/risc0_image_id.txt)
 
           # Validate image_id format (0x followed by 64 hex chars)
           if [[ ! "$IMAGE_ID" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
