@@ -620,7 +620,7 @@ jobs:
           echo "image_id=$IMAGE_ID" >> $GITHUB_OUTPUT
           echo "::notice::RISC Zero Image ID: $IMAGE_ID"
 
-      - name: (proof-service) Attach image ID artifact
+      - name: (proof-service) Attach RISC Zero image ID artifact
         if: ${{ matrix.image == 'proof-service' && steps.image_id.outputs.image_id != '' }}
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
