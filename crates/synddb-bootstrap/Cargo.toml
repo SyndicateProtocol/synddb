@@ -37,7 +37,11 @@ alloy = { workspace = true, features = [
   "signer-local",
   "provider-http",
   "network",
+  "contract",
 ] }
+
+# Generated contract bindings
+synddb-bindings = { path = "../synddb-bindings" }
 
 # CLI configuration
 clap = { workspace = true, features = ["env"] }

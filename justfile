@@ -140,6 +140,15 @@ check: lint-toml lint-deps lint-fmt lint
     @echo "All checks passed!"
 
 # ============================================================================
+# Contract Bindings
+# ============================================================================
+
+# Regenerate Rust bindings from Solidity contracts
+[group('bindings')]
+bindings:
+    cd contracts && forge bind --crate-name synddb-bindings -b ../crates/synddb-bindings --overwrite
+
+# ============================================================================
 # Reproducible Builds (for Confidential Space / TEE verification)
 # ============================================================================
 # BuildKit version pinned for reproducibility

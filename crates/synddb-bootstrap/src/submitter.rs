@@ -6,24 +6,15 @@ use alloy::{
     primitives::{Address, B256},
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
-    sol,
 };
 use std::str::FromStr;
+use synddb_bindings::bridge::Bridge::BridgeInstance;
+use synddb_bindings::i_tee_key_manager::ITeeKeyManager::ITeeKeyManagerInstance;
 use tracing::{debug, info, warn};
 
-// Bridge contract interface for key validation
-sol! {
-    #[sol(rpc)]
-    interface IBridge {
-        function teeKeyManager() external view returns (address);
-    }
-
-    #[sol(rpc)]
-    interface ITeeKeyManager {
-        function isSequencerKeyValid(address publicKey) external view returns (bool);
-        function isValidatorKeyValid(address publicKey) external view returns (bool);
-    }
-}
+/// KeyType enum values from the contract: 0 = Sequencer, 1 = Validator
+const KEY_TYPE_SEQUENCER: u8 = 0;
+const KEY_TYPE_VALIDATOR: u8 = 1;
 
 /// Check if an error string indicates an `InvalidPublicKey` error.
 ///
@@ -80,37 +71,29 @@ impl ContractSubmitter {
 
     /// Verify that a sequencer key is registered on-chain
     pub async fn is_sequencer_key_valid(&self, address: Address) -> Result<bool, BootstrapError> {
-        let url = reqwest::Url::from_str(&self.rpc_url)
-            .map_err(|e| BootstrapError::Config(format!("Invalid RPC URL: {e}")))?;
-
-        let provider = ProviderBuilder::new().connect_http(url);
-
-        let tee_key_manager_address = self.fetch_tee_key_manager_address(&provider).await?;
-        let contract = ITeeKeyManager::new(tee_key_manager_address, &provider);
-
-        match contract.isSequencerKeyValid(address).call().await {
-            Ok(_) => Ok(true),
-            Err(e) => {
-                if is_invalid_public_key_error(&e.to_string()) {
-                    Ok(false)
-                } else {
-                    Err(BootstrapError::KeyVerificationFailed(e.to_string()))
-                }
-            }
-        }
+        self.is_key_valid(KEY_TYPE_SEQUENCER, address).await
     }
 
     /// Verify that a validator key is registered on-chain
     pub async fn is_validator_key_valid(&self, address: Address) -> Result<bool, BootstrapError> {
+        self.is_key_valid(KEY_TYPE_VALIDATOR, address).await
+    }
+
+    /// Verify that a key is registered on-chain for the given key type
+    async fn is_key_valid(
+        &self,
+        key_type: u8,
+        address: Address,
+    ) -> Result<bool, BootstrapError> {
         let url = reqwest::Url::from_str(&self.rpc_url)
             .map_err(|e| BootstrapError::Config(format!("Invalid RPC URL: {e}")))?;
 
         let provider = ProviderBuilder::new().connect_http(url);
 
         let tee_key_manager_address = self.fetch_tee_key_manager_address(&provider).await?;
-        let contract = ITeeKeyManager::new(tee_key_manager_address, &provider);
+        let contract = ITeeKeyManagerInstance::new(tee_key_manager_address, &provider);
 
-        match contract.isValidatorKeyValid(address).call().await {
+        match contract.isKeyValid(key_type, address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
                 if is_invalid_public_key_error(&e.to_string()) {
@@ -127,7 +110,7 @@ impl ContractSubmitter {
         &self,
         provider: &P,
     ) -> Result<Address, BootstrapError> {
-        let bridge = IBridge::new(self.bridge_address, provider);
+        let bridge = BridgeInstance::new(self.bridge_address, provider);
         bridge
             .teeKeyManager()
             .call()

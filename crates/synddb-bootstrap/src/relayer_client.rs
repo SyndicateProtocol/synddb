@@ -8,20 +8,12 @@ use alloy::{
     primitives::{keccak256, Address, B256, U256},
     providers::ProviderBuilder,
     signers::{local::PrivateKeySigner, Signer},
-    sol,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use synddb_bindings::bridge::Bridge::BridgeInstance;
 use tracing::{debug, info};
 use url::Url;
-
-// Bridge contract interface for fetching TeeKeyManager address
-sol! {
-    #[sol(rpc)]
-    interface IBridge {
-        function teeKeyManager() external view returns (address);
-    }
-}
 
 /// Timeout for GCP metadata requests
 const METADATA_TIMEOUT: Duration = Duration::from_secs(5);
@@ -137,7 +129,7 @@ impl RelayerClient {
         let url = Url::parse(rpc_url)
             .map_err(|e| BootstrapError::Config(format!("Invalid RPC URL: {e}")))?;
         let provider = ProviderBuilder::new().connect_http(url);
-        let bridge = IBridge::new(bridge_address, &provider);
+        let bridge = BridgeInstance::new(bridge_address, &provider);
         let tee_key_manager_address = bridge
             .teeKeyManager()
             .call()

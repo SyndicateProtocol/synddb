@@ -8,35 +8,13 @@ use alloy::{
     primitives::{Address, Bytes, B256},
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
-    sol,
 };
 use sha2::{Digest, Sha256};
 use std::time::Duration;
+use synddb_bindings::bridge::Bridge::BridgeInstance;
+use synddb_bindings::i_tee_key_manager::ITeeKeyManager::ITeeKeyManagerInstance;
 use tracing::{debug, info, warn};
 use url::Url;
-
-// Bridge contract interface for key registration
-sol! {
-    #[sol(rpc)]
-    interface IBridge {
-        /// KeyType enum: 0 = Sequencer, 1 = Validator
-        function registerKeyWithSignature(
-            uint8 keyType,
-            bytes calldata publicValues,
-            bytes calldata proofBytes,
-            uint256 deadline,
-            bytes calldata signature
-        ) external returns (address publicKey);
-
-        function teeKeyManager() external view returns (address);
-    }
-
-    #[sol(rpc)]
-    interface ITeeKeyManager {
-        /// KeyType enum: 0 = Sequencer, 1 = Validator
-        function isKeyValid(uint8 keyType, address publicKey) external view returns (bool);
-    }
-}
 
 /// Submitter for relayer transactions
 pub(crate) struct RelayerSubmitter {
@@ -66,7 +44,7 @@ impl RelayerSubmitter {
         // Fetch TeeKeyManager address from Bridge contract
         let url = Url::parse(&config.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
-        let bridge = IBridge::new(config.bridge_address, &provider);
+        let bridge = BridgeInstance::new(config.bridge_address, &provider);
         let tee_key_manager_address = Address::from(bridge.teeKeyManager().call().await?.0);
 
         info!(
@@ -156,7 +134,7 @@ impl RelayerSubmitter {
             "RISC Zero verification parameters"
         );
 
-        let contract = IBridge::new(self.bridge_address, &provider);
+        let contract = BridgeInstance::new(self.bridge_address, &provider);
 
         let tx = contract.registerKeyWithSignature(
             key_type,
@@ -198,7 +176,7 @@ impl RelayerSubmitter {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
-        let contract = ITeeKeyManager::new(self.tee_key_manager_address, &provider);
+        let contract = ITeeKeyManagerInstance::new(self.tee_key_manager_address, &provider);
 
         match contract.isKeyValid(key_type, address).call().await {
             Ok(_) => Ok(true),

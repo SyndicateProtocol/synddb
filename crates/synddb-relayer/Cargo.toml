@@ -34,8 +34,11 @@ alloy = { workspace = true, features = [
   "signer-local",
   "provider-http",
   "network",
-  "sol-types",
+  "contract",
 ] }
+
+# Generated contract bindings
+synddb-bindings = { path = "../synddb-bindings" }
 
 # URL parsing
 url = { workspace = true }
