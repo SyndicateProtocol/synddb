@@ -30,6 +30,7 @@ ENV ATTESTATION_AUDIENCE=https://synddb-sequencer.example.com
 # See: https://cloud.google.com/confidential-computing/confidential-space/docs/create-customize-workloads
 LABEL "tee.launch_policy.allow_env_override"="ATTESTATION_AUDIENCE,OUTPUT_BUCKET,RUST_LOG,RUST_LOG_FORMAT"
 LABEL "tee.launch_policy.log_redirect"="always"
+LABEL "tee.launch_policy.allow_ssh"="never"
 
 # Run the binary
 ENTRYPOINT ["/app/cs-attestation-sample"]
