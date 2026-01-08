@@ -235,3 +235,144 @@ pub fn decode_public_values(output: &[u8]) -> Result<PublicValuesStruct> {
     PublicValuesStruct::abi_decode_validate(output)
         .map_err(|e| anyhow::anyhow!("Failed to decode public values: {:?}", e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::keccak256;
+    use gcp_attestation::verify_attestation;
+    use risc0_zkvm::ProverOpts;
+    use serde::Deserialize;
+
+    /// Attestation bundle from sample capture workload
+    #[derive(Debug, Deserialize)]
+    struct AttestationBundle {
+        samples: Vec<AttestationSample>,
+        jwks: Jwks,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct AttestationSample {
+        raw_token: String,
+        audience: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Jwks {
+        keys: Vec<JwkKey>,
+    }
+
+    /// Test guest program execution with sample attestation data.
+    ///
+    /// This test validates that the guest program correctly:
+    /// 1. Parses and verifies JWT attestation tokens
+    /// 2. Extracts claims from the token
+    /// 3. Produces correct public values for on-chain verification
+    ///
+    /// Run locally with: `cargo test -p proof-service --release`
+    /// Note: Requires RISC Zero toolchain installed.
+    #[test]
+    fn test_guest_execution_with_sample_attestation() {
+        // Load sample attestation data
+        let sample_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/confidential-space/samples/samples_20251202_20_50_37.json"
+        );
+        let content = std::fs::read_to_string(sample_path)
+            .expect("Failed to read sample file - run from repo root");
+        let bundle: AttestationBundle =
+            serde_json::from_str(&content).expect("Failed to parse sample JSON");
+
+        let sample = &bundle.samples[0];
+
+        // Find the JWK for this token
+        let kid = extract_kid_from_jwt(sample.raw_token.as_bytes())
+            .expect("Failed to extract kid from JWT");
+        let jwk = bundle
+            .jwks
+            .keys
+            .iter()
+            .find(|k| k.kid == kid)
+            .expect("JWK not found for token's key ID")
+            .clone();
+
+        // Generate mock EVM public key (64 bytes) - deterministic for reproducible tests
+        let mock_evm_public_key: [u8; 64] = {
+            let mut key = [0u8; 64];
+            for (i, byte) in key.iter_mut().enumerate() {
+                *byte = (i as u8).wrapping_mul(7).wrapping_add(42);
+            }
+            key
+        };
+
+        // Generate mock image signature (65 bytes: r || s || v)
+        let mock_image_signature: [u8; 65] = {
+            let mut sig = [0u8; 65];
+            for (i, byte) in sig[0..32].iter_mut().enumerate() {
+                *byte = (i as u8).wrapping_mul(11).wrapping_add(17);
+            }
+            for (i, byte) in sig[32..64].iter_mut().enumerate() {
+                *byte = (i as u8).wrapping_mul(13).wrapping_add(23);
+            }
+            sig[64] = 27; // valid recovery id
+            sig
+        };
+
+        // Build executor environment
+        let env = ExecutorEnv::builder()
+            .write(&sample.raw_token.as_bytes().to_vec())
+            .expect("Failed to write JWT token")
+            .write(&jwk)
+            .expect("Failed to write JWK")
+            .write(&sample.audience.to_string())
+            .expect("Failed to write audience")
+            .write(&mock_evm_public_key.to_vec())
+            .expect("Failed to write EVM public key")
+            .write(&mock_image_signature.to_vec())
+            .expect("Failed to write image signature")
+            .build()
+            .expect("Failed to build executor environment");
+
+        // Run in execute mode (fast, no proof generation)
+        let prover = default_prover();
+        let prove_info = prover
+            .prove_with_opts(env, GCP_CS_ATTESTATION_RISC0_PROGRAM_ELF, &ProverOpts::fast())
+            .expect("Guest execution failed");
+
+        let receipt = prove_info.receipt;
+        let output = receipt.journal.bytes.clone();
+
+        // Decode and verify public values
+        let public_values =
+            PublicValuesStruct::abi_decode_validate(output.as_slice()).expect("Failed to decode output");
+
+        // Verify against local attestation verification
+        let expected = verify_attestation(
+            sample.raw_token.as_bytes(),
+            &jwk,
+            Some(&sample.audience),
+            None,
+        )
+        .expect("Local verification failed");
+
+        assert_eq!(
+            public_values.jwk_key_hash,
+            keccak256(expected.signing_key_id.as_bytes()),
+            "JWK key hash mismatch"
+        );
+        assert_eq!(
+            public_values.validity_window_start, expected.validity_window_start,
+            "Validity window start mismatch"
+        );
+        assert_eq!(
+            public_values.validity_window_end, expected.validity_window_end,
+            "Validity window end mismatch"
+        );
+        assert_eq!(
+            public_values.image_digest_hash,
+            keccak256(expected.image_digest.as_bytes()),
+            "Image digest hash mismatch"
+        );
+        assert_eq!(public_values.secboot, expected.secboot, "Secboot mismatch");
+    }
+}
