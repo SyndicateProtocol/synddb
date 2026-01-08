@@ -1,10 +1,12 @@
+use core::panic;
 use std::{
     fs,
     path::Path,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::Connection;
+use tracing::trace;
 
 const JOURNAL_MODE: &str = "journal_mode";
 const WAL_AUTOCHECKPOINT: &str = "wal_autocheckpoint";
@@ -52,43 +54,51 @@ pub fn monitor_wal<P: AsRef<Path>>(db_path: P, wal_backups_dir: P, checkpoint_in
     // release DB lock
     // apply WAL checkpoint (reset WAL file)
 
+    trace!(?wal_path, "monitor_wal started");
+
     loop {
-        // let wal = read_wal_file(&wal_path).unwrap();
-        if !wal_path.exists()
-            || fs::metadata(&wal_path)
-                .expect("failed to get wal file size")
-                .len()
-                == 0
-        {
-            continue; // no new WAL data
+        std::thread::sleep(checkpoint_interval);
+
+        let wal_size = fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+        if wal_size == 0 {
+            trace!("WAL is empty.");
+            continue;
         }
+        trace!(wal_size, "WAL contents found.");
 
         // NOTE: to avoid changes while the WAL data is collected, we temporarily lock db access with this tx (notice the locking mode)
         // https://www.sqlite.org/lockingv3.html#locking
         // this is how litestream does it for reference: https://github.com/benbjohnson/litestream/blob/e1d5aad75bc67735732b54a252d98685c502288b/db.go#L544
         // TODO I think Immediate is enough here, but maybe Exclusive is warranted?
         // TODO make some tests that assert this actually properly locks the DB as expected
-        let dummy_tx = conn
+        let lock_tx = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .unwrap();
 
-        dummy_tx
-            .execute("SELECT 1 FROM syndicate", [])
-            .expect("failed to execute dummy read tx");
+        // let _: i32 = dummy_tx
+        //     .query_row("SELECT 1 FROM sqlite_schema", [], |row| row.get(0))
+        //     .unwrap_or_else(|e| panic!("failed to execute dummy read tx: {e}"));
 
         // TODO using timestamp for simplicity, but a sequence number would suffice (needs to come
         // from the storage layer)
+
+        let start = Instant::now();
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis();
         let wal_backup = wal_backups_dir.as_ref().join(format!("{ts}.db-wal"));
-        fs::copy(&wal_path, wal_backup).expect("failed to backup WAL file");
+        fs::copy(&wal_path, &wal_backup)
+            .unwrap_or_else(|e| panic!("failed to backup WAL file: {e}"));
+
+        trace!(
+            ?wal_backup,
+            "WAL backup complete, took {} ns",
+            start.elapsed().as_nanos()
+        );
 
         // release the lock
-        dummy_tx
-            .rollback()
-            .expect("failed to rollback read_lock tx");
+        lock_tx.rollback().expect("failed to rollback lock_tx");
 
         // TODO address this:
         // NOTE: there is a race condition where the application could write to the db
@@ -99,15 +109,13 @@ pub fn monitor_wal<P: AsRef<Path>>(db_path: P, wal_backups_dir: P, checkpoint_in
         // checkpoint
         // https://www.sqlite.org/pragma.html#pragma_wal_checkpoint
         conn.pragma_update(None, WAL_CHECKPOINT, TRUNCATE)
-            .expect("failed to initiate WAL checkpoint");
-
-        std::thread::sleep(checkpoint_interval);
+            .unwrap_or_else(|e| panic!("failed to initiate WAL checkpoint: {e}"));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use super::*;
 
     #[test]
     fn todo_test() {}

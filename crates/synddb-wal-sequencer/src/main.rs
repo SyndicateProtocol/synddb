@@ -43,23 +43,29 @@ fn main() {
 }
 
 fn start(config: &'static Config) {
-    let wal_monitor_handle = thread::spawn(move || {
-        info!("starting WAL monitor");
-        monitor_wal(
-            &config.db_path,
-            &config.wal_backups_dir,
-            config.checkpoint_interval,
-        );
-    });
+    let wal_monitor_handle = thread::Builder::new()
+        .name("wal_monitor".into())
+        .spawn(move || {
+            info!("starting WAL monitor");
+            monitor_wal(
+                &config.db_path,
+                &config.wal_backups_dir,
+                config.checkpoint_interval,
+            );
+        })
+        .unwrap();
 
-    let storage_handle = thread::spawn(|| {
-        info!("starting Storage service");
-        watch_and_sync_to_storage(
-            &config.wal_backups_dir,
-            &config.storage_layer,
-            config.storage_sync_interval,
-        );
-    });
+    let storage_handle = thread::Builder::new()
+        .name("storage_service".into())
+        .spawn(|| {
+            info!("starting Storage service");
+            watch_and_sync_to_storage(
+                &config.wal_backups_dir,
+                &config.storage_layer,
+                config.storage_sync_interval,
+            );
+        })
+        .unwrap();
 
     wal_monitor_handle.join().expect("monitor thread panicked");
     storage_handle.join().expect("uploader thread panicked");
@@ -73,6 +79,7 @@ mod tests {
     use rusqlite::Connection;
     use synddb_shared::utils::tmp_dir;
     use synddb_wal_sequencer::storage_layer::StorageLayer;
+    use tracing_test::traced_test;
 
     use crate::Config;
 
@@ -88,6 +95,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn basic_functionality() {
         let db_dir = tmp_dir("db", None);
         let wal_backups_dir = tmp_dir("db_backup", None);
@@ -97,11 +105,21 @@ mod tests {
         let db_path = db_dir.join("test.db");
         let new_db_path = new_db_dir.join("test.db");
 
-        // create source DB and write test data
+        // start monitor and storage sync in background threads
+        let config = Box::leak(Box::new(Config {
+            db_path: db_path.clone(),
+            wal_backups_dir: (&wal_backups_dir).into(),
+            storage_layer: StorageLayer::Filesystem((&storage_dir).into()),
+            checkpoint_interval: Duration::from_secs(1),
+            storage_sync_interval: Duration::from_secs(1),
+        }));
+        let _handle = thread::spawn(move || start(config));
+
+        thread::sleep(Duration::from_millis(1100));
+
+        // simulate an application writing to the DB
         {
             let conn = Connection::open(&db_path).unwrap();
-            conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-            conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
 
             conn.execute(
                 "CREATE TABLE syndicate (id INTEGER PRIMARY KEY, value TEXT)",
@@ -118,17 +136,7 @@ mod tests {
             }
         }
 
-        // start monitor and storage sync in background threads
-        let config = Box::leak(Box::new(Config {
-            db_path,
-            wal_backups_dir: (&wal_backups_dir).into(),
-            storage_layer: StorageLayer::Filesystem((&storage_dir).into()),
-            checkpoint_interval: Duration::from_secs(1),
-            storage_sync_interval: Duration::from_secs(1),
-        }));
-        start(config);
-
-        thread::sleep(Duration::from_millis(1100));
+        thread::sleep(Duration::from_millis(5100));
 
         // // wait for WAL files to appear in storage
         // let mut attempts = 0;
@@ -154,6 +162,8 @@ mod tests {
             .map(|e| e.path())
             .collect();
         wal_files.sort();
+
+        assert!(!wal_files.is_empty());
 
         // apply WAL files to new database
         for wal_file in &wal_files {

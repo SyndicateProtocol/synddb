@@ -25,3 +25,4 @@ zerocopy = { workspace = true, features = ["derive"] }
 synddb-shared = { path = "../synddb-shared/" }
 
 [dev-dependencies]
+tracing-test = "0.2"

@@ -157,7 +157,7 @@ struct WalFrameHeader {
 }
 
 #[derive(Debug)]
-struct WalFrame {
+pub struct WalFrame {
     header: WalFrameHeader,
     data: Vec<u8>,
 }
@@ -166,11 +166,6 @@ struct WalFrame {
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use std::{
-        ops::Deref,
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-    };
     use synddb_shared::utils::tmp_dir;
 
     #[test]

@@ -2,8 +2,10 @@ use std::{
     fs::{self, DirEntry},
     io::Error,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+use tracing::trace;
 
 #[derive(Debug, Clone)]
 pub enum StorageLayer {
@@ -48,6 +50,7 @@ where
     P: AsRef<Path>,
     S: StorageAdapter,
 {
+    trace!(dir = ?dir.as_ref(), "starting watch_and_sync");
     loop {
         let wal_files = wal_files_in_dir(&dir)
             .unwrap_or_else(|e| panic!("failed to obtain wal_files in dir: {e}"));
@@ -55,11 +58,15 @@ where
         for wal in wal_files {
             let filename = wal.file_name().to_string_lossy().into_owned();
             if !storage.has_file(&filename) {
+                // TODO this is a naive implementation that reads the entire file to RAM ,can be
+                // improved
+                let start = Instant::now();
                 let contents = fs::read(wal.path())
                     .unwrap_or_else(|e| panic!("failed to read file {filename}: {e}"));
                 storage
                     .upload(&filename, &contents)
                     .unwrap_or_else(|e| panic!("failed to upload file {filename}: {e}"));
+                trace!(%filename, "uploaded, took {} ns", start.elapsed().as_nanos());
             }
             fs::remove_file(wal.path())
                 .unwrap_or_else(|e| panic!("failed to remove file: {wal:?}, error: {e}"));
