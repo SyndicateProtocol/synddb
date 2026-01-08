@@ -7,9 +7,11 @@ name: RISC Zero CI
 on:
   pull_request:
     paths:
-      - "crates/synddb-bootstrap/risc0/**"
-      - "crates/proof-service/**"
+      # Guest program (the zkVM code being tested)
+      - "crates/synddb-bootstrap/risc0/program/**"
+      # Guest program dependency
       - "crates/gcp-attestation/**"
+      # Test script (host program that runs the guest)
       - "tests/confidential-space/risc0/**"
       - ".github/workflows/risc0-ci.yml"
 
