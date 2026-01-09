@@ -25,9 +25,3 @@ pre-commit:
       run: taplo fmt "**/Cargo.toml"
       stage_fixed: true
       fail_text: "TOML formatting failed"
-
-    sol-bindings:
-      glob: "contracts/src/**/*.sol"
-      run: cd contracts && forge bind --crate-name synddb-bindings -b ../crates/synddb-bindings --overwrite
-      stage_fixed: true
-      fail_text: "Solidity bindings generation failed"

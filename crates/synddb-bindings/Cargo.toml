@@ -1,8 +1,11 @@
 [package]
 name = "synddb-bindings"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
-alloy = { version = "1.0", features = ["sol-types", "contract"] }
-serde = { version = "1.0", features = ["derive"] }
+alloy = { workspace = true, features = ["sol-types", "contract"] }
+serde = { workspace = true }

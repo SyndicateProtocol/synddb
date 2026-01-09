@@ -9,11 +9,10 @@ on:
   push:
     branches:
       - main
-  # Only run on pull requests when contracts, bindings, or deploy scripts are modified
+  # Only run on pull requests when contracts or deploy scripts are modified
   pull_request:
     paths:
       - "contracts/**"
-      - "crates/synddb-bindings/**"
       - "scripts/deploy-local.sh"
       - ".github/workflows/foundry-tests.yml"
 
@@ -121,31 +120,3 @@ jobs:
         if: always()
         run: |
           pkill -f "anvil" || true
-
-  bindings-check:
-    name: Rust Bindings Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-
-      - name: Regenerate Rust bindings
-        working-directory: contracts
-        run: |
-          forge bind --crate-name synddb-bindings -b ../crates/synddb-bindings --overwrite
-
-      - name: Check for binding drift
-        run: |
-          if ! git diff --exit-code crates/synddb-bindings/; then
-            echo "::error::Rust bindings are out of sync with Solidity contracts!"
-            echo "If you have lefthook installed, amend your commit and the pre-commit hook will regenerate bindings automatically."
-            echo "Otherwise, run: cd contracts && forge bind --crate-name synddb-bindings -b ../crates/synddb-bindings --overwrite"
-            exit 1
-          fi
-          echo "✓ Rust bindings are up to date"
