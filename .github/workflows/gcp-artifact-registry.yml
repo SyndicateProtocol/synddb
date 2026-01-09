@@ -57,7 +57,8 @@ jobs:
               - 'crates/synddb-validator/**'
               - 'crates/synddb-shared/**'
               - 'crates/synddb-storage/**'
-              - 'crates/synddb-chain-monitor/**'
+              - 'crates/synddb-bootstrap/**'
+              - 'crates/gcp-attestation/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/gcp-artifact-registry.yml'
@@ -71,7 +72,6 @@ jobs:
             relayer:
               - 'docker/relayer.Dockerfile'
               - 'crates/synddb-relayer/**'
-              - 'crates/synddb-shared/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/gcp-artifact-registry.yml'
