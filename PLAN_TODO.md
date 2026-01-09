@@ -184,7 +184,7 @@ src/validator/confidential_validator.rs
 ### 4.3 Bridge Registration
 
 - Generate zkVM proof for attestation (SP1)
-- Call `Bridge.registerValidator()` with attestation + proof
+- Call `Bridge.registerKeyWithSignature(KeyType.Validator, ...)` via relayer with attestation + proof
 - Store registered tx hash
 
 ### 4.4 State Update Signatures
