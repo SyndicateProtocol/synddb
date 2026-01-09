@@ -17,11 +17,11 @@ locals {
       BIND_ADDRESS  = "0.0.0.0:8080"
       SEQUENCER_URL = var.sequencer_url
 
-      # Database paths (use /tmp until validator image includes /data directory)
-      # TODO: Switch to /data after rebuilding validator image with mkdir /data
-      DATABASE_PATH               = "/tmp/validator.db"
-      STATE_DB_PATH               = "/tmp/validator_state.db"
-      PENDING_CHANGESETS_DB_PATH  = "/tmp/pending_changesets.db"
+      # Database paths (container-local storage, state lost on restart)
+      # For production, mount a persistent disk at /data
+      DATABASE_PATH               = "/data/validator.db"
+      STATE_DB_PATH               = "/data/validator_state.db"
+      PENDING_CHANGESETS_DB_PATH  = "/data/pending_changesets.db"
 
       # Fetcher configuration
       FETCHER_TYPE = "gcs"
