@@ -103,7 +103,9 @@ resource "google_compute_router_nat" "synddb" {
 }
 
 # Static internal IPs for services
-# These persist across VM recreation, ensuring dependent services always have a stable address
+# These persist across VM recreation, ensuring dependent services always have a stable address.
+# Note: Currently supports single instances only. For multiple instances (e.g., multiple
+# validators), add count/for_each here and update the service modules accordingly.
 
 resource "google_compute_address" "sequencer" {
   name         = "${var.name_prefix}-sequencer-ip"
