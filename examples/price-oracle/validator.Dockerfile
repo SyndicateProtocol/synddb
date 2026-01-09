@@ -26,6 +26,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Create data directory for SQLite databases
+RUN mkdir -p /data
+
 # Copy the validator binary
 COPY --from=builder /app/target/release/price-oracle-validator /usr/local/bin/
 
