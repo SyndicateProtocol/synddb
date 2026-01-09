@@ -19,8 +19,9 @@ locals {
 
       # Database paths (use /tmp until validator image includes /data directory)
       # TODO: Switch to /data after rebuilding validator image with mkdir /data
-      DATABASE_PATH = "/tmp/validator.db"
-      STATE_DB_PATH = "/tmp/validator_state.db"
+      DATABASE_PATH               = "/tmp/validator.db"
+      STATE_DB_PATH               = "/tmp/validator_state.db"
+      PENDING_CHANGESETS_DB_PATH  = "/tmp/pending_changesets.db"
 
       # Fetcher configuration
       FETCHER_TYPE = "gcs"
