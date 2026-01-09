@@ -47,3 +47,13 @@ output "price_oracle_instance_name" {
   description = "Instance name of the price oracle"
   value       = length(module.price_oracle) > 0 ? module.price_oracle[0].instance_name : null
 }
+
+output "resolved_images" {
+  description = "Resolved container images with digests (from tag or explicit digest)"
+  value = var.tee_bootstrap != null ? {
+    sequencer     = local.sequencer_resolved_image
+    validator     = local.validator_resolved_image
+    proof_service = local.proof_service_resolved_image
+    price_oracle  = var.price_oracle_config != null ? local.price_oracle_resolved_image : null
+  } : null
+}

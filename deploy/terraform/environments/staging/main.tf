@@ -93,7 +93,7 @@ module "proof_service" {
   project_id            = var.project_id
   region                = var.region
   service_name          = "synddb-staging-proof"
-  container_image       = var.proof_service_image
+  container_image       = local.proof_service_resolved_image
   service_account_email = module.iam.proof_service_account_email
   ingress               = "internal"
   allow_unauthenticated = false
@@ -127,7 +127,7 @@ module "sequencer" {
   subnet_self_link      = module.networking.subnet_self_link
   static_internal_ip    = module.networking.sequencer_static_ip
   service_account_email = module.iam.sequencer_service_account_email
-  container_image       = var.sequencer_image
+  container_image       = local.sequencer_resolved_image
   gcs_bucket            = module.storage.bucket_name
   machine_type          = var.sequencer_machine_type
   batch_max_messages    = var.batch_max_messages
@@ -160,7 +160,7 @@ module "validator" {
   subnet_self_link        = module.networking.subnet_self_link
   static_internal_ip      = module.networking.validator_static_ip
   service_account_email   = module.iam.validator_service_account_email
-  container_image         = var.validator_image
+  container_image         = local.validator_resolved_image
   gcs_bucket              = module.storage.bucket_name
   sequencer_url           = "http://${module.networking.sequencer_static_ip}:8433"
   machine_type            = var.validator_machine_type
@@ -196,7 +196,7 @@ module "price_oracle" {
   subnet_self_link      = module.networking.subnet_self_link
   static_internal_ip    = module.networking.price_oracle_static_ip
   service_account_email = module.iam.price_oracle_service_account_email
-  container_image       = var.price_oracle_image
+  container_image       = local.price_oracle_resolved_image
   sequencer_url         = "http://${module.networking.sequencer_static_ip}:8433"
   machine_type          = var.price_oracle_machine_type
 
