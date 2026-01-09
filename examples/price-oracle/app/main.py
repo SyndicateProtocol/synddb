@@ -509,9 +509,13 @@ def watch(
 
 @cli.command("run-daemon")
 @click.option("--mock", is_flag=True, help="Use mock APIs")
-@click.option("--interval", default=60, help="Fetch interval in seconds")
+@click.option("--interval", default=60, envvar="FETCH_INTERVAL", help="Fetch interval in seconds")
 @click.option("--push/--no-push", default=False, help="Push prices to contract")
 @click.option("--contract", help="PriceOracle contract address (for push)")
+@click.option("--chain-monitor-enabled", is_flag=True, envvar="CHAIN_MONITOR_ENABLED", help="Enable chain monitor")
+@click.option("--chain-monitor-contract", envvar="CHAIN_MONITOR_CONTRACT", help="Contract address to monitor")
+@click.option("--chain-monitor-rpc-url", envvar="CHAIN_MONITOR_RPC_URL", help="RPC URL for chain monitor")
+@click.option("--chain-monitor-poll", default=5, envvar="CHAIN_MONITOR_POLL", help="Chain monitor poll interval")
 @click.pass_context
 def run_daemon(
     ctx: click.Context,
@@ -519,17 +523,31 @@ def run_daemon(
     interval: int,
     push: bool,
     contract: Optional[str],
+    chain_monitor_enabled: bool,
+    chain_monitor_contract: Optional[str],
+    chain_monitor_rpc_url: Optional[str],
+    chain_monitor_poll: int,
 ) -> None:
     """Run as a daemon, periodically fetching prices.
 
     Optionally pushes prices to the contract and processes incoming requests.
+    When chain monitor is enabled, also listens for on-chain PriceRequested events.
     """
     db_path = ctx.obj["db_path"]
     sequencer_url = ctx.obj["sequencer_url"]
+    logger = logging.getLogger("app.daemon")
 
     if push and not contract:
         click.echo("Error: --contract required when using --push", err=True)
         sys.exit(1)
+
+    if chain_monitor_enabled:
+        if not chain_monitor_contract or not chain_monitor_rpc_url:
+            click.echo("Error: --chain-monitor-contract and --chain-monitor-rpc-url required when chain monitor is enabled", err=True)
+            sys.exit(1)
+        if not sequencer_url:
+            click.echo("Error: --sequencer-url required when chain monitor is enabled", err=True)
+            sys.exit(1)
 
     # Create APIs
     if mock:
@@ -542,18 +560,66 @@ def run_daemon(
     click.echo(f"  Push to contract: {push}")
     if sequencer_url:
         click.echo(f"  Sequencer: {sequencer_url}")
+    if chain_monitor_enabled:
+        click.echo(f"  Chain monitor: enabled")
+        click.echo(f"    Contract: {chain_monitor_contract}")
+        click.echo(f"    RPC: {chain_monitor_rpc_url}")
+        click.echo(f"    Poll interval: {chain_monitor_poll}s")
     click.echo("Press Ctrl+C to stop\n")
 
     import signal
+    import threading
 
     running = True
+    monitor_thread = None
+    stop_event = threading.Event()
 
     def handle_sigint(sig, frame):
         nonlocal running
         click.echo("\nShutting down...")
         running = False
+        stop_event.set()
 
     signal.signal(signal.SIGINT, handle_sigint)
+
+    # Start chain monitor in background thread if enabled
+    if chain_monitor_enabled:
+        try:
+            from app.chain_monitor import (
+                ChainMonitorConfig,
+                PriceRequestHandler,
+                PollingChainMonitor,
+            )
+
+            config = ChainMonitorConfig(
+                rpc_url=chain_monitor_rpc_url,
+                contract_address=chain_monitor_contract,
+                start_block=0,  # Start from latest
+                poll_interval=chain_monitor_poll,
+            )
+
+            handler = PriceRequestHandler(sequencer_url)
+            monitor = PollingChainMonitor(config, handler)
+
+            def run_monitor():
+                logger.info("Chain monitor thread started")
+                try:
+                    monitor.run(stop_event=stop_event)
+                except Exception as e:
+                    logger.error(f"Chain monitor error: {e}")
+                logger.info("Chain monitor thread stopped")
+
+            monitor_thread = threading.Thread(target=run_monitor, daemon=True)
+            monitor_thread.start()
+            logger.info("Chain monitor started in background thread")
+
+        except ImportError as e:
+            click.echo(f"Error importing chain monitor: {e}", err=True)
+            click.echo("Install web3 with: pip install web3", err=True)
+            sys.exit(1)
+        except Exception as e:
+            click.echo(f"Error starting chain monitor: {e}", err=True)
+            sys.exit(1)
 
     with PriceOracle(db_path, apis, sequencer_url) as oracle:
         while running:
