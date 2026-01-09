@@ -211,8 +211,8 @@ class PollingChainMonitor:
         # Get PriceRequested events
         try:
             events = self.contract.events.PriceRequested.get_logs(
-                fromBlock=self.last_block + 1,
-                toBlock=safe_block,
+                from_block=self.last_block + 1,
+                to_block=safe_block,
             )
         except Exception as e:
             logger.error(f"Error fetching events: {e}")
