@@ -259,6 +259,7 @@ module "relayer" {
   max_instances         = 2
   deletion_protection   = false  # Allow destruction in staging
   labels                = var.labels
+  rust_log              = "debug"  # Enable debug logging for troubleshooting
 
   # Allow sequencer, validator, and price oracle to invoke the relayer
   invoker_service_accounts = [
