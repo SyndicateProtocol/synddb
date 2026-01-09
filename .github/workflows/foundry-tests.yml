@@ -144,7 +144,8 @@ jobs:
         run: |
           if ! git diff --exit-code crates/synddb-bindings/; then
             echo "::error::Rust bindings are out of sync with Solidity contracts!"
-            echo "Run 'cd contracts && forge bind --crate-name synddb-bindings -b ../crates/synddb-bindings --overwrite' to regenerate."
+            echo "If you have lefthook installed, amend your commit and the pre-commit hook will regenerate bindings automatically."
+            echo "Otherwise, run: cd contracts && forge bind --crate-name synddb-bindings -b ../crates/synddb-bindings --overwrite"
             exit 1
           fi
           echo "✓ Rust bindings are up to date"
