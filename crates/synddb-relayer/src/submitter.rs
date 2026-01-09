@@ -19,7 +19,7 @@ use url::Url;
 sol! {
     #[sol(rpc)]
     interface IBridge {
-        /// KeyType enum: 0 = Sequencer, 1 = Validator
+        /// `KeyType` enum: 0 = Sequencer, 1 = Validator
         function registerKeyWithSignature(
             uint8 keyType,
             bytes calldata publicValues,
@@ -33,7 +33,7 @@ sol! {
 
     #[sol(rpc)]
     interface ITeeKeyManager {
-        /// KeyType enum: 0 = Sequencer, 1 = Validator
+        /// `KeyType` enum: 0 = Sequencer, 1 = Validator
         function isKeyValid(uint8 keyType, address publicKey) external view returns (bool);
     }
 }
