@@ -217,17 +217,10 @@ impl BootstrapStateMachine {
         self.register_with_retry(&relayer_client, &proof, signer, config.relayer_max_retries)
             .await?;
 
-        // Step 5: Verify registration
+        // Step 5: Verify registration (with retry to account for RPC indexing delay)
         self.state = BootstrapState::VerifyingRegistration;
-        let is_valid = match self.key_type {
-            KeyType::Sequencer => submitter.is_sequencer_key_valid(address).await?,
-            KeyType::Validator => submitter.is_validator_key_valid(address).await?,
-        };
-        if !is_valid {
-            return Err(BootstrapError::KeyVerificationFailed(
-                "Key not found in contract after registration".into(),
-            ));
-        }
+        self.verify_registration_with_retry(&submitter, address, config.verification_max_retries)
+            .await?;
 
         self.state = BootstrapState::Ready;
         let elapsed = self.started_at.map(|s| s.elapsed()).unwrap_or_default();
@@ -357,6 +350,58 @@ impl BootstrapStateMachine {
             operation: "key_registration".into(),
             last_error: last_error.map(|e| e.to_string()).unwrap_or_default(),
         })
+    }
+
+    /// Verify key registration with retry to account for RPC indexing delay
+    ///
+    /// After a key registration transaction is confirmed, RPC nodes may take
+    /// a brief period to index the new state. This retry loop accounts for
+    /// that delay by waiting before the first check and retrying on failure.
+    async fn verify_registration_with_retry(
+        &self,
+        submitter: &ContractSubmitter,
+        address: Address,
+        max_retries: u32,
+    ) -> Result<(), BootstrapError> {
+        // Initial delay to give RPC node time to index the transaction
+        let initial_delay = std::time::Duration::from_secs(2);
+        debug!(
+            delay_secs = 2,
+            "Waiting for RPC indexing before verification"
+        );
+        tokio::time::sleep(initial_delay).await;
+
+        for attempt in 1..=max_retries {
+            let is_valid = match self.key_type {
+                KeyType::Sequencer => submitter.is_sequencer_key_valid(address).await?,
+                KeyType::Validator => submitter.is_validator_key_valid(address).await?,
+            };
+
+            if is_valid {
+                info!(
+                    attempt,
+                    address = %address,
+                    key_type = ?self.key_type,
+                    "Key registration verified on-chain"
+                );
+                return Ok(());
+            }
+
+            if attempt < max_retries {
+                let delay = std::time::Duration::from_secs(2 * u64::from(attempt));
+                warn!(
+                    attempt,
+                    max_retries,
+                    delay_secs = delay.as_secs(),
+                    "Key not found on-chain yet, retrying..."
+                );
+                tokio::time::sleep(delay).await;
+            }
+        }
+
+        Err(BootstrapError::KeyVerificationFailed(
+            "Key not found in contract after registration (RPC sync issue?)".into(),
+        ))
     }
 }
 
