@@ -8,7 +8,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use rusqlite::{session::ConflictAction, Connection};
+use rusqlite::{
+    session::{ConflictAction, ConflictType},
+    Connection,
+};
 use synddb_shared::types::{
     message::{MessageType, SignedMessage},
     payloads::{ChangesetBatchRequest, SnapshotRequest, WithdrawalRequest},
@@ -364,11 +367,32 @@ impl ChangesetApplier {
             &mut cursor,
             None::<fn(&str) -> bool>,
             |conflict_type, _item| {
-                warn!(
-                    conflict_type = ?conflict_type,
-                    "Changeset conflict detected, aborting"
-                );
-                ConflictAction::SQLITE_CHANGESET_ABORT
+                // SQLITE_CHANGESET_CONFLICT means INSERT on existing row.
+                // This is expected when a snapshot includes seed data that was also
+                // in early changesets. The row already exists, so we skip (OMIT).
+                //
+                // Other conflict types indicate real data divergence:
+                // - DATA: UPDATE/DELETE where current row differs from expected
+                // - NOTFOUND: UPDATE/DELETE target doesn't exist
+                // - CONSTRAINT: Schema constraint violation
+                // - FOREIGN_KEY: Foreign key violation
+                // These should abort to prevent silent data corruption.
+                match conflict_type {
+                    ConflictType::SQLITE_CHANGESET_CONFLICT => {
+                        debug!(
+                            conflict_type = ?conflict_type,
+                            "INSERT conflict on existing row, skipping"
+                        );
+                        ConflictAction::SQLITE_CHANGESET_OMIT
+                    }
+                    _ => {
+                        warn!(
+                            conflict_type = ?conflict_type,
+                            "Changeset conflict detected, aborting"
+                        );
+                        ConflictAction::SQLITE_CHANGESET_ABORT
+                    }
+                }
             },
         )
         .map_err(|e| anyhow::anyhow!("Failed to apply changeset: {e}"))?;
