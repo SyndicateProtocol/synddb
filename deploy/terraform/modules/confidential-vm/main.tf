@@ -74,6 +74,7 @@ resource "google_compute_instance" "confidential_vm" {
   network_interface {
     network    = var.network_self_link
     subnetwork = var.subnet_self_link
+    network_ip = var.static_internal_ip
 
     # External IP if explicitly requested
     dynamic "access_config" {

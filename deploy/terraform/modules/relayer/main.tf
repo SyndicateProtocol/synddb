@@ -78,7 +78,7 @@ resource "google_cloud_run_v2_service" "relayer" {
           cpu    = var.cpu_limit
           memory = var.memory_limit
         }
-        cpu_idle          = true  # Allow CPU throttling when idle
+        cpu_idle          = true # Allow CPU throttling when idle
         startup_cpu_boost = true
       }
 
