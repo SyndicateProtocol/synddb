@@ -91,7 +91,8 @@ PRICE_REQUESTED_TOPIC = Web3.keccak(
 KNOWN_ASSET_HASHES = {}
 if HAS_WEB3:
     for asset in ["BTC", "ETH", "SOL", "USDC", "USDT"]:
-        asset_hash = Web3.keccak(text=asset).hex()
+        # Add 0x prefix to match the format used in lookup
+        asset_hash = "0x" + Web3.keccak(text=asset).hex()
         KNOWN_ASSET_HASHES[asset_hash] = asset
 
 
