@@ -220,14 +220,15 @@ class PollingChainMonitor:
 
         processed = 0
         for event in events:
+            # Ensure all values are JSON serializable strings
             event_data = {
                 "requestId": "0x" + event.args.requestId.hex(),
                 "asset": event.args.asset,
-                "requester": event.args.requester,
-                "maxAge": event.args.maxAge,
-                "blockNumber": event.blockNumber,
+                "requester": str(event.args.requester),
+                "maxAge": int(event.args.maxAge),
+                "blockNumber": int(event.blockNumber),
                 "transactionHash": "0x" + event.transactionHash.hex(),
-                "logIndex": event.logIndex,
+                "logIndex": int(event.logIndex),
             }
 
             if self.handler.handle_event(event_data):
