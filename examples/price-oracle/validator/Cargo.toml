@@ -33,7 +33,7 @@ metrics-exporter-prometheus = { workspace = true }
 rusqlite = { workspace = true }
 
 # Crypto primitives (for bridge signing)
-alloy = { workspace = true, features = ["primitives"] }
+alloy = { workspace = true }
 hex = { workspace = true }
 
 [features]
