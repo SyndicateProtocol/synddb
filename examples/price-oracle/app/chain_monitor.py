@@ -86,6 +86,14 @@ PRICE_REQUESTED_TOPIC = Web3.keccak(
     text="PriceRequested(bytes32,string,address,uint256)"
 ).hex() if HAS_WEB3 else "0x..."
 
+# Mapping of keccak256(asset_name) -> asset_name for indexed string recovery
+# When a string is indexed in an event, only its hash is stored in topics
+KNOWN_ASSET_HASHES = {}
+if HAS_WEB3:
+    for asset in ["BTC", "ETH", "SOL", "USDC", "USDT"]:
+        asset_hash = Web3.keccak(text=asset).hex()
+        KNOWN_ASSET_HASHES[asset_hash] = asset
+
 
 @dataclass
 class ChainMonitorConfig:
@@ -220,10 +228,15 @@ class PollingChainMonitor:
 
         processed = 0
         for event in events:
+            # Indexed string params are stored as keccak256 hash (bytes)
+            # Look up the original asset name from our known assets mapping
+            asset_hash = "0x" + event.args.asset.hex()
+            asset_name = KNOWN_ASSET_HASHES.get(asset_hash, f"<unknown:{asset_hash[:18]}>")
+
             # Ensure all values are JSON serializable strings
             event_data = {
                 "requestId": "0x" + event.args.requestId.hex(),
-                "asset": event.args.asset,
+                "asset": asset_name,
                 "requester": str(event.args.requester),
                 "maxAge": int(event.args.maxAge),
                 "blockNumber": int(event.blockNumber),
