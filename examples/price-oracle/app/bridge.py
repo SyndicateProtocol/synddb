@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 # Global sequencer URL (set by caller)
 _sequencer_url: Optional[str] = None
 _price_oracle_address: Optional[str] = None
+_relayer_url: Optional[str] = None
 
 
 def set_sequencer_url(url: str) -> None:
@@ -49,6 +50,12 @@ def set_price_oracle_address(address: str) -> None:
     """Set the PriceOracle contract address for withdrawal targets."""
     global _price_oracle_address
     _price_oracle_address = address
+
+
+def set_relayer_url(url: str) -> None:
+    """Set the relayer URL for Bridge transaction submission."""
+    global _relayer_url
+    _relayer_url = url
 
 
 def encode_fulfill_price_request(
@@ -93,11 +100,12 @@ def submit_withdrawal_request(
     timestamp: int,
     sequencer_url: Optional[str] = None,
     price_oracle_address: Optional[str] = None,
+    relayer_url: Optional[str] = None,
 ) -> Optional[str]:
-    """Submit a withdrawal request to the sequencer for bridge execution.
+    """Submit a withdrawal request to the sequencer and relayer for bridge execution.
 
-    This creates a Withdrawal message that the validator will sign and the
-    relayer will submit to the Bridge contract.
+    This creates a Withdrawal message, gets it signed by the sequencer, then
+    submits it to the relayer for Bridge contract execution.
 
     Args:
         request_id: The bytes32 request ID from PriceRequested event
@@ -106,12 +114,14 @@ def submit_withdrawal_request(
         timestamp: Unix timestamp
         sequencer_url: Sequencer URL (uses global if not provided)
         price_oracle_address: Target contract address (uses global if not provided)
+        relayer_url: Relayer URL (uses global if not provided)
 
     Returns:
         Sequence number if successful, None if failed
     """
     url = sequencer_url or _sequencer_url
     target = price_oracle_address or _price_oracle_address
+    relayer = relayer_url or _relayer_url
 
     if not url:
         logger.warning("No sequencer URL configured, skipping withdrawal submission")
@@ -128,6 +138,7 @@ def submit_withdrawal_request(
     try:
         # Encode the fulfillPriceRequest calldata
         calldata = encode_fulfill_price_request(request_id, asset, price, timestamp)
+        calldata_hex = "0x" + calldata.hex()
 
         # Create the withdrawal request
         withdrawal = {
@@ -148,21 +159,69 @@ def submit_withdrawal_request(
             timeout=10,
         )
 
-        if response.status_code in (200, 201):
-            # Parse CBOR response
-            result = cbor2.loads(response.content)
-            sequence = result.get("sequence")
-            logger.info(
-                f"Submitted withdrawal for price response: request_id={request_id[:16]}..., "
-                f"sequence={sequence}"
-            )
-            return sequence
-        else:
+        if response.status_code not in (200, 201):
             logger.error(
                 f"Failed to submit withdrawal: status={response.status_code}, "
                 f"body={response.text[:200]}"
             )
             return None
+
+        # Parse CBOR response
+        result = cbor2.loads(response.content)
+        sequence = result.get("sequence")
+        seq_timestamp = result.get("timestamp")
+        bridge_sig = result.get("bridge_signature", {})
+
+        logger.info(
+            f"Submitted withdrawal for price response: request_id={request_id[:16]}..., "
+            f"sequence={sequence}"
+        )
+
+        # If relayer is configured, submit to Bridge via relayer
+        if relayer and bridge_sig:
+            try:
+                # Get the message_id and signature from bridge_signature
+                message_id = bridge_sig.get("message_id", request_id)
+                bridge_signature = bridge_sig.get("signature", "")
+
+                if bridge_signature:
+                    relayer_request = {
+                        "message_id": message_id,
+                        "target_address": target,
+                        "payload": calldata_hex,
+                        "native_token_amount": "0",
+                        "sequencer_signature": bridge_signature,
+                        "sequence": sequence,
+                        "timestamp": seq_timestamp,
+                    }
+
+                    relayer_response = requests.post(
+                        f"{relayer}/submit-withdrawal",
+                        json=relayer_request,
+                        timeout=30,
+                    )
+
+                    if relayer_response.status_code in (200, 202):
+                        relayer_result = relayer_response.json()
+                        tx_hash = relayer_result.get("tx_hash")
+                        status = relayer_result.get("status")
+                        logger.info(
+                            f"Relayer submitted withdrawal to Bridge: "
+                            f"status={status}, tx_hash={tx_hash}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Relayer failed to submit: status={relayer_response.status_code}, "
+                            f"body={relayer_response.text[:200]}"
+                        )
+                else:
+                    logger.warning("No bridge signature in sequencer response")
+            except Exception as e:
+                logger.error(f"Error submitting to relayer: {e}")
+        elif not relayer:
+            logger.debug("No relayer URL configured, skipping Bridge submission")
+
+        return sequence
 
     except Exception as e:
         logger.error(f"Error submitting withdrawal request: {e}")

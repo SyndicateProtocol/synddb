@@ -26,6 +26,7 @@ from app.bridge import (
     get_outbound_message_stats,
     set_sequencer_url,
     set_price_oracle_address,
+    set_relayer_url,
     PriceUpdate,
 )
 
@@ -63,6 +64,11 @@ def setup_logging(verbose: bool) -> None:
     envvar="PRICE_ORACLE_CONTRACT_ADDRESS",
     help="PriceOracle contract address for bridge submissions",
 )
+@click.option(
+    "--relayer-url",
+    envvar="RELAYER_URL",
+    help="Relayer URL for Bridge transaction submission",
+)
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -70,6 +76,7 @@ def cli(
     db_path: str,
     sequencer_url: Optional[str],
     price_oracle_address: Optional[str],
+    relayer_url: Optional[str],
 ) -> None:
     """Price Oracle - Fetch and store cryptocurrency prices.
 
@@ -81,6 +88,7 @@ def cli(
     ctx.obj["db_path"] = db_path
     ctx.obj["sequencer_url"] = sequencer_url
     ctx.obj["price_oracle_address"] = price_oracle_address
+    ctx.obj["relayer_url"] = relayer_url
     ctx.obj["verbose"] = verbose
 
     # Configure bridge module for withdrawal submissions
@@ -88,6 +96,8 @@ def cli(
         set_sequencer_url(sequencer_url)
     if price_oracle_address:
         set_price_oracle_address(price_oracle_address)
+    if relayer_url:
+        set_relayer_url(relayer_url)
 
 
 @cli.command()
