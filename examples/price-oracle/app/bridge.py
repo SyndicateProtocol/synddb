@@ -22,7 +22,151 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
+import cbor2
+import requests
+
+# Try to import eth_abi for ABI encoding (used for withdrawal calldata)
+try:
+    from eth_abi import encode as abi_encode
+    HAS_ETH_ABI = True
+except ImportError:
+    HAS_ETH_ABI = False
+
 logger = logging.getLogger(__name__)
+
+# Global sequencer URL (set by caller)
+_sequencer_url: Optional[str] = None
+_price_oracle_address: Optional[str] = None
+
+
+def set_sequencer_url(url: str) -> None:
+    """Set the sequencer URL for withdrawal submissions."""
+    global _sequencer_url
+    _sequencer_url = url
+
+
+def set_price_oracle_address(address: str) -> None:
+    """Set the PriceOracle contract address for withdrawal targets."""
+    global _price_oracle_address
+    _price_oracle_address = address
+
+
+def encode_fulfill_price_request(
+    request_id: str, asset: str, price: int, timestamp: int
+) -> bytes:
+    """Encode the fulfillPriceRequest function call.
+
+    Args:
+        request_id: The bytes32 request ID (0x-prefixed hex string)
+        asset: Asset symbol (e.g., "BTC")
+        price: Price in 8-decimal fixed point
+        timestamp: Unix timestamp
+
+    Returns:
+        ABI-encoded calldata for fulfillPriceRequest(bytes32, string, uint256, uint256)
+    """
+    if not HAS_ETH_ABI:
+        raise RuntimeError("eth_abi package required for withdrawal encoding")
+
+    # Function selector for fulfillPriceRequest(bytes32,string,uint256,uint256)
+    # cast sig "fulfillPriceRequest(bytes32,string,uint256,uint256)" = 0xcb15f73f
+    selector = bytes.fromhex("cb15f73f")
+
+    # Parse request_id as bytes32
+    request_id_bytes = bytes.fromhex(request_id[2:] if request_id.startswith("0x") else request_id)
+    if len(request_id_bytes) != 32:
+        raise ValueError(f"request_id must be 32 bytes, got {len(request_id_bytes)}")
+
+    # Encode parameters
+    encoded_params = abi_encode(
+        ["bytes32", "string", "uint256", "uint256"],
+        [request_id_bytes, asset, price, timestamp]
+    )
+
+    return selector + encoded_params
+
+
+def submit_withdrawal_request(
+    request_id: str,
+    asset: str,
+    price: int,
+    timestamp: int,
+    sequencer_url: Optional[str] = None,
+    price_oracle_address: Optional[str] = None,
+) -> Optional[str]:
+    """Submit a withdrawal request to the sequencer for bridge execution.
+
+    This creates a Withdrawal message that the validator will sign and the
+    relayer will submit to the Bridge contract.
+
+    Args:
+        request_id: The bytes32 request ID from PriceRequested event
+        asset: Asset symbol
+        price: Price in 8-decimal fixed point
+        timestamp: Unix timestamp
+        sequencer_url: Sequencer URL (uses global if not provided)
+        price_oracle_address: Target contract address (uses global if not provided)
+
+    Returns:
+        Sequence number if successful, None if failed
+    """
+    url = sequencer_url or _sequencer_url
+    target = price_oracle_address or _price_oracle_address
+
+    if not url:
+        logger.warning("No sequencer URL configured, skipping withdrawal submission")
+        return None
+
+    if not target:
+        logger.warning("No PriceOracle address configured, skipping withdrawal submission")
+        return None
+
+    if not HAS_ETH_ABI:
+        logger.warning("eth_abi not available, skipping withdrawal submission")
+        return None
+
+    try:
+        # Encode the fulfillPriceRequest calldata
+        calldata = encode_fulfill_price_request(request_id, asset, price, timestamp)
+
+        # Create the withdrawal request
+        withdrawal = {
+            "request_id": request_id,
+            "recipient": target,
+            "amount": "0",  # No ETH transfer, just calldata execution
+            "data": calldata,
+        }
+
+        # CBOR-encode the request
+        cbor_data = cbor2.dumps(withdrawal)
+
+        # Submit to sequencer
+        response = requests.post(
+            f"{url}/withdrawals",
+            data=cbor_data,
+            headers={"Content-Type": "application/cbor"},
+            timeout=10,
+        )
+
+        if response.status_code in (200, 201):
+            # Parse CBOR response
+            result = cbor2.loads(response.content)
+            sequence = result.get("sequence")
+            logger.info(
+                f"Submitted withdrawal for price response: request_id={request_id[:16]}..., "
+                f"sequence={sequence}"
+            )
+            return sequence
+        else:
+            logger.error(
+                f"Failed to submit withdrawal: status={response.status_code}, "
+                f"body={response.text[:200]}"
+            )
+            return None
+
+    except Exception as e:
+        logger.error(f"Error submitting withdrawal request: {e}")
+        return None
 
 
 @dataclass
@@ -204,6 +348,17 @@ def create_price_response_message(
         )
         conn.commit()
         logger.info(f"Created price response for request {request_id[:16]}...")
+
+        # Submit a withdrawal request to the sequencer for bridge execution
+        # This creates a Withdrawal message that validators will sign
+        withdrawal_seq = submit_withdrawal_request(
+            request_id=request_id,
+            asset=asset,
+            price=price_fixed,
+            timestamp=timestamp,
+        )
+        if withdrawal_seq:
+            logger.info(f"Submitted withdrawal for bridge: sequence={withdrawal_seq}")
 
     return message_id
 

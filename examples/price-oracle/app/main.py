@@ -24,6 +24,8 @@ from app.bridge import (
     create_batch_price_update_message,
     create_price_response_message,
     get_outbound_message_stats,
+    set_sequencer_url,
+    set_price_oracle_address,
     PriceUpdate,
 )
 
@@ -56,8 +58,19 @@ def setup_logging(verbose: bool) -> None:
     envvar="SEQUENCER_URL",
     help="SyndDB sequencer URL",
 )
+@click.option(
+    "--price-oracle-address",
+    envvar="PRICE_ORACLE_CONTRACT_ADDRESS",
+    help="PriceOracle contract address for bridge submissions",
+)
 @click.pass_context
-def cli(ctx: click.Context, verbose: bool, db_path: str, sequencer_url: Optional[str]) -> None:
+def cli(
+    ctx: click.Context,
+    verbose: bool,
+    db_path: str,
+    sequencer_url: Optional[str],
+    price_oracle_address: Optional[str],
+) -> None:
     """Price Oracle - Fetch and store cryptocurrency prices.
 
     This application demonstrates SyndDB custom validator rules by fetching
@@ -67,7 +80,14 @@ def cli(ctx: click.Context, verbose: bool, db_path: str, sequencer_url: Optional
     ctx.ensure_object(dict)
     ctx.obj["db_path"] = db_path
     ctx.obj["sequencer_url"] = sequencer_url
+    ctx.obj["price_oracle_address"] = price_oracle_address
     ctx.obj["verbose"] = verbose
+
+    # Configure bridge module for withdrawal submissions
+    if sequencer_url:
+        set_sequencer_url(sequencer_url)
+    if price_oracle_address:
+        set_price_oracle_address(price_oracle_address)
 
 
 @cli.command()
