@@ -1,8 +1,12 @@
 //! HTTP handlers for the relayer
 //!
-//! Implements the /health and /register-key endpoints.
+//! Implements the /health, /register-key, and /submit-withdrawal endpoints.
 
-use crate::{config::RelayerConfig, submitter::RelayerSubmitter};
+use crate::{
+    config::RelayerConfig,
+    submitter::RelayerSubmitter,
+    withdrawal::{WithdrawalSubmissionRequest, WithdrawalSubmitter},
+};
 use alloy::primitives::B256;
 use axum::{http::StatusCode, Extension, Json};
 use serde::{Deserialize, Serialize};
@@ -346,6 +350,64 @@ pub(crate) async fn register_key(
                     tx_hash: None,
                     error: Some(format!("Failed to submit registration: {}", e)),
                 }),
+            )
+        }
+    }
+}
+
+/// Submit a withdrawal to the Bridge contract
+///
+/// This endpoint receives withdrawal data from clients (e.g., price oracle),
+/// fetches validator signatures, and submits the withdrawal to the Bridge.
+pub(crate) async fn submit_withdrawal(
+    Extension(withdrawal_submitter): Extension<Option<Arc<WithdrawalSubmitter>>>,
+    Json(request): Json<WithdrawalSubmissionRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let submitter = match withdrawal_submitter {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "status": "failed",
+                    "error": "Withdrawal submission not configured (no VALIDATOR_URL)"
+                })),
+            );
+        }
+    };
+
+    info!(
+        message_id = %request.message_id,
+        target_address = %request.target_address,
+        sequence = request.sequence,
+        "Processing withdrawal submission request"
+    );
+
+    match submitter.submit_withdrawal(&request).await {
+        Ok(response) => {
+            let status_code = match response.status.as_str() {
+                "confirmed" => StatusCode::OK,
+                "submitted" => StatusCode::ACCEPTED,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+
+            (
+                status_code,
+                Json(serde_json::json!({
+                    "status": response.status,
+                    "tx_hash": response.tx_hash,
+                    "error": response.error
+                })),
+            )
+        }
+        Err(e) => {
+            warn!(error = %e, message_id = %request.message_id, "Withdrawal submission failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "status": "failed",
+                    "error": e.to_string()
+                })),
             )
         }
     }
