@@ -388,6 +388,7 @@ def process_requests(ctx: click.Context, mock: bool) -> None:
                 asset=asset,
                 price=price,
                 timestamp=timestamp,
+                inbound_id=msg["id"],
             )
 
             if msg_id:
@@ -686,6 +687,7 @@ def run_daemon(
                                     asset=asset,
                                     price=price,
                                     timestamp=timestamp,
+                                    inbound_id=msg["id"],
                                 )
                                 if resp_id:
                                     msg_client.ack(msg["id"], processed=True)
