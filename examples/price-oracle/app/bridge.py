@@ -58,6 +58,36 @@ def set_relayer_url(url: str) -> None:
     _relayer_url = url
 
 
+def get_gce_identity_token(audience: str) -> Optional[str]:
+    """Get an identity token from the GCE metadata server.
+
+    This is used to authenticate requests to Cloud Run services
+    that require IAM authentication.
+
+    Args:
+        audience: The target audience (typically the Cloud Run service URL)
+
+    Returns:
+        The identity token if successful, None otherwise
+    """
+    metadata_url = (
+        f"http://metadata.google.internal/computeMetadata/v1/"
+        f"instance/service-accounts/default/identity?audience={audience}"
+    )
+    try:
+        response = requests.get(
+            metadata_url,
+            headers={"Metadata-Flavor": "Google"},
+            timeout=5,
+        )
+        if response.status_code == 200:
+            return response.text
+        logger.warning(f"Failed to get identity token: status={response.status_code}")
+    except Exception as e:
+        logger.debug(f"Not running on GCE or metadata unavailable: {e}")
+    return None
+
+
 def encode_fulfill_price_request(
     request_id: str, asset: str, price: int, timestamp: int
 ) -> bytes:
@@ -195,9 +225,16 @@ def submit_withdrawal_request(
                         "timestamp": seq_timestamp,
                     }
 
+                    # Get identity token for Cloud Run authentication
+                    headers = {"Content-Type": "application/json"}
+                    identity_token = get_gce_identity_token(relayer)
+                    if identity_token:
+                        headers["Authorization"] = f"Bearer {identity_token}"
+
                     relayer_response = requests.post(
                         f"{relayer}/submit-withdrawal",
                         json=relayer_request,
+                        headers=headers,
                         timeout=30,
                     )
 
