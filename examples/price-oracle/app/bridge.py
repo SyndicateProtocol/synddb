@@ -166,8 +166,8 @@ def submit_withdrawal_request(
             )
             return None
 
-        # Parse CBOR response
-        result = cbor2.loads(response.content)
+        # Parse JSON response (sequencer returns JSON for withdrawal receipts)
+        result = response.json()
         sequence = result.get("sequence")
         seq_timestamp = result.get("timestamp")
         bridge_sig = result.get("bridge_signature", {})
