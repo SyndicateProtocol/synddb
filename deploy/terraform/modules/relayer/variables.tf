@@ -153,3 +153,9 @@ variable "invoker_service_accounts" {
   type        = list(string)
   default     = []
 }
+
+variable "validator_url" {
+  description = "URL of the validator service for fetching validator signatures on withdrawals"
+  type        = string
+  default     = ""
+}

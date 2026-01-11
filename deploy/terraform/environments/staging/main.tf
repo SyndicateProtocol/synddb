@@ -264,6 +264,10 @@ module "relayer" {
   labels                = var.labels
   rust_log              = "debug" # Enable debug logging for troubleshooting
 
+  # Validator URL for withdrawal signature fetching
+  # Note: Using hardcoded IP to avoid circular dependency with validator module
+  validator_url = "http://10.0.0.12:8080"
+
   # Allow sequencer, validator, and price oracle to invoke the relayer
   invoker_service_accounts = [
     module.iam.sequencer_service_account_email,
