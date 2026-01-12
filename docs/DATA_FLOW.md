@@ -245,9 +245,212 @@ struct PublicValuesStruct {
 
 ---
 
-## 3. Withdrawal Flow: Application → Sequencer → Validator → Relayer → Bridge
+## 3. Bridge Message Flow: Sequencer → Relayer → Bridge → Target Contract
 
-For withdrawals, there's an additional path where the relayer collects signatures and submits to the Bridge contract.
+This section details how messages flow from the sequencer through the Bridge contract to target contracts (e.g., PriceOracle). The Bridge requires:
+1. **Sequencer signature** - Proves the message was sequenced by a registered TEE
+2. **Validator signatures** - Additional attestations that meet a configurable threshold
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            SEQUENCER                                                    │
+│                                                                                         │
+│   After batching messages, sequencer also creates Bridge-compatible signatures:         │
+│                                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │                          Inbox / Batcher                                        │   │
+│   │                                                                                 │   │
+│   │  For each message requiring on-chain execution:                                 │   │
+│   │                                                                                 │   │
+│   │  1. Compute messageHash:                                                        │   │
+│   │     messageHash = keccak256(messageId || targetAddress || keccak256(payload)    │   │
+│   │                             || nativeTokenAmount)                               │   │
+│   │                                                                                 │   │
+│   │  2. Sign with EIP-191:                                                          │   │
+│   │     ethSignedHash = keccak256("\x19Ethereum Signed Message:\n32" + messageHash) │   │
+│   │     signature = secp256k1_sign(ethSignedHash, sequencer_private_key)            │   │
+│   │                                                                                 │   │
+│   │  3. Return SequencerSignature { signature, submittedAt }                        │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   Two parallel outputs:                                                                 │
+│   ├─► Batch to GCS (for validator sync)                                                 │
+│   └─► SequencerSignature to Relayer (for Bridge initialization)                         │
+└───────────────────────────┬─────────────────────────────────────────────────────────────┘
+                            │
+                            │  POST /bridge/messages { messageId, target, payload,
+                            │                          sequencerSignature, nativeAmount }
+                            ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            RELAYER                                                      │
+│                                                                                         │
+│   Step 1: Initialize message on Bridge                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  Bridge.initializeMessage(                                                      │   │
+│   │      messageId,                    // bytes32 unique ID                         │   │
+│   │      targetAddress,                // e.g., PriceOracle contract                │   │
+│   │      payload,                      // abi.encodeCall(PriceOracle.updatePrice,   │   │
+│   │                                    //                ("BTC", 50000e8, timestamp))│   │
+│   │      SequencerSignature {          // From sequencer                            │   │
+│   │          signature,                // 65-byte ECDSA (r||s||v)                   │   │
+│   │          submittedAt               // Block timestamp                           │   │
+│   │      },                                                                         │   │
+│   │      nativeTokenAmount             // ETH to transfer with call                 │   │
+│   │  )                                                                              │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   Step 2: Collect validator signatures                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  For each validator:                                                            │   │
+│   │    GET validator_url/signature/{messageId}                                      │   │
+│   │    → Returns MessageSignature { message_id, signature, signer, signed_at }      │   │
+│   │                                                                                 │   │
+│   │  Then submit each to Bridge:                                                    │   │
+│   │    Bridge.signMessageWithSignature(messageId, validatorSignature)               │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   Step 3: Execute message                                                               │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  Bridge.handleMessage(messageId)                                                │   │
+│   │  // Or use initializeAndHandleMessage() to do all in one transaction            │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+└───────────────────────────┬─────────────────────────────────────────────────────────────┘
+                            │
+                            │  Transaction to Bridge contract
+                            ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            BRIDGE CONTRACT (L1)                                         │
+│                                                                                         │
+│   initializeMessage():                                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  1. Check message not already initialized                                       │   │
+│   │  2. Verify sequencer signature:                                                 │   │
+│   │     - Recover signer from EIP-191 signature                                     │   │
+│   │     - Check teeKeyManager.isKeyValid(KeyType.Sequencer, signer)                 │   │
+│   │  3. Store MessageState { messageId, targetAddress, PreExecution, payload, ... } │   │
+│   │  4. Emit MessageInitialized(messageId, payload)                                 │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   signMessageWithSignature():                                                           │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  1. Recover validator address from signature                                    │   │
+│   │  2. Check teeKeyManager.isKeyValid(KeyType.Validator, validator)                │   │
+│   │  3. Record validatorSignatures[messageId][validator] = true                     │   │
+│   │  4. Emit MessageSigned(messageId, validator)                                    │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   handleMessage():                                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  1. Validate message is in PreExecution stage                                   │   │
+│   │  2. Run pre-execution modules (e.g., ValidatorSignatureModule checks threshold) │   │
+│   │  3. Unwrap native tokens if nativeTokenAmount > 0                               │   │
+│   │  4. Execute: targetAddress.call{value: amount}(payload)  ─────────────────────┐ │   │
+│   │  5. Run post-execution modules                                                 │ │   │
+│   │  6. Mark message as Completed                                                  │ │   │
+│   │  7. Emit MessageHandled(messageId, success)                                    │ │   │
+│   └────────────────────────────────────────────────────────────────────────────────┼─┘   │
+└────────────────────────────────────────────────────────────────────────────────────┼─────┘
+                                                                                     │
+                            targetAddress.call(payload)                              │
+                                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            TARGET CONTRACT (e.g., PriceOracle)                          │
+│                                                                                         │
+│   Receives call from Bridge:                                                            │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  // payload = abi.encodeCall(PriceOracle.updatePrice, ("BTC", 50000e8, ts))     │   │
+│   │                                                                                 │   │
+│   │  function updatePrice(                                                          │   │
+│   │      string calldata asset,     // "BTC"                                        │   │
+│   │      uint256 price,             // 50000_00000000 (8 decimals)                  │   │
+│   │      uint256 timestamp          // Unix timestamp from off-chain                │   │
+│   │  ) external onlyRole(UPDATER_ROLE) {                                            │   │
+│   │      // msg.sender == Bridge contract (has UPDATER_ROLE)                        │   │
+│   │      prices[assetHash(asset)] = Price(price, timestamp, block.timestamp);       │   │
+│   │      emit PriceUpdated(asset, price, timestamp, msg.sender);                    │   │
+│   │  }                                                                              │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   Result: On-chain state updated based on off-chain TEE computation                     │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Bridge Message Lifecycle
+
+| Stage | Description |
+|-------|-------------|
+| `NotStarted` | Message ID not yet used |
+| `PreExecution` | Initialized, awaiting pre-execution module validation |
+| `Executing` | Currently executing target contract call |
+| `PostExecution` | Execution complete, running post-execution modules |
+| `Completed` | Successfully processed |
+| `Rejected` | Rejected by validation module |
+
+### Bridge Contract Data Structures
+
+#### SequencerSignature
+```solidity
+struct SequencerSignature {
+    bytes signature;       // 65-byte ECDSA (r || s || v)
+    uint256 submittedAt;   // Block timestamp when submitted
+}
+```
+
+#### MessageState
+```solidity
+struct MessageState {
+    bytes32 messageId;
+    address targetAddress;
+    ProcessingStage stage;
+    bytes payload;
+    uint256 createdAt;
+    uint256 nativeTokenAmount;
+}
+```
+
+### Bridge API Calls
+
+**initializeMessage** - Submit sequencer-signed message
+```solidity
+function initializeMessage(
+    bytes32 messageId,
+    address targetAddress,
+    bytes calldata payload,
+    SequencerSignature calldata sequencerSignature,
+    uint256 nativeTokenAmount
+) external;
+```
+
+**signMessageWithSignature** - Submit validator signature
+```solidity
+function signMessageWithSignature(
+    bytes32 messageId,
+    bytes calldata signature  // 65-byte ECDSA from validator
+) external;
+```
+
+**handleMessage** - Execute the message
+```solidity
+function handleMessage(bytes32 messageId) external;
+```
+
+**initializeAndHandleMessage** - All-in-one (init + validator sigs + execute)
+```solidity
+function initializeAndHandleMessage(
+    bytes32 messageId,
+    address targetAddress,
+    bytes calldata payload,
+    SequencerSignature calldata sequencerSignature,
+    bytes[] calldata validatorSignatures,
+    uint256 nativeTokenAmount
+) external;
+```
+
+---
+
+## 3.1 Withdrawal Flow (Specific Case)
+
+Withdrawals are a specific message type where the target is typically a token transfer.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
@@ -263,47 +466,52 @@ For withdrawals, there's an additional path where the relayer collects signature
 │                            SEQUENCER                                                    │
 │                                                                                         │
 │   1. Assign sequence number                                                             │
-│   2. Create COSE signed message (for batch storage)                                     │
-│   3. Create Bridge-compatible signature (EIP-191 for on-chain)                          │
+│   2. Create COSE signed message (for batch storage + validator sync)                    │
+│   3. Create Bridge-compatible EIP-191 signature                                         │
 │                                                                                         │
 │   Returns: WithdrawalResponse with BOTH signatures                                      │
-│   - cose_signature: for validator verification                                          │
-│   - bridge_signature: for Bridge.initializeMessage()                                    │
 └────────────────────────────────────────────────────────────────────────────────────┬────┘
                                                                                      │
-                  Stored in batch → GCS                                              │
-                                                                                     ▼
+               ┌─────────────────────────────────────────────────────────────────────┤
+               │                                                                     │
+               ▼                                                                     ▼
+┌──────────────────────────────────┐                    ┌────────────────────────────────┐
+│         GCS (Batch Storage)      │                    │          RELAYER               │
+│                                  │                    │                                │
+│  .cbor.zst with COSE-signed      │                    │  Receives sequencer signature  │
+│  withdrawal message              │                    │  immediately for Bridge init   │
+└──────────────┬───────────────────┘                    └───────────────┬────────────────┘
+               │                                                        │
+               │ Validator fetches batch                                │ Bridge.initializeMessage()
+               ▼                                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                            VALIDATOR (with Bridge Signer mode)                          │
+│                            VALIDATOR (Bridge Signer mode)                               │
 │                                                                                         │
 │   1. Fetch batch containing withdrawal                                                  │
 │   2. Verify sequencer COSE signature                                                    │
-│   3. Apply withdrawal to replica DB (records withdrawal intent)                         │
-│   4. BridgeSigner signs withdrawal attestation:                                         │
-│      - message_id = keccak256(request_id) or parse as bytes32                           │
-│      - Signs with EIP-191: keccak256("\x19Ethereum Signed Message:\n32" + message_id)   │
-│   5. Store in SignatureStore for relayer retrieval                                      │
-└────────────────────────────────────────────────────────────────────────────────────┬────┘
-                                                                                     │
-                  GET /pending → GET /signature/{message_id}                         │
-                                                                                     ▼
+│   3. Apply withdrawal to replica DB                                                     │
+│   4. BridgeSigner creates EIP-191 signature over messageId                              │
+│   5. Store in SignatureStore                                                            │
+└───────────────────────────┬─────────────────────────────────────────────────────────────┘
+                            │
+                            │ Relayer polls GET /pending, GET /signature/{id}
+                            ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                            RELAYER                                                      │
 │                                                                                         │
-│   1. Poll validator: GET /pending                                                       │
-│   2. For each pending: GET /signature/{message_id}                                      │
-│   3. Collect required number of validator signatures                                    │
-│   4. Submit to Bridge contract                                                          │
-└────────────────────────────────────────────────────────────────────────────────────┬────┘
-                                                                                     │
-                  Bridge.executeWithdrawal(messageId, signatures)                    │
-                                                                                     ▼
+│   Collects validator signatures, submits to Bridge:                                     │
+│   - Bridge.signMessageWithSignature(messageId, validatorSig) for each                   │
+│   - Bridge.handleMessage(messageId) to execute                                          │
+└───────────────────────────┬─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                            BRIDGE CONTRACT (L1)                                         │
+│                            BRIDGE CONTRACT                                              │
 │                                                                                         │
-│   1. Verify sequencer signature (from initializeMessage)                                │
-│   2. Verify validator signatures meet threshold                                         │
-│   3. Execute withdrawal: transfer ETH/tokens to recipient                               │
+│   Executes withdrawal:                                                                  │
+│   - Unwraps WETH if nativeTokenAmount > 0                                               │
+│   - Transfers ETH/tokens to recipient                                                   │
+│   - Emits MessageHandled(messageId, true)                                               │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
