@@ -2,88 +2,414 @@
 
 This document describes all data flows between SyndDB components, including message formats, serialization, and concrete examples.
 
-## System Overview
+---
+
+## 1. Core Data Flow: Application → Client → Sequencer → Storage → Validator
+
+This is the primary data path for all application state changes.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            APPLICATION (App TEE VM1)                                    │
+│                                                                                         │
+│   ┌─────────────────┐      ┌──────────────────────────────────────────────────────────┐ │
+│   │  Your App Code  │      │                  synddb-client Library                   │ │
+│   │                 │      │  ┌──────────────────┐   ┌─────────────────────────────┐  │ │
+│   │  // App writes  │      │  │ SessionMonitor   │   │ Background Sender Thread    │  │ │
+│   │  // to SQLite   │      │  │                  │   │                             │  │ │
+│   │  conn.execute(  │ ───► │  │ - Hooks into     │   │ - Buffers changesets        │  │ │
+│   │    "INSERT...", │      │  │   SQLite Session │   │ - Batches by size/time      │  │ │
+│   │    params       │      │  │ - Captures raw   │──►│ - Sends HTTP POST to        │  │ │
+│   │  );             │      │  │   changeset bytes│   │   sequencer                 │  │ │
+│   │                 │      │  │ - Tracks sequence│   │ - Retries on failure        │  │ │
+│   └─────────────────┘      │  └──────────────────┘   └─────────────┬───────────────┘  │ │
+│                            └───────────────────────────────────────┼──────────────────┘ │
+└────────────────────────────────────────────────────────────────────┼─────────────────────┘
+                                                                     │
+                            HTTP POST /changesets (CBOR)             │
+                            ChangesetBatchRequest                    │
+                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            SEQUENCER (Sequencer TEE VM2)                                │
+│                                                                                         │
+│   ┌─────────────────────┐   ┌─────────────────────┐   ┌─────────────────────────────┐   │
+│   │     HTTP API        │   │       Inbox         │   │        Batcher              │   │
+│   │                     │   │                     │   │                             │   │
+│   │ - Receives CBOR     │──►│ - Atomic counter    │──►│ - Groups messages           │   │
+│   │ - Validates request │   │ - zstd compression  │   │ - SHA-256 content hash      │   │
+│   │ - Returns receipt   │   │ - COSE Sign1 wrap   │   │ - Signs batch               │   │
+│   │                     │   │ - secp256k1/keccak  │   │ - Compresses with zstd      │   │
+│   └─────────────────────┘   └─────────────────────┘   └─────────────┬───────────────┘   │
+│                                                                     │                   │
+│                                                                     ▼                   │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │                              Publisher                                          │   │
+│   │   ┌─────────────────────────┐     ┌─────────────────────────────────────────┐   │   │
+│   │   │ GCS Publisher           │     │ Local Publisher (dev)                   │   │   │
+│   │   │ Uploads .cbor.zst       │     │ SQLite storage                          │   │   │
+│   │   └───────────┬─────────────┘     └─────────────────────────────────────────┘   │   │
+│   └───────────────┼─────────────────────────────────────────────────────────────────┘   │
+└───────────────────┼─────────────────────────────────────────────────────────────────────┘
+                    │
+                    │  gs://{bucket}/batches/000000000001_000000000050.cbor.zst
+                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            GOOGLE CLOUD STORAGE                                         │
+│                                                                                         │
+│   batches/                                                                              │
+│   ├── 000000000001_000000000050.cbor.zst                                                │
+│   ├── 000000000051_000000000100.cbor.zst                                                │
+│   └── ...                                                                               │
+└───────────────────┬─────────────────────────────────────────────────────────────────────┘
+                    │
+                    │  Fetch and decompress batches
+                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            VALIDATOR                                                    │
+│                                                                                         │
+│   ┌─────────────────────┐   ┌─────────────────────┐   ┌─────────────────────────────┐   │
+│   │   GCS Fetcher       │   │ SignatureVerifier   │   │  ChangesetApplier           │   │
+│   │                     │   │                     │   │                             │   │
+│   │ - Lists batches     │──►│ - Verifies COSE     │──►│ - Decompresses payload      │   │
+│   │ - Downloads .zst    │   │ - Checks sequencer  │   │ - Applies to SQLite         │   │
+│   │ - Builds batch index│   │   public key        │   │ - Handles schema changes    │   │
+│   └─────────────────────┘   └─────────────────────┘   └─────────────┬───────────────┘   │
+│                                                                     │                   │
+│                                                                     ▼                   │
+│                                                         ┌───────────────────────────┐   │
+│                                                         │   Replicated SQLite DB    │   │
+│                                                         │   (Identical to App DB)   │   │
+│                                                         └───────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Step-by-Step Flow
+
+| Step | Component | Action | Data |
+|------|-----------|--------|------|
+| 1 | App | Executes SQL: `INSERT INTO trades VALUES (...)` | SQL statement |
+| 2 | SQLite | Session Extension captures change | Raw changeset bytes |
+| 3 | synddb-client | SessionMonitor extracts changeset | `Changeset { data, sequence, timestamp }` |
+| 4 | synddb-client | Background thread batches and sends | `ChangesetBatchRequest` (CBOR) |
+| 5 | Sequencer | Assigns sequence, compresses, signs | `CborSignedMessage` |
+| 6 | Sequencer | Batcher groups into batch | `CborBatch` with batch signature |
+| 7 | Sequencer | Publisher uploads | `000000000042_000000000050.cbor.zst` |
+| 8 | Validator | Fetcher downloads batch | Decompressed CBOR |
+| 9 | Validator | Verifies sequencer signature | Public key check |
+| 10 | Validator | Applies changeset to SQLite | Replicated state |
+
+---
+
+## 2. TEE Bootstrapping Flow
+
+Before sequencers and validators can operate, they must register their signing keys on-chain via the TEE bootstrap process.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                   SEQUENCER/VALIDATOR (Inside Confidential Space TEE)                   │
+│                                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │                        BootstrapStateMachine                                    │   │
+│   │                                                                                 │   │
+│   │   State: NotStarted → GeneratingKey → FetchingAttestation → GeneratingProof    │   │
+│   │          → RegisteringKey → VerifyingRegistration → Ready                       │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   Step 1: Generate Key                                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  EvmKeyManager::generate()                                                      │   │
+│   │  - Uses secure OS randomness inside TEE                                         │   │
+│   │  - Produces secp256k1 keypair                                                   │   │
+│   │  - Output: 64-byte public key, derived 20-byte address                          │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   Step 2: Fetch Attestation                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  AttestationClient::get_token()                                                 │   │
+│   │  - Calls GCP metadata server inside Confidential Space                          │   │
+│   │  - Returns JWT with TEE claims (image_digest, secboot, dbgstat)                 │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────────────────┬────┘
+                                                                                     │
+                  POST /prove { jwt_token, evm_public_key, image_signature }         │
+                                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            PROOF SERVICE (Cloud Run + GPU)                              │
+│                                                                                         │
+│   Step 3: Generate ZK Proof                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  AttestationProver (RISC Zero zkVM)                                             │   │
+│   │                                                                                 │   │
+│   │  Inside zkVM guest program:                                                     │   │
+│   │  1. Verify RS256 signature on JWT attestation                                   │   │
+│   │  2. Validate TEE claims (secboot, dbgstat == "disabled-since-boot")             │   │
+│   │  3. Parse image_signature (secp256k1 over image_digest)                         │   │
+│   │  4. Derive Ethereum address from public key                                     │   │
+│   │  5. Commit PublicValuesStruct to journal                                        │   │
+│   │                                                                                 │   │
+│   │  Output: Groth16 proof + ABI-encoded public values                              │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   Response: { public_values: "0x...", proof_bytes: "0x...", tee_address: "0x..." }      │
+└────────────────────────────────────────────────────────────────────────────────────┬────┘
+                                                                                     │
+                  POST /register-key { public_values, proof_bytes, signature }       │
+                                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            RELAYER (Cloud Run)                                          │
+│                                                                                         │
+│   Step 4: Register Key                                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  RelayerClient                                                                  │   │
+│   │                                                                                 │   │
+│   │  1. TEE signs EIP-712 registration request:                                     │   │
+│   │     AddKey(bytes32 attestationHash, uint256 deadline)                           │   │
+│   │     attestationHash = keccak256(publicValues || proofBytes)                     │   │
+│   │                                                                                 │   │
+│   │  2. Sends to relayer with signature                                             │   │
+│   │  3. Relayer pays gas, submits to TeeKeyManager contract                         │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────────────────┬────┘
+                                                                                     │
+                  Transaction: TeeKeyManager.addKey(proof, publicValues, signature)  │
+                                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            BLOCKCHAIN (L1)                                              │
+│                                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  TeeKeyManager Contract                                                         │   │
+│   │                                                                                 │   │
+│   │  1. Verify RISC Zero proof against known image ID                               │   │
+│   │  2. Verify image_signature via ecrecover → must match authorized signer         │   │
+│   │  3. Verify EIP-712 signature from TEE key                                       │   │
+│   │  4. Register key: sequencerKeys[address] = true or validatorKeys[address] = true│   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   Step 5: Verify Registration                                                           │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  ContractSubmitter.is_sequencer_key_valid(address)                              │   │
+│   │  - Queries contract to confirm key is registered                                │   │
+│   │  - Retries to handle RPC indexing delay                                         │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Bootstrap Data Structures
+
+#### ProofRequest (to Proof Service)
+```rust
+struct ProofRequest {
+    jwt_token: String,           // Raw JWT from Confidential Space
+    expected_audience: String,   // Audience claim to verify
+    evm_public_key: String,      // 64-byte hex, 0x-prefixed
+    image_signature: String,     // 65-byte hex (r||s||v), 0x-prefixed
+}
+```
+
+#### ProofResponse (from Proof Service)
+```rust
+struct ProofResponse {
+    public_values: String,       // ABI-encoded PublicValuesStruct, 0x-prefixed
+    proof_bytes: String,         // Groth16 proof, 0x-prefixed
+    tee_address: String,         // Derived address for verification
+}
+```
+
+#### PublicValuesStruct (committed by zkVM)
+```rust
+struct PublicValuesStruct {
+    jwk_key_hash: [u8; 32],           // keccak256(signing_key_id)
+    validity_window_start: u64,       // JWT nbf claim
+    validity_window_end: u64,         // JWT exp claim
+    image_digest_hash: [u8; 32],      // keccak256(image_digest)
+    tee_signing_key: Address,         // Derived from public key
+    secboot: bool,                    // Secure boot enabled
+    dbgstat_disabled: bool,           // Debug disabled since boot
+    audience_hash: [u8; 32],          // keccak256(audience)
+    image_signature_v: u8,            // For ecrecover
+    image_signature_r: [u8; 32],      // For ecrecover
+    image_signature_s: [u8; 32],      // For ecrecover
+}
+```
+
+#### RegisterKeyRequest (to Relayer)
+```json
+{
+  "publicValues": "0x...",
+  "proofBytes": "0x...",
+  "deadline": 1700003600,
+  "signature": "0x...",
+  "keyType": "sequencer"
+}
+```
+
+---
+
+## 3. Withdrawal Flow: Application → Sequencer → Validator → Relayer → Bridge
+
+For withdrawals, there's an additional path where the relayer collects signatures and submits to the Bridge contract.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            APPLICATION                                                  │
+│                                                                                         │
+│   User requests withdrawal:                                                             │
+│   synddb.submit_withdrawal("w-123", "0x742d35...", "1000000000000000000", None)         │
+└────────────────────────────────────────────────────────────────────────────────────┬────┘
+                                                                                     │
+                  POST /withdrawals { request_id, recipient, amount, data }          │
+                                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            SEQUENCER                                                    │
+│                                                                                         │
+│   1. Assign sequence number                                                             │
+│   2. Create COSE signed message (for batch storage)                                     │
+│   3. Create Bridge-compatible signature (EIP-191 for on-chain)                          │
+│                                                                                         │
+│   Returns: WithdrawalResponse with BOTH signatures                                      │
+│   - cose_signature: for validator verification                                          │
+│   - bridge_signature: for Bridge.initializeMessage()                                    │
+└────────────────────────────────────────────────────────────────────────────────────┬────┘
+                                                                                     │
+                  Stored in batch → GCS                                              │
+                                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            VALIDATOR (with Bridge Signer mode)                          │
+│                                                                                         │
+│   1. Fetch batch containing withdrawal                                                  │
+│   2. Verify sequencer COSE signature                                                    │
+│   3. Apply withdrawal to replica DB (records withdrawal intent)                         │
+│   4. BridgeSigner signs withdrawal attestation:                                         │
+│      - message_id = keccak256(request_id) or parse as bytes32                           │
+│      - Signs with EIP-191: keccak256("\x19Ethereum Signed Message:\n32" + message_id)   │
+│   5. Store in SignatureStore for relayer retrieval                                      │
+└────────────────────────────────────────────────────────────────────────────────────┬────┘
+                                                                                     │
+                  GET /pending → GET /signature/{message_id}                         │
+                                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            RELAYER                                                      │
+│                                                                                         │
+│   1. Poll validator: GET /pending                                                       │
+│   2. For each pending: GET /signature/{message_id}                                      │
+│   3. Collect required number of validator signatures                                    │
+│   4. Submit to Bridge contract                                                          │
+└────────────────────────────────────────────────────────────────────────────────────┬────┘
+                                                                                     │
+                  Bridge.executeWithdrawal(messageId, signatures)                    │
+                                                                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            BRIDGE CONTRACT (L1)                                         │
+│                                                                                         │
+│   1. Verify sequencer signature (from initializeMessage)                                │
+│   2. Verify validator signatures meet threshold                                         │
+│   3. Execute withdrawal: transfer ETH/tokens to recipient                               │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Validator Signature API
+
+**GET /pending** - List pending withdrawal message IDs
+```json
+{
+  "count": 2,
+  "message_ids": [
+    "0x772d313233...",
+    "0x772d343536..."
+  ]
+}
+```
+
+**GET /signature/{message_id}** - Get specific signature
+```json
+{
+  "message_id": "0x772d3132332d616263000000000000000000000000000000000000000000000000",
+  "signature": "0x...<65 bytes r||s||v>...",
+  "signer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "signed_at": 1700000000
+}
+```
+
+**GET /info** - Signer information
+```json
+{
+  "signer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "bridge_contract": "0x1234567890abcdef1234567890abcdef12345678",
+  "chain_id": 84532
+}
+```
+
+---
+
+## 4. System Architecture Overview
 
 ```
                                     ┌──────────────────────────────────────┐
                                     │         Blockchain (L1)              │
                                     │  ┌─────────────────────────────────┐ │
-                                    │  │        Bridge Contract          │ │
-                                    │  │ - Deposit events                │ │
-                                    │  │ - Withdrawal events             │ │
-                                    │  │ - StateSync events              │ │
-                                    │  └─────────────┬───────────────────┘ │
-                                    └────────────────┼─────────────────────┘
-                                                     │
-                  ┌──────────────────────────────────┼──────────────────────────────────┐
-                  │                                  │                                  │
-                  ▼                                  ▼                                  ▼
-┌─────────────────────────────────┐   ┌────────────────────────────────┐   ┌─────────────────────────────────┐
-│   synddb-chain-monitor          │   │   synddb-client (App TEE)      │   │   Relayer                       │
-│   - WebSocket subscription      │   │   - SQLite Session Extension   │   │   - Fetches signatures          │
-│   - Event filtering             │   │   - Changeset capture          │   │   - Submits to Bridge           │
-│   - Handler dispatch            │   │   - Snapshot generation        │   │                                 │
-└──────────────┬──────────────────┘   └──────────────┬─────────────────┘   └──────────────┬──────────────────┘
-               │                                     │                                    │
-               │ MessageHandler                      │ HTTP POST                          │ HTTP GET
-               │ callback                            │ (CBOR)                             │ (JSON)
-               ▼                                     ▼                                    │
-┌─────────────────────────────────────────────────────────────────────────────────────────┼───────────────────┐
-│                                     synddb-sequencer (Sequencer TEE)                    │                   │
-│  ┌─────────────────────────┐    ┌─────────────────────────┐    ┌──────────────────────┐ │                   │
-│  │    Message Queue        │    │       Inbox             │    │      Batcher         │ │                   │
-│  │ - Inbound messages      │◄───│ - Atomic sequencing     │───►│ - Batch grouping     │ │                   │
-│  │ - Outbound tracking     │    │ - COSE signing          │    │ - zstd compression   │ │                   │
-│  │ - Acknowledgements      │    │ - keccak256 hashing     │    │ - Batch signing      │ │                   │
-│  └─────────────────────────┘    └─────────────────────────┘    └──────────┬───────────┘ │                   │
-│                                                                            │             │                   │
-│  ┌───────────────────────────────────────────────────────────────────────────────────────┼─────────────────┐ │
-│  │                                     Publishers                                        │                 │ │
-│  │  ┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────────┐   │                 │ │
-│  │  │   Local (SQLite)    │    │        GCS          │    │    Future: Celestia     │   │                 │ │
-│  │  │   - local://N       │    │   - gs://bucket/... │    │    Future: EigenDA      │   │                 │ │
-│  │  └─────────────────────┘    └──────────┬──────────┘    └─────────────────────────┘   │                 │ │
-│  └───────────────────────────────────────┼──────────────────────────────────────────────┼─────────────────┘ │
-└──────────────────────────────────────────┼──────────────────────────────────────────────┼───────────────────┘
-                                           │                                              │
-                                           │ .cbor.zst files                              │
-                                           ▼                                              │
-                       ┌─────────────────────────────────────────┐                        │
-                       │           Google Cloud Storage          │                        │
-                       │                                         │                        │
-                       │  gs://{bucket}/{prefix}/batches/        │                        │
-                       │   ├── 000000000001_000000000050.cbor.zst│                        │
-                       │   ├── 000000000051_000000000100.cbor.zst│                        │
-                       │   └── ...                               │                        │
-                       └──────────────────┬──────────────────────┘                        │
-                                          │                                               │
-                                          │ Fetch batches                                 │
-                                          ▼                                               │
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                    synddb-validator                                      │                   │
-│  ┌─────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────────┐ │                   │
-│  │     Fetcher         │   │  SignatureVerifier      │   │   ChangesetApplier         │ │                   │
-│  │ - HTTP or GCS       │──►│ - COSE verification     │──►│ - SQLite changeset apply   │ │                   │
-│  │ - Batch indexing    │   │ - secp256k1/keccak256   │   │ - Schema gap handling      │ │                   │
-│  └─────────────────────┘   └─────────────────────────┘   └──────────────┬──────────────┘ │                   │
-│                                                                          │               │                   │
-│  ┌─────────────────────┐   ┌─────────────────────────┐                  ▼               │                   │
-│  │   Bridge Signer     │   │   Signature Store       │        ┌────────────────────┐    │                   │
-│  │ - EIP-191 signing   │──►│ - Pending signatures    │◄───────│   StateStore       │    │                   │
-│  │ - Withdrawal attest │   │ - Relayer retrieval     │        │ - Sync progress    │    │                   │
-│  └─────────────────────┘   └─────────────────────────┘        └────────────────────┘    │                   │
-│                                     │                                                    │                   │
-│                                     │ GET /signature/{id}                                │                   │
-└─────────────────────────────────────┼────────────────────────────────────────────────────┼───────────────────┘
-                                      │                                                    │
-                                      └────────────────────────────────────────────────────┘
+                                    │  │   Bridge + TeeKeyManager        │ │
+                                    │  │   - Key registration            │ │
+                                    │  │   - Deposit events              │ │
+                                    │  │   - Withdrawal execution        │ │
+                                    │  └─────────────────────────────────┘ │
+                                    └───────────────────┬──────────────────┘
+                                                        │
+        ┌───────────────────────────────────────────────┼───────────────────────────────────────────────┐
+        │                                               │                                               │
+        ▼                                               ▼                                               ▼
+┌───────────────────┐                      ┌─────────────────────────┐                      ┌───────────────────┐
+│  Proof Service    │                      │        Relayer          │                      │   Chain Monitor   │
+│  (Cloud Run+GPU)  │                      │     (Cloud Run)         │                      │                   │
+│                   │                      │                         │                      │ - WebSocket sub   │
+│ - RISC Zero zkVM  │                      │ - Bootstrap gas sponsor │                      │ - Event filtering │
+│ - Groth16 proofs  │                      │ - Withdrawal submitter  │                      │ - Handler dispatch│
+└─────────┬─────────┘                      └────────────┬────────────┘                      └─────────┬─────────┘
+          │                                             │                                             │
+          │ POST /prove                                 │ POST /register-key                          │ Events
+          │                                             │ GET /signature/{id}                         │
+          ▼                                             ▼                                             ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                            APPLICATION (App TEE)                                                │
+│  ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐    │
+│  │                                          synddb-client                                                  │    │
+│  │  - Bootstrap: generates key, fetches attestation, requests proof, registers via relayer                 │    │
+│  │  - Runtime: captures changesets, sends to sequencer                                                     │    │
+│  └──────────────────────────────────────────────────────────────────────────────────────────────┬──────────┘    │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┘
+                                                                                                  │
+                                              HTTP POST /changesets, /withdrawals                 │
+                                                                                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                            SEQUENCER (Sequencer TEE)                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐    │
+│  │  - Bootstrap: same process as client                                                                    │    │
+│  │  - Runtime: atomic sequencing, COSE signing, batching, publishing to GCS                                │    │
+│  └──────────────────────────────────────────────────────────────────────────────────────────────┬──────────┘    │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────┘
+                                                                                                  │
+                                              .cbor.zst batches to GCS                            │
+                                                                                                  ▼
+                                              ┌─────────────────────────────────────────┐
+                                              │         Google Cloud Storage            │
+                                              └───────────────────────┬─────────────────┘
+                                                                      │
+                                              Fetch batches           │
+                                                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                            VALIDATOR                                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐    │
+│  │  - Bootstrap: same process as sequencer/client                                                          │    │
+│  │  - Runtime: fetches batches, verifies signatures, applies changesets, signs withdrawals                 │    │
+│  │  - Signature API: serves withdrawal signatures to relayer                                               │    │
+│  └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 1. Client → Sequencer Data Flow
+## 5. Client → Sequencer Request/Response Formats
 
-### 1.1 Changeset Submission
+### 5.1 Changeset Submission
 
 **Origin**: `synddb-client` (Application TEE)
 **Destination**: `synddb-sequencer` (Sequencer TEE)
@@ -170,7 +496,7 @@ pub struct SequenceResponse {
 
 ---
 
-### 1.2 Withdrawal Submission
+### 5.2 Withdrawal Submission
 
 **Origin**: `synddb-client` (Application TEE)
 **Destination**: `synddb-sequencer` (Sequencer TEE)
@@ -244,7 +570,7 @@ pub struct BridgeSignatureResponse {
 
 ---
 
-### 1.3 Snapshot Submission
+### 5.3 Snapshot Submission
 
 **Origin**: `synddb-client` (Application TEE)
 **Destination**: `synddb-sequencer` (Sequencer TEE)
@@ -283,9 +609,9 @@ pub struct SnapshotData {
 
 ---
 
-## 2. Sequencer Internal Data Flow
+## 6. Sequencer Internal Data Flow
 
-### 2.1 Inbox Sequencing
+### 6.1 Inbox Sequencing
 
 When a message arrives at the sequencer:
 
@@ -313,7 +639,7 @@ When a message arrives at the sequencer:
    - Payload: compressed data
    - Signature: secp256k1 ECDSA over `keccak256(Sig_structure)`
 
-### 2.2 COSE Message Structure
+### 6.2 COSE Message Structure
 
 ```
 COSE_Sign1 = [
@@ -336,7 +662,7 @@ Sig_structure = [
 ]
 ```
 
-### 2.3 Batch Creation
+### 6.3 Batch Creation
 
 **Trigger conditions**:
 - Message count reaches threshold
@@ -388,9 +714,9 @@ let payload = keccak256(
 
 ---
 
-## 3. Sequencer → Storage Data Flow
+## 7. Sequencer → Storage Data Flow
 
-### 3.1 GCS Publisher
+### 7.1 GCS Publisher
 
 **Destination**: Google Cloud Storage
 **Path**: `gs://{bucket}/{prefix}/batches/{filename}`
@@ -406,7 +732,7 @@ gs://synddb-staging/sequencer/batches/000000000051_000000000100.cbor.zst
 2. Compress with zstd (level 3)
 3. Upload to GCS with content type `application/octet-stream`
 
-### 3.2 Local Publisher
+### 7.2 Local Publisher
 
 **Destination**: SQLite database
 **Path reference**: `local://{sequence}`
@@ -424,9 +750,9 @@ CREATE TABLE messages (
 
 ---
 
-## 4. Storage → Validator Data Flow
+## 8. Storage → Validator Data Flow
 
-### 4.1 HTTP Fetcher
+### 8.1 HTTP Fetcher
 
 **Origin**: Sequencer HTTP API
 **Destination**: Validator
@@ -445,7 +771,7 @@ pub struct MessageResponse {
 }
 ```
 
-### 4.2 GCS Fetcher (Batch Mode)
+### 8.2 GCS Fetcher (Batch Mode)
 
 **Origin**: Google Cloud Storage
 **Destination**: Validator
@@ -470,9 +796,9 @@ pub struct BatchInfo {
 
 ---
 
-## 5. Validator Internal Data Flow
+## 9. Validator Internal Data Flow
 
-### 5.1 Signature Verification
+### 9.1 Signature Verification
 
 ```rust
 pub struct SignedMessage {
@@ -495,7 +821,7 @@ pub struct SignedMessage {
 5. Compute `keccak256(Sig_structure)`
 6. Verify ECDSA signature against expected public key
 
-### 5.2 Changeset Application
+### 9.2 Changeset Application
 
 After verification:
 1. Decompress payload with zstd
@@ -504,7 +830,7 @@ After verification:
 4. If `MessageType::Withdrawal`: trigger signing callback
 5. Update `StateStore` with new sequence
 
-### 5.3 Bridge Signer (Optional)
+### 9.3 Bridge Signer (Optional)
 
 When validator processes withdrawals in bridge signer mode:
 
@@ -524,9 +850,9 @@ pub struct MessageSignature {
 
 ---
 
-## 6. Validator → Relayer Data Flow
+## 10. Validator → Relayer Data Flow (Withdrawals)
 
-### 6.1 Signature Retrieval API
+### 10.1 Signature Retrieval API
 
 **Endpoint**: `GET /signature/{message_id}`
 
@@ -540,7 +866,7 @@ pub struct MessageSignature {
 }
 ```
 
-### 6.2 List Pending Signatures
+### 10.2 List Pending Signatures
 
 **Endpoint**: `GET /pending`
 
@@ -555,7 +881,7 @@ pub struct MessageSignature {
 }
 ```
 
-### 6.3 Signer Info
+### 10.3 Signer Info
 
 **Endpoint**: `GET /info`
 
@@ -570,9 +896,9 @@ pub struct MessageSignature {
 
 ---
 
-## 7. Chain Monitor → Application Data Flow
+## 11. Chain Monitor → Application Data Flow
 
-### 7.1 Blockchain Events
+### 11.1 Blockchain Events
 
 **Origin**: Blockchain (via WebSocket RPC)
 **Destination**: Application via `MessageHandler` trait
@@ -628,9 +954,9 @@ pub struct Log {
 
 ---
 
-## 8. Message Queue API (Sequencer)
+## 12. Message Queue API (Sequencer)
 
-### 8.1 Inbound Messages
+### 12.1 Inbound Messages
 
 **Push message from chain monitor**:
 **Endpoint**: `POST /messages/inbound`
@@ -677,7 +1003,7 @@ pub struct Log {
 }
 ```
 
-### 8.2 Acknowledgement
+### 12.2 Acknowledgement
 
 **Endpoint**: `POST /messages/inbound/{id}/ack`
 
@@ -699,9 +1025,9 @@ pub struct Log {
 
 ---
 
-## 9. Status and Monitoring APIs
+## 13. Status and Monitoring APIs
 
-### 9.1 Sequencer Status
+### 13.1 Sequencer Status
 
 **Endpoint**: `GET /status`
 
@@ -714,7 +1040,7 @@ pub struct Log {
 }
 ```
 
-### 9.2 Validator Status
+### 13.2 Validator Status
 
 **Endpoint**: `GET /status`
 
@@ -728,7 +1054,7 @@ pub struct Log {
 }
 ```
 
-### 9.3 Batch Statistics
+### 13.3 Batch Statistics
 
 **Endpoint**: `GET /batch/stats`
 
@@ -749,9 +1075,9 @@ pub struct Log {
 
 ---
 
-## 10. Serialization Reference
+## 14. Serialization Reference
 
-### 10.1 Binary Fields
+### 14.1 Binary Fields
 
 In **JSON**: Binary fields are base64-encoded
 ```json
@@ -760,7 +1086,7 @@ In **JSON**: Binary fields are base64-encoded
 
 In **CBOR**: Binary fields are raw bytes (major type 2)
 
-### 10.2 Signature Formats
+### 14.2 Signature Formats
 
 | Format | Length | Description |
 |--------|--------|-------------|
@@ -769,7 +1095,7 @@ In **CBOR**: Binary fields are raw bytes (major type 2)
 | Public key | 64 bytes | Uncompressed secp256k1 (no 0x04 prefix) |
 | Address | 20 bytes | keccak256(pubkey)[12:32] |
 
-### 10.3 Hash Functions
+### 14.3 Hash Functions
 
 | Purpose | Algorithm |
 |---------|-----------|
@@ -779,7 +1105,7 @@ In **CBOR**: Binary fields are raw bytes (major type 2)
 
 ---
 
-## 11. Complete Flow Example
+## 15. Complete Flow Example
 
 ### Deposit → Withdrawal Round Trip
 
@@ -843,7 +1169,7 @@ In **CBOR**: Binary fields are raw bytes (major type 2)
 
 ---
 
-## 12. Environment Variables Reference
+## 16. Environment Variables Reference
 
 ### Sequencer
 | Variable | Required | Default | Description |
@@ -884,3 +1210,31 @@ In **CBOR**: Binary fields are raw bytes (major type 2)
 | `CONTRACT_ADDRESS` | Yes | - | Contract to monitor |
 | `START_BLOCK` | No | `0` | Block to start from |
 | `EVENT_SIGNATURE` | No | - | Filter specific events |
+
+### TEE Bootstrap (Sequencer/Validator)
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PROOF_SERVICE_URL` | Yes | - | URL of proof generation service |
+| `RELAYER_URL` | Yes | - | URL of key registration relayer |
+| `BRIDGE_ADDRESS` | Yes | - | Bridge contract address |
+| `RPC_URL` | Yes | - | Blockchain RPC endpoint |
+| `CHAIN_ID` | Yes | - | Target chain ID |
+| `IMAGE_SIGNATURE` | Yes | - | 65-byte secp256k1 sig over image digest |
+| `ATTESTATION_AUDIENCE` | No | auto | Expected JWT audience |
+| `PROVER_MODE` | No | `service` | `service` or `mock` |
+
+### Proof Service
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `BIND_ADDRESS` | No | `0.0.0.0:8080` | HTTP bind address |
+| `GOOGLE_OIDC_DISCOVERY_URL` | No | GCP default | OIDC discovery endpoint |
+| `JWKS_CACHE_TTL_SECS` | No | `3600` | JWK cache TTL |
+| `LOG_JSON` | No | `false` | JSON logging format |
+
+### Relayer
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SIGNING_KEY` | Yes | - | Relayer's private key (pays gas) |
+| `RPC_URL` | Yes | - | Blockchain RPC endpoint |
+| `BRIDGE_ADDRESS` | Yes | - | Bridge contract address |
+| `CHAIN_ID` | Yes | - | Target chain ID |
