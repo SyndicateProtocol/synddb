@@ -448,102 +448,135 @@ function initializeAndHandleMessage(
 
 ---
 
-## 3.1 Withdrawal Flow (Specific Case)
+## 3.1 Inbound Message Flow: Bridge → Chain Monitor → Application
 
-Withdrawals are a specific message type where the target is typically a token transfer.
+Inbound messages (e.g., deposits) flow FROM the blockchain INTO SyndDB. This is the reverse direction of outbound bridge messages.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                            APPLICATION                                                  │
+│                            BLOCKCHAIN (L1)                                              │
 │                                                                                         │
-│   User requests withdrawal:                                                             │
-│   synddb.submit_withdrawal("w-123", "0x742d35...", "1000000000000000000", None)         │
+│   User deposits ETH/tokens to Bridge:                                                   │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  Bridge.receive() or Bridge.depositTokens(amount, recipient, data)              │   │
+│   │                                                                                 │   │
+│   │  Emits: Deposit(from, to, amount, data)                                         │   │
+│   │         NativeTokenWrapped(sender, amount)                                      │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────────────────────────┬────┘
                                                                                      │
-                  POST /withdrawals { request_id, recipient, amount, data }          │
+                  WebSocket subscription to Bridge contract events                   │
                                                                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                            SEQUENCER                                                    │
+│                            CHAIN MONITOR                                                │
 │                                                                                         │
-│   1. Assign sequence number                                                             │
-│   2. Create COSE signed message (for batch storage + validator sync)                    │
-│   3. Create Bridge-compatible EIP-191 signature                                         │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  ChainMonitor                                                                   │   │
+│   │                                                                                 │   │
+│   │  1. WebSocket connects to RPC node(s)                                           │   │
+│   │  2. Subscribes to logs for Bridge contract address                              │   │
+│   │  3. Filters by event signature (e.g., Deposit topic)                            │   │
+│   │  4. Waits for confirmation depth (e.g., 12 blocks)                              │   │
+│   │  5. Dispatches to registered MessageHandler                                     │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                         │
-│   Returns: WithdrawalResponse with BOTH signatures                                      │
+│   Event Log received:                                                                   │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  Log {                                                                          │   │
+│   │      address: 0x1234...Bridge,                                                  │   │
+│   │      topics: [keccak256("Deposit(address,address,uint256,bytes)"),              │   │
+│   │               from_indexed, to_indexed],                                        │   │
+│   │      data: abi.encode(amount, data),                                            │   │
+│   │      block_number: 12345678,                                                    │   │
+│   │      transaction_hash: 0xabcd...,                                               │   │
+│   │  }                                                                              │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────────────────────────┬────┘
                                                                                      │
-               ┌─────────────────────────────────────────────────────────────────────┤
-               │                                                                     │
-               ▼                                                                     ▼
-┌──────────────────────────────────┐                    ┌────────────────────────────────┐
-│         GCS (Batch Storage)      │                    │          RELAYER               │
-│                                  │                    │                                │
-│  .cbor.zst with COSE-signed      │                    │  Receives sequencer signature  │
-│  withdrawal message              │                    │  immediately for Bridge init   │
-└──────────────┬───────────────────┘                    └───────────────┬────────────────┘
-               │                                                        │
-               │ Validator fetches batch                                │ Bridge.initializeMessage()
-               ▼                                                        ▼
+                  MessageHandler.handle_event(log)                                   │
+                                                                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                            VALIDATOR (Bridge Signer mode)                               │
+│                            APPLICATION (App TEE)                                        │
 │                                                                                         │
-│   1. Fetch batch containing withdrawal                                                  │
-│   2. Verify sequencer COSE signature                                                    │
-│   3. Apply withdrawal to replica DB                                                     │
-│   4. BridgeSigner creates EIP-191 signature over messageId                              │
-│   5. Store in SignatureStore                                                            │
-└───────────────────────────┬─────────────────────────────────────────────────────────────┘
-                            │
-                            │ Relayer polls GET /pending, GET /signature/{id}
-                            ▼
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  DepositHandler (implements MessageHandler)                                     │   │
+│   │                                                                                 │   │
+│   │  async fn handle_event(&self, log: &Log) -> Result<bool> {                      │   │
+│   │      // 1. Decode event data                                                    │   │
+│   │      let (from, to, amount, data) = decode_deposit_event(log)?;                 │   │
+│   │                                                                                 │   │
+│   │      // 2. Credit user in application database                                  │   │
+│   │      conn.execute(                                                              │   │
+│   │          "INSERT INTO balances (user, amount) VALUES (?, ?)                     │   │
+│   │           ON CONFLICT(user) DO UPDATE SET amount = amount + ?",                 │   │
+│   │          (to, amount, amount)                                                   │   │
+│   │      )?;                                                                        │   │
+│   │                                                                                 │   │
+│   │      // 3. Record deposit for audit trail                                       │   │
+│   │      conn.execute(                                                              │   │
+│   │          "INSERT INTO deposits (tx_hash, from_addr, to_addr, amount, block)     │   │
+│   │           VALUES (?, ?, ?, ?, ?)",                                              │   │
+│   │          (log.transaction_hash, from, to, amount, log.block_number)             │   │
+│   │      )?;                                                                        │   │
+│   │                                                                                 │   │
+│   │      Ok(true)  // Event handled successfully                                    │   │
+│   │  }                                                                              │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│   SQLite Session Extension captures changes automatically                               │
+└────────────────────────────────────────────────────────────────────────────────────┬────┘
+                                                                                     │
+                  Changeset captured → Core Data Flow (Section 1)                    │
+                                                                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                            RELAYER                                                      │
+│                            synddb-client → Sequencer → GCS → Validator                  │
 │                                                                                         │
-│   Collects validator signatures, submits to Bridge:                                     │
-│   - Bridge.signMessageWithSignature(messageId, validatorSig) for each                   │
-│   - Bridge.handleMessage(messageId) to execute                                          │
-└───────────────────────────┬─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                            BRIDGE CONTRACT                                              │
-│                                                                                         │
-│   Executes withdrawal:                                                                  │
-│   - Unwraps WETH if nativeTokenAmount > 0                                               │
-│   - Transfers ETH/tokens to recipient                                                   │
-│   - Emits MessageHandled(messageId, true)                                               │
+│   The deposit-triggered state change now follows the standard outbound flow:            │
+│   - Client batches changeset                                                            │
+│   - Sequencer signs and sequences                                                       │
+│   - Batch published to GCS                                                              │
+│   - Validator syncs and replicates state                                                │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Validator Signature API
+### Inbound Message Types
 
-**GET /pending** - List pending withdrawal message IDs
-```json
-{
-  "count": 2,
-  "message_ids": [
-    "0x772d313233...",
-    "0x772d343536..."
-  ]
+| Event | Description | Handler Action |
+|-------|-------------|----------------|
+| `Deposit(from, to, amount, data)` | User deposited ETH/tokens | Credit user balance |
+| `NativeTokenWrapped(sender, amount)` | ETH wrapped to WETH | Track bridge liquidity |
+| `KeyRegistered(keyType, publicKey)` | New TEE key registered | Update authorized signers |
+| `MessageHandled(messageId, success)` | Outbound message executed | Mark withdrawal complete |
+
+### Chain Monitor Configuration
+
+```rust
+pub struct ChainMonitorConfig {
+    pub ws_urls: Vec<String>,           // WebSocket RPC endpoints
+    pub contract_address: Address,       // Bridge contract to monitor
+    pub start_block: u64,               // Block to start from
+    pub confirmation_blocks: u64,        // Blocks to wait before processing
+    pub event_signatures: Vec<B256>,     // Filter specific events (optional)
+    pub reconnect_interval: Duration,    // WebSocket reconnect delay
 }
 ```
 
-**GET /signature/{message_id}** - Get specific signature
-```json
-{
-  "message_id": "0x772d3132332d616263000000000000000000000000000000000000000000000000",
-  "signature": "0x...<65 bytes r||s||v>...",
-  "signer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-  "signed_at": 1700000000
-}
-```
+### MessageHandler Trait
 
-**GET /info** - Signer information
-```json
-{
-  "signer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-  "bridge_contract": "0x1234567890abcdef1234567890abcdef12345678",
-  "chain_id": 84532
+```rust
+#[async_trait]
+pub trait MessageHandler: Send + Sync {
+    /// Process an event log, return true if handled
+    async fn handle_event(&self, log: &Log) -> Result<bool>;
+
+    /// Event signature to filter (None = all events)
+    fn event_signature(&self) -> Option<B256>;
+
+    /// Called when monitor starts
+    async fn on_start(&self) -> Result<()>;
+
+    /// Called when monitor stops
+    async fn on_stop(&self) -> Result<()>;
 }
 ```
 
@@ -1106,6 +1139,8 @@ pub struct MessageSignature {
 
 ## 11. Chain Monitor → Application Data Flow
 
+> **See also**: Section 3.1 for the complete inbound message flow diagram showing how blockchain events flow through the Chain Monitor into the application and then into the SyndDB replication pipeline.
+
 ### 11.1 Blockchain Events
 
 **Origin**: Blockchain (via WebSocket RPC)
@@ -1315,14 +1350,17 @@ In **CBOR**: Binary fields are raw bytes (major type 2)
 
 ## 15. Complete Flow Example
 
-### Deposit → Withdrawal Round Trip
+### Deposit (Inbound) → Application State → Withdrawal (Outbound)
 
+This example shows both directions of the data flow.
+
+**Part A: Inbound Flow (Deposit)**
 ```
 1. User deposits ETH to Bridge contract on L1
    ↓
 2. Bridge emits Deposit(from, to, amount, data) event
    ↓
-3. chain-monitor captures event via WebSocket
+3. chain-monitor captures event via WebSocket (Section 3.1)
    ↓
 4. DepositHandler.handle_event() processes deposit
    ↓
@@ -1330,49 +1368,53 @@ In **CBOR**: Binary fields are raw bytes (major type 2)
    ↓
 6. SQLite Session Extension captures changeset
    ↓
-7. synddb-client batches changeset, sends POST /changesets
+7. synddb-client batches changeset, sends POST /changesets (Section 1)
    ↓
 8. synddb-sequencer:
-   - Assigns sequence #42
+   - Assigns sequence number
    - Compresses with zstd
    - Signs with COSE/secp256k1
    - Returns SequenceResponse
    ↓
-9. Batcher groups messages 1-50 into batch
+9. Batcher groups messages into batch
    ↓
-10. Publisher uploads 000000000001_000000000050.cbor.zst to GCS
+10. Publisher uploads .cbor.zst to GCS
     ↓
 11. synddb-validator fetches batch from GCS
     ↓
-12. Validator verifies all signatures
+12. Validator verifies sequencer signature
     ↓
 13. Validator applies changesets to replica database
     ↓
+    User's deposit is now reflected in both app and validator state
+```
+
+**Part B: Outbound Flow (Withdrawal via Bridge)**
+```
 14. User requests withdrawal via application
     ↓
-15. Application calls synddb.submit_withdrawal()
+15. Application triggers bridge message (withdrawal is just one message type)
     ↓
-16. synddb-client sends POST /withdrawals
+16. Sequencer creates message with EIP-191 signature (Section 3)
     ↓
-17. synddb-sequencer:
-    - Sequences withdrawal
-    - Signs COSE message
-    - Also signs Bridge-compatible message
-    - Returns WithdrawalResponse with both signatures
+17. Parallel paths:
+    ├─► Batch to GCS (for validator sync)
+    └─► Sequencer signature to Relayer
     ↓
-18. Validator syncs withdrawal message
+18. Relayer calls Bridge.initializeMessage(messageId, target, payload, sig, amount)
     ↓
-19. Validator bridge_signer signs withdrawal attestation
+19. Validator syncs message, creates EIP-191 signature
     ↓
-20. Signature stored in SignatureStore
+20. Relayer polls validator GET /pending, GET /signature/{id}
     ↓
-21. Relayer polls GET /pending
+21. Relayer calls Bridge.signMessageWithSignature(messageId, validatorSig)
     ↓
-22. Relayer fetches GET /signature/{message_id}
+22. Once threshold met, Relayer calls Bridge.handleMessage(messageId)
     ↓
-23. Relayer submits signature to Bridge.processWithdrawal()
+23. Bridge executes: targetAddress.call{value: amount}(payload)
     ↓
-24. User receives ETH on L1
+24. For withdrawals: ETH transferred to recipient
+    For other messages: Target contract function executed
 ```
 
 ---
