@@ -7,7 +7,7 @@ Self-contained Terraform package for GCP Marketplace deployment.
 This package deploys SyndDB with:
 - **Sequencer**: Confidential Space VM for message ordering and signing
 - **Validator**: Confidential Space VM for state validation and sync
-- **Proof Service** (optional): Cloud Run with GPU for SP1 attestation proofs
+- **Proof Service** (optional): Cloud Run for SP1 attestation proofs
 - **Storage**: GCS bucket for batch storage
 - **Networking**: Private VPC with NAT for outbound access
 
@@ -15,8 +15,7 @@ This package deploys SyndDB with:
 
 1. GCP project with billing enabled
 2. Required APIs enabled (automated by this package)
-3. GPU quota in Cloud Run (if deploying proof service)
-4. Container images in Artifact Registry
+3. Container images in Artifact Registry
 
 ## Deployment
 
@@ -56,17 +55,23 @@ terraform apply
 | `validator_image` | Yes | Validator container image URI |
 | `gcs_bucket_name` | Yes | GCS bucket name for batch storage |
 | `enable_key_bootstrap` | No | Enable TEE key bootstrapping (default: false) |
-| `deploy_proof_service` | No | Deploy GPU proof service (default: false) |
+| `deploy_proof_service` | No | Deploy proof service (default: false) |
 
-### TEE Bootstrap Configuration
-
-When `enable_key_bootstrap = true`:
+### Bridge Configuration
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `tee_key_manager_address` | Yes | TeeKeyManager contract address |
-| `bootstrap_rpc_url` | Yes | Ethereum RPC endpoint |
-| `bootstrap_chain_id` | Yes | Chain ID for transactions |
+| `bridge_contract_address` | Yes | Bridge contract address (shared across all services) |
+| `bridge_chain_id` | Yes | Chain ID for the bridge contract |
+
+### TEE Bootstrap Configuration
+
+When `tee_bootstrap` is configured:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `relayer_url` | Yes | Relayer URL for key registration |
+| `rpc_url` | Yes | Ethereum RPC endpoint |
 | `attestation_audience` | Yes | Expected audience for attestation |
 | `proof_service_image` | Yes | Proof service container image |
 
@@ -98,7 +103,7 @@ When `enable_key_bootstrap = true`:
 │  └───────────────────────────────────────┘          │
 │                                                      │
 │  ┌───────────────┐                                  │
-│  │ Proof Service │ (Cloud Run GPU, optional)        │
+│  │ Proof Service │ (Cloud Run, optional)            │
 │  │   :8080       │                                  │
 │  └───────────────┘                                  │
 └─────────────────────────────────────────────────────┘

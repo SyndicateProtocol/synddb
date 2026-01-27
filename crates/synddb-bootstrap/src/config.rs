@@ -11,17 +11,21 @@ pub struct BootstrapConfig {
     #[arg(long, env = "ENABLE_KEY_BOOTSTRAP", default_value = "false")]
     pub enable_key_bootstrap: bool,
 
-    /// `TeeKeyManager` contract address
-    #[arg(long, env = "TEE_KEY_MANAGER_CONTRACT_ADDRESS")]
-    pub tee_key_manager_address: Option<String>,
+    /// Bridge contract address (for key registration)
+    #[arg(long, env = "BRIDGE_CONTRACT_ADDRESS")]
+    pub bridge_address: Option<String>,
 
-    /// RPC endpoint for submitting transactions
+    /// RPC endpoint for verifying key registration
     #[arg(long, env = "BOOTSTRAP_RPC_URL")]
     pub rpc_url: Option<String>,
 
-    /// Chain ID for contract interactions
+    /// Chain ID for EIP-712 signatures
     #[arg(long, env = "BOOTSTRAP_CHAIN_ID")]
     pub chain_id: Option<u64>,
+
+    /// Relayer URL for key registration (relayer pays gas)
+    #[arg(long, env = "RELAYER_URL")]
+    pub relayer_url: Option<String>,
 
     /// Proof generation mode
     #[arg(long, env = "SP1_PROVER_MODE", default_value = "service", value_enum)]
@@ -49,40 +53,26 @@ pub struct BootstrapConfig {
     #[arg(long, env = "PROOF_MAX_RETRIES", default_value = "3")]
     pub proof_max_retries: u32,
 
-    /// Maximum retries for transaction submission
-    #[arg(long, env = "TX_MAX_RETRIES", default_value = "5")]
-    pub tx_max_retries: u32,
-
-    /// Minimum balance required for gas (in wei)
-    #[arg(long, env = "MIN_GAS_BALANCE", default_value = "10000000000000000")]
-    pub min_gas_balance: u128,
-
-    /// Gas treasury contract address (for automated funding)
-    #[arg(long, env = "GAS_TREASURY_CONTRACT_ADDRESS")]
-    pub gas_treasury_address: Option<String>,
-
-    /// Funding relayer URL (for signature-based funding requests)
-    #[arg(long, env = "FUNDING_RELAYER_URL")]
-    pub funding_relayer_url: Option<String>,
+    /// Maximum retries for relayer requests
+    #[arg(long, env = "RELAYER_MAX_RETRIES", default_value = "3")]
+    pub relayer_max_retries: u32,
 }
 
 impl Default for BootstrapConfig {
     fn default() -> Self {
         Self {
             enable_key_bootstrap: false,
-            tee_key_manager_address: None,
+            bridge_address: None,
             rpc_url: None,
             chain_id: None,
+            relayer_url: None,
             prover_mode: ProverMode::Service,
             proof_service_url: None,
             attestation_audience: None,
             proof_timeout: Duration::from_secs(600),
             bootstrap_timeout: Duration::from_secs(900),
             proof_max_retries: 3,
-            tx_max_retries: 5,
-            min_gas_balance: 10_000_000_000_000_000, // 0.01 ETH
-            gas_treasury_address: None,
-            funding_relayer_url: None,
+            relayer_max_retries: 3,
         }
     }
 }
@@ -94,9 +84,9 @@ impl BootstrapConfig {
             return Ok(());
         }
 
-        if self.tee_key_manager_address.is_none() {
+        if self.bridge_address.is_none() {
             return Err(crate::BootstrapError::Config(
-                "TEE_KEY_MANAGER_CONTRACT_ADDRESS is required when bootstrap is enabled".into(),
+                "BRIDGE_CONTRACT_ADDRESS is required when bootstrap is enabled".into(),
             ));
         }
 
@@ -109,6 +99,12 @@ impl BootstrapConfig {
         if self.chain_id.is_none() {
             return Err(crate::BootstrapError::Config(
                 "BOOTSTRAP_CHAIN_ID is required when bootstrap is enabled".into(),
+            ));
+        }
+
+        if self.relayer_url.is_none() {
+            return Err(crate::BootstrapError::Config(
+                "RELAYER_URL is required when bootstrap is enabled".into(),
             ));
         }
 
@@ -126,7 +122,7 @@ impl BootstrapConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum ProverMode {
-    /// Use self-hosted GPU proof service
+    /// Use self-hosted proof service
     #[default]
     Service,
     /// Use mock prover for testing (no real proof)
@@ -151,9 +147,22 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_missing_contract() {
+    fn test_validate_missing_bridge() {
         let config = BootstrapConfig {
             enable_key_bootstrap: true,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_missing_relayer() {
+        let config = BootstrapConfig {
+            enable_key_bootstrap: true,
+            bridge_address: Some("0x1234567890123456789012345678901234567890".into()),
+            rpc_url: Some("http://localhost:8545".into()),
+            chain_id: Some(1),
+            proof_service_url: Some("http://localhost:8080".into()),
             ..Default::default()
         };
         assert!(config.validate().is_err());

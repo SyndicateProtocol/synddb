@@ -13,7 +13,7 @@
 #   1 = Assertions failed
 #
 # Build optimization:
-#   All services use a single multi-stage Dockerfile (docker/Dockerfile).
+#   All services use a single multi-stage Dockerfile (docker/local.Dockerfile).
 #   Docker BuildKit builds the shared 'builder' stage once and reuses it
 #   for all service targets, reducing build time by ~4x.
 
@@ -21,7 +21,7 @@ services:
   sequencer:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: sequencer
     environment:
       RUST_LOG: info
@@ -42,7 +42,7 @@ services:
   validator:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: validator
     environment:
       RUST_LOG: info
@@ -67,7 +67,7 @@ services:
   validator2:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: validator
     environment:
       RUST_LOG: info
@@ -92,7 +92,7 @@ services:
   customer_app:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: customer-app
     environment:
       RUST_LOG: info
@@ -108,7 +108,7 @@ services:
   e2e_assertions:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: e2e
     environment:
       RUST_LOG: info

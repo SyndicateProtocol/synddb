@@ -1,8 +1,12 @@
 name: Performance Benchmarks
 
+# COST OPTIMIZATION:
+# Benchmarks are expensive (~30 min). On PRs, they only run when the
+# 'run-benchmarks' label is added. On main pushes, they always run.
+
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review] # Run on all non-draft PRs
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - "crates/**"
       - "Cargo.toml"
@@ -30,7 +34,13 @@ env:
 
 jobs:
   benchmarks:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    # On PRs: only run if 'run-benchmarks' label is present
+    # On main pushes: always run
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.draft == false &&
+       contains(github.event.pull_request.labels.*.name, 'run-benchmarks'))
     name: Performance Benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -73,11 +83,11 @@ jobs:
             cargo run --package synddb-benchmark --release -- init --db "$db_name"
 
             if ! cargo run --package synddb-benchmark --release -- run --db "$db_name" --clean --rate 0 $mode_flags --batch-size $batch_size 2>&1 | tee "$log_file"; then
-              echo "❌ $mode_label benchmark failed!"
+              echo "::error::$mode_label benchmark failed!"
               cat "$log_file"
               exit 1
             fi
-            echo "✅ $mode_label benchmark completed"
+            echo "::notice::$mode_label benchmark completed"
           }
 
           # Extract rates and output to GitHub Actions
@@ -147,9 +157,9 @@ jobs:
           source /tmp/benchmark-helpers.sh
 
           if [ "${{ steps.cache-baseline.outputs.cache-hit }}" == "true" ]; then
-            echo "📦 Using cached baseline"
+            echo "Using cached baseline"
           else
-            echo "🆕 Using fresh baseline"
+            echo "Using fresh baseline"
           fi
 
           output_rates bench-baseline-simple.log simple "Baseline simple"
@@ -189,7 +199,7 @@ jobs:
           echo "Full mode sustained change: $CHANGE_FULL%"
 
           # Write summary
-          echo "## 📊 Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Simple Mode (Insert-Only)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -212,14 +222,14 @@ jobs:
           IS_REGRESSION_FULL=$(echo "$CHANGE_FULL < $THRESHOLD" | bc)
 
           if [ "$IS_REGRESSION_SIMPLE" -eq 1 ] || [ "$IS_REGRESSION_FULL" -eq 1 ]; then
-            echo "❌ PERFORMANCE REGRESSION DETECTED!"
+            echo "::error::PERFORMANCE REGRESSION DETECTED!"
             if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
               echo "Simple mode: ${CHANGE_SIMPLE}% (exceeds ${THRESHOLD}% threshold)"
             fi
             if [ "$IS_REGRESSION_FULL" -eq 1 ]; then
               echo "Full mode: ${CHANGE_FULL}% (exceeds ${THRESHOLD}% threshold)"
             fi
-            echo "### ❌ Performance Regression Detected" >> $GITHUB_STEP_SUMMARY
+            echo "### Performance Regression Detected" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             if [ "$IS_REGRESSION_SIMPLE" -eq 1 ]; then
               echo "**Simple mode** sustained rate decreased by **${CHANGE_SIMPLE}%** (threshold: ${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
@@ -229,14 +239,14 @@ jobs:
             fi
             exit 1
           elif [ $(echo "$CHANGE_SIMPLE < 0" | bc) -eq 1 ] || [ $(echo "$CHANGE_FULL < 0" | bc) -eq 1 ]; then
-            echo "⚠️  Minor performance decrease detected"
+            echo "Minor performance decrease detected"
             echo "This is within acceptable range (< ${THRESHOLD}%)."
-            echo "### ⚠️ Minor Performance Decrease" >> $GITHUB_STEP_SUMMARY
+            echo "### Minor Performance Decrease" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Changes are within acceptable range." >> $GITHUB_STEP_SUMMARY
           else
-            echo "✅ Performance improved or neutral!"
-            echo "### ✅ Performance Improvement" >> $GITHUB_STEP_SUMMARY
+            echo "Performance improved or neutral!"
+            echo "### Performance Improvement" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Both benchmarks show improvement or neutral performance!" >> $GITHUB_STEP_SUMMARY
           fi
@@ -251,3 +261,19 @@ jobs:
             bench-current-*.db
             bench-baseline-*.log
             bench-baseline-*.db
+
+  # Provide instructions when benchmarks are skipped on PRs
+  benchmark-skip-notice:
+    if: |
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'run-benchmarks')
+    name: Benchmarks Skipped
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notice
+        run: |
+          echo "## Benchmarks Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Performance benchmarks are opt-in for PRs to save CI resources." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To run benchmarks, add the \`run-benchmarks\` label to this PR." >> $GITHUB_STEP_SUMMARY

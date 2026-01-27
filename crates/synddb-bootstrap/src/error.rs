@@ -45,10 +45,6 @@ pub enum BootstrapError {
     #[error("Key verification failed: {0}")]
     KeyVerificationFailed(String),
 
-    /// Insufficient balance for gas
-    #[error("Insufficient balance: have {have} wei, need {need} wei")]
-    InsufficientBalance { have: u128, need: u128 },
-
     /// Configuration error
     #[error("Configuration error: {0}")]
     Config(String),
@@ -78,10 +74,5 @@ impl BootstrapError {
                 | Self::TransactionFailed(_)
                 | Self::TransactionConfirmationFailed(_)
         )
-    }
-
-    /// Whether this error indicates we should wait for external action
-    pub const fn requires_external_action(&self) -> bool {
-        matches!(self, Self::InsufficientBalance { .. })
     }
 }

@@ -209,19 +209,23 @@ pub struct SequencerConfig {
     #[arg(long, env = "ENABLE_KEY_BOOTSTRAP", default_value = "false")]
     pub enable_key_bootstrap: bool,
 
-    /// `TeeKeyManager` contract address for key registration
-    #[arg(long, env = "TEE_KEY_MANAGER_CONTRACT_ADDRESS")]
-    pub tee_key_manager_address: Option<String>,
+    /// Bridge contract address for key registration
+    #[arg(long, env = "BRIDGE_CONTRACT_ADDRESS")]
+    pub bridge_contract_address: Option<String>,
 
-    /// RPC URL for submitting bootstrap transactions
+    /// RPC URL for verifying key registration
     #[arg(long, env = "BOOTSTRAP_RPC_URL")]
     pub bootstrap_rpc_url: Option<String>,
 
-    /// Chain ID for bootstrap transactions
+    /// Chain ID for EIP-712 signatures
     #[arg(long, env = "BOOTSTRAP_CHAIN_ID")]
     pub bootstrap_chain_id: Option<u64>,
 
-    /// URL of the GPU proof service for generating SP1 proofs
+    /// Relayer URL for key registration (relayer pays gas)
+    #[arg(long, env = "RELAYER_URL")]
+    pub relayer_url: Option<String>,
+
+    /// URL of the proof service for generating SP1 proofs
     #[arg(long, env = "PROOF_SERVICE_URL")]
     pub proof_service_url: Option<String>,
 
@@ -238,14 +242,6 @@ pub struct SequencerConfig {
     #[arg(long, env = "BOOTSTRAP_TIMEOUT", default_value = "900s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub bootstrap_timeout: Duration,
-
-    /// Minimum balance required for bootstrap gas (in wei)
-    #[arg(
-        long,
-        env = "MIN_BOOTSTRAP_BALANCE",
-        default_value = "100000000000000000"
-    )]
-    pub min_bootstrap_balance: u128,
 }
 
 impl SequencerConfig {
@@ -257,10 +253,9 @@ impl SequencerConfig {
             return Ok(());
         }
 
-        if self.tee_key_manager_address.is_none() {
+        if self.bridge_contract_address.is_none() {
             return Err(
-                "TEE_KEY_MANAGER_CONTRACT_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true"
-                    .into(),
+                "BRIDGE_CONTRACT_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true".into(),
             );
         }
         if self.bootstrap_rpc_url.is_none() {
@@ -268,6 +263,9 @@ impl SequencerConfig {
         }
         if self.bootstrap_chain_id.is_none() {
             return Err("BOOTSTRAP_CHAIN_ID is required when ENABLE_KEY_BOOTSTRAP=true".into());
+        }
+        if self.relayer_url.is_none() {
+            return Err("RELAYER_URL is required when ENABLE_KEY_BOOTSTRAP=true".into());
         }
         if self.proof_service_url.is_none() {
             return Err("PROOF_SERVICE_URL is required when ENABLE_KEY_BOOTSTRAP=true".into());

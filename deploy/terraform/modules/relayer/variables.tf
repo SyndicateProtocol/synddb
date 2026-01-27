@@ -36,38 +36,21 @@ variable "chain_id" {
   type        = number
 }
 
-variable "key_manager_address" {
-  description = "TeeKeyManager contract address"
-  type        = string
-}
-
-variable "treasury_address" {
-  description = "GasTreasury contract address"
+variable "bridge_address" {
+  description = "Bridge contract address (for key registration)"
   type        = string
 }
 
 # Application Configuration
-variable "required_audience_hash" {
-  description = "Audience hash that identifies the application (from TEE attestation)"
+variable "required_audience" {
+  description = "Audience string that identifies the application (e.g., https://example.com/app)"
   type        = string
 }
 
 variable "allowed_image_digests" {
-  description = "List of allowed TEE image digests that can be funded"
+  description = "List of allowed TEE image digests for key registration"
   type        = list(string)
   default     = []
-}
-
-variable "max_funding_per_digest_daily" {
-  description = "Maximum total funding per image digest per day (in wei)"
-  type        = string
-  default     = "1000000000000000000" # 1 ETH
-}
-
-variable "max_funding_per_address" {
-  description = "Maximum funding per address (in wei)"
-  type        = string
-  default     = "50000000000000000" # 0.05 ETH
 }
 
 # Secret Configuration
@@ -157,4 +140,10 @@ variable "labels" {
   description = "Labels to apply"
   type        = map(string)
   default     = {}
+}
+
+variable "deletion_protection" {
+  description = "Enable deletion protection for the Cloud Run service"
+  type        = bool
+  default     = true
 }

@@ -20,6 +20,18 @@ contract MockSP1Verifier {
     }
 }
 
+/// @notice Mock P256 precompile that always returns success (1)
+/// @dev Used for testing since Foundry doesn't have RIP-7212 precompile
+contract MockP256Precompile {
+    fallback() external {
+        // Always return 1 (success) as a 32-byte value
+        assembly {
+            mstore(0, 1)
+            return(0, 32)
+        }
+    }
+}
+
 /**
  * @title AttestationVerifierTest
  * @notice Comprehensive test suite for TEE attestation verification
@@ -45,9 +57,16 @@ contract AttestationVerifierTest is Test {
     event TrustedJwkHashRemoved(bytes32 indexed jwkHash);
     event ImageDigestHashUpdated(bytes32 oldHash, bytes32 newHash);
 
+    // RIP-7212 P256 precompile address
+    address constant P256_VERIFIER = 0x0000000000000000000000000000000000000100;
+
     function setUp() public {
         admin = address(this);
         weth = makeAddr("weth");
+
+        // Deploy mock P256 precompile at the RIP-7212 address
+        MockP256Precompile mockP256 = new MockP256Precompile();
+        vm.etch(P256_VERIFIER, address(mockP256).code);
 
         sp1Verifier = new MockSP1Verifier();
 
@@ -58,7 +77,16 @@ contract AttestationVerifierTest is Test {
         // Deploy bridge and connect to key manager
         bridge = new Bridge(admin, weth, address(keyManager));
         keyManager.setBridge(address(bridge));
+
+        // Add trusted cosign pubkey for tests
+        verifier.addTrustedCosignPubkey(COSIGN_PUBKEY_X, COSIGN_PUBKEY_Y);
     }
+
+    // Test cosign key coordinates (dummy values for testing)
+    bytes32 public constant COSIGN_PUBKEY_X = 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef;
+    bytes32 public constant COSIGN_PUBKEY_Y = 0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321;
+    bytes32 public constant COSIGN_SIG_R = 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;
+    bytes32 public constant COSIGN_SIG_S = 0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb;
 
     function createValidPublicValues() internal view returns (PublicValuesStruct memory) {
         return PublicValuesStruct({
@@ -69,7 +97,11 @@ contract AttestationVerifierTest is Test {
             tee_signing_key: TEE_SIGNING_KEY,
             secboot: true,
             dbgstat_disabled: true,
-            audience_hash: keccak256("https://synddb-sequencer.example.com")
+            audience_hash: keccak256("https://synddb-sequencer.example.com"),
+            cosign_signature_r: COSIGN_SIG_R,
+            cosign_signature_s: COSIGN_SIG_S,
+            cosign_pubkey_x: COSIGN_PUBKEY_X,
+            cosign_pubkey_y: COSIGN_PUBKEY_Y
         });
     }
 

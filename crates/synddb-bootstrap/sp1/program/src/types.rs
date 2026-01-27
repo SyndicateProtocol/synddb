@@ -26,5 +26,14 @@ sol! {
         bool dbgstat_disabled;
         /// Audience hash (keccak256 of audience string)
         bytes32 audience_hash;
+        /// Cosign signature R component (P-256 / secp256r1)
+        /// Signature is over the raw image digest bytes (32 bytes)
+        bytes32 cosign_signature_r;
+        /// Cosign signature S component (P-256 / secp256r1)
+        bytes32 cosign_signature_s;
+        /// Cosign public key X coordinate (P-256 / secp256r1)
+        bytes32 cosign_pubkey_x;
+        /// Cosign public key Y coordinate (P-256 / secp256r1)
+        bytes32 cosign_pubkey_y;
     }
 }

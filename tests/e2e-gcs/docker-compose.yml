@@ -60,7 +60,7 @@ services:
   sequencer:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: sequencer
     environment:
       RUST_LOG: info,synddb_sequencer=debug,google_cloud_storage=debug,reqwest=debug
@@ -84,7 +84,7 @@ services:
   validator:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: validator
     environment:
       RUST_LOG: info,synddb_validator=debug,google_cloud_storage=debug
@@ -114,7 +114,7 @@ services:
   validator2:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: validator
     environment:
       RUST_LOG: info,synddb_validator=debug,google_cloud_storage=debug
@@ -144,7 +144,7 @@ services:
   customer_app:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: customer-app
     environment:
       RUST_LOG: info
@@ -159,7 +159,7 @@ services:
   e2e_assertions:
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: e2e
     environment:
       RUST_LOG: info
