@@ -1,0 +1,49 @@
+[package]
+name = "synddb-e2e-fuzzer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "End-to-end fuzzer for SyndDB replication pipeline"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Internal crates
+synddb-sequencer = { path = "../synddb-sequencer" }
+synddb-validator = { path = "../synddb-validator" }
+synddb-shared = { path = "../synddb-shared" }
+synddb-fuzzer = { path = "../synddb-fuzzer" }
+
+# Database
+rusqlite = { workspace = true }
+
+# Property-based testing
+proptest = "1.5"
+
+# Random generation
+rand = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+
+# Cryptography
+alloy = { workspace = true, features = ["signers"] }
+
+# Serialization
+ciborium = { workspace = true }
+zstd = { workspace = true }
+hex = { workspace = true }
+
+# Utils
+tempfile = "3"
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+test-log = { version = "0.2", features = ["trace"] }

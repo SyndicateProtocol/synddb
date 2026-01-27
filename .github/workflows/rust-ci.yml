@@ -125,6 +125,11 @@ jobs:
           cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/Cargo.toml
           cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
 
+      - name: Check documentation builds
+        run: cargo doc --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
   test:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Tests
@@ -174,8 +179,133 @@ jobs:
       - name: Build stress test
         run: cargo build --package synddb-benchmark --bin session-stress-test --release
 
+      - name: Build sequencer
+        run: cargo build --package synddb-sequencer --release
+
+      - name: Start sequencer
+        run: |
+          ./target/release/synddb-sequencer &
+          echo $! > /tmp/sequencer.pid
+          # Wait for sequencer to be healthy
+          for i in {1..30}; do
+            if curl -s http://localhost:8433/health > /dev/null 2>&1; then
+              echo "Sequencer is healthy"
+              break
+            fi
+            echo "Waiting for sequencer... ($i/30)"
+            sleep 1
+          done
+        env:
+          # Test signing key (anvil account 0)
+          SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+
       - name: Run session stress test
         run: |
           ./target/release/session-stress-test --duration 15
         env:
           RUST_LOG: info
+
+      - name: Stop sequencer
+        if: always()
+        run: |
+          if [ -f /tmp/sequencer.pid ]; then
+            kill $(cat /tmp/sequencer.pid) || true
+          fi
+
+  client-integration:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Client Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build sequencer
+        run: cargo build --package synddb-sequencer --release
+
+      - name: Start sequencer
+        run: |
+          ./target/release/synddb-sequencer &
+          echo $! > /tmp/sequencer.pid
+          # Wait for sequencer to be healthy
+          for i in {1..30}; do
+            if curl -s http://localhost:8433/health > /dev/null 2>&1; then
+              echo "Sequencer is healthy"
+              break
+            fi
+            echo "Waiting for sequencer... ($i/30)"
+            sleep 1
+          done
+        env:
+          # Test signing key (anvil account 0)
+          SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+
+      - name: Run client integration tests
+        run: cargo test -p synddb-client --lib -- --ignored --skip attestation
+        env:
+          RUST_LOG: info
+
+      - name: Stop sequencer
+        if: always()
+        run: |
+          if [ -f /tmp/sequencer.pid ]; then
+            kill $(cat /tmp/sequencer.pid) || true
+          fi
+
+  fuzzer:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: SQLite Fuzzer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run fuzzer tests
+        run: cargo test -p synddb-fuzzer --release
+        env:
+          # Run more proptest iterations in CI
+          PROPTEST_CASES: "256"
+
+  e2e-fuzzer:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: E2E Pipeline Fuzzer
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run E2E fuzzer tests
+        run: cargo test -p synddb-e2e-fuzzer --release
+        env:
+          # Run proptest iterations in CI
+          PROPTEST_CASES: "100"
+
+      - name: Run E2E stress tests
+        run: cargo test -p synddb-e2e-fuzzer --release -- --ignored
+        env:
+          # Fewer iterations for expensive stress tests
+          PROPTEST_CASES: "10"

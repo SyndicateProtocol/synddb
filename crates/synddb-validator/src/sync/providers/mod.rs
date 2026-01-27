@@ -2,9 +2,9 @@
 //!
 //! # Implemented Fetchers
 //!
-//! - [`HttpFetcher`] - HTTP fetcher for sequencer's local storage API
-//! - [`GcsFetcher`] - Google Cloud Storage
-//! - [`MockFetcher`] - In-memory mock for testing
+//! - [`http::HttpFetcher`] - HTTP fetcher for sequencer's local storage API
+//! - [`gcs::GcsFetcher`] - Google Cloud Storage
+//! - [`mock::MockFetcher`] - In-memory mock for testing
 
 pub mod gcs;
 pub mod http;
