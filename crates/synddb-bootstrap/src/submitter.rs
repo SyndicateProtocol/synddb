@@ -20,8 +20,8 @@ sol! {
 
     #[sol(rpc)]
     interface ITeeKeyManager {
-        function isSequencerKeyValid(address publicKey) external view returns (bool);
-        function isValidatorKeyValid(address publicKey) external view returns (bool);
+        /// `KeyType` enum: 0 = Sequencer, 1 = Validator
+        function isKeyValid(uint8 keyType, address publicKey) external view returns (bool);
     }
 }
 
@@ -88,7 +88,8 @@ impl ContractSubmitter {
         let tee_key_manager_address = self.fetch_tee_key_manager_address(&provider).await?;
         let contract = ITeeKeyManager::new(tee_key_manager_address, &provider);
 
-        match contract.isSequencerKeyValid(address).call().await {
+        // KeyType::Sequencer = 0
+        match contract.isKeyValid(0, address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
                 if is_invalid_public_key_error(&e.to_string()) {
@@ -110,7 +111,8 @@ impl ContractSubmitter {
         let tee_key_manager_address = self.fetch_tee_key_manager_address(&provider).await?;
         let contract = ITeeKeyManager::new(tee_key_manager_address, &provider);
 
-        match contract.isValidatorKeyValid(address).call().await {
+        // KeyType::Validator = 1
+        match contract.isKeyValid(1, address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
                 if is_invalid_public_key_error(&e.to_string()) {

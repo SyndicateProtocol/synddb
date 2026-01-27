@@ -176,11 +176,18 @@ The sequencer and validator automatically register their TEE keys on startup via
 # Get sequencer's signer address
 SIGNER=$(curl -s http://$SEQUENCER_IP:8433/status | jq -r '.signer_address')
 
-# Check if registered on-chain (via Bridge contract)
-cast call \
+# Get TeeKeyManager address from Bridge
+TEE_KEY_MANAGER=$(cast call \
     --rpc-url https://sepolia.base.org \
     $BRIDGE_CONTRACT_ADDRESS \
-    "isSequencerKeyValid(address)(bool)" \
+    "teeKeyManager()(address)")
+
+# Check if sequencer key is registered (KeyType: 0 = Sequencer, 1 = Validator)
+cast call \
+    --rpc-url https://sepolia.base.org \
+    $TEE_KEY_MANAGER \
+    "isKeyValid(uint8,address)(bool)" \
+    0 \
     $SIGNER
 ```
 

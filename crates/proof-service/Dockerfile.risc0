@@ -55,7 +55,11 @@ COPY . .
 # Build the proof service with CUDA support
 # The proof-service's build.rs uses risc0-build::embed_methods() which compiles
 # the guest program for the riscv32im-risc0-zkvm-elf target automatically.
-# build.rs also extracts the image ID to risc0_image_id.txt for CI/deployment.
+#
+# CRITICAL: The imageId (hash of guest ELF) must come from THIS build, not a separate
+# CI runner build. Different environments produce different ELFs = different imageIds.
+# build.rs extracts the imageId to risc0_image_id.txt so CI can read it without running
+# the binary (which requires libcuda.so.1 from a GPU host).
 # Target L4 GPU (Ada Lovelace, compute 8.9). The build doesn't have a GPU present
 # so -arch=native fails - we must specify the target explicitly.
 # Also include sm_80 (Ampere A100) for compatibility with other GPU types.

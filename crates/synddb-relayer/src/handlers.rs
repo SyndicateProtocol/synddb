@@ -120,16 +120,16 @@ pub(crate) async fn register_key(
         }
     };
 
-    // Check image digest is in application's allowlist (empty list = allow all for staging)
+    // Check image digest hash is in application's allowlist (empty list = allow all for staging)
     let image_allowed = app_config.allowed_image_digests.is_empty()
         || app_config
             .allowed_image_digests
-            .contains(&attestation.image_digest);
+            .contains(&attestation.image_digest_hash);
     if !image_allowed {
         warn!(
-            image_digest = %attestation.image_digest,
+            image_digest_hash = %attestation.image_digest_hash,
             audience_hash = %attestation.audience_hash,
-            "Rejected: image digest not in application's allowlist"
+            "Rejected: image digest hash not in application's allowlist"
         );
         return (
             StatusCode::FORBIDDEN,
@@ -185,7 +185,7 @@ pub(crate) async fn register_key(
     info!(
         tee_key = %attestation.tee_signing_key,
         key_type = ?request.key_type,
-        image_digest = %attestation.image_digest,
+        image_digest_hash = %attestation.image_digest_hash,
         audience_hash = %attestation.audience_hash,
         "Processing key registration request"
     );
@@ -353,7 +353,8 @@ pub(crate) async fn register_key(
 
 /// Extracted attestation fields from public values
 struct AttestationFields {
-    image_digest: B256,
+    /// keccak256 hash of the image digest string (e.g., keccak256("sha256:abc..."))
+    image_digest_hash: B256,
     audience_hash: B256,
     tee_signing_key: alloy::primitives::Address,
 }
@@ -394,7 +395,7 @@ fn extract_attestation_fields(public_values: &[u8]) -> Option<AttestationFields>
     let audience_hash: [u8; 32] = public_values[224..256].try_into().ok()?;
 
     Some(AttestationFields {
-        image_digest: B256::from(image_digest),
+        image_digest_hash: B256::from(image_digest),
         tee_signing_key: alloy::primitives::Address::from(tee_signing_key),
         audience_hash: B256::from(audience_hash),
     })
@@ -410,8 +411,8 @@ mod tests {
         let mut public_values = vec![0u8; 352];
 
         // Slot 3 (bytes 96-128): image_digest_hash
-        let expected_digest = B256::from([0xAB; 32]);
-        public_values[96..128].copy_from_slice(expected_digest.as_slice());
+        let expected_digest_hash = B256::from([0xAB; 32]);
+        public_values[96..128].copy_from_slice(expected_digest_hash.as_slice());
 
         // Slot 4 (bytes 128-160): tee_signing_key (address is right-aligned, bytes 140-160)
         let expected_key = alloy::primitives::Address::from([0xCD; 20]);
@@ -425,7 +426,7 @@ mod tests {
         assert!(extracted.is_some());
 
         let fields = extracted.unwrap();
-        assert_eq!(fields.image_digest, expected_digest);
+        assert_eq!(fields.image_digest_hash, expected_digest_hash);
         assert_eq!(fields.tee_signing_key, expected_key);
         assert_eq!(fields.audience_hash, expected_audience);
     }

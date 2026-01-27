@@ -192,6 +192,35 @@ Key settings:
 
 4. **Image Signature Verification**: The image signature is embedded in the proof and verified on-chain using ecrecover. The on-chain contract maintains a registry of trusted signer addresses.
 
+## ImageId and Build Determinism
+
+The RISC Zero `imageId` is a hash of the compiled guest ELF. **The imageId used on-chain must match the imageId embedded in the deployed binary exactly.**
+
+### Why Build-Time Extraction?
+
+The guest ELF is compiled inside the Docker container during `cargo build`. If you build separately on the CI runner, different build environments produce different ELF binaries → different imageIds → proof verification fails on-chain.
+
+### CUDA Stubs
+
+The binary is linked against CUDA and requires `libcuda.so.1` to start. This library is the CUDA driver provided by the host via `--gpus`, not bundled in images. CI has no GPU.
+
+**Solution**: Extract the imageId during Docker build using CUDA stubs:
+
+```dockerfile
+# In builder stage (nvidia/cuda:12.2.0-devel has stubs at /usr/local/cuda/lib64/stubs/)
+# build.rs writes imageId to risc0_image_id.txt during cargo build
+```
+
+CI then reads `/app/risc0_image_id.txt` from the built image instead of running the binary.
+
+### Debugging Verification Failures
+
+If proofs verify locally but fail on-chain with `VerificationFailed()`:
+
+1. Check the on-chain contract's imageId matches the deployed proof-service
+2. Verify the imageId in GCP Artifact Registry OCI artifact matches
+3. Ensure no separate build generated a different imageId
+
 ## Development
 
 ### Prerequisites

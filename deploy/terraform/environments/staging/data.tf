@@ -279,7 +279,7 @@ locals {
     # For now use the signer from the signature artifact
     # This could be extended to support multiple signers
     jsondecode(data.external.sequencer_signature[0].result.signature != "" ?
-      "{\"signer\": \"${var.trusted_image_signer}\"}" : "{}")["signer"],
+    "{\"signer\": \"${var.trusted_image_signer}\"}" : "{}")["signer"],
     var.trusted_image_signer
   ) : var.trusted_image_signer
 }

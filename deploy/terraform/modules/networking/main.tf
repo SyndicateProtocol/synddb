@@ -101,3 +101,35 @@ resource "google_compute_router_nat" "synddb" {
     filter = "ERRORS_ONLY"
   }
 }
+
+# Static internal IPs for services
+# These persist across VM recreation, ensuring dependent services always have a stable address.
+# Note: Currently supports single instances only. For multiple instances (e.g., multiple
+# validators), add count/for_each here and update the service modules accordingly.
+
+resource "google_compute_address" "sequencer" {
+  name         = "${var.name_prefix}-sequencer-ip"
+  project      = var.project_id
+  region       = var.region
+  address_type = "INTERNAL"
+  subnetwork   = google_compute_subnetwork.synddb.id
+  purpose      = "GCE_ENDPOINT"
+}
+
+resource "google_compute_address" "validator" {
+  name         = "${var.name_prefix}-validator-ip"
+  project      = var.project_id
+  region       = var.region
+  address_type = "INTERNAL"
+  subnetwork   = google_compute_subnetwork.synddb.id
+  purpose      = "GCE_ENDPOINT"
+}
+
+resource "google_compute_address" "price_oracle" {
+  name         = "${var.name_prefix}-price-oracle-ip"
+  project      = var.project_id
+  region       = var.region
+  address_type = "INTERNAL"
+  subnetwork   = google_compute_subnetwork.synddb.id
+  purpose      = "GCE_ENDPOINT"
+}

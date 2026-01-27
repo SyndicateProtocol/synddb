@@ -27,3 +27,18 @@ output "subnet_name" {
   description = "Name of the subnet"
   value       = google_compute_subnetwork.synddb.name
 }
+
+output "sequencer_static_ip" {
+  description = "Static internal IP address for the sequencer"
+  value       = google_compute_address.sequencer.address
+}
+
+output "validator_static_ip" {
+  description = "Static internal IP address for the validator"
+  value       = google_compute_address.validator.address
+}
+
+output "price_oracle_static_ip" {
+  description = "Static internal IP address for the price oracle"
+  value       = google_compute_address.price_oracle.address
+}

@@ -65,7 +65,7 @@ module "storage" {
   project_id    = var.project_id
   bucket_name   = var.gcs_bucket_name
   location      = var.region
-  force_destroy = true  # Allow bucket deletion in staging
+  force_destroy = true # Allow bucket deletion in staging
   labels        = var.labels
 
   depends_on = [google_project_service.apis]
@@ -75,9 +75,9 @@ module "storage" {
 module "iam" {
   source = "../../modules/iam"
 
-  project_id                   = var.project_id
-  name_prefix                  = "synddb-staging"
-  gcs_bucket_name              = module.storage.bucket_name
+  project_id                    = var.project_id
+  name_prefix                   = "synddb-staging"
+  gcs_bucket_name               = module.storage.bucket_name
   artifact_registry_location    = var.artifact_registry_location
   artifact_registry_repository  = var.artifact_registry_repository
   app_artifact_registry_project = var.app_artifact_registry_project
@@ -97,14 +97,14 @@ module "proof_service" {
   service_account_email = module.iam.proof_service_account_email
   ingress               = "internal"
   allow_unauthenticated = false
-  min_instances         = 0  # Scale to zero when idle
+  min_instances         = 0 # Scale to zero when idle
   max_instances         = 1
   # RISC Zero GPU proving requires 8 CPU and 32GB memory with L4 GPU
-  enable_gpu            = true
-  gpu_type              = "nvidia-l4"
-  cpu_limit             = "8"
-  memory_limit          = "32Gi"
-  labels                = var.labels
+  enable_gpu   = true
+  gpu_type     = "nvidia-l4"
+  cpu_limit    = "8"
+  memory_limit = "32Gi"
+  labels       = var.labels
 
   # Allow sequencer, validator, and price oracle to invoke the proof service
   invoker_service_accounts = [
@@ -125,6 +125,7 @@ module "sequencer" {
   name_prefix           = "synddb-staging"
   network_self_link     = module.networking.network_self_link
   subnet_self_link      = module.networking.subnet_self_link
+  static_internal_ip    = module.networking.sequencer_static_ip
   service_account_email = module.iam.sequencer_service_account_email
   container_image       = var.sequencer_image
   gcs_bucket            = module.storage.bucket_name
@@ -152,20 +153,21 @@ module "sequencer" {
 module "validator" {
   source = "../../modules/validator"
 
-  project_id            = var.project_id
-  zone                  = var.zone
-  name_prefix           = "synddb-staging"
-  network_self_link     = module.networking.network_self_link
-  subnet_self_link      = module.networking.subnet_self_link
-  service_account_email = module.iam.validator_service_account_email
-  container_image       = var.validator_image
-  gcs_bucket            = module.storage.bucket_name
-  sequencer_url         = "http://${module.sequencer.internal_ip}:8433"
-  machine_type          = var.validator_machine_type
-  enable_bridge_signer  = var.enable_bridge_signer
+  project_id              = var.project_id
+  zone                    = var.zone
+  name_prefix             = "synddb-staging"
+  network_self_link       = module.networking.network_self_link
+  subnet_self_link        = module.networking.subnet_self_link
+  static_internal_ip      = module.networking.validator_static_ip
+  service_account_email   = module.iam.validator_service_account_email
+  container_image         = var.validator_image
+  gcs_bucket              = module.storage.bucket_name
+  sequencer_url           = "http://${module.networking.sequencer_static_ip}:8433"
+  machine_type            = var.validator_machine_type
+  enable_bridge_signer    = var.enable_bridge_signer
   bridge_contract_address = var.bridge_contract_address
-  bridge_chain_id       = var.bridge_chain_id
-  labels                = var.labels
+  bridge_chain_id         = var.bridge_chain_id
+  labels                  = var.labels
 
   # TEE bootstrap (null = disabled, requires relayer to be deployed)
   # Image signature is fetched automatically from OCI artifact referrers
@@ -192,9 +194,10 @@ module "price_oracle" {
   name_prefix           = "synddb-staging"
   network_self_link     = module.networking.network_self_link
   subnet_self_link      = module.networking.subnet_self_link
+  static_internal_ip    = module.networking.price_oracle_static_ip
   service_account_email = module.iam.price_oracle_service_account_email
   container_image       = var.price_oracle_image
-  sequencer_url         = "http://${module.sequencer.internal_ip}:8433"
+  sequencer_url         = "http://${module.networking.sequencer_static_ip}:8433"
   machine_type          = var.price_oracle_machine_type
 
   # Price sources
@@ -246,8 +249,8 @@ module "relayer" {
   bridge_address = var.bridge_contract_address
 
   # Application configuration
-  required_audience      = var.relayer_config.required_audience
-  allowed_image_digests  = var.relayer_config.allowed_image_digests
+  required_audience     = var.relayer_config.required_audience
+  allowed_image_digests = var.relayer_config.allowed_image_digests
 
   # Secret (if empty, set manually in Secret Manager console)
   private_key = var.relayer_private_key
@@ -257,8 +260,9 @@ module "relayer" {
   allow_unauthenticated = false
   min_instances         = 0
   max_instances         = 2
-  deletion_protection   = false  # Allow destruction in staging
+  deletion_protection   = false # Allow destruction in staging
   labels                = var.labels
+  rust_log              = "debug" # Enable debug logging for troubleshooting
 
   # Allow sequencer, validator, and price oracle to invoke the relayer
   invoker_service_accounts = [
