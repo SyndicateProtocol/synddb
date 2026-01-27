@@ -46,5 +46,5 @@ clap = { version = "4.5.53", features = ["derive", "env"] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+serde-saphyr = { workspace = true }
 tracing-subscriber = { workspace = true }

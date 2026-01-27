@@ -65,4 +65,6 @@ pub mod http_api;
 pub mod http_errors;
 pub mod inbox;
 pub mod messages;
+pub mod metrics;
+pub mod request_id;
 pub mod transport;

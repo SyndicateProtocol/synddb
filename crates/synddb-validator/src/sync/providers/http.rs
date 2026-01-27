@@ -19,7 +19,7 @@ use synddb_shared::types::{
     cbor::batch::CborBatch,
     message::{SignedBatch, SignedMessage},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Response from the `/storage/latest` endpoint
 #[derive(Debug, Deserialize)]
@@ -148,7 +148,7 @@ impl StorageFetcher for HttpFetcher {
         if let Some(seq) = latest.sequence {
             debug!(sequence = seq, "Found latest sequence via HTTP");
         } else {
-            warn!("No messages found via HTTP");
+            debug!("No messages found via HTTP");
         }
 
         Ok(latest.sequence)

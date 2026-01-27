@@ -93,9 +93,13 @@ async fn main() -> Result<()> {
     registry.register(Box::new(price_rule));
     validator.set_rules(registry);
 
+    // Initialize metrics
+    let metrics_handle = synddb_shared::metrics::init_metrics();
+
     // Start HTTP server for health checks
     let app_state = AppState::new();
-    let http_handle = start_http_server(app_state.clone(), config.base.bind_address);
+    let http_handle =
+        start_http_server(app_state.clone(), config.base.bind_address, metrics_handle);
 
     // Start sync loop
     let sync_app_state = app_state.clone();
@@ -232,9 +236,10 @@ fn current_timestamp() -> u64 {
 fn start_http_server(
     app_state: AppState,
     bind_address: std::net::SocketAddr,
+    metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let router = create_router(app_state);
+        let router = create_router(app_state, metrics_handle);
         let listener = tokio::net::TcpListener::bind(bind_address)
             .await
             .expect("Failed to bind HTTP server");

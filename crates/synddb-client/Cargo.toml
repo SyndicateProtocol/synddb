@@ -26,6 +26,8 @@ humantime = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 hyperlocal = { workspace = true }
 hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
 ciborium = { workspace = true }

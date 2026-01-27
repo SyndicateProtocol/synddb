@@ -517,8 +517,8 @@ impl<'a> OrderbookSimulator<'a> {
         user_ids: &[i64],
         tx: &rusqlite::Transaction<'_>,
     ) -> Result<()> {
-        let mut rng = rand::thread_rng();
-        let operation_type = rng.gen_range(0..100);
+        let mut rng = rand::rng();
+        let operation_type = rng.random_range(0..100);
 
         match operation_type {
             0..=50 => Self::place_order_in_tx(user_ids, tx)?, // 51% - place order
@@ -537,13 +537,13 @@ impl<'a> OrderbookSimulator<'a> {
         user_ids: &[i64],
         tx: &rusqlite::Transaction<'_>,
     ) -> Result<()> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
-        let user_id = user_ids[rng.gen_range(0..user_ids.len())];
-        let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];
-        let side = if rng.gen_bool(0.5) { "buy" } else { "sell" };
-        let price = rng.gen_range(10_000..100_000);
-        let quantity = rng.gen_range(1..100);
+        let user_id = user_ids[rng.random_range(0..user_ids.len())];
+        let symbol = SYMBOLS[rng.random_range(0..SYMBOLS.len())];
+        let side = if rng.random_bool(0.5) { "buy" } else { "sell" };
+        let price = rng.random_range(10_000..100_000);
+        let quantity = rng.random_range(1..100);
 
         tx.execute(
             "INSERT INTO orders (user_id, symbol, side, order_type, price, quantity, status)
@@ -604,12 +604,12 @@ impl<'a> OrderbookSimulator<'a> {
 
     // Transaction-based versions for batching
     fn place_order_in_tx(user_ids: &[i64], tx: &rusqlite::Transaction<'_>) -> Result<()> {
-        let mut rng = rand::thread_rng();
-        let user_id = user_ids[rng.gen_range(0..user_ids.len())];
-        let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];
-        let side = if rng.gen_bool(0.5) { "buy" } else { "sell" };
-        let price = rng.gen_range(10_000..100_000);
-        let quantity = rng.gen_range(1..100);
+        let mut rng = rand::rng();
+        let user_id = user_ids[rng.random_range(0..user_ids.len())];
+        let symbol = SYMBOLS[rng.random_range(0..SYMBOLS.len())];
+        let side = if rng.random_bool(0.5) { "buy" } else { "sell" };
+        let price = rng.random_range(10_000..100_000);
+        let quantity = rng.random_range(1..100);
 
         tx.execute(
             "INSERT INTO orders (user_id, symbol, side, order_type, price, quantity, status)
@@ -638,7 +638,7 @@ impl<'a> OrderbookSimulator<'a> {
     }
 
     fn execute_trade_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<()> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let buy_order: Option<(i64, i64, String, i64)> = tx
             .query_row(
@@ -665,7 +665,7 @@ impl<'a> OrderbookSimulator<'a> {
         {
             if buy_symbol == sell_symbol {
                 let quantity = buy_qty.min(sell_qty);
-                let price = rng.gen_range(10_000..100_000);
+                let price = rng.random_range(10_000..100_000);
 
                 tx.execute(
                     "INSERT INTO trades (buy_order_id, sell_order_id, symbol, price, quantity, buyer_id, seller_id)
@@ -692,10 +692,10 @@ impl<'a> OrderbookSimulator<'a> {
     }
 
     fn update_balance_in_tx(user_ids: &[i64], tx: &rusqlite::Transaction<'_>) -> Result<()> {
-        let mut rng = rand::thread_rng();
-        let user_id = user_ids[rng.gen_range(0..user_ids.len())];
-        let symbol = SYMBOLS[rng.gen_range(0..SYMBOLS.len())];
-        let amount_change: i64 = rng.gen_range(-1000..1000);
+        let mut rng = rand::rng();
+        let user_id = user_ids[rng.random_range(0..user_ids.len())];
+        let symbol = SYMBOLS[rng.random_range(0..SYMBOLS.len())];
+        let amount_change: i64 = rng.random_range(-1000..1000);
 
         tx.execute(
             "UPDATE balances SET amount = MAX(0, amount + ?1), updated_at = unixepoch()

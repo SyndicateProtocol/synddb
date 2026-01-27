@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use synddb_shared::runtime;
+use synddb_shared::{metrics, runtime, telemetry};
 use synddb_validator::{
     bridge::{signature_store::SignatureStore, signer::BridgeSigner},
     config::{FetcherType, ValidatorConfig},
@@ -22,7 +22,18 @@ use synddb_validator::{
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut config = ValidatorConfig::parse();
-    runtime::init_logging(config.log_json);
+
+    // Initialize tracing with optional OpenTelemetry export and Cloud Trace correlation
+    let _tracing_guard = telemetry::init_tracing(
+        "synddb-validator",
+        config.log_json,
+        config.otel_enabled,
+        config.gcp_project_id.clone(),
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {e}"))?;
+
+    // Initialize Prometheus metrics exporter
+    let metrics_handle = metrics::init_metrics();
 
     // Log supported fetcher types
     info!(
@@ -59,7 +70,7 @@ async fn main() -> Result<()> {
     let mut validator = Validator::new(&config, fetcher.clone(), shutdown_rx.clone())?;
     let app_state = AppState::new();
 
-    let http_handle = start_http_server(app_state.clone(), config.bind_address);
+    let http_handle = start_http_server(app_state.clone(), config.bind_address, metrics_handle);
 
     let signature_store = SignatureStore::new();
     let bridge_signer: Option<Arc<BridgeSigner>> = if config.is_bridge_signer() {
@@ -281,9 +292,10 @@ fn current_timestamp() -> u64 {
 fn start_http_server(
     app_state: AppState,
     bind_address: std::net::SocketAddr,
+    metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let router = create_router(app_state);
+        let router = create_router(app_state, metrics_handle);
         let listener = tokio::net::TcpListener::bind(bind_address)
             .await
             .expect("Failed to bind HTTP server");

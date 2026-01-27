@@ -23,7 +23,7 @@ use rusqlite::Connection;
 use std::{sync::Arc, time::Duration};
 use synddb_shared::types::message::{MessageType, SignedBatch, SignedMessage};
 use tokio::sync::watch;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 /// Result of applying a message with audit trail handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,6 +390,7 @@ impl Validator {
                                     gap_size,
                                     "Sequence gap detected"
                                 );
+                                crate::metrics::record_gap_detected();
 
                                 if !gap_skip_on_failure {
                                     error!(
@@ -511,6 +512,7 @@ impl Validator {
     ///
     /// The callback receives the `WithdrawalRequest` if the message is a withdrawal.
     /// Returns `Ok(true)` if message was synced, `Ok(false)` if not available yet.
+    #[instrument(skip(self, on_withdrawal), fields(message_type))]
     pub async fn sync_one_with_callback<F>(
         &mut self,
         sequence: u64,
@@ -519,20 +521,29 @@ impl Validator {
     where
         F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),
     {
+        let sync_start = std::time::Instant::now();
+
         // 1. Fetch message
+        let fetch_start = std::time::Instant::now();
         let message = match self.fetcher.get(sequence).await? {
             Some(msg) => msg,
             None => return Ok(false),
         };
+        crate::metrics::record_fetch_duration(fetch_start.elapsed().as_secs_f64());
 
-        debug!(
-            sequence,
-            message_type = ?message.message_type,
-            "Fetched message"
-        );
+        // Record message type in span for distributed tracing
+        let message_type_str = match message.message_type {
+            MessageType::Changeset => "changeset",
+            MessageType::Withdrawal => "withdrawal",
+            MessageType::Snapshot => "snapshot",
+        };
+        tracing::Span::current().record("message_type", message_type_str);
+
+        debug!(sequence, message_type = message_type_str, "Fetched message");
 
         // 2. Validate sequence matches what we requested (defensive check)
         if message.sequence != sequence {
+            crate::metrics::record_error("sequence_mismatch");
             return Err(ValidatorError::SequenceGap {
                 expected: sequence,
                 actual: message.sequence,
@@ -541,9 +552,12 @@ impl Validator {
         }
 
         // 3. Verify signature
-        self.verifier
-            .verify(&message)
-            .map_err(|e| ValidatorError::SignatureVerification(e.to_string()))?;
+        let verify_start = std::time::Instant::now();
+        self.verifier.verify(&message).map_err(|e| {
+            crate::metrics::record_error("signature_verification");
+            ValidatorError::SignatureVerification(e.to_string())
+        })?;
+        crate::metrics::record_verify_duration(verify_start.elapsed().as_secs_f64());
 
         debug!(sequence, "Signature verified");
 
@@ -557,10 +571,16 @@ impl Validator {
                 "Processing withdrawal message"
             );
             on_withdrawal(&withdrawal);
+            crate::metrics::record_withdrawal_processed();
         }
 
         // 5. Apply to database with audit trail handling
+        let apply_start = std::time::Instant::now();
         let apply_result = self.apply_message_with_audit(&message)?;
+        crate::metrics::record_apply_duration(
+            message_type_str,
+            apply_start.elapsed().as_secs_f64(),
+        );
 
         match apply_result {
             ApplyResult::Applied => {
@@ -568,11 +588,18 @@ impl Validator {
             }
             ApplyResult::StoredAsPending => {
                 debug!(sequence, "Message stored as pending (schema mismatch)");
+                if let Ok(count) = self.pending_changeset_count() {
+                    crate::metrics::update_pending_changesets(count);
+                }
             }
         }
 
         // 6. Update state (even if stored as pending - we've processed this sequence)
         self.state.record_sync(message.sequence)?;
+
+        // Record metrics
+        crate::metrics::record_message_synced(message_type_str, message.sequence);
+        crate::metrics::record_sync_duration(sync_start.elapsed().as_secs_f64());
 
         info!(sequence, "Synced message");
 
@@ -629,6 +656,14 @@ impl Validator {
     /// Returns the number of messages synced from this batch.
     ///
     /// Signature verification is always performed using COSE format.
+    #[instrument(
+        skip(self, batch, on_withdrawal),
+        fields(
+            batch_start = batch.start_sequence,
+            batch_end = batch.end_sequence,
+            message_count = batch.messages.len()
+        )
+    )]
     pub async fn sync_batch<F>(&mut self, batch: &SignedBatch, on_withdrawal: &mut F) -> Result<u64>
     where
         F: FnMut(&synddb_shared::types::payloads::WithdrawalRequest),

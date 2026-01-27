@@ -25,6 +25,7 @@ use synddb_shared::{
     },
 };
 use thiserror::Error;
+use tracing::debug;
 
 /// Errors from inbox operations
 #[derive(Debug, Error)]
@@ -120,6 +121,8 @@ impl Inbox {
         message_type: CborMessageType,
         payload: Vec<u8>,
     ) -> Result<(CborSignedMessage, SequenceReceipt), InboxError> {
+        let start = std::time::Instant::now();
+
         // Atomically get and increment sequence
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
 
@@ -163,6 +166,28 @@ impl Inbox {
             signature: signature_hex,
             signer: signer_hex,
         };
+
+        // Record metrics
+        let message_type_str = match message_type {
+            CborMessageType::Changeset => "changeset",
+            CborMessageType::Withdrawal => "withdrawal",
+            CborMessageType::Snapshot => "snapshot",
+        };
+        crate::metrics::record_message_sequenced(
+            message_type_str,
+            cbor_message.size(),
+            start.elapsed().as_secs_f64(),
+        );
+        crate::metrics::update_current_sequence(sequence + 1);
+
+        debug!(
+            sequence,
+            message_type = message_type_str,
+            payload_size = payload.len(),
+            compressed_size = cbor_message.size(),
+            elapsed_us = start.elapsed().as_micros(),
+            "Message sequenced"
+        );
 
         Ok((cbor_message, receipt))
     }

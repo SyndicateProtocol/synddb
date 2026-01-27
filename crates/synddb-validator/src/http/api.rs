@@ -28,12 +28,27 @@
 //! - `last_sequence` is `null` if the validator has never synced
 //! - `last_sync_time` is a Unix timestamp (seconds)
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::{header::HeaderName, Request, StatusCode},
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
+use axum_prometheus::PrometheusMetricLayer;
+use metrics_exporter_prometheus::PrometheusHandle;
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
+use tower_http::{
+    request_id::{PropagateRequestIdLayer, SetRequestIdLayer},
+    trace::{DefaultOnResponse, MakeSpan, TraceLayer},
+};
+use tracing::{Level, Span};
+
+use super::request_id::UuidRequestId;
 
 /// Shared application state for HTTP handlers
 ///
@@ -142,13 +157,53 @@ struct StatusResponse {
     next_sequence: u64,
 }
 
+/// Custom span maker that includes request ID in all spans
+#[derive(Clone, Debug)]
+struct RequestIdMakeSpan;
+
+impl<B> MakeSpan<B> for RequestIdMakeSpan {
+    fn make_span(&mut self, request: &Request<B>) -> Span {
+        let request_id = request
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-");
+
+        tracing::info_span!(
+            "http_request",
+            method = %request.method(),
+            uri = %request.uri(),
+            request_id = %request_id,
+        )
+    }
+}
+
 /// Create the HTTP router
-pub fn create_router(state: AppState) -> Router {
+pub fn create_router(state: AppState, metrics_handle: PrometheusHandle) -> Router {
+    // Create HTTP metrics layer (uses existing global recorder from init_metrics)
+    let prometheus_layer = PrometheusMetricLayer::new();
+
+    // Create metrics endpoint handler
+    let metrics_endpoint = synddb_shared::metrics::metrics_endpoint(metrics_handle);
+
+    // Request ID header name
+    let x_request_id = HeaderName::from_static("x-request-id");
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/healthz", get(health_handler))
         .route("/status", get(status_handler))
         .route("/ready", get(ready_handler))
+        .route("/metrics", get(metrics_endpoint))
+        // Layers are applied in reverse order (bottom to top)
+        .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
+        .layer(prometheus_layer)
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(RequestIdMakeSpan)
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
+        .layer(SetRequestIdLayer::new(x_request_id, UuidRequestId))
         .with_state(state)
 }
 
@@ -201,7 +256,8 @@ mod tests {
 
     fn create_test_app() -> (Router, AppState) {
         let app_state = AppState::new();
-        let router = create_router(app_state.clone());
+        let metrics_handle = synddb_shared::metrics::init_metrics();
+        let router = create_router(app_state.clone(), metrics_handle);
         (router, app_state)
     }
 

@@ -4,9 +4,11 @@
 //!
 //! - [`gcs`]: Google Cloud Storage configuration
 //! - [`keys`]: TEE key management (secure key generation)
+//! - [`metrics`]: Prometheus metrics utilities
 //! - [`parse`]: CLI argument parsing helpers
 //! - [`prelude`]: Convenient re-exports of common types
 //! - [`runtime`]: Tokio runtime utilities
+//! - [`telemetry`]: OpenTelemetry distributed tracing (with `otel` feature)
 //! - [`types`]: Wire format types (messages, batches, payloads)
 //!
 //! # Quick Start
@@ -19,7 +21,9 @@
 
 pub mod gcs;
 pub mod keys;
+pub mod metrics;
 pub mod parse;
 pub mod prelude;
 pub mod runtime;
+pub mod telemetry;
 pub mod types;

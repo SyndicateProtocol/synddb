@@ -61,14 +61,20 @@
 
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header::HeaderName, Request, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
+use axum_prometheus::PrometheusMetricLayer;
+use metrics_exporter_prometheus::PrometheusHandle;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tower_http::{
+    request_id::{PropagateRequestIdLayer, SetRequestIdLayer},
+    trace::{DefaultOnResponse, MakeSpan, TraceLayer},
+};
+use tracing::{error, info, instrument, warn, Level, Span};
 
 use crate::{
     attestation::AttestationVerifier,
@@ -76,6 +82,7 @@ use crate::{
     cbor_extractor::Cbor,
     http_errors::{HttpError, SequencerError},
     inbox::{Inbox, SequenceReceipt},
+    request_id::UuidRequestId,
 };
 use synddb_shared::types::{
     cbor::message::CborMessageType,
@@ -103,17 +110,45 @@ impl std::fmt::Debug for AppState {
     }
 }
 
+/// Custom span maker that includes request ID in all spans
+///
+/// This enables correlation of logs and traces across the request lifecycle.
+/// The request ID is extracted from the `x-request-id` header (set by middleware).
+#[derive(Clone, Debug)]
+struct RequestIdMakeSpan;
+
+impl<B> MakeSpan<B> for RequestIdMakeSpan {
+    fn make_span(&mut self, request: &Request<B>) -> Span {
+        let request_id = request
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-");
+
+        tracing::info_span!(
+            "http_request",
+            method = %request.method(),
+            uri = %request.uri(),
+            request_id = %request_id,
+        )
+    }
+}
+
 /// Create the HTTP router with all endpoints
-pub fn create_router(state: AppState) -> Router {
-    info!("Endpoints:");
-    info!("  POST /changesets       - Submit changeset batch");
-    info!("  POST /withdrawals      - Submit withdrawal request");
-    info!("  POST /snapshots        - Submit database snapshot");
-    info!("  GET  /health           - Health check (liveness)");
-    info!("  GET  /ready            - Readiness check");
-    info!("  GET  /status           - Sequencer status");
-    info!("  GET  /batch/stats      - CBOR batch statistics");
-    info!("  POST /batch/flush      - Force flush pending batch");
+pub fn create_router(state: AppState, metrics_handle: PrometheusHandle) -> Router {
+    info!(
+        endpoints = "/changesets, /withdrawals, /snapshots, /health, /ready, /status, /batch/stats, /batch/flush, /metrics",
+        "HTTP router initialized"
+    );
+
+    // Create HTTP metrics layer (uses existing global recorder from init_metrics)
+    let prometheus_layer = PrometheusMetricLayer::new();
+
+    // Create metrics endpoint handler
+    let metrics_endpoint = synddb_shared::metrics::metrics_endpoint(metrics_handle);
+
+    // Request ID header name
+    let x_request_id = HeaderName::from_static("x-request-id");
 
     Router::new()
         .route("/changesets", post(receive_changesets))
@@ -124,6 +159,20 @@ pub fn create_router(state: AppState) -> Router {
         .route("/status", get(status))
         .route("/batch/stats", get(batch_stats))
         .route("/batch/flush", post(batch_flush))
+        .route("/metrics", get(metrics_endpoint))
+        // Layers are applied in reverse order (bottom to top)
+        // 1. PropagateRequestId - copies request ID to response headers
+        .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
+        // 2. Prometheus metrics
+        .layer(prometheus_layer)
+        // 3. Trace layer with request ID in spans
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(RequestIdMakeSpan)
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
+        // 4. SetRequestId - generates x-request-id if not present
+        .layer(SetRequestIdLayer::new(x_request_id, UuidRequestId))
         .with_state(state)
 }
 
@@ -290,15 +339,12 @@ impl From<SignedMessage> for MessageResponse {
 // ============================================================================
 
 /// Receive and sequence a changeset batch (CBOR format)
+#[instrument(skip(state, request), fields(batch_id = %request.batch_id, changeset_count = request.changesets.len()))]
 async fn receive_changesets(
     State(state): State<AppState>,
     Cbor(request): Cbor<ChangesetBatchRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
-    info!(
-        batch_id = %request.batch_id,
-        changeset_count = request.changesets.len(),
-        "Received changeset batch"
-    );
+    info!("Received changeset batch");
 
     // Verify attestation token if verifier is configured
     if let Some(verifier) = &state.attestation_verifier {
@@ -309,12 +355,14 @@ async fn receive_changesets(
                     .await
                     .map_err(|e| {
                         error!(batch_id = %request.batch_id, error = %e, "Attestation verification failed");
+                        crate::metrics::record_error("attestation_verification");
                         SequencerError::from(e)
                     })?;
                 info!(batch_id = %request.batch_id, "Attestation token verified");
             }
             None => {
                 error!(batch_id = %request.batch_id, "Missing attestation token");
+                crate::metrics::record_error("missing_attestation_token");
                 return Err(SequencerError::MissingAttestationToken.into());
             }
         }
@@ -323,6 +371,7 @@ async fn receive_changesets(
     // Serialize the batch as CBOR payload
     let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize changeset batch: {}", e);
+        crate::metrics::record_error("cbor_serialization");
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
@@ -332,6 +381,7 @@ async fn receive_changesets(
         .sequence_message(CborMessageType::Changeset, payload)
         .map_err(|e| {
             error!("Failed to sequence message: {}", e);
+            crate::metrics::record_error("sequence_changeset");
             SequencerError::from(e)
         })?;
 
@@ -343,6 +393,7 @@ async fn receive_changesets(
                 error = %e,
                 "Failed to add to batcher (sequencing succeeded)"
             );
+            crate::metrics::record_error("batcher_add");
         }
     }
 
@@ -356,16 +407,12 @@ async fn receive_changesets(
 }
 
 /// Receive and sequence a withdrawal request (CBOR format)
+#[instrument(skip(state, request), fields(request_id = %request.request_id, recipient = %request.recipient, amount = %request.amount))]
 async fn receive_withdrawal(
     State(state): State<AppState>,
     Cbor(request): Cbor<WithdrawalRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
-    info!(
-        request_id = %request.request_id,
-        recipient = %request.recipient,
-        amount = %request.amount,
-        "Received withdrawal request"
-    );
+    info!("Received withdrawal request");
 
     // Validate recipient address format (0x + 40 hex chars)
     if !request.recipient.starts_with("0x")
@@ -374,6 +421,13 @@ async fn receive_withdrawal(
             .chars()
             .all(|c| c.is_ascii_hexdigit())
     {
+        warn!(
+            request_id = %request.request_id,
+            recipient = %request.recipient,
+            recipient_len = request.recipient.len(),
+            "Invalid recipient address format"
+        );
+        crate::metrics::record_error("invalid_recipient_address");
         return Err(SequencerError::InvalidRecipientAddress.into());
     }
 
@@ -382,17 +436,31 @@ async fn receive_withdrawal(
         || !request.amount.chars().all(|c| c.is_ascii_digit())
         || (request.amount.len() > 1 && request.amount.starts_with('0'))
     {
+        warn!(
+            request_id = %request.request_id,
+            amount = %request.amount,
+            "Invalid amount format"
+        );
+        crate::metrics::record_error("invalid_amount");
         return Err(SequencerError::InvalidAmount.into());
     }
 
     // Validate request_id is not empty
     if request.request_id.is_empty() {
+        warn!("Empty request_id in withdrawal request");
+        crate::metrics::record_error("empty_request_id");
         return Err(SequencerError::EmptyRequestId.into());
     }
 
     // Serialize the request as CBOR payload
     let payload = request.to_cbor().map_err(|e| {
-        error!("Failed to serialize withdrawal request: {}", e);
+        error!(
+            request_id = %request.request_id,
+            error = %e,
+            error_type = "cbor_serialization",
+            "Failed to serialize withdrawal request"
+        );
+        crate::metrics::record_error("cbor_serialization");
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
@@ -401,7 +469,13 @@ async fn receive_withdrawal(
         .inbox
         .sequence_message(CborMessageType::Withdrawal, payload)
         .map_err(|e| {
-            error!("Failed to sequence withdrawal: {}", e);
+            error!(
+                request_id = %request.request_id,
+                error = %e,
+                error_type = "sequence_withdrawal",
+                "Failed to sequence withdrawal"
+            );
+            crate::metrics::record_error("sequence_withdrawal");
             SequencerError::from(e)
         })?;
 
@@ -413,6 +487,7 @@ async fn receive_withdrawal(
                 error = %e,
                 "Failed to add to batcher (sequencing succeeded)"
             );
+            crate::metrics::record_error("batcher_add");
         }
     }
 
@@ -426,16 +501,12 @@ async fn receive_withdrawal(
 }
 
 /// Receive and sequence a database snapshot (CBOR format)
+#[instrument(skip(state, request), fields(message_id = %request.message_id, snapshot_size = request.snapshot.data.len(), client_sequence = request.snapshot.sequence))]
 async fn receive_snapshot(
     State(state): State<AppState>,
     Cbor(request): Cbor<SnapshotRequest>,
 ) -> Result<impl IntoResponse, HttpError> {
-    info!(
-        message_id = %request.message_id,
-        snapshot_size = request.snapshot.data.len(),
-        client_sequence = request.snapshot.sequence,
-        "Received snapshot"
-    );
+    info!("Received snapshot");
 
     // Verify attestation token if verifier is configured
     if let Some(verifier) = &state.attestation_verifier {
@@ -446,12 +517,14 @@ async fn receive_snapshot(
                     .await
                     .map_err(|e| {
                         error!(message_id = %request.message_id, error = %e, "Attestation verification failed");
+                        crate::metrics::record_error("attestation_verification");
                         SequencerError::from(e)
                     })?;
                 info!(message_id = %request.message_id, "Attestation token verified");
             }
             None => {
                 error!(message_id = %request.message_id, "Missing attestation token");
+                crate::metrics::record_error("missing_attestation_token");
                 return Err(SequencerError::MissingAttestationToken.into());
             }
         }
@@ -460,6 +533,7 @@ async fn receive_snapshot(
     // Serialize the snapshot request as CBOR payload
     let payload = request.to_cbor().map_err(|e| {
         error!("Failed to serialize snapshot: {}", e);
+        crate::metrics::record_error("cbor_serialization");
         SequencerError::CborSerializationFailed(e.to_string())
     })?;
 
@@ -469,6 +543,7 @@ async fn receive_snapshot(
         .sequence_message(CborMessageType::Snapshot, payload)
         .map_err(|e| {
             error!("Failed to sequence snapshot: {}", e);
+            crate::metrics::record_error("sequence_snapshot");
             SequencerError::from(e)
         })?;
 
@@ -480,6 +555,7 @@ async fn receive_snapshot(
                 error = %e,
                 "Failed to add to batcher (sequencing succeeded)"
             );
+            crate::metrics::record_error("batcher_add");
         }
     }
 
@@ -641,7 +717,8 @@ mod tests {
             attestation_verifier: None,
             batcher: None,
         };
-        create_router(state)
+        let metrics_handle = synddb_shared::metrics::init_metrics();
+        create_router(state, metrics_handle)
     }
 
     /// Send a CBOR-serialized request to the server
@@ -774,7 +851,8 @@ mod tests {
             attestation_verifier: None,
             batcher: None,
         };
-        let app = create_router(state);
+        let metrics_handle = synddb_shared::metrics::init_metrics();
+        let app = create_router(state, metrics_handle);
 
         // First request
         let request1 = ChangesetBatchRequest {
@@ -990,7 +1068,8 @@ mod tests {
             attestation_verifier: None,
             batcher: None,
         };
-        let app = create_router(state);
+        let metrics_handle = synddb_shared::metrics::init_metrics();
+        let app = create_router(state, metrics_handle);
 
         // Send a snapshot with client sequence 100
         let request1 = SnapshotRequest {

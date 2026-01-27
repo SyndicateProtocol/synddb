@@ -14,16 +14,16 @@ pub fn scenario_from_seed(seed: u64) -> E2EScenario {
     let table = "test_table".to_string();
 
     // Generate 5-30 operations
-    let num_ops = rng.gen_range(5..30);
+    let num_ops = rng.random_range(5..30);
     let mut actions = Vec::new();
 
     for _ in 0..num_ops {
-        let action_type = rng.gen_range(0..10);
+        let action_type = rng.random_range(0..10);
 
         let action = if action_type < 4 {
             // UPDATE (40%)
-            let id = rng.gen_range(1..50);
-            let value = rng.gen_range(-1000..1000);
+            let id = rng.random_range(1..50);
+            let value = rng.random_range(-1000..1000);
             E2EAction::ExecuteDml(DmlOperation::Update {
                 table_name: table.clone(),
                 set_column: "value".to_string(),
@@ -33,10 +33,10 @@ pub fn scenario_from_seed(seed: u64) -> E2EScenario {
             })
         } else if action_type < 7 {
             // INSERT (30%)
-            let id = rng.gen_range(100..1000);
-            let value = rng.gen_range(0..1000);
+            let id = rng.random_range(100..1000);
+            let value = rng.random_range(0..1000);
             let name: String = (0..8)
-                .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+                .map(|_| rng.sample(rand::distr::Alphanumeric) as char)
                 .collect();
             E2EAction::ExecuteDml(DmlOperation::Insert {
                 table_name: table.clone(),
@@ -49,7 +49,7 @@ pub fn scenario_from_seed(seed: u64) -> E2EScenario {
             })
         } else if action_type < 8 {
             // DELETE (10%)
-            let id = rng.gen_range(1..50);
+            let id = rng.random_range(1..50);
             E2EAction::ExecuteDml(DmlOperation::Delete {
                 table_name: table.clone(),
                 where_column: "id".to_string(),
