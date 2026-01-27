@@ -25,6 +25,7 @@ impl ChainMonitorHandle {
     /// Process deposits (no-op)
     ///
     /// Always returns 0 since no monitoring is active.
+    #[allow(clippy::missing_const_for_fn)] // Result type is not const-compatible
     pub fn process_deposits(&self) -> Result<usize> {
         Ok(0)
     }

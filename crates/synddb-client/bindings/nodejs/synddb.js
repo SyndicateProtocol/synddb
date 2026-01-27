@@ -12,8 +12,8 @@
  *   const db = new Database('app.db');
  *   db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
  *
- *   // IMPORTANT: Call publish() after commits to send changesets
- *   synddb.publish();
+ *   // Optionally force immediate publish (auto-publishes every second)
+ *   synddb.publishChangeset();
  *
  *   // Create a snapshot (optional)
  *   const size = synddb.snapshot();
@@ -181,18 +181,18 @@ class SyndDB {
    * @throws {Error} If publish fails
    *
    * @example
-   * synddb.publish();
+   * synddb.publishChangeset();
    */
-  publish() {
+  publishChangeset() {
     if (!this._handle) {
       throw new Error('SyndDB handle already detached');
     }
 
-    const result = lib.synddb_publish(this._handle);
+    const result = lib.synddb_publish_changeset(this._handle);
 
     if (result !== SyndDBError.SUCCESS) {
       const errorMsg = lib.synddb_last_error() || 'Unknown error';
-      throw new Error(`Failed to publish (error ${result}): ${errorMsg}`);
+      throw new Error(`Failed to publish changeset (error ${result}): ${errorMsg}`);
     }
   }
 
@@ -203,8 +203,8 @@ class SyndDB {
    * to the sequencer. Use this after schema changes (CREATE TABLE, etc.)
    * since DDL is NOT captured in changesets.
    *
-   * This is consistent with publish() for changesets:
-   * - publish() - sends pending changesets to sequencer
+   * This is consistent with publishChangeset() for changesets:
+   * - publishChangeset() - sends pending changesets to sequencer
    * - snapshot() - creates and sends snapshot to sequencer
    *
    * When to use:

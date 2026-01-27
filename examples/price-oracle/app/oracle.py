@@ -127,7 +127,7 @@ class PriceOracle:
         # Publish changesets if SyndDB is attached
         if self._synddb:
             try:
-                self._synddb.publish()
+                self._synddb.publish_changeset()
                 logger.debug("Published changesets to sequencer")
             except RuntimeError as e:
                 logger.error(f"Failed to publish changesets: {e}")

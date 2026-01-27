@@ -62,9 +62,83 @@ struct SessionState {
     snapshot_interval: u64,
     changesets_since_snapshot: u64,
     snapshot_tx: Option<Sender<Snapshot>>,
-    schema_changed: bool,
     /// Flag to indicate changes have occurred since last publish
     has_changes: bool,
+    /// Hash of `sqlite_master` to detect schema changes between publishes.
+    /// If the schema changes (DDL executed), we automatically trigger a snapshot.
+    last_schema_hash: u64,
+}
+
+impl SessionState {
+    /// Recreate the session to clear accumulated changes.
+    ///
+    /// The `SQLite` Session Extension does NOT reset after `changeset_strm()` extraction.
+    /// Each subsequent call returns ALL changes since session creation. To get only
+    /// new changes in the next extraction, we must drop the old session and create
+    /// a fresh one. See: <https://sqlite.org/session/sqlite3session_changeset.html>
+    fn recreate_session(&mut self) -> Result<()> {
+        // Drop the old session by replacing it
+        let mut new_session =
+            Session::new(self.conn).context("Failed to create new SQLite session")?;
+
+        // Attach to all tables (None means all tables)
+        new_session
+            .attach(None::<&str>)
+            .context("Failed to attach new session to tables")?;
+
+        self.session = new_session;
+        debug!("Session recreated to clear accumulated changes");
+        Ok(())
+    }
+
+    /// Compute a hash of the current schema (`sqlite_master` contents).
+    ///
+    /// This is used to detect schema changes (DDL) that happen outside of `execute_ddl()`.
+    /// When the schema hash changes, we automatically trigger a snapshot to ensure
+    /// validators have the updated schema.
+    fn compute_schema_hash(conn: &Connection) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+
+        // Query all schema objects (tables, indexes, triggers, views)
+        // Order by type and name for deterministic hashing
+        let result: Result<Vec<(String, String, String)>, _> = conn
+            .prepare(
+                "SELECT type, name, sql FROM sqlite_master \
+                 WHERE name NOT LIKE 'sqlite_%' \
+                 ORDER BY type, name",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    ))
+                })
+                .and_then(|rows| rows.collect())
+            });
+
+        match result {
+            Ok(schema_items) => {
+                for (type_, name, sql) in schema_items {
+                    type_.hash(&mut hasher);
+                    name.hash(&mut hasher);
+                    sql.hash(&mut hasher);
+                }
+            }
+            Err(e) => {
+                // If we can't read the schema, use a sentinel value
+                // This shouldn't happen in practice
+                debug!("Failed to read schema for hashing: {}", e);
+                0u64.hash(&mut hasher);
+            }
+        }
+
+        hasher.finish()
+    }
 }
 
 thread_local! {
@@ -72,6 +146,24 @@ thread_local! {
     /// Note: This is thread-local, so each thread gets its own instance.
     /// The SessionMonitor API is designed so that only the main thread accesses SESSION_STATE.
     static SESSION_STATE: RefCell<Option<SessionState>> = const { RefCell::new(None) };
+
+    /// Flag indicating we're inside an `execute_ddl()` call.
+    /// When true, schema changes are expected and handled properly.
+    /// When false and a schema change is detected, we warn or panic.
+    static IN_EXECUTE_DDL: RefCell<bool> = const { RefCell::new(false) };
+}
+
+/// Set the `IN_EXECUTE_DDL` flag for the duration of a closure.
+/// This is called by `SyndDB::execute_ddl()` to indicate that schema changes
+/// are expected and should not trigger warnings.
+pub(crate) fn with_ddl_context<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    IN_EXECUTE_DDL.with(|flag| *flag.borrow_mut() = true);
+    let result = f();
+    IN_EXECUTE_DDL.with(|flag| *flag.borrow_mut() = false);
+    result
 }
 
 #[derive(Debug)]
@@ -110,6 +202,10 @@ impl SessionMonitor {
 
         debug!("Session attached to all tables");
 
+        // Compute initial schema hash for change detection
+        let initial_schema_hash = SessionState::compute_schema_hash(conn);
+        debug!("Initial schema hash: {:016x}", initial_schema_hash);
+
         // Store session state in thread-local storage
         SESSION_STATE.with(|state| {
             *state.borrow_mut() = Some(SessionState {
@@ -120,8 +216,8 @@ impl SessionMonitor {
                 snapshot_interval,
                 changesets_since_snapshot: 0,
                 snapshot_tx,
-                schema_changed: false,
                 has_changes: false,
+                last_schema_hash: initial_schema_hash,
             });
         });
 
@@ -163,16 +259,15 @@ impl SessionMonitor {
                                 s.has_changes = true;
                             }
 
-                            // Detect schema changes by monitoring sqlite_schema table
-                            if !s.schema_changed
-                                && (table == "sqlite_schema" || table == "sqlite_master")
-                            {
-                                info!(
-                                    "Schema change detected ({:?} on {}), will trigger snapshot",
-                                    action, table
-                                );
-                                s.schema_changed = true;
-                            }
+                            // Note: We previously tried to detect schema changes by monitoring
+                            // sqlite_schema/sqlite_master tables here. However, SQLite's update
+                            // hook does NOT fire for DDL operations (CREATE/ALTER/DROP) - it only
+                            // fires for INSERT/UPDATE/DELETE on user tables.
+                            //
+                            // DDL crash recovery is now handled in execute_ddl() which writes
+                            // a marker before execution and clears it after the snapshot is created.
+                            // Direct DDL via connection().execute() cannot be detected and is
+                            // not covered by the crash recovery mechanism.
                         }
                     }
                 });
@@ -186,28 +281,6 @@ impl SessionMonitor {
     /// Extract changeset from session and send to background thread.
     /// This must be called from the main thread.
     fn extract_and_send_changeset(state: &mut SessionState) -> Result<()> {
-        // If schema changed, create and send snapshot BEFORE capturing changesets
-        if state.schema_changed && state.conn.is_autocommit() {
-            info!("Creating immediate snapshot for schema change");
-
-            match Self::create_snapshot_internal(state) {
-                Ok(snapshot) => {
-                    if let Some(ref snapshot_tx) = state.snapshot_tx {
-                        if let Err(e) = snapshot_tx.try_send(snapshot) {
-                            error!("Failed to send schema change snapshot: {}", e);
-                        } else {
-                            info!("Schema change snapshot sent at sequence {}", state.sequence);
-                            state.changesets_since_snapshot = 0;
-                        }
-                    }
-                    state.schema_changed = false;
-                }
-                Err(e) => {
-                    error!("Failed to create schema change snapshot: {}", e);
-                }
-            }
-        }
-
         // Only extract if there might be changes and we're not in a transaction
         if !state.has_changes {
             return Ok(());
@@ -218,6 +291,54 @@ impl SessionMonitor {
         if !state.conn.is_autocommit() {
             trace!("Skipping changeset extraction - transaction active");
             return Ok(());
+        }
+
+        // SCHEMA CHANGE DETECTION: Check if schema changed since last publish.
+        // SQLite's update hook doesn't fire for DDL, so we detect schema changes
+        // by comparing the hash of sqlite_master. If the schema changed (DDL was
+        // executed), we MUST publish a snapshot first so validators have the
+        // updated schema before receiving changesets that reference it.
+        let current_schema_hash = SessionState::compute_schema_hash(state.conn);
+        if current_schema_hash != state.last_schema_hash {
+            info!(
+                "Schema change detected (hash {:016x} -> {:016x}), publishing snapshot",
+                state.last_schema_hash, current_schema_hash
+            );
+
+            // Create and send snapshot before processing changesets
+            match Self::create_snapshot_internal(state) {
+                Ok(snapshot) => {
+                    if let Some(ref snapshot_tx) = state.snapshot_tx {
+                        if let Err(e) = snapshot_tx.try_send(snapshot.clone()) {
+                            error!("Failed to send schema-change snapshot: {}", e);
+                        } else {
+                            info!(
+                                "Schema-change snapshot sent: {} bytes at sequence {}",
+                                snapshot.data.len(),
+                                snapshot.sequence
+                            );
+                            // Increment sequence so subsequent changesets have a later sequence
+                            // This ensures validators apply snapshot before changesets
+                            state.sequence += 1;
+                            state.changesets_since_snapshot = 0;
+                        }
+                    } else {
+                        // No snapshot channel configured - log warning
+                        // This happens when snapshot_interval is 0 (disabled)
+                        // The snapshot is still important for schema changes
+                        info!(
+                            "Schema changed but no snapshot channel configured. \
+                             Consider enabling snapshot_interval or calling publish_snapshot() manually."
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to create schema-change snapshot: {}", e);
+                }
+            }
+
+            // Update the stored schema hash
+            state.last_schema_hash = current_schema_hash;
         }
 
         // Extract changeset bytes from session
@@ -235,7 +356,11 @@ impl SessionMonitor {
             return Ok(());
         }
 
-        trace!("Captured changeset: {} bytes", changeset_data.len());
+        info!(
+            sequence = state.sequence,
+            bytes = changeset_data.len(),
+            "Captured changeset"
+        );
 
         let changeset = Changeset {
             data: changeset_data,
@@ -277,6 +402,12 @@ impl SessionMonitor {
                 }
             }
         }
+
+        // Recreate session to clear accumulated changes.
+        // The SQLite Session Extension does NOT reset after changeset_strm() -
+        // it accumulates all changes since session creation. We must recreate
+        // the session so the next extraction only captures NEW changes.
+        state.recreate_session()?;
 
         Ok(())
     }
