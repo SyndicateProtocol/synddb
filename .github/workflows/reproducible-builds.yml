@@ -1,0 +1,400 @@
+name: Reproducible Builds
+
+# Verify that Docker builds are bit-for-bit reproducible across machines.
+# This is critical for Confidential Space attestation - the image hash
+# must be verifiable by anyone rebuilding from source.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'  # Release tags (e.g., v1.0.0)
+    paths:
+      - "docker/reproducible/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/reproducible-builds.yml"
+
+  # Allow manual triggering for verification before releases
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build on multiple runners to verify cross-machine reproducibility
+  build:
+    name: Build (${{ matrix.runner }}, ${{ matrix.image }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04]
+        image: [sequencer, validator]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Read BuildKit version from shared config (single source of truth)
+      - name: Get BuildKit version
+        id: buildkit
+        run: echo "version=$(cat docker/reproducible/buildkit.version)" >> $GITHUB_OUTPUT
+
+      # Pin BuildKit version for reproducibility
+      # Latest versions: https://github.com/moby/buildkit/releases
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:${{ steps.buildkit.outputs.version }}
+
+      - name: Build image (attempt 1)
+        env:
+          SOURCE_DATE_EPOCH: 0
+        run: |
+          docker buildx build \
+            --no-cache \
+            --provenance=false \
+            --sbom=false \
+            --build-arg SOURCE_DATE_EPOCH=0 \
+            --platform linux/amd64 \
+            --output type=docker,rewrite-timestamp=true \
+            -f docker/reproducible/${{ matrix.image }}.Dockerfile \
+            -t ${{ matrix.image }}:build1 \
+            .
+
+      - name: Build image (attempt 2)
+        env:
+          SOURCE_DATE_EPOCH: 0
+        run: |
+          docker buildx build \
+            --no-cache \
+            --provenance=false \
+            --sbom=false \
+            --build-arg SOURCE_DATE_EPOCH=0 \
+            --platform linux/amd64 \
+            --output type=docker,rewrite-timestamp=true \
+            -f docker/reproducible/${{ matrix.image }}.Dockerfile \
+            -t ${{ matrix.image }}:build2 \
+            .
+
+      - name: Verify same-machine reproducibility
+        run: |
+          HASH1=$(docker inspect ${{ matrix.image }}:build1 --format='{{.Id}}')
+          HASH2=$(docker inspect ${{ matrix.image }}:build2 --format='{{.Id}}')
+
+          echo "Build 1: $HASH1"
+          echo "Build 2: $HASH2"
+
+          if [ "$HASH1" != "$HASH2" ]; then
+            echo "::error::Same-machine reproducibility failed!"
+            echo "Two builds on the same machine produced different hashes."
+            exit 1
+          fi
+
+          echo "::notice::Same-machine reproducibility verified for ${{ matrix.image }} on ${{ matrix.runner }}"
+
+      - name: Save image hash
+        run: |
+          mkdir -p hashes
+          docker inspect ${{ matrix.image }}:build1 --format='{{.Id}}' > hashes/${{ matrix.image }}-${{ matrix.runner }}.txt
+          echo "Hash: $(cat hashes/${{ matrix.image }}-${{ matrix.runner }}.txt)"
+
+      - name: Upload hash artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hash-${{ matrix.image }}-${{ matrix.runner }}
+          path: hashes/
+          retention-days: 1
+
+  # Compare hashes across all runners
+  verify-cross-machine:
+    name: Verify Cross-Machine Reproducibility
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all hash artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-hashes
+          pattern: hash-*
+          merge-multiple: true
+
+      - name: Compare hashes across machines
+        run: |
+          echo "=== Collected Hashes ==="
+          for f in all-hashes/*.txt; do
+            echo "$(basename $f .txt): $(cat $f)"
+          done
+          echo ""
+
+          # Check sequencer hashes match across runners
+          echo "=== Verifying Sequencer ==="
+          SEQUENCER_HASHES=$(cat all-hashes/sequencer-*.txt | sort -u)
+          SEQUENCER_COUNT=$(echo "$SEQUENCER_HASHES" | wc -l)
+
+          if [ "$SEQUENCER_COUNT" -ne 1 ]; then
+            echo "::error::Cross-machine reproducibility failed for sequencer!"
+            echo "Different runners produced different hashes:"
+            for f in all-hashes/sequencer-*.txt; do
+              echo "  $(basename $f .txt): $(cat $f)"
+            done
+            exit 1
+          fi
+          echo "::notice::Sequencer hash verified across all runners: $SEQUENCER_HASHES"
+
+          # Check validator hashes match across runners
+          echo ""
+          echo "=== Verifying Validator ==="
+          VALIDATOR_HASHES=$(cat all-hashes/validator-*.txt | sort -u)
+          VALIDATOR_COUNT=$(echo "$VALIDATOR_HASHES" | wc -l)
+
+          if [ "$VALIDATOR_COUNT" -ne 1 ]; then
+            echo "::error::Cross-machine reproducibility failed for validator!"
+            echo "Different runners produced different hashes:"
+            for f in all-hashes/validator-*.txt; do
+              echo "  $(basename $f .txt): $(cat $f)"
+            done
+            exit 1
+          fi
+          echo "::notice::Validator hash verified across all runners: $VALIDATOR_HASHES"
+
+          echo ""
+          echo "=== All Reproducibility Checks Passed ==="
+          echo "Sequencer: $SEQUENCER_HASHES"
+          echo "Validator: $VALIDATOR_HASHES"
+
+          # Save verified hashes for publish job (trim whitespace)
+          echo "sequencer=$(echo "$SEQUENCER_HASHES" | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+          echo "validator=$(echo "$VALIDATOR_HASHES" | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+        id: hashes
+
+    outputs:
+      sequencer_hash: ${{ steps.hashes.outputs.sequencer }}
+      validator_hash: ${{ steps.hashes.outputs.validator }}
+
+  # Publish to Artifact Registry after verification passes
+  publish:
+    name: Publish to Artifact Registry
+    needs: verify-cross-machine
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for Workload Identity Federation
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Authenticate to Google Cloud using Workload Identity Federation
+      # This is more secure than using service account keys
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev --quiet
+
+      # Read BuildKit version from shared config (single source of truth)
+      - name: Get BuildKit version
+        id: buildkit
+        run: echo "version=$(cat docker/reproducible/buildkit.version)" >> $GITHUB_OUTPUT
+
+      # Pin BuildKit version for reproducibility
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:${{ steps.buildkit.outputs.version }}
+
+      # Install cosign for keyless image signing
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.0.0
+
+      # Generate image tags based on trigger type
+      # - Release tags (v*): version tag + latest
+      # - Branch push: sha-xxx + edge
+      # - Manual run (workflow_dispatch): sha-xxx only (no edge to avoid overwriting)
+      - name: Generate image tags
+        id: tags
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # Release tag
+            VERSION=${GITHUB_REF#refs/tags/}
+            if [[ "${{ github.event_name }}" == "push" ]]; then
+              # Push event: version + latest
+              echo "sequencer_tags=$REGISTRY/synddb-sequencer:$VERSION,$REGISTRY/synddb-sequencer:latest" >> $GITHUB_OUTPUT
+              echo "validator_tags=$REGISTRY/synddb-validator:$VERSION,$REGISTRY/synddb-validator:latest" >> $GITHUB_OUTPUT
+            else
+              # Manual run: version only, no latest to avoid overwriting
+              echo "sequencer_tags=$REGISTRY/synddb-sequencer:$VERSION" >> $GITHUB_OUTPUT
+              echo "validator_tags=$REGISTRY/synddb-validator:$VERSION" >> $GITHUB_OUTPUT
+            fi
+            echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            # Branch push: sha + edge (edge = latest on main)
+            echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA,$REGISTRY/synddb-sequencer:edge" >> $GITHUB_OUTPUT
+            echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA,$REGISTRY/synddb-validator:edge" >> $GITHUB_OUTPUT
+            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          else
+            # Manual run (workflow_dispatch): sha only, no edge to avoid overwriting latest
+            echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push sequencer
+        env:
+          SOURCE_DATE_EPOCH: 0
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/synddb-sequencer"
+          PRIMARY_TAG="${{ steps.tags.outputs.primary_tag }}"
+
+          # Build with primary tag for hash verification
+          docker buildx build \
+            --no-cache \
+            --provenance=false \
+            --sbom=false \
+            --build-arg SOURCE_DATE_EPOCH=0 \
+            --platform linux/amd64 \
+            --output type=docker,rewrite-timestamp=true \
+            -f docker/reproducible/sequencer.Dockerfile \
+            -t $IMAGE:$PRIMARY_TAG \
+            .
+
+          # Verify the hash matches what we verified
+          BUILT_HASH=$(docker inspect $IMAGE:$PRIMARY_TAG --format='{{.Id}}')
+          VERIFIED_HASH="${{ needs.verify-cross-machine.outputs.sequencer_hash }}"
+
+          echo "Built hash:    $BUILT_HASH"
+          echo "Verified hash: $VERIFIED_HASH"
+
+          # Fail if verified hash is empty (indicates upstream issue)
+          if [ -z "$VERIFIED_HASH" ]; then
+            echo "::error::Verified hash is empty! Check verify-cross-machine job."
+            exit 1
+          fi
+
+          if [ "$BUILT_HASH" != "$VERIFIED_HASH" ]; then
+            echo "::error::Publish build hash doesn't match verified hash!"
+            echo "This indicates a reproducibility failure on the publish runner."
+            exit 1
+          fi
+
+          echo "::notice::Hash verification passed for sequencer"
+
+          # Tag and push all configured tags
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.sequencer_tags }}"
+          for TAG in "${TAGS[@]}"; do
+            docker tag $IMAGE:$PRIMARY_TAG $TAG
+            docker push $TAG
+            echo "::notice::Pushed $TAG"
+          done
+
+      # Sign sequencer images with cosign (keyless)
+      # Signatures are stored in the registry alongside the images
+      - name: Sign sequencer images
+        run: |
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.sequencer_tags }}"
+          for TAG in "${TAGS[@]}"; do
+            cosign sign --yes "$TAG"
+            echo "::notice::Signed $TAG"
+          done
+
+      - name: Build and push validator
+        env:
+          SOURCE_DATE_EPOCH: 0
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/synddb-validator"
+          PRIMARY_TAG="${{ steps.tags.outputs.primary_tag }}"
+
+          # Build with primary tag for hash verification
+          docker buildx build \
+            --no-cache \
+            --provenance=false \
+            --sbom=false \
+            --build-arg SOURCE_DATE_EPOCH=0 \
+            --platform linux/amd64 \
+            --output type=docker,rewrite-timestamp=true \
+            -f docker/reproducible/validator.Dockerfile \
+            -t $IMAGE:$PRIMARY_TAG \
+            .
+
+          # Verify the hash matches what we verified
+          BUILT_HASH=$(docker inspect $IMAGE:$PRIMARY_TAG --format='{{.Id}}')
+          VERIFIED_HASH="${{ needs.verify-cross-machine.outputs.validator_hash }}"
+
+          echo "Built hash:    $BUILT_HASH"
+          echo "Verified hash: $VERIFIED_HASH"
+
+          # Fail if verified hash is empty (indicates upstream issue)
+          if [ -z "$VERIFIED_HASH" ]; then
+            echo "::error::Verified hash is empty! Check verify-cross-machine job."
+            exit 1
+          fi
+
+          if [ "$BUILT_HASH" != "$VERIFIED_HASH" ]; then
+            echo "::error::Publish build hash doesn't match verified hash!"
+            echo "This indicates a reproducibility failure on the publish runner."
+            exit 1
+          fi
+
+          echo "::notice::Hash verification passed for validator"
+
+          # Tag and push all configured tags
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.validator_tags }}"
+          for TAG in "${TAGS[@]}"; do
+            docker tag $IMAGE:$PRIMARY_TAG $TAG
+            docker push $TAG
+            echo "::notice::Pushed $TAG"
+          done
+
+      # Sign validator images with cosign (keyless)
+      - name: Sign validator images
+        run: |
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.validator_tags }}"
+          for TAG in "${TAGS[@]}"; do
+            cosign sign --yes "$TAG"
+            echo "::notice::Signed $TAG"
+          done
+
+      - name: Summary
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+
+          echo "## Published Images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.tags.outputs.is_release }}" == "true" ]]; then
+            echo "**Release:** \`${{ steps.tags.outputs.primary_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Edge build:** \`${{ steps.tags.outputs.primary_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tags | Hash |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| synddb-sequencer | \`${{ steps.tags.outputs.sequencer_tags }}\` | \`${{ needs.verify-cross-machine.outputs.sequencer_hash }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| synddb-validator | \`${{ steps.tags.outputs.validator_tags }}\` | \`${{ needs.verify-cross-machine.outputs.validator_hash }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Verify Signatures" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "cosign verify $REGISTRY/synddb-sequencer:${{ steps.tags.outputs.primary_tag }} \\\\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-identity-regexp='https://github.com/SyndicateProtocol/synddb/.*' \\\\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-oidc-issuer='https://token.actions.githubusercontent.com'" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
