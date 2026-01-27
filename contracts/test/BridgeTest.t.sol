@@ -50,16 +50,24 @@ contract BridgeTest is Test {
         attestationVerifier = new MockAttestationVerifier();
         teeKeyManager = new TeeKeyManager(attestationVerifier);
 
-        // Register sequencer as a valid TEE key
-        bytes memory publicValues = abi.encode(sequencer);
-        teeKeyManager.addKey(publicValues, "");
-
+        // Deploy bridge first (TeeKeyManager needs bridge address)
         bridge = new Bridge(admin, address(weth), address(teeKeyManager));
 
-        setupValidators(3);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
+        // Set bridge on TeeKeyManager
+        teeKeyManager.setBridge(address(bridge));
 
-        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+        // Register sequencer as a valid TEE key through bridge
+        bytes memory publicValues = abi.encode(sequencer);
+        bridge.registerSequencerKey(publicValues, "");
+
+        // Setup validators and register them
+        setupValidators(3);
+
+        // Deploy validator module with TeeKeyManager reference
+        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), 2);
+
+        // Grant message initializer permission to sequencer
+        bridge.setMessageInitializer(sequencer, true);
         bridge.addPreModule(address(validatorModule));
 
         vm.deal(sequencer, type(uint128).max);
@@ -74,7 +82,9 @@ contract BridgeTest is Test {
             validatorPrivateKeys.push(privateKey);
             validators.push(validatorAddr);
 
-            bridge.grantRole(bridge.VALIDATOR_ROLE(), validatorAddr);
+            // Register validator key through bridge
+            bytes memory publicValues = abi.encode(validatorAddr);
+            bridge.registerValidatorKey(publicValues, "");
         }
     }
 
@@ -116,7 +126,8 @@ contract BridgeTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_Constructor_RevertsOnZeroAdminAddress() public {
-        vm.expectRevert(Bridge.ZeroAddressNotAllowed.selector);
+        // Ownable2Step rejects zero address owner before our check runs
+        vm.expectRevert(abi.encodeWithSignature("OwnableInvalidOwner(address)", address(0)));
         new Bridge(address(0), address(weth), address(teeKeyManager));
     }
 
@@ -131,7 +142,8 @@ contract BridgeTest is Test {
     }
 
     function test_Constructor_RevertsOnAllZeroAddresses() public {
-        vm.expectRevert(Bridge.ZeroAddressNotAllowed.selector);
+        // Ownable2Step rejects zero address owner before our check runs
+        vm.expectRevert(abi.encodeWithSignature("OwnableInvalidOwner(address)", address(0)));
         new Bridge(address(0), address(0), address(0));
     }
 
@@ -394,9 +406,16 @@ contract BridgeTest is Test {
     }
 
     function test_HandleMessage_SequencerOnlyMode_NoValidators() public {
-        // Deploy a new bridge with no validator module (sequencer-only mode)
-        Bridge sequencerOnlyBridge = new Bridge(admin, address(weth), address(teeKeyManager));
-        sequencerOnlyBridge.grantRole(sequencerOnlyBridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+        // Deploy a new set of contracts for sequencer-only mode
+        MockAttestationVerifier newAttestationVerifier = new MockAttestationVerifier();
+        TeeKeyManager newKeyManager = new TeeKeyManager(newAttestationVerifier);
+        Bridge sequencerOnlyBridge = new Bridge(admin, address(weth), address(newKeyManager));
+        newKeyManager.setBridge(address(sequencerOnlyBridge));
+
+        // Register sequencer key and grant permission
+        bytes memory publicValues = abi.encode(sequencer);
+        sequencerOnlyBridge.registerSequencerKey(publicValues, "");
+        sequencerOnlyBridge.setMessageInitializer(sequencer, true);
 
         bytes32 messageId = keccak256("sequencer-only");
         bytes memory payload = "";

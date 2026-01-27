@@ -13,7 +13,9 @@ address constant SP1_VERIFIER_GATEWAY_GROTH16 = 0x397A5f7f3dBd538f23DE225B51f532
 /**
  * @title DeployAttestationVerifier
  * @notice Deployment script for TEE attestation verification contracts
- * @dev Deploys AttestationVerifier and TeeKeyManager for GCP Confidential Space
+ * @dev Deploys AttestationVerifier and TeeKeyManager for GCP Confidential Space.
+ *      After running this script, you must call keyManager.setBridge(bridgeAddress)
+ *      once the Bridge is deployed.
  */
 contract DeployAttestationVerifier is Script {
     function run() external returns (AttestationVerifier, TeeKeyManager) {
@@ -47,15 +49,16 @@ contract DeployAttestationVerifier is Script {
         console.log("TeeKeyManager:", address(keyManager));
         console.log("========================================");
         console.log("");
-        console.log("Next Steps:");
-        console.log("1. Add trusted JWK hashes:");
+        console.log("IMPORTANT: Complete setup after Bridge deployment:");
+        console.log("1. Deploy Bridge with this TeeKeyManager address");
+        console.log("2. Set Bridge on TeeKeyManager:");
+        console.log("   keyManager.setBridge(<bridge_address>)");
+        console.log("");
+        console.log("3. Add trusted JWK hashes:");
         console.log("   attestationVerifier.addTrustedJwkHash(<jwk_hash>)");
         console.log("");
-        console.log("2. Add TEE keys with proof:");
-        console.log("   keyManager.addKey(<publicValues>, <proofBytes>)");
-        console.log("");
-        console.log("3. Update image digest hash if needed:");
-        console.log("   attestationVerifier.updateImageDigestHash(<new_hash>)");
+        console.log("4. Register TEE keys through Bridge:");
+        console.log("   bridge.registerSequencerKey(<publicValues>, <proofBytes>)");
         console.log("========================================");
 
         return (attestationVerifier, keyManager);

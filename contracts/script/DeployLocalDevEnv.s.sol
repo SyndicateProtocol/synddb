@@ -15,7 +15,7 @@ import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
  *
  * Required environment variables:
  *   - ADMIN_ADDRESS: Address to receive admin roles (typically deployer)
- *   - SEQUENCER_ADDRESS: Address of the sequencer (receives MESSAGE_INITIALIZER_ROLE on Bridge)
+ *   - SEQUENCER_ADDRESS: Address of the sequencer (will be granted message initializer permission)
  *
  * Optional environment variables:
  *   - DEPLOY_MOCK_ATTESTATION: Set to "true" to deploy mock attestation on non-Anvil chains
@@ -26,12 +26,9 @@ import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
  *
  * TEE Key Registration (after sequencer starts):
  *   1. Get sequencer address: curl -s http://localhost:8433/status | jq -r '.signer_address'
- *   2. Register key: cast send $TEE_KEY_MANAGER "addKey(bytes,bytes)" $(cast abi-encode "f(address)" $SIGNER_ADDRESS) 0x
+ *   2. Register key: cast send $BRIDGE "registerSequencerKey(bytes,bytes)" $(cast abi-encode "f(address)" $SIGNER_ADDRESS) 0x
  */
 contract DeployLocalDevEnv is Script {
-    // Role constants (must match Bridge/ModuleCheckRegistry)
-    bytes32 public constant MESSAGE_INITIALIZER_ROLE = keccak256("MESSAGE_INITIALIZER_ROLE");
-
     // Anvil chain ID
     uint256 public constant ANVIL_CHAIN_ID = 31337;
 
@@ -84,11 +81,15 @@ contract DeployLocalDevEnv is Script {
         bridge = new Bridge(admin, address(weth), address(keyManager));
         console.log("Bridge deployed:", address(bridge));
 
-        // 5. Grant MESSAGE_INITIALIZER_ROLE to sequencer (for relayer pattern)
-        bridge.grantRole(MESSAGE_INITIALIZER_ROLE, sequencer);
-        console.log("Granted MESSAGE_INITIALIZER_ROLE to sequencer");
+        // 5. Set Bridge on TeeKeyManager (required for key management)
+        keyManager.setBridge(address(bridge));
+        console.log("TeeKeyManager bridge set");
 
-        // 6. Deploy PriceOracle with admin and bridge
+        // 6. Grant message initializer permission to sequencer
+        bridge.setMessageInitializer(sequencer, true);
+        console.log("Granted message initializer to sequencer");
+
+        // 7. Deploy PriceOracle with admin and bridge
         oracle = new PriceOracle(admin, address(bridge));
         console.log("PriceOracle deployed:", address(oracle));
 
@@ -105,10 +106,10 @@ contract DeployLocalDevEnv is Script {
         console.log("TeeKeyManager:          ", address(keyManager));
         console.log("========================================");
         console.log("");
-        console.log("Role Configuration:");
+        console.log("Permission Configuration:");
         console.log("  Bridge:");
-        console.log("    - Admin has DEFAULT_ADMIN_ROLE");
-        console.log("    - Sequencer has MESSAGE_INITIALIZER_ROLE");
+        console.log("    - Admin is owner (can manage keys, modules, permissions)");
+        console.log("    - Sequencer can initialize messages");
         console.log("  PriceOracle:");
         console.log("    - Admin has DEFAULT_ADMIN_ROLE and UPDATER_ROLE");
         console.log("    - Bridge has UPDATER_ROLE");
@@ -118,8 +119,8 @@ contract DeployLocalDevEnv is Script {
         console.log("  1. Get sequencer's dynamically generated address:");
         console.log("     SIGNER=$(curl -s http://localhost:8433/status | jq -r '.signer_address')");
         console.log("");
-        console.log("  2. Register the key with TeeKeyManager:");
-        console.log("     cast send", address(keyManager), "\"addKey(bytes,bytes)\" \\");
+        console.log("  2. Register the key through Bridge:");
+        console.log("     cast send", address(bridge), "\"registerSequencerKey(bytes,bytes)\" \\");
         console.log("       $(cast abi-encode \"f(address)\" $SIGNER) 0x --private-key $ANVIL_KEY_0");
         console.log("========================================");
 

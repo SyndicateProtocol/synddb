@@ -53,12 +53,18 @@ contract ModuleAddingAndRemovingTest is Test {
         attestationVerifier = new MockAttestationVerifier();
         teeKeyManager = new TeeKeyManager(attestationVerifier);
 
-        // Register sequencer as a valid TEE key
-        bytes memory publicValues = abi.encode(sequencer);
-        teeKeyManager.addKey(publicValues, "");
-
+        // Deploy bridge first
         bridge = new Bridge(admin, weth, address(teeKeyManager));
-        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+
+        // Set bridge on TeeKeyManager
+        teeKeyManager.setBridge(address(bridge));
+
+        // Register sequencer as a valid TEE key through bridge
+        bytes memory publicValues = abi.encode(sequencer);
+        bridge.registerSequencerKey(publicValues, "");
+
+        // Grant message initializer permission
+        bridge.setMessageInitializer(sequencer, true);
     }
 
     /// @notice Create a sequencer signature for a message
@@ -191,7 +197,7 @@ contract ModuleAddingAndRemovingTest is Test {
         for (uint256 j = 0; j < moduleCounts.length; j++) {
             // Deploy fresh Bridge for each test
             Bridge testBridge = new Bridge(admin, weth, address(teeKeyManager));
-            testBridge.grantRole(testBridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+            testBridge.setMessageInitializer(sequencer, true);
 
             // Add gas-consuming modules
             for (uint256 i = 0; i < moduleCounts[j]; i++) {

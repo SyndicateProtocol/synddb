@@ -39,6 +39,14 @@ resource "google_service_account" "relayer" {
   description  = "Service account for SyndDB gas funding relayer"
 }
 
+# Price Oracle service account
+resource "google_service_account" "price_oracle" {
+  project      = var.project_id
+  account_id   = "${var.name_prefix}-price-oracle"
+  display_name = "SyndDB Price Oracle"
+  description  = "Service account for SyndDB price oracle running in Confidential Space"
+}
+
 # Confidential Computing workload user role (required for attestation)
 resource "google_project_iam_member" "sequencer_cc_workload" {
   project = var.project_id
@@ -50,6 +58,12 @@ resource "google_project_iam_member" "validator_cc_workload" {
   project = var.project_id
   role    = "roles/confidentialcomputing.workloadUser"
   member  = "serviceAccount:${google_service_account.validator.email}"
+}
+
+resource "google_project_iam_member" "price_oracle_cc_workload" {
+  project = var.project_id
+  role    = "roles/confidentialcomputing.workloadUser"
+  member  = "serviceAccount:${google_service_account.price_oracle.email}"
 }
 
 # Logging permissions
@@ -75,6 +89,12 @@ resource "google_project_iam_member" "relayer_logging" {
   project = var.project_id
   role    = "roles/logging.logWriter"
   member  = "serviceAccount:${google_service_account.relayer.email}"
+}
+
+resource "google_project_iam_member" "price_oracle_logging" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.price_oracle.email}"
 }
 
 # GCS permissions - sequencer writes, validator reads
@@ -107,4 +127,13 @@ resource "google_artifact_registry_repository_iam_member" "validator_ar" {
   repository = var.artifact_registry_repository
   role       = "roles/artifactregistry.reader"
   member     = "serviceAccount:${google_service_account.validator.email}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "price_oracle_ar" {
+  count      = var.artifact_registry_repository != "" ? 1 : 0
+  project    = var.project_id
+  location   = var.artifact_registry_location
+  repository = var.artifact_registry_repository
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.price_oracle.email}"
 }

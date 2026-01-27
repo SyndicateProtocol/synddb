@@ -53,21 +53,25 @@ contract UseCase6_MessageOrdering is Test {
         attestationVerifier = new MockAttestationVerifier();
         teeKeyManager = new TeeKeyManager(attestationVerifier);
 
-        // Register sequencer as a valid TEE key
-        bytes memory publicValues = abi.encode(sequencer);
-        teeKeyManager.addKey(publicValues, "");
-
+        // Deploy bridge first
         bridge = new Bridge(admin, address(weth), address(teeKeyManager));
+
+        // Set bridge on TeeKeyManager
+        teeKeyManager.setBridge(address(bridge));
+
+        // Register sequencer as a valid TEE key through bridge
+        bytes memory publicValues = abi.encode(sequencer);
+        bridge.registerSequencerKey(publicValues, "");
 
         // Setup validators
         setupValidators(3);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
+        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), 2);
 
         // Deploy and configure ordering module
         orderingModule = new MessageOrderingModule(admin);
 
         // Configure bridge
-        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+        bridge.setMessageInitializer(sequencer, true);
         bridge.addPreModule(address(validatorModule));
         bridge.addPreModule(address(orderingModule)); // Add ordering check before execution
 
@@ -84,7 +88,9 @@ contract UseCase6_MessageOrdering is Test {
             validatorPrivateKeys.push(privateKey);
             validators.push(validatorAddr);
 
-            bridge.grantRole(bridge.VALIDATOR_ROLE(), validatorAddr);
+            // Register validator key through bridge
+            bytes memory publicValues = abi.encode(validatorAddr);
+            bridge.registerValidatorKey(publicValues, "");
         }
     }
 

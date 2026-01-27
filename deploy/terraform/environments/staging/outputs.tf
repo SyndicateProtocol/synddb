@@ -37,3 +37,13 @@ output "network_name" {
   description = "Name of the VPC network"
   value       = module.networking.network_name
 }
+
+output "price_oracle_internal_ip" {
+  description = "Internal IP of the price oracle"
+  value       = length(module.price_oracle) > 0 ? module.price_oracle[0].internal_ip : null
+}
+
+output "price_oracle_instance_name" {
+  description = "Instance name of the price oracle"
+  value       = length(module.price_oracle) > 0 ? module.price_oracle[0].instance_name : null
+}

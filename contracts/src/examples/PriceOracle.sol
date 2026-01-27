@@ -25,13 +25,8 @@ contract PriceOracle is AccessControl {
     }
 
     /// @notice Mapping from asset symbol hash to price data
+    /// @dev Key is keccak256(bytes(asset)), e.g., keccak256("BTC")
     mapping(bytes32 => Price) public prices;
-
-    /// @notice Mapping from asset symbol hash to human-readable symbol
-    mapping(bytes32 => string) public assetSymbols;
-
-    /// @notice List of known asset hashes for enumeration
-    bytes32[] public knownAssets;
 
     /// @notice Nonce for request IDs to ensure uniqueness
     uint256 public requestNonce;
@@ -71,6 +66,8 @@ contract PriceOracle is AccessControl {
     error ZeroAddressNotAllowed();
     error StalePrice(uint256 priceAge, uint256 maxAge);
     error InvalidPrice();
+    error FutureTimestamp(uint256 timestamp, uint256 currentTime);
+    error ArrayLengthMismatch();
     error AssetNotFound(string asset);
 
     // ============ Constructor ============
@@ -109,16 +106,9 @@ contract PriceOracle is AccessControl {
      */
     function updatePrice(string calldata asset, uint256 price, uint256 timestamp) external onlyRole(UPDATER_ROLE) {
         if (price == 0) revert InvalidPrice();
+        if (timestamp > block.timestamp) revert FutureTimestamp(timestamp, block.timestamp);
 
-        bytes32 assetHash = keccak256(bytes(asset));
-
-        // Track new assets
-        if (prices[assetHash].updatedAt == 0) {
-            knownAssets.push(assetHash);
-            assetSymbols[assetHash] = asset;
-        }
-
-        prices[assetHash] = Price({price: price, timestamp: timestamp, updatedAt: block.timestamp});
+        prices[assetHash(asset)] = Price({price: price, timestamp: timestamp, updatedAt: block.timestamp});
 
         emit PriceUpdated(asset, price, timestamp, msg.sender);
     }
@@ -136,16 +126,9 @@ contract PriceOracle is AccessControl {
         onlyRole(UPDATER_ROLE)
     {
         if (price == 0) revert InvalidPrice();
+        if (timestamp > block.timestamp) revert FutureTimestamp(timestamp, block.timestamp);
 
-        bytes32 assetHash = keccak256(bytes(asset));
-
-        // Track new assets
-        if (prices[assetHash].updatedAt == 0) {
-            knownAssets.push(assetHash);
-            assetSymbols[assetHash] = asset;
-        }
-
-        prices[assetHash] = Price({price: price, timestamp: timestamp, updatedAt: block.timestamp});
+        prices[assetHash(asset)] = Price({price: price, timestamp: timestamp, updatedAt: block.timestamp});
 
         emit PriceUpdated(asset, price, timestamp, msg.sender);
         emit PriceRequestFulfilled(requestId, asset, price);
@@ -161,19 +144,16 @@ contract PriceOracle is AccessControl {
         external
         onlyRole(UPDATER_ROLE)
     {
-        require(assets.length == priceValues.length && assets.length == timestamps.length, "Array length mismatch");
+        if (assets.length != priceValues.length || assets.length != timestamps.length) {
+            revert ArrayLengthMismatch();
+        }
 
         for (uint256 i = 0; i < assets.length; i++) {
             if (priceValues[i] == 0) continue; // Skip invalid prices
+            if (timestamps[i] > block.timestamp) continue; // Skip future timestamps
 
-            bytes32 assetHash = keccak256(bytes(assets[i]));
-
-            if (prices[assetHash].updatedAt == 0) {
-                knownAssets.push(assetHash);
-                assetSymbols[assetHash] = assets[i];
-            }
-
-            prices[assetHash] = Price({price: priceValues[i], timestamp: timestamps[i], updatedAt: block.timestamp});
+            prices[assetHash(assets[i])] =
+                Price({price: priceValues[i], timestamp: timestamps[i], updatedAt: block.timestamp});
 
             emit PriceUpdated(assets[i], priceValues[i], timestamps[i], msg.sender);
         }
@@ -221,6 +201,15 @@ contract PriceOracle is AccessControl {
     // ============ Read Functions ============
 
     /**
+     * @notice Compute the storage key for an asset symbol
+     * @param asset Asset symbol (e.g., "BTC", "ETH")
+     * @return The keccak256 hash used as the mapping key
+     */
+    function assetHash(string memory asset) public pure returns (bytes32) {
+        return keccak256(bytes(asset));
+    }
+
+    /**
      * @notice Get the latest price for an asset
      * @param asset Asset symbol
      * @return price The price value
@@ -232,8 +221,7 @@ contract PriceOracle is AccessControl {
         view
         returns (uint256 price, uint256 timestamp, uint256 updatedAt)
     {
-        bytes32 assetHash = keccak256(bytes(asset));
-        Price storage p = prices[assetHash];
+        Price storage p = prices[assetHash(asset)];
 
         if (p.updatedAt == 0) revert AssetNotFound(asset);
 
@@ -247,8 +235,7 @@ contract PriceOracle is AccessControl {
      * @return price The price value
      */
     function getPriceIfFresh(string calldata asset, uint256 maxAge) external view returns (uint256 price) {
-        bytes32 assetHash = keccak256(bytes(asset));
-        Price storage p = prices[assetHash];
+        Price storage p = prices[assetHash(asset)];
 
         if (p.updatedAt == 0) revert AssetNotFound(asset);
 
@@ -261,28 +248,9 @@ contract PriceOracle is AccessControl {
     }
 
     /**
-     * @notice Get the number of known assets
-     */
-    function getAssetCount() external view returns (uint256) {
-        return knownAssets.length;
-    }
-
-    /**
-     * @notice Get all known asset symbols
-     */
-    function getAllAssets() external view returns (string[] memory) {
-        string[] memory symbols = new string[](knownAssets.length);
-        for (uint256 i = 0; i < knownAssets.length; i++) {
-            symbols[i] = assetSymbols[knownAssets[i]];
-        }
-        return symbols;
-    }
-
-    /**
      * @notice Check if an asset has a stored price
      */
     function hasPrice(string calldata asset) external view returns (bool) {
-        bytes32 assetHash = keccak256(bytes(asset));
-        return prices[assetHash].updatedAt > 0;
+        return prices[assetHash(asset)].updatedAt > 0;
     }
 }

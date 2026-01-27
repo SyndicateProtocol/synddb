@@ -75,7 +75,7 @@ contract GasTreasury is IGasTreasury, Ownable {
     /**
      * @notice Funds a registered TEE key via signature
      * @dev Called by relayer with signature from the key requesting funding.
-     *      Verifies the key is registered in TeeKeyManager.
+     *      Verifies the key is registered in TeeKeyManager as either sequencer or validator.
      * @param teeKey The key to fund
      * @param deadline Timestamp after which the signature expires
      * @param signature EIP-712 signature from the TEE key
@@ -83,10 +83,19 @@ contract GasTreasury is IGasTreasury, Ownable {
     function fundKeyWithSignature(address teeKey, uint256 deadline, bytes calldata signature) external override {
         if (block.timestamp > deadline) revert SignatureExpired();
 
-        // Verify key is registered
-        // Note: isKeyValid reverts if key is not valid
-        try keyManager.isKeyValid(teeKey) {}
-        catch {
+        // Verify key is registered as either sequencer or validator
+        bool isValidKey = false;
+        try keyManager.isSequencerKeyValid(teeKey) {
+            isValidKey = true;
+        } catch {}
+
+        if (!isValidKey) {
+            try keyManager.isValidatorKeyValid(teeKey) {
+                isValidKey = true;
+            } catch {}
+        }
+
+        if (!isValidKey) {
             revert KeyNotRegistered(teeKey);
         }
 
