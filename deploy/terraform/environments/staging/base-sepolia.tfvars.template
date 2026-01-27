@@ -25,8 +25,11 @@ zone   = "us-central1-a"
 # Using edge tag from Artifact Registry. Change to specific version for stability.
 
 sequencer_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-sequencer:edge"
-validator_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-validator:edge"
 proof_service_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/proof-service:edge"
+
+# For price oracle example, use the custom validator with price consistency rules
+# For other use cases, use: us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-validator:edge
+validator_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle-validator:edge"
 
 # -----------------------------------------------------------------------------
 # Storage
@@ -88,6 +91,32 @@ batch_max_messages   = 100
 batch_flush_interval = "2s"
 
 # -----------------------------------------------------------------------------
+# Price Oracle Configuration
+# -----------------------------------------------------------------------------
+# The price oracle runs in Confidential Space alongside sequencer/validator
+# Image is built automatically by CI and pushed to Artifact Registry
+
+price_oracle_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle:edge"
+
+# TODO: PriceOracle contract address (from contract deployment)
+price_oracle_contract_address = "0xTODO_PRICE_ORACLE_ADDRESS"
+
+price_oracle_config = {
+  # API keys (optional - free tier works without)
+  coingecko_api_key = ""
+  cmc_api_key       = ""
+
+  # Fetch interval in seconds
+  fetch_interval = 60
+
+  # Assets to track
+  assets = ["BTC", "ETH", "SOL"]
+
+  # Enable chain monitor to watch for on-chain price requests
+  chain_monitor_enabled = true
+}
+
+# -----------------------------------------------------------------------------
 # Relayer Configuration (Optional - for gas funding)
 # -----------------------------------------------------------------------------
 # Uncomment and fill in to enable the relayer service
@@ -140,18 +169,26 @@ labels = {
 #     - PriceOracle:    0x...
 #
 # Step 3: Fill in TODO values above with deployed contract addresses
+#   (Container images are built automatically by CI)
 #
 # Step 4: Deploy infrastructure
 #   cd deploy/terraform/environments/staging
-#   cp terraform.tfvars.base-sepolia terraform.tfvars
+#   cp base-sepolia.tfvars.template terraform.tfvars
+#   # Edit terraform.tfvars with your values
 #   terraform init
 #   terraform plan
 #   terraform apply
 #
-# Step 5: Get outputs
+# Step 5: Verify deployment
 #   terraform output
+#   gcloud compute instances list --filter="name~synddb-staging"
 #
-# Step 6: Deploy price oracle app (separate service)
-#   See examples/price-oracle/README.md
+# Step 6: Test end-to-end
+#   # Request a price on-chain
+#   cast send --rpc-url https://sepolia.base.org --account deployer \
+#       $PRICE_ORACLE_CONTRACT_ADDRESS "requestPrice(string)" "BTC"
+#
+#   # Check logs
+#   gcloud compute instances get-serial-port-output synddb-staging-price-oracle --zone us-central1-a
 #
 # =============================================================================

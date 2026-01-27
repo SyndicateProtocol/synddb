@@ -34,6 +34,8 @@ jobs:
     name: SP1 Build & Execute
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      vkey: ${{ steps.vkey.outputs.vkey }}
     steps:
       - uses: actions/checkout@v4
 
@@ -80,6 +82,25 @@ jobs:
           cargo run --release --bin gcp-cs-prover -- --execute --sample ../../samples/samples_*.json
 
       - name: Generate verification key
+        id: vkey
         run: |
           cd tests/confidential-space/sp1/script
-          cargo run --release --bin gcp-cs-vkey
+          VKEY=$(cargo run --release --bin gcp-cs-vkey 2>/dev/null | grep "bytes32" | awk '{print $NF}')
+
+          # Validate vkey format (should be 0x followed by 64 hex chars)
+          if [[ ! "$VKEY" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
+            echo "::error::Invalid vkey format: $VKEY"
+            exit 1
+          fi
+
+          echo "vkey=$VKEY" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## SP1 Verification Key"
+            echo ""
+            echo "Use this value for \`ATTESTATION_VERIFIER_VKEY\` in contract deployment:"
+            echo ""
+            echo "\`\`\`"
+            echo "$VKEY"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

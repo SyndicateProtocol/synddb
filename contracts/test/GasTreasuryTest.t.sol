@@ -6,14 +6,26 @@ import {GasTreasury} from "src/GasTreasury.sol";
 import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
 
 contract MockKeyManagerForTreasury {
-    mapping(address => bool) public validKeys;
+    mapping(address => bool) public validSequencerKeys;
+    mapping(address => bool) public validValidatorKeys;
 
-    function setKeyValid(address key, bool valid) external {
-        validKeys[key] = valid;
+    function setSequencerKeyValid(address key, bool valid) external {
+        validSequencerKeys[key] = valid;
     }
 
-    function isKeyValid(address key) external view returns (bool) {
-        if (!validKeys[key]) {
+    function setValidatorKeyValid(address key, bool valid) external {
+        validValidatorKeys[key] = valid;
+    }
+
+    function isSequencerKeyValid(address key) external view returns (bool) {
+        if (!validSequencerKeys[key]) {
+            revert("Key not valid");
+        }
+        return true;
+    }
+
+    function isValidatorKeyValid(address key) external view returns (bool) {
+        if (!validValidatorKeys[key]) {
             revert("Key not valid");
         }
         return true;
@@ -50,8 +62,8 @@ contract GasTreasuryTest is Test {
         teePrivateKey = 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef;
         teeAddress = vm.addr(teePrivateKey);
 
-        // Register the key
-        mockKeyManager.setKeyValid(teeAddress, true);
+        // Register the key as a sequencer
+        mockKeyManager.setSequencerKeyValid(teeAddress, true);
     }
 
     function createFundingSignature(address key, uint256 privKey, uint256 deadline)

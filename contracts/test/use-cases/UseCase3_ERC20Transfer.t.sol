@@ -42,16 +42,21 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
         attestationVerifier = new MockAttestationVerifier();
         teeKeyManager = new TeeKeyManager(attestationVerifier);
 
-        // Register sequencer as a valid TEE key
-        bytes memory publicValues = abi.encode(sequencer);
-        teeKeyManager.addKey(publicValues, "");
-
+        // Deploy bridge first
         bridge = new Bridge(admin, address(weth), address(teeKeyManager));
 
-        setupValidators(bridge);
-        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
+        // Set bridge on TeeKeyManager
+        teeKeyManager.setBridge(address(bridge));
 
-        bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+        // Register sequencer as a valid TEE key through bridge
+        bytes memory publicValues = abi.encode(sequencer);
+        bridge.registerSequencerKey(publicValues, "");
+
+        // Setup validators and module using TeeKeyManager
+        setupValidators(bridge);
+        validatorModule = new ValidatorSignatureThresholdModule(address(bridge), address(teeKeyManager), 2);
+
+        bridge.setMessageInitializer(sequencer, true);
         bridge.addPreModule(address(validatorModule));
 
         usdc.transfer(user, INITIAL_BALANCE);

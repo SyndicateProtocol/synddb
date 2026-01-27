@@ -37,3 +37,13 @@ output "relayer_service_account_id" {
   description = "ID of the relayer service account"
   value       = google_service_account.relayer.id
 }
+
+output "price_oracle_service_account_email" {
+  description = "Email of the price oracle service account"
+  value       = google_service_account.price_oracle.email
+}
+
+output "price_oracle_service_account_id" {
+  description = "ID of the price oracle service account"
+  value       = google_service_account.price_oracle.id
+}
