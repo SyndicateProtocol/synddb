@@ -151,6 +151,58 @@ cargo test -p synddb-sequencer
 - `cargo install taplo-cli` (TOML formatting)
 - `cargo install cargo-machete` (unused dependency detection)
 
+## Justfile
+
+The project uses [just](https://github.com/casey/just) as a command runner for local development. The justfile is the single source of truth for all development defaults (Anvil keys, contract addresses, ports).
+
+**When to use:** Both local development and CI. The justfile is the single source of truth - CI jobs call the same recipes you run locally.
+
+**Quick start:**
+```bash
+just              # Show all available commands
+just dev          # Start full local environment (Anvil + contracts + sequencer)
+just check        # Run all CI checks locally
+just test         # Run tests
+```
+
+**Modules:** Recipes are organized into modules for contracts and examples:
+```bash
+just contracts::build    # Build Solidity contracts
+just contracts::test     # Run contract tests
+just examples::price-oracle      # Run price oracle example
+```
+
+**CI recipes:** Integration tests that start/stop services:
+```bash
+just stress-test         # Run stress test with sequencer
+just client-integration  # Run client integration tests
+just fuzz-ci             # Run fuzzer with CI iterations
+```
+
+### Language Features Used
+
+| Feature | Purpose | Example |
+|---------|---------|---------|
+| `set shell` | Bash strict mode for all recipes | `set shell := ["bash", "-euo", "pipefail", "-c"]` |
+| `set dotenv-load` | Load `.env` for optional overrides | Users can create `.env` to customize defaults |
+| `set export` | Export all variables as env vars | Variables available to all recipes |
+| `mod` | Organize recipes into modules | `mod contracts 'contracts/mod.just'` |
+| `[group()]` | Group recipes in `just --list` | `[group('dev')]`, `[group('test')]` |
+| `[confirm()]` | Require confirmation for destructive ops | `[confirm('Remove all data?')]` |
+| Variables | Single source of truth for config | `anvil_key_0 := "ac097..."` |
+
+### Configuration
+
+All local dev defaults are defined in the justfile. No `.env` file is needed for basic development. To override any value, create a `.env` file (gitignored):
+
+```bash
+# .env (optional - for local overrides only)
+RUST_LOG=debug
+sequencer_port=9000
+```
+
+**Reference:** [Just Manual](https://just.systems/man/en/)
+
 ## Code Style
 
 - No emojis in code or comments unless explicitly requested

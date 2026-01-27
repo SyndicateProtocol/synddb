@@ -9,6 +9,7 @@ on:
       - "Cargo.lock"
       - ".github/workflows/rust-ci.yml"
       - "tests/**"
+      - "justfile"
 
   # Run on main pushes
   push:
@@ -29,10 +30,13 @@ env:
 jobs:
   taplo:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
-    name: Cargo.toml Format
+    name: TOML Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
 
       - name: Cache cargo binaries
         uses: Swatinem/rust-cache@v2
@@ -46,11 +50,8 @@ jobs:
           command: install
           args: taplo-cli@0.9.0
 
-      - name: Validate Cargo.toml files
-        run: taplo lint "**/Cargo.toml" --verbose
-
-      - name: Check Cargo.toml formatting
-        run: taplo fmt --check "**/Cargo.toml" --verbose
+      - name: Check TOML formatting
+        run: just taplo
 
   machete:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
@@ -58,6 +59,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
 
       - name: Cache cargo binaries
         uses: Swatinem/rust-cache@v2
@@ -72,9 +76,7 @@ jobs:
           args: cargo-machete@0.7.0
 
       - name: Check for unused dependencies
-        uses: clechasseur/rs-cargo@v2
-        with:
-          command: machete
+        run: just machete
 
       - name: Check for unused dependencies (tests/confidential-space)
         run: |
@@ -88,13 +90,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install just
+        uses: extractions/setup-just@v2
+
       - name: Install Rust nightly toolchain
         run: |
           rustup toolchain install nightly --profile minimal
           rustup component add --toolchain nightly rustfmt
 
       - name: Check Rust formatting
-        run: cargo +nightly fmt --all --check
+        run: just fmt-check
 
       - name: Check Rust formatting (tests/confidential-space)
         run: |
@@ -108,6 +113,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install just
+        uses: extractions/setup-just@v2
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -118,7 +126,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features
+        run: just clippy
 
       - name: Run Clippy (tests/confidential-space)
         run: |
@@ -126,7 +134,7 @@ jobs:
           cargo clippy --all-targets --all-features --manifest-path tests/confidential-space/gcp-confidential-space/Cargo.toml
 
       - name: Check documentation builds
-        run: cargo doc --workspace --all-features --no-deps
+        run: just docs-check
         env:
           RUSTDOCFLAGS: "-D warnings"
 
@@ -137,6 +145,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -149,11 +160,10 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Run tests with nextest
-        run: cargo nextest run --workspace --all-features --exclude synddb-e2e --exclude synddb-e2e-gcs
+      - name: Run tests
+        run: just test
 
       # Fallback to standard cargo test for doctests (nextest doesn't support them)
-      # Note: e2e tests are excluded here and run separately in `e2e.yml`
       - name: Run doctests
         run: cargo test --workspace --doc --exclude synddb-e2e --exclude synddb-e2e-gcs
 
@@ -168,6 +178,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install just
+        uses: extractions/setup-just@v2
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -176,41 +189,8 @@ jobs:
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Build stress test
-        run: cargo build --package synddb-benchmark --bin session-stress-test --release
-
-      - name: Build sequencer
-        run: cargo build --package synddb-sequencer --release
-
-      - name: Start sequencer
-        run: |
-          ./target/release/synddb-sequencer &
-          echo $! > /tmp/sequencer.pid
-          # Wait for sequencer to be healthy
-          for i in {1..30}; do
-            if curl -s http://localhost:8433/health > /dev/null 2>&1; then
-              echo "Sequencer is healthy"
-              break
-            fi
-            echo "Waiting for sequencer... ($i/30)"
-            sleep 1
-          done
-        env:
-          # Test signing key (anvil account 0)
-          SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-
-      - name: Run session stress test
-        run: |
-          ./target/release/session-stress-test --duration 15
-        env:
-          RUST_LOG: info
-
-      - name: Stop sequencer
-        if: always()
-        run: |
-          if [ -f /tmp/sequencer.pid ]; then
-            kill $(cat /tmp/sequencer.pid) || true
-          fi
+      - name: Run stress test
+        run: just stress-test
 
   client-integration:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
@@ -220,6 +200,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install just
+        uses: extractions/setup-just@v2
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -228,37 +211,8 @@ jobs:
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Build sequencer
-        run: cargo build --package synddb-sequencer --release
-
-      - name: Start sequencer
-        run: |
-          ./target/release/synddb-sequencer &
-          echo $! > /tmp/sequencer.pid
-          # Wait for sequencer to be healthy
-          for i in {1..30}; do
-            if curl -s http://localhost:8433/health > /dev/null 2>&1; then
-              echo "Sequencer is healthy"
-              break
-            fi
-            echo "Waiting for sequencer... ($i/30)"
-            sleep 1
-          done
-        env:
-          # Test signing key (anvil account 0)
-          SIGNING_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-
       - name: Run client integration tests
-        run: cargo test -p synddb-client --lib -- --ignored --skip attestation
-        env:
-          RUST_LOG: info
-
-      - name: Stop sequencer
-        if: always()
-        run: |
-          if [ -f /tmp/sequencer.pid ]; then
-            kill $(cat /tmp/sequencer.pid) || true
-          fi
+        run: just client-integration
 
   fuzzer:
     if: github.event.pull_request.draft == false || github.event_name == 'push'
@@ -267,6 +221,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -277,9 +234,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run fuzzer tests
-        run: cargo test -p synddb-fuzzer --release
+        run: just fuzz-ci
         env:
-          # Run more proptest iterations in CI
           PROPTEST_CASES: "256"
 
   e2e-fuzzer:
@@ -290,6 +246,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install just
+        uses: extractions/setup-just@v2
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -299,13 +258,32 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run E2E fuzzer tests
-        run: cargo test -p synddb-e2e-fuzzer --release
+        run: just fuzz-e2e-ci
         env:
-          # Run proptest iterations in CI
           PROPTEST_CASES: "100"
+          PROPTEST_CASES_STRESS: "10"
 
-      - name: Run E2E stress tests
-        run: cargo test -p synddb-e2e-fuzzer --release -- --ignored
-        env:
-          # Fewer iterations for expensive stress tests
-          PROPTEST_CASES: "10"
+  justfile-validate:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    name: Justfile Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Validate justfile syntax
+        run: just --unstable --fmt --check
+
+      - name: List available recipes
+        run: |
+          echo "=== Root recipes ==="
+          just --list
+          echo ""
+          echo "=== Contracts module ==="
+          just --list contracts
+          echo ""
+          echo "=== Examples module ==="
+          just --list examples
