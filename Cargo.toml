@@ -28,7 +28,7 @@ repository = "https://github.com/syndicate-io/synddb"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.48", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 
 # Database
 # TODO: Update to rusqlite 0.38+ when ready - has breaking changes:
