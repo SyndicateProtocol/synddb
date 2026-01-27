@@ -46,6 +46,10 @@ pub(crate) struct ConfigFile {
     #[serde(default = "default_tx_confirmation_timeout_secs")]
     pub tx_confirmation_timeout_secs: u64,
 
+    /// Validator URL for fetching withdrawal signatures
+    #[serde(default)]
+    pub validator_url: Option<String>,
+
     /// Per-application configurations
     #[serde(rename = "application")]
     pub applications: Vec<ApplicationConfig>,
@@ -97,6 +101,10 @@ pub(crate) struct CliConfig {
     /// Allowed image digests (comma-separated hex hashes, single-app mode)
     #[arg(long, env = "ALLOWED_IMAGE_DIGESTS")]
     pub allowed_image_digests: Option<String>,
+
+    /// Validator URL for fetching withdrawal signatures
+    #[arg(long, env = "VALIDATOR_URL")]
+    pub validator_url: Option<String>,
 }
 
 /// Runtime configuration for the relayer
@@ -119,6 +127,9 @@ pub(crate) struct RelayerConfig {
 
     /// Transaction confirmation timeout
     pub tx_confirmation_timeout: Duration,
+
+    /// Validator URL for fetching withdrawal signatures
+    pub validator_url: Option<String>,
 
     /// Application configs indexed by audience hash
     pub applications: HashMap<B256, ApplicationConfig>,
@@ -165,6 +176,7 @@ impl RelayerConfig {
             private_key: config.private_key,
             listen_addr: config.listen_addr,
             tx_confirmation_timeout: Duration::from_secs(config.tx_confirmation_timeout_secs),
+            validator_url: config.validator_url,
             applications,
         })
     }
@@ -222,6 +234,7 @@ impl RelayerConfig {
             private_key,
             listen_addr: cli.listen_addr,
             tx_confirmation_timeout: Duration::from_secs(cli.tx_confirmation_timeout_secs),
+            validator_url: cli.validator_url,
             applications,
         })
     }

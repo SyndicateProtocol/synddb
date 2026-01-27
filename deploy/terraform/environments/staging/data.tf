@@ -129,6 +129,55 @@ locals {
     regex("@(sha256:[a-f0-9]+)$", var.price_oracle_image)[0] :
     try(data.external.price_oracle_signature[0].result.digest, "")
   ) : ""
+
+  # ---------------------------------------------------------------------------
+  # Resolved image references
+  # ---------------------------------------------------------------------------
+  # These locals resolve tag references (e.g., :latest) to full digest references.
+  # If the image variable already contains @sha256:, it's used as-is.
+  # Otherwise, the base image (before :tag) is combined with the resolved digest.
+  #
+  # This allows tfvars to use either:
+  #   - Full digest: "registry/repo@sha256:abc123..."
+  #   - Tag reference: "registry/repo:latest" (auto-resolved via get-image-info.sh)
+
+  # Extract base image (before @ or :) for constructing resolved references
+  sequencer_base = replace(var.sequencer_image, "/[@:].*$/", "")
+  validator_base = replace(var.validator_image, "/[@:].*$/", "")
+  price_oracle_base = var.price_oracle_image != "" ? replace(var.price_oracle_image, "/[@:].*$/", "") : ""
+  proof_service_base = replace(var.proof_service_image, "/[@:].*$/", "")
+
+  # Proof service digest (used for RISC Zero image ID lookup and Cloud Run deployment)
+  proof_service_digest = var.tee_bootstrap != null ? (
+    can(regex("@(sha256:[a-f0-9]+)$", var.proof_service_image)) ?
+    regex("@(sha256:[a-f0-9]+)$", var.proof_service_image)[0] :
+    try(data.external.proof_service_info[0].result.digest, "")
+  ) : ""
+
+  # Resolved full image references with digest
+  sequencer_resolved_image = (
+    can(regex("@sha256:", var.sequencer_image)) ?
+    var.sequencer_image :
+    "${local.sequencer_base}@${local.sequencer_digest}"
+  )
+
+  validator_resolved_image = (
+    can(regex("@sha256:", var.validator_image)) ?
+    var.validator_image :
+    "${local.validator_base}@${local.price_oracle_validator_digest}"
+  )
+
+  price_oracle_resolved_image = var.price_oracle_image != "" ? (
+    can(regex("@sha256:", var.price_oracle_image)) ?
+    var.price_oracle_image :
+    "${local.price_oracle_base}@${local.price_oracle_digest}"
+  ) : ""
+
+  proof_service_resolved_image = (
+    can(regex("@sha256:", var.proof_service_image)) ?
+    var.proof_service_image :
+    "${local.proof_service_base}@${local.proof_service_digest}"
+  )
 }
 
 resource "null_resource" "update_attestation_verifier_sequencer" {

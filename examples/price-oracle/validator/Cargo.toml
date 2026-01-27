@@ -9,6 +9,7 @@ publish = false
 # SyndDB crates
 synddb-validator = { path = "../../../crates/synddb-validator" }
 synddb-shared = { path = "../../../crates/synddb-shared" }
+synddb-bootstrap = { path = "../../../crates/synddb-bootstrap", optional = true }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -31,6 +32,10 @@ metrics-exporter-prometheus = { workspace = true }
 # Database
 rusqlite = { workspace = true }
 
+# Crypto primitives (for bridge signing)
+alloy = { workspace = true }
+hex = { workspace = true }
+
 [features]
 default = []
-tee = ["synddb-validator/tee"]
+tee = ["synddb-validator/tee", "dep:synddb-bootstrap"]

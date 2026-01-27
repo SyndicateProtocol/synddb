@@ -5,8 +5,11 @@
 //!
 //! Messages are signed using COSE (CBOR Object Signing and Encryption) with
 //! 64-byte secp256k1 ECDSA signatures (r || s format, no recovery ID).
+//!
+//! For withdrawals, a Bridge-compatible signature is also generated using
+//! EIP-191 personal sign format, matching what the Bridge contract expects.
 
-use alloy::primitives::{keccak256, Address};
+use alloy::primitives::{keccak256, Address, B256, U256};
 use k256::ecdsa::Signature;
 use std::{
     io::Write,
@@ -54,6 +57,23 @@ pub struct SequenceReceipt {
     /// COSE signature (64 bytes, r || s). Encoded as hex with 0x prefix.
     pub signature: String,
     /// 64-byte uncompressed public key (without 0x04 prefix). Encoded as hex with 0x prefix.
+    pub signer: String,
+}
+
+/// Bridge-compatible signature for withdrawals
+///
+/// This signature matches the format expected by the Bridge contract's
+/// `initializeMessage` function. It uses EIP-191 personal sign format over
+/// the Bridge message hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgeSignature {
+    /// The message ID (`request_id` as bytes32)
+    pub message_id: String,
+    /// The Bridge message hash that was signed
+    pub message_hash: String,
+    /// EIP-191 signature (65 bytes: r || s || v). Encoded as hex with 0x prefix.
+    pub signature: String,
+    /// Signer address (20 bytes). Encoded as hex with 0x prefix.
     pub signer: String,
 }
 
@@ -204,6 +224,113 @@ impl Inbox {
         bytes[..32].copy_from_slice(&alloy_sig.r().to_be_bytes::<32>());
         bytes[32..].copy_from_slice(&alloy_sig.s().to_be_bytes::<32>());
         signature_from_bytes(&bytes)
+    }
+
+    /// Sign a withdrawal for the Bridge contract
+    ///
+    /// Creates a signature compatible with the Bridge contract's `initializeMessage` function.
+    /// The signature is over the EIP-191 personal sign hash of the Bridge message hash.
+    ///
+    /// Bridge message hash format:
+    /// ```solidity
+    /// keccak256(abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount))
+    /// ```
+    pub fn sign_bridge_withdrawal(
+        &self,
+        message_id: &str,
+        target_address: &str,
+        payload: &[u8],
+        native_token_amount: &str,
+    ) -> Result<BridgeSignature, InboxError> {
+        // Parse message_id to bytes32
+        // If it looks like a hex string (0x prefix or 64 hex chars), decode it
+        // Otherwise, hash the string to get a bytes32
+        let message_id_b256 = {
+            let message_id_hex = message_id.strip_prefix("0x").unwrap_or(message_id);
+            if message_id_hex.len() == 64 && message_id_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                // Valid 32-byte hex string
+                let bytes = hex::decode(message_id_hex)
+                    .map_err(|e| InboxError::Signing(format!("Invalid message_id hex: {e}")))?;
+                B256::from_slice(&bytes)
+            } else if message_id_hex.chars().all(|c| c.is_ascii_hexdigit())
+                && !message_id_hex.is_empty()
+            {
+                // Shorter hex string - pad left with zeros
+                let bytes = hex::decode(message_id_hex)
+                    .map_err(|e| InboxError::Signing(format!("Invalid message_id hex: {e}")))?;
+                let mut padded = [0u8; 32];
+                let start = 32 - bytes.len().min(32);
+                padded[start..].copy_from_slice(&bytes[..bytes.len().min(32)]);
+                B256::from(padded)
+            } else {
+                // Non-hex string - hash it to get a bytes32
+                keccak256(message_id.as_bytes())
+            }
+        };
+
+        // Parse target address
+        let target_hex = target_address.strip_prefix("0x").unwrap_or(target_address);
+        let target_bytes = hex::decode(target_hex)
+            .map_err(|e| InboxError::Signing(format!("Invalid target address hex: {e}")))?;
+        if target_bytes.len() != 20 {
+            return Err(InboxError::Signing(format!(
+                "Invalid target address length: expected 20 bytes, got {}",
+                target_bytes.len()
+            )));
+        }
+        let target_address_bytes: [u8; 20] = target_bytes
+            .try_into()
+            .map_err(|_| InboxError::Signing("Invalid target address".to_string()))?;
+
+        // Parse native token amount
+        let amount = native_token_amount
+            .parse::<u128>()
+            .map_err(|e| InboxError::Signing(format!("Invalid amount: {e}")))?;
+        let amount_u256 = U256::from(amount);
+
+        // Hash the payload
+        let payload_hash = keccak256(payload);
+
+        // Compute Bridge message hash: keccak256(abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount))
+        let mut packed = Vec::with_capacity(32 + 20 + 32 + 32);
+        packed.extend_from_slice(message_id_b256.as_slice());
+        packed.extend_from_slice(&target_address_bytes);
+        packed.extend_from_slice(payload_hash.as_slice());
+        packed.extend_from_slice(&amount_u256.to_be_bytes::<32>());
+        let bridge_message_hash = keccak256(&packed);
+
+        // Apply EIP-191 personal sign: keccak256("\x19Ethereum Signed Message:\n32" + hash)
+        let mut eth_signed_data = Vec::with_capacity(60);
+        eth_signed_data.extend_from_slice(b"\x19Ethereum Signed Message:\n32");
+        eth_signed_data.extend_from_slice(bridge_message_hash.as_slice());
+        let eth_signed_hash = keccak256(&eth_signed_data);
+
+        // Sign the EIP-191 hash
+        let alloy_sig = self
+            .key_manager
+            .sign_raw_sync(&eth_signed_hash.0)
+            .map_err(|e| InboxError::Signing(e.to_string()))?;
+
+        // Format as r || s || v (65 bytes)
+        let mut sig_bytes = Vec::with_capacity(65);
+        sig_bytes.extend_from_slice(&alloy_sig.r().to_be_bytes::<32>());
+        sig_bytes.extend_from_slice(&alloy_sig.s().to_be_bytes::<32>());
+        // Ethereum uses v = 27 or 28
+        sig_bytes.push(if alloy_sig.v() { 28 } else { 27 });
+
+        debug!(
+            message_id = %message_id,
+            target = %target_address,
+            signer = %self.key_manager.address(),
+            "Signed Bridge withdrawal"
+        );
+
+        Ok(BridgeSignature {
+            message_id: format!("{message_id_b256:#x}"),
+            message_hash: format!("{bridge_message_hash:#x}"),
+            signature: format!("0x{}", hex::encode(&sig_bytes)),
+            signer: format!("{:#x}", self.key_manager.address()),
+        })
     }
 }
 
