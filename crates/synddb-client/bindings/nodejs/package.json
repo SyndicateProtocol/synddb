@@ -12,9 +12,8 @@
   ],
   "author": "Syndicate",
   "license": "MIT",
-  "peerDependencies": {
-    "ffi-napi": "^4.0.3",
-    "ref-napi": "^3.0.3"
+  "dependencies": {
+    "koffi": "^2.9.0"
   },
   "engines": {
     "node": ">=14.0.0"

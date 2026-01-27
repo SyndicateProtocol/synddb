@@ -196,8 +196,8 @@ pub struct StatusResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReplicationStats {
     pub pending_changesets: usize,
-    pub published_changesets: u64,
-    pub failed_publishes: u64,
+    pub pushed_changesets: u64,
+    pub failed_pushes: u64,
 }
 
 // =============================================================================
@@ -376,7 +376,7 @@ async fn create_account(
 ) -> Result<Json<IdResponse>, AppError> {
     let app = config.connect()?;
     let id = app.create_account(&req.name)?;
-    app.publish_changeset()?;
+    app.push()?;
     Ok(Json(IdResponse { id }))
 }
 
@@ -414,7 +414,7 @@ async fn create_market(
         req.description.as_deref(),
         req.resolution_time,
     )?;
-    app.publish_changeset()?;
+    app.push()?;
     Ok(Json(IdResponse { id }))
 }
 
@@ -440,7 +440,7 @@ async fn buy_shares(
 ) -> Result<Json<TradeJson>, AppError> {
     let app = config.connect()?;
     let trade = app.buy_shares(req.account_id, market_id, &req.outcome, req.shares)?;
-    app.publish_changeset()?;
+    app.push()?;
     Ok(Json(trade.into()))
 }
 
@@ -451,7 +451,7 @@ async fn sell_shares(
 ) -> Result<Json<TradeJson>, AppError> {
     let app = config.connect()?;
     let trade = app.sell_shares(req.account_id, market_id, &req.outcome, req.shares)?;
-    app.publish_changeset()?;
+    app.push()?;
     Ok(Json(trade.into()))
 }
 
@@ -462,7 +462,7 @@ async fn resolve_market(
 ) -> Result<StatusCode, AppError> {
     let app = config.connect()?;
     app.resolve_market(market_id, &req.outcome)?;
-    app.publish_changeset()?;
+    app.push()?;
     Ok(StatusCode::OK)
 }
 
@@ -478,14 +478,14 @@ async fn simulate_deposit(
         req.amount,
         req.block_number,
     )?;
-    app.publish_changeset()?;
+    app.push()?;
     Ok(Json(IdResponse { id }))
 }
 
 async fn process_deposits(State(config): State<AppState>) -> Result<Json<CountResponse>, AppError> {
     let app = config.connect()?;
     let count = app.process_deposits()?;
-    app.publish_changeset()?;
+    app.push()?;
     Ok(Json(CountResponse { count }))
 }
 
@@ -495,7 +495,7 @@ async fn request_withdrawal(
 ) -> Result<Json<IdResponse>, AppError> {
     let app = config.connect()?;
     let id = app.request_withdrawal(req.account_id, req.amount, &req.destination_address)?;
-    app.publish_changeset()?;
+    app.push()?;
     Ok(Json(IdResponse { id }))
 }
 
@@ -515,8 +515,8 @@ async fn get_status(State(config): State<AppState>) -> Result<Json<StatusRespons
 
     let stats = app.stats().map(|s| ReplicationStats {
         pending_changesets: s.pending_changesets,
-        published_changesets: s.published_changesets,
-        failed_publishes: s.failed_publishes,
+        pushed_changesets: s.pushed_changesets,
+        failed_pushes: s.failed_pushes,
     });
 
     Ok(Json(StatusResponse {

@@ -5,11 +5,11 @@
 //! The Session Extension contains raw pointers that are NOT thread-safe. To avoid races:
 //! - `SessionState` is stored in thread-local storage, accessed only from the main thread
 //! - Background threads only receive `Vec<u8>` bytes through channels
-//! - `publish()` and `snapshot()` have debug assertions verifying the calling thread
+//! - `push()` and `snapshot()` have debug assertions verifying the calling thread
 //!
-//! # Publishing
+//! # Pushing
 //!
-//! Changesets must be published explicitly via `publish()`. Automatic publishing via
+//! Changesets must be pushed explicitly via `push()`. Automatic pushing via
 //! UPDATE or COMMIT hooks is not possible because `SQLite`'s session extension requires reading from
 //! the database during extraction, which is not allowed inside hook callbacks.
 
@@ -62,9 +62,9 @@ struct SessionState {
     snapshot_interval: u64,
     changesets_since_snapshot: u64,
     snapshot_tx: Option<Sender<Snapshot>>,
-    /// Flag to indicate changes have occurred since last publish
+    /// Flag to indicate changes have occurred since last push
     has_changes: bool,
-    /// Hash of `sqlite_master` to detect schema changes between publishes.
+    /// Hash of `sqlite_master` to detect schema changes between pushes.
     /// If the schema changes (DDL executed), we automatically trigger a snapshot.
     last_schema_hash: u64,
 }
@@ -235,7 +235,7 @@ impl SessionMonitor {
     ///
     /// **Note**: Changeset extraction cannot happen inside hooks (`update_hook` or `commit_hook`)
     /// because `SQLite`'s session extension requires reading from the database, which is not
-    /// allowed during hook callbacks. Instead, call `publish()` after transactions complete.
+    /// allowed during hook callbacks. Instead, call `push()` after transactions complete.
     pub(crate) fn start(&self, conn: &Connection) -> Result<()> {
         debug!("Installing hooks for change detection");
 
@@ -291,15 +291,15 @@ impl SessionMonitor {
             return Ok(());
         }
 
-        // SCHEMA CHANGE DETECTION: Check if schema changed since last publish.
+        // SCHEMA CHANGE DETECTION: Check if schema changed since last push.
         // SQLite's update hook doesn't fire for DDL, so we detect schema changes
         // by comparing the hash of sqlite_master. If the schema changed (DDL was
-        // executed), we MUST publish a snapshot first so validators have the
+        // executed), we MUST send a snapshot first so validators have the
         // updated schema before receiving changesets that reference it.
         let current_schema_hash = SessionState::compute_schema_hash(state.conn);
         if current_schema_hash != state.last_schema_hash {
             info!(
-                "Schema change detected (hash {:016x} -> {:016x}), publishing snapshot",
+                "Schema change detected (hash {:016x} -> {:016x}), sending snapshot",
                 state.last_schema_hash, current_schema_hash
             );
 
@@ -345,7 +345,7 @@ impl SessionMonitor {
         state.has_changes = false;
 
         if changeset_data.is_empty() {
-            trace!("No changes to publish");
+            trace!("No changes to push");
             return Ok(());
         }
 
@@ -445,14 +445,14 @@ impl SessionMonitor {
         })
     }
 
-    /// Trigger changeset extraction and publishing.
-    /// Call this after committing transactions to send changesets to the sequencer.
+    /// Trigger changeset extraction and pushing.
+    /// Call this after committing transactions to push changesets to the sequencer.
     /// Must be called from the same thread that created the `SessionMonitor`.
-    pub(crate) fn publish(&self) -> Result<()> {
+    pub(crate) fn push(&self) -> Result<()> {
         debug_assert_eq!(
             thread::current().id(),
             self.owner_thread,
-            "publish() must be called from the same thread that created SyndDB"
+            "push() must be called from the same thread that created SyndDB"
         );
 
         SESSION_STATE.with(|state| {

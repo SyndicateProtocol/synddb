@@ -61,6 +61,7 @@ class SyndDBError:
     ATTACH_ERROR = 4
     PUBLISH_ERROR = 5
     SNAPSHOT_ERROR = 6
+    INVALID_URL = 7
 
 # Opaque handle type
 class SyndDBHandle(ctypes.Structure):
@@ -83,14 +84,14 @@ lib.synddb_attach.restype = ctypes.c_int
 lib.synddb_attach_with_config.argtypes = [
     ctypes.c_char_p,  # db_path
     ctypes.c_char_p,  # sequencer_url
-    ctypes.c_ulonglong,  # flush_interval_ms
+    ctypes.c_ulonglong,  # push_interval_ms
     ctypes.c_ulonglong,  # snapshot_interval
     ctypes.POINTER(ctypes.POINTER(SyndDBHandle))  # out_handle
 ]
 lib.synddb_attach_with_config.restype = ctypes.c_int
 
-lib.synddb_publish.argtypes = [ctypes.POINTER(SyndDBHandle)]
-lib.synddb_publish.restype = ctypes.c_int
+lib.synddb_push.argtypes = [ctypes.POINTER(SyndDBHandle)]
+lib.synddb_push.restype = ctypes.c_int
 
 lib.synddb_snapshot.argtypes = [
     ctypes.POINTER(SyndDBHandle),
@@ -138,16 +139,16 @@ def main():
         return 1
     print("   ✓ Successfully attached to database\n")
 
-    # Test 4: Manual publish
-    print("4. Testing synddb_publish()...")
-    result = lib.synddb_publish(handle)
+    # Test 4: Manual push
+    print("4. Testing synddb_push()...")
+    result = lib.synddb_push(handle)
     if result != SyndDBError.SUCCESS:
         error = lib.synddb_last_error()
         error_str = error.decode('utf-8') if error else "(unknown error)"
-        print(f"   ✗ Failed to publish: {error_str}")
+        print(f"   ✗ Failed to push: {error_str}")
         lib.synddb_detach(handle)
         return 1
-    print("   ✓ Successfully published\n")
+    print("   ✓ Successfully pushed\n")
 
     # Test 5: Create snapshot
     print("5. Testing synddb_snapshot()...")
@@ -170,7 +171,7 @@ def main():
     result = lib.synddb_attach_with_config(
         db_path2,
         sequencer_url,
-        500,  # flush_interval_ms
+        500,  # push_interval_ms
         10,   # snapshot_interval
         ctypes.byref(handle2)
     )

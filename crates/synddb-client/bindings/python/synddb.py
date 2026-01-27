@@ -13,8 +13,8 @@ Usage:
     conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 100))
     conn.commit()
 
-    # Optionally force immediate publish (auto-publishes every second)
-    synddb.publish_changeset()
+    # Optionally force immediate push (auto-pushes every second)
+    synddb.push()
 
     # Create a snapshot (optional)
     synddb.snapshot()
@@ -81,6 +81,7 @@ class SyndDBError:
     ATTACH_ERROR = 4
     PUBLISH_ERROR = 5
     SNAPSHOT_ERROR = 6
+    INVALID_URL = 7
 
 # Opaque handle type
 class _SyndDBHandle(ctypes.Structure):
@@ -97,14 +98,14 @@ _lib.synddb_attach.restype = ctypes.c_int
 _lib.synddb_attach_with_config.argtypes = [
     ctypes.c_char_p,  # db_path
     ctypes.c_char_p,  # sequencer_url
-    ctypes.c_uint64,  # flush_interval_ms
+    ctypes.c_uint64,  # push_interval_ms
     ctypes.c_uint64,  # snapshot_interval
     ctypes.POINTER(ctypes.POINTER(_SyndDBHandle))  # out_handle
 ]
 _lib.synddb_attach_with_config.restype = ctypes.c_int
 
-_lib.synddb_publish.argtypes = [ctypes.POINTER(_SyndDBHandle)]
-_lib.synddb_publish.restype = ctypes.c_int
+_lib.synddb_push.argtypes = [ctypes.POINTER(_SyndDBHandle)]
+_lib.synddb_push.restype = ctypes.c_int
 
 _lib.synddb_snapshot.argtypes = [
     ctypes.POINTER(_SyndDBHandle),
@@ -138,7 +139,7 @@ _lib.synddb_rollback.restype = ctypes.c_int
 
 
 class SyndDB:
-    """SyndDB client handle - automatically captures and publishes SQLite changesets"""
+    """SyndDB client handle - automatically captures and sends SQLite changesets"""
 
     def __init__(self, handle: ctypes.POINTER(_SyndDBHandle)):
         self._handle = handle
@@ -185,7 +186,7 @@ class SyndDB:
         cls,
         db_path: str,
         sequencer_url: str,
-        flush_interval_ms: int = 1000,
+        push_interval_ms: int = 1000,
         snapshot_interval: int = 100
     ) -> 'SyndDB':
         """
@@ -194,7 +195,7 @@ class SyndDB:
         Args:
             db_path: Path to SQLite database file
             sequencer_url: URL of sequencer TEE
-            flush_interval_ms: Milliseconds between automatic publishes (must be > 0, default: 1000)
+            push_interval_ms: Milliseconds between automatic pushes (must be > 0, default: 1000)
             snapshot_interval: Changesets between snapshots (must be > 0, default: 100)
 
         Returns:
@@ -204,15 +205,15 @@ class SyndDB:
             >>> synddb = SyndDB.attach_with_config(
             ...     'app.db',
             ...     'http://localhost:8433',
-            ...     flush_interval_ms=500,  # Publish every 500ms
-            ...     snapshot_interval=100      # Snapshot every 100 changesets
+            ...     push_interval_ms=500,  # Push every 500ms
+            ...     snapshot_interval=100  # Snapshot every 100 changesets
             ... )
         """
         handle = ctypes.POINTER(_SyndDBHandle)()
         result = _lib.synddb_attach_with_config(
             db_path.encode('utf-8'),
             sequencer_url.encode('utf-8'),
-            flush_interval_ms,
+            push_interval_ms,
             snapshot_interval,
             ctypes.byref(handle)
         )
@@ -224,28 +225,28 @@ class SyndDB:
 
         return cls(handle)
 
-    def publish_changeset(self):
+    def push(self):
         """
-        Publish all pending changesets to the sequencer immediately
+        Push all pending changesets to the sequencer immediately
 
-        Changesets are automatically published on a timer. Use this to force
-        immediate publication for low-latency or high-value changes.
+        Changesets are automatically pushed on a timer. Use this to force
+        immediate push for low-latency or high-value changes.
 
         Raises:
-            RuntimeError: If publish fails
+            RuntimeError: If push fails
 
         Example:
-            >>> synddb.publish_changeset()
+            >>> synddb.push()
         """
         if not self._handle:
             raise RuntimeError("SyndDB handle already detached")
 
-        result = _lib.synddb_publish_changeset(self._handle)
+        result = _lib.synddb_push(self._handle)
 
         if result != SyndDBError.SUCCESS:
             error_msg = _lib.synddb_last_error()
             error_str = error_msg.decode('utf-8') if error_msg else "Unknown error"
-            raise RuntimeError(f"Failed to publish changeset (error {result}): {error_str}")
+            raise RuntimeError(f"Failed to push changeset (error {result}): {error_str}")
 
     def snapshot(self) -> int:
         """
@@ -255,9 +256,9 @@ class SyndDB:
         to the sequencer. Use this after schema changes (CREATE TABLE, etc.)
         since DDL is NOT captured in changesets.
 
-        This is consistent with publish_changeset() for changesets:
-        - publish_changeset() - sends pending changesets to sequencer
-        - snapshot() - creates and sends snapshot to sequencer
+        This is consistent with push() for changesets:
+        - push() - pushes pending changesets to sequencer
+        - snapshot() - creates and pushes snapshot to sequencer
 
         When to use:
         - After CREATE TABLE, ALTER TABLE, or other DDL statements
@@ -413,7 +414,7 @@ class SyndDB:
         """
         Detach SyndDB and free resources
 
-        This gracefully shuts down the client, publishing any pending changesets.
+        This gracefully shuts down the client, sending any pending changesets.
         The instance cannot be used after this call.
 
         Example:
@@ -471,7 +472,7 @@ def attach(db_path: str, sequencer_url: str, **kwargs) -> SyndDB:
     Args:
         db_path: Path to SQLite database file
         sequencer_url: URL of sequencer TEE
-        **kwargs: Optional config (flush_interval_ms, snapshot_interval)
+        **kwargs: Optional config (push_interval_ms, snapshot_interval)
 
     Returns:
         SyndDB instance

@@ -39,7 +39,7 @@ conn.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER, name TEXT)")
 conn.execute("INSERT INTO users VALUES (?, ?)", (1, 'Alice'))
 conn.commit()
 
-# Changes are automatically published every 1 second
+# Changes are automatically sent every 1 second
 
 # Clean up when done (optional - Python GC will handle it)
 synddb.detach()
@@ -50,38 +50,38 @@ synddb.detach()
 ```python
 from synddb import SyndDB
 
-# Custom publish interval and snapshots
+# Custom push interval and snapshots
 synddb = SyndDB.attach_with_config(
     'app.db',
     'http://localhost:8433',
-    flush_interval_ms=500,   # Publish every 500ms
-    snapshot_interval=100       # Snapshot every 100 changesets
+    push_interval_ms=500,   # Push every 500ms
+    snapshot_interval=100   # Snapshot every 100 changesets
 )
 ```
 
-### Manual Publishing
+### Manual Sending
 
-Changesets are published automatically every 1 second. For critical transactions, publish immediately:
+Changesets are pushed automatically every 1 second. For critical transactions, push immediately:
 
 ```python
 from synddb import attach
 
 synddb = attach('app.db', 'http://localhost:8433')
 
-# Critical transaction - publish immediately after commit
+# Critical transaction - push immediately after commit
 import sqlite3
 conn = sqlite3.connect('app.db')
 conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 1000000))
 conn.commit()
-synddb.publish_changeset()  # Force immediate publish
+synddb.push()  # Force immediate push
 ```
 
-**When to call `publish_changeset()` manually:**
+**When to call `push()` manually:**
 - After critical transactions that must be sent immediately
 - Before application shutdown (handled automatically by `detach()`)
 - When you need to ensure data is sent before proceeding
 
-**When automatic publishing is sufficient:**
+**When automatic sending is sufficient:**
 - Normal application operations
 - High-throughput batch processing
 
@@ -95,7 +95,7 @@ with SyndDB.attach('app.db', 'http://localhost:8433') as synddb:
     conn = sqlite3.connect('app.db')
     conn.execute("INSERT INTO users VALUES (?, ?)", (2, 'Bob'))
     conn.commit()
-# Automatically detaches and publishes on exit
+# Automatically detaches and sends on exit
 ```
 
 ## API Reference
@@ -110,21 +110,21 @@ Attach to a SQLite database with default configuration.
 
 **Returns:** SyndDB instance
 
-### `SyndDB.attach_with_config(db_path, sequencer_url, flush_interval_ms=1000, snapshot_interval=100)`
+### `SyndDB.attach_with_config(db_path, sequencer_url, push_interval_ms=1000, snapshot_interval=100)`
 
 Attach with custom configuration.
 
 **Parameters:**
 - `db_path` (str): Path to SQLite database file
 - `sequencer_url` (str): URL of sequencer TEE
-- `flush_interval_ms` (int): Milliseconds between automatic publishes (must be > 0, default: 1000)
+- `push_interval_ms` (int): Milliseconds between automatic pushes (must be > 0, default: 1000)
 - `snapshot_interval` (int): Number of changesets between snapshots (must be > 0, default: 100)
 
 **Returns:** SyndDB instance
 
-### `synddb.publish_changeset()`
+### `synddb.push()`
 
-Force immediate publication of all pending changesets.
+Force immediate push of all pending changesets.
 
 ### `synddb.snapshot()`
 
@@ -141,7 +141,7 @@ This creates a complete database snapshot (schema + data) and sends it to the se
 
 ### `synddb.detach()`
 
-Gracefully shutdown and free resources. Publishes any pending changesets.
+Gracefully shutdown and free resources. Sends any pending changesets.
 
 ### `synddb.version()`
 

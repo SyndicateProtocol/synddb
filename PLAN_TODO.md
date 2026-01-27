@@ -10,90 +10,81 @@ This document tracks major unimplemented features identified from the PLAN and S
 
 ---
 
-## 1. Sequencer DA Layer Publishers [P0]
+## 1. Sequencer DA Layer Publishers [P2 - Deprioritized]
 
 **Source**: `PLAN_SEQUENCER.md`
 
-**Status**: Stub implementations only - Local and GCS are implemented
+**Status**: GCS is the primary DA layer. Additional publishers are deprioritized.
 
-| Publisher | File | Status |
-|-----------|------|--------|
-| Celestia | `crates/synddb-sequencer/src/publish/celestia.rs` | Stub - TODO: Use celestia-client |
-| EigenDA | `crates/synddb-sequencer/src/publish/eigenda.rs` | Stub - TODO: Use eigenda-rust |
-| IPFS | `crates/synddb-sequencer/src/publish/ipfs.rs` | Stub - TODO: Use ipfs-api |
-| Arweave | `crates/synddb-sequencer/src/publish/arweave.rs` | Stub - TODO: Use arweave-rs |
+| Publisher | File | Status | Priority |
+|-----------|------|--------|----------|
+| GCS | `crates/synddb-sequencer/src/transport/gcs.rs` | ✅ Implemented | Primary |
+| Local | `crates/synddb-sequencer/src/transport/local.rs` | ✅ Implemented | Dev/Testing |
+| Arweave | `crates/synddb-sequencer/src/transport/arweave.rs` | Documentation only | Next if needed |
+| Celestia | N/A | Not started | Deprioritized |
+| EigenDA | N/A | Not started | Deprioritized |
+| IPFS | N/A | Not started | Deprioritized |
 
-**Implementation Notes**:
-- Each publisher should implement the `DAPublisher` trait from `crates/synddb-sequencer/src/publish/traits.rs`
-- Add corresponding feature flags to `Cargo.toml`
-- Wire up in `main.rs` with feature gates
+**Decision**: Focus on GCS for production. Arweave would be next if permanent storage is required.
+
+**Implementation Notes** (for Arweave if needed):
+- Implement `TransportPublisher` trait from `crates/synddb-sequencer/src/transport/traits.rs`
+- Detailed implementation plan exists in `transport/arweave.rs` module docs
+- Add `arweave` feature flag to `Cargo.toml`
 
 ---
 
-## 2. Message Passing System [P0]
+## 2. Message Passing System [Largely Complete]
 
 **Source**: `PLAN_MESSAGE_PASSING.md`
 
-**Status**: Not implemented
+**Status**: Core components implemented. Some advanced features pending.
 
-The sequencer needs bidirectional message passing between applications and blockchain. Current `http_api.rs` only handles changesets/snapshots/withdrawals.
+### 2.1 Inbound Message Monitor ✅ Partially Complete
 
-### 2.1 Inbound Message Monitor
+**Implemented** via `synddb-chain-monitor` crate:
+- ✅ `ChainMonitor` - WebSocket subscription to contract events
+- ✅ `EventStore` - SQLite-backed persistent event storage
+- ✅ Event parsing and handler dispatch
 
-Monitor blockchain for bridge events and deliver to applications.
+**Implemented** via `synddb-sequencer/src/messages/`:
+- ✅ `MessageQueue` - In-memory queue with retention and size limits
+- ✅ REST polling endpoint: `GET /messages/inbound?after_id={id}`
+- ✅ Acknowledgment endpoint: `POST /messages/inbound/{id}/ack`
+- ✅ Push endpoint for chain monitors: `POST /messages/inbound`
 
-**Components needed**:
-- `InboundMonitor` - WebSocket subscription to Bridge contract events
-- `MessageQueue` - In-memory queue with retention and size limits
-- SSE endpoint for real-time delivery: `GET /messages/inbound/stream`
-- REST polling endpoint: `GET /messages/inbound?after_id={id}`
-- Acknowledgment endpoint: `POST /messages/inbound/{id}/ack`
+**Not implemented**:
+- SSE endpoint for real-time delivery (optional optimization)
 
-### 2.2 Outbound Message Monitor
+### 2.2 Outbound Message Monitor ✅ Complete
 
-Monitor SQLite message tables and publish to DA layers.
+**Implemented** in `crates/synddb-sequencer/src/messages/outbound.rs`:
+- ✅ `OutboundMonitor` - Polls `message_log` table (read-only)
+- ✅ `OutboundTracker` - In-memory state tracking
+- ✅ Status endpoint: `GET /messages/outbound/{id}/status`
+- ✅ Stats endpoint: `GET /messages/outbound/stats`
 
-**Components needed**:
-- `OutboundMonitor` - Poll `message_log` and `inbound_message_log` tables (read-only)
-- Validate message context (trigger references exist)
-- Status endpoint: `GET /messages/outbound/{id}/status`
+### 2.3 Consistency Enforcer [P2]
 
-### 2.3 Consistency Enforcer
+Not implemented. Lower priority - can be added when needed.
 
-Ensure all inbound messages are acknowledged before processing outbound.
+### 2.4 Progressive Degradation Manager [P2]
 
-**Components needed**:
-- `ConsistencyEnforcer` - Track blockchain messages vs acknowledged messages
-- Halt outbound processing when consistency violated
-- `can_process_outbound()` check before publishing
+Not implemented. Lower priority - can be added when needed.
 
-### 2.4 Progressive Degradation Manager
+### 2.5 State Commitments [P1]
 
-4-level degradation strategy for system health.
-
-| Level | Duration | Missing Msgs | Status | Actions |
-|-------|----------|--------------|--------|---------|
-| L1: Warning | < 30s | < 3 | Healthy | Alert app, increase retry |
-| L2: Degraded | < 5min | < 10 | Degraded | Halt outbound, restrict API |
-| L3: Critical | < 30min | < 50 | Critical | Fail health checks |
-| L4: Halt | > 30min | > 50 | Halted | Full shutdown |
-
-### 2.5 State Commitments
-
-Signed commitments for validators about system state.
-
-**Components needed**:
-- `StateCommitment` struct with sequence, status, error code, state hash
-- `StateCommitmentPublisher` - Sign with TEE key and publish to DA
-- Publish even when halted for validator visibility
+Not implemented. Would be useful for validator visibility into sequencer state.
 
 ---
 
-## 3. Sequencer Operational Features [P1]
+## 3. Sequencer Operational Features [Partially Complete]
 
-**Source**: `PLAN_SEQUENCER.md` (marked as TODO sections)
+**Source**: `PLAN_SEQUENCER.md`
 
-### 3.1 Persistent Queue
+### 3.1 Persistent Queue [P1]
+
+**Status**: Not implemented
 
 **Problem**: Sequencer crash loses in-memory changesets
 
@@ -105,27 +96,23 @@ src/publish/persistent_queue.rs
 - recover() - On restart, republish unconfirmed payloads
 ```
 
-### 3.2 Backpressure Handling
+### 3.2 Backpressure Handling ✅ Complete
 
-**Problem**: Application writes faster than sequencer can publish
+**Implemented** via bounded channels in `Batcher`:
+- Bounded `mpsc::channel` for batcher commands
+- Stats tracking for pending messages/bytes
 
-**Solution**: Bounded channels with monitoring
-- Bounded `mpsc::channel` for changesets (e.g., 1000 capacity)
-- Monitor queue depth, alert when falling behind
-- Metrics for queue depth
+### 3.3 Graceful Shutdown ✅ Complete
 
-### 3.3 Graceful Shutdown
+**Implemented** in `crates/synddb-sequencer/src/main.rs`:
+- ✅ Ctrl+C / SIGTERM signal handling
+- ✅ Batcher flush on shutdown
+- ✅ Configurable shutdown timeout
+- ✅ Watch channel for shutdown coordination
 
-**Problem**: Shutdown could lose in-flight changesets
+### 3.4 Large Transaction Handling [P2]
 
-**Solution**: Flush all pending work before exit
-1. Stop accepting new changesets
-2. Flush all pending batches
-3. Wait for attestor to finish
-4. Wait for all DA publishes to confirm
-5. Persist state checkpoint
-
-### 3.4 Large Transaction Handling
+**Status**: Not implemented
 
 **Problem**: Single transaction with millions of rows creates huge changeset
 
@@ -133,7 +120,9 @@ src/publish/persistent_queue.rs
 - `MAX_CHANGESET_SIZE` threshold (e.g., 100MB)
 - If exceeded, discard changesets and create snapshot instead
 
-### 3.5 Key Rotation
+### 3.5 Key Rotation [P2]
+
+**Status**: Not implemented
 
 **Problem**: Ethereum signing keys may need rotation
 
@@ -143,40 +132,26 @@ src/publish/persistent_queue.rs
 - Publish `KeyRotation` message to validators
 - Keep old key active during transition period
 
-### 3.6 Observability/Metrics
+### 3.6 Observability/Metrics [P1]
 
-**Problem**: Insufficient monitoring
+**Status**: Partial - BatchStats exists, Prometheus endpoint not implemented
 
-**Solution**: Comprehensive metrics
-- `changeset_lag_seconds` - Time from commit to publish
-- `queue_depth` - Unpublished changesets
-- `changesets_per_second` / `bytes_published_per_second`
-- `da_publish_failures` / `schema_detection_errors`
-- Health status per DA layer
+**Implemented**:
+- ✅ `BatchStats` struct with counters for batches/messages/bytes
+- ✅ Compression ratio tracking
 
-### 3.7 Batching Layer
+**Not implemented**:
+- Prometheus `/metrics` endpoint
+- `changeset_lag_seconds`, `da_publish_failures` metrics
 
-**Source**: `crates/synddb-sequencer/src/publish/traits.rs:9`
+### 3.7 Batching Layer ✅ Complete
 
-**Status**: TODO - documented but not implemented
-
-**Problem**: Messages published one at a time, inefficient for high throughput
-
-**Solution**: Implement batching layer between HTTP handlers and StoragePublisher
-```rust
-pub struct BatchConfig {
-    /// Maximum messages per batch before flushing (default: 50)
-    pub batch_size: usize,
-    /// Maximum time to wait before flushing a partial batch (default: 5s)
-    pub batch_interval: Duration,
-    /// Enable zstd compression for batches (recommended for batch_size > 1)
-    pub compress: bool,
-}
-```
-
-Two possible modes:
-- Fire-and-forget: HTTP handler returns immediately after sequencing
-- Wait-for-batch: HTTP handler waits until its message's batch is published
+**Implemented** in `crates/synddb-sequencer/src/batcher.rs`:
+- ✅ `Batcher` struct with configurable batch size, interval, and byte limits
+- ✅ `BatchConfig` with `max_messages`, `max_batch_bytes`, `flush_interval`
+- ✅ Async flush on interval, size, or shutdown
+- ✅ CBOR+zstd compression
+- ✅ Fire-and-forget mode (HTTP returns after sequencing)
 
 ---
 
@@ -297,42 +272,55 @@ Future protocols beyond REST:
 
 ---
 
-## 8. Additional Validator Fetchers [P2]
+## 8. Additional Validator Fetchers [P2 - Deprioritized]
 
 **Source**: `PLAN_VALIDATOR.md`
 
-**Status**: Only HTTP and GCS implemented
+**Status**: HTTP and GCS implemented. Additional fetchers deprioritized (matching sequencer DA decision).
 
-| Fetcher | Status |
-|---------|--------|
-| Celestia | Planned - needs celestia-client integration |
-| EigenDA | Planned - needs eigenda-rust integration |
-| IPFS | Planned - needs ipfs-api integration |
-| Arweave | Planned - needs arweave-rs integration |
+| Fetcher | Status | Priority |
+|---------|--------|----------|
+| HTTP | ✅ Implemented | Primary (sequencer API) |
+| GCS | ✅ Implemented | Primary (batch storage) |
+| Arweave | Not started | Next if needed |
+| Celestia | Not started | Deprioritized |
+| EigenDA | Not started | Deprioritized |
+| IPFS | Not started | Deprioritized |
 
 **Implementation Notes**:
-- Each fetcher implements `StorageFetcher` trait from `crates/synddb-validator/src/sync/providers/mod.rs`
-- Mirror the publisher implementations from sequencer
+- Fetchers implement `StorageFetcher` trait from `crates/synddb-validator/src/sync/fetcher.rs`
+- Would mirror sequencer transport implementations
 
 ---
 
-## 9. Client Language Bindings [P2]
+## 9. Client Language Bindings ✅ Complete
 
-**Source**: `crates/synddb-client/examples/`
+**Source**: `crates/synddb-client/bindings/`
 
-**Status**: Go bindings exist with TODOs, Python not implemented
+### 9.1 Python Bindings ✅ Complete
 
-### 9.1 Python Bindings
+**Implemented** in `crates/synddb-client/bindings/python/synddb.py`:
+- ✅ Pure Python FFI wrapper using `ctypes` (no compilation needed)
+- ✅ `SyndDB` class with `attach()`, `execute()`, `snapshot()`, `detach()`
+- ✅ `MessageClient` class for message passing API
+- ✅ Transaction support (`begin()`, `commit()`, `rollback()`)
+- ✅ Context manager support
 
-- `crates/synddb-client/examples/README.md:145` - "Status: TODO - Native Python bindings not yet implemented"
-- `crates/synddb-client/examples/python_example.py:5` - "WORK IN PROGRESS - NOT FUNCTIONAL"
-- Options: PyO3 bindings or C FFI wrapper
+### 9.2 Go Bindings ✅ Complete
 
-### 9.2 Go Bindings
+**Implemented** in `crates/synddb-client/bindings/go/synddb.go`:
+- ✅ CGO wrapper with full FFI coverage
+- ✅ `Attach()`, `AttachWithConfig()` for database connection
+- ✅ `Execute()`, `ExecuteBatch()` for SQL operations
+- ✅ Transaction support (`Begin()`, `Commit()`, `Rollback()`)
+- ✅ `Push()`, `Snapshot()`, `Detach()`
 
-- `crates/synddb-client/bindings/go/synddb.go:58` - "TODO: Platform-specific extraction of sqlite3*"
-- Complete CGO integration for SQLite pointer handling
-- Currently passes null pointer - needs driver-specific extraction
+### 9.3 Node.js Bindings ✅ Complete
+
+**Implemented** in `crates/synddb-client/bindings/nodejs/`:
+- ✅ FFI wrapper using `koffi` (no native compilation needed)
+- ✅ Async/await API
+- ✅ Disposable pattern support (Node.js 20+)
 
 ---
 
@@ -423,65 +411,43 @@ Tests marked with `#[ignore]` that need environments or manual verification:
 
 ## Implementation Checklist
 
-### Phase 1: Core Production Features [P0]
-
-- [ ] Celestia publisher implementation
-- [ ] EigenDA publisher implementation
-- [ ] Inbound message monitor
-- [ ] Outbound message monitor
-- [ ] Consistency enforcer
-- [ ] Message passing HTTP API
-
-### Phase 2: Production Readiness [P1]
+### Phase 1: Production Readiness [P1]
 
 - [ ] Persistent queue for crash recovery
-- [ ] Graceful shutdown
 - [ ] Validator TEE integration (ConfidentialValidator)
 - [ ] Bridge event definitions (update from sample events)
-- [ ] Progressive degradation manager
 - [ ] State commitments
 - [ ] Validator Prometheus metrics
-- [ ] Batching layer for publishers
-- [ ] Bridge deployment metadata auto-discovery
+- [ ] Sequencer Prometheus metrics endpoint
+- [ ] GCS pagination for >1000 batches
 
-### Phase 3: Extended Features [P2]
+### Phase 2: Extended Features [P2]
 
-- [ ] IPFS publisher
-- [ ] Arweave publisher
-- [ ] Validator extension system
-- [ ] Python bindings (PyO3)
-- [ ] Complete Go bindings (CGO sqlite3*)
+- [ ] Arweave publisher (if permanent storage needed)
+- [ ] Validator extension system (WithdrawalValidator trait)
 - [ ] Key rotation protocol
-- [ ] Additional validator fetchers
-- [ ] GCS pagination for large batch counts
-- [ ] Batch file compression (.json.zst)
-- [ ] COSE format for batches
+- [ ] Large transaction handling (force snapshot)
+- [ ] Consistency enforcer
+- [ ] Progressive degradation manager
 - [ ] Release automation (npm, PyPI, changelog)
-- [ ] E2E test DA configuration fix
 - [ ] Validator JSON-RPC/WebSocket protocols
 
 ---
 
 ## Code TODOs Summary
 
-Quick reference of all TODO comments found in the codebase:
+Quick reference of actual TODO comments found in the codebase:
 
-| File | Line | Description |
-|------|------|-------------|
-| `synddb-sequencer/src/publish/celestia.rs` | 21-22 | Use celestia-client, return blob ID |
-| `synddb-sequencer/src/publish/eigenda.rs` | 21-22 | Use eigenda-rust, return blob reference |
-| `synddb-sequencer/src/publish/ipfs.rs` | 21-22 | Use ipfs-api, return CID |
-| `synddb-sequencer/src/publish/arweave.rs` | 21-22 | Use arweave-rs, return tx ID |
-| `synddb-sequencer/src/publish/traits.rs` | 9 | Implement batching layer |
-| `synddb-sequencer/src/publish/gcs.rs` | 243 | O(n) batch listing optimization |
-| `synddb-validator/src/metrics.rs` | 3 | Implement Prometheus metrics |
-| `synddb-validator/src/sync/providers/gcs.rs` | 17 | Revisit GCS architecture |
-| `synddb-validator/src/sync/providers/gcs.rs` | 187 | GCS 1000 object pagination |
-| `synddb-chain-monitor/src/events.rs` | 9-10 | Update Bridge events, test multi-contract |
-| `synddb-chain-monitor/src/config.rs` | 25 | Auto-get Bridge deployment metadata |
-| `synddb-client/bindings/go/synddb.go` | 58 | Platform-specific sqlite3* extraction |
-| `synddb-client/examples/python_example.py` | 21 | Implement Python bindings |
-| `tests/e2e/runner/src/runner.rs` | 54 | Fix DA test configuration |
+| File | Line | Description | Priority |
+|------|------|-------------|----------|
+| `synddb-validator/src/metrics.rs` | 3 | Implement Prometheus metrics | P1 |
+| `synddb-validator/src/sync/providers/gcs.rs` | 195 | GCS 1000 object pagination | P1 |
+| `synddb-validator/src/main.rs` | 188 | Check messages are in order | P2 |
+| `synddb-validator/src/validator.rs` | 584 | Handle out-of-sequence errors | P2 |
+| `synddb-chain-monitor/src/events.rs` | 9-10 | Update Bridge events to match real contract | P1 |
+| `synddb-chain-monitor/src/config.rs` | 30 | Auto-get Bridge deployment metadata | P2 |
+| `synddb-sequencer/src/transport/arweave.rs` | 136 | Implement ArweaveTransport | P2 |
+| `synddb-sequencer/src/transport/mod.rs` | 23 | Additional DA transports | P2 |
 
 ---
 

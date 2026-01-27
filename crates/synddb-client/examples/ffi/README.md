@@ -51,15 +51,15 @@ int synddb_attach(
 int synddb_attach_with_config(
     const char* db_path,
     const char* sequencer_url,
-    uint64_t flush_interval_ms,
+    uint64_t push_interval_ms,
     uint64_t snapshot_interval,
     SyndDBHandle** out_handle
 );
 
-// Manually publish pending changesets
-int synddb_publish(SyndDBHandle* handle);
+// Push pending changesets to sequencer
+int synddb_push(SyndDBHandle* handle);
 
-// Create a database snapshot
+// Create and push a database snapshot
 int synddb_snapshot(
     SyndDBHandle* handle,
     size_t* out_size
@@ -241,8 +241,8 @@ All FFI examples have been tested and verified:
 3. Testing synddb_attach()...
    ✓ Successfully attached to database
 
-4. Testing synddb_publish()...
-   ✓ Successfully published
+4. Testing synddb_push()...
+   ✓ Successfully pushed
 
 5. Testing synddb_snapshot()...
    ✓ Successfully created snapshot (4096 bytes)
@@ -268,8 +268,8 @@ All FFI examples have been tested and verified:
 3. Testing synddb_attach()...
    ✓ Successfully attached to database
 
-4. Testing synddb_publish()...
-   ✓ Successfully published
+4. Testing synddb_push()...
+   ✓ Successfully pushed
 
 5. Testing synddb_snapshot()...
    ✓ Successfully created snapshot (4096 bytes)
@@ -298,8 +298,8 @@ All FFI examples have been tested and verified:
 3. Testing synddb_attach()...
    ✓ Successfully attached to database
 
-4. Testing synddb_publish()...
-   ✓ Successfully published
+4. Testing synddb_push()...
+   ✓ Successfully pushed
 
 5. Testing synddb_snapshot()...
    ✓ Successfully created snapshot (4096 bytes)
@@ -321,7 +321,7 @@ The typical workflow across all languages is:
 2. **Define function signatures** - Match the C FFI interface
 3. **Call `synddb_attach()`** - Attach to your SQLite database
 4. **Use your database normally** - Changesets are automatically captured
-5. **Optionally call `synddb_publish()`** - For critical transactions
+5. **Optionally call `synddb_push()`** - For critical transactions
 6. **Call `synddb_detach()`** - Cleanup when done
 
 ## Error Handling

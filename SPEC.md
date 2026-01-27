@@ -438,8 +438,8 @@ SyndDB is designed for high-scale applications that require ultra-low latency an
    conn.execute("INSERT INTO trades VALUES (?1, ?2)", params![1, 100])?;
 
    // Changesets are automatically sent to sequencer every 1 second
-   // Or force immediate publish for critical transactions:
-   synddb.publish_changeset()?;
+   // Or force immediate push for critical transactions:
+   synddb.push()?;
    ```
 
    **Python Example:**

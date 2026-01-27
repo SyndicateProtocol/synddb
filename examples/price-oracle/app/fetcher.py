@@ -2,7 +2,7 @@
 """Price Oracle Fetcher Daemon
 
 Periodically fetches prices from all configured APIs and stores them
-in the database. Changesets are published to SyndDB if configured.
+in the database. Changesets are pushed to SyndDB if configured.
 """
 
 import argparse

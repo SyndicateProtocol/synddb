@@ -199,7 +199,7 @@ fn main() -> Result<()> {
 
         Commands::CreateAccount { name } => {
             let id = app.create_account(&name)?;
-            app.publish_changeset()?;
+            app.push()?;
             println!("Created account '{}' with ID {}", name, id);
         }
 
@@ -209,7 +209,7 @@ fn main() -> Result<()> {
             description,
         } => {
             let id = app.create_market(&question, description.as_deref(), resolution_time)?;
-            app.publish_changeset()?;
+            app.push()?;
             println!("Created market {} - \"{}\"", id, question);
         }
 
@@ -220,7 +220,7 @@ fn main() -> Result<()> {
             shares,
         } => {
             let trade = app.buy_shares(account, market, &outcome, shares)?;
-            app.publish_changeset()?;
+            app.push()?;
             println!(
                 "Bought {} {} shares in market {} for {} cents",
                 trade.shares, trade.outcome, trade.market_id, trade.total
@@ -234,7 +234,7 @@ fn main() -> Result<()> {
             shares,
         } => {
             let trade = app.sell_shares(account, market, &outcome, shares)?;
-            app.publish_changeset()?;
+            app.push()?;
             println!(
                 "Sold {} {} shares in market {} for {} cents",
                 trade.shares, trade.outcome, trade.market_id, trade.total
@@ -243,7 +243,7 @@ fn main() -> Result<()> {
 
         Commands::Resolve { market, outcome } => {
             app.resolve_market(market, &outcome)?;
-            app.publish_changeset()?;
+            app.push()?;
             println!("Resolved market {} as '{}'", market, outcome);
         }
 
@@ -299,7 +299,7 @@ fn main() -> Result<()> {
             block,
         } => {
             let id = app.simulate_deposit(&tx_hash, &from, &to, amount, block)?;
-            app.publish_changeset()?;
+            app.push()?;
             println!(
                 "Simulated deposit {} for ${:.2} from {} to {}",
                 id,
@@ -311,7 +311,7 @@ fn main() -> Result<()> {
 
         Commands::ProcessDeposits => {
             let count = app.process_deposits()?;
-            app.publish_changeset()?;
+            app.push()?;
             println!("Processed {} deposits", count);
         }
 
@@ -321,7 +321,7 @@ fn main() -> Result<()> {
             destination,
         } => {
             let id = app.request_withdrawal(account, amount, &destination)?;
-            app.publish_changeset()?;
+            app.push()?;
             println!(
                 "Created withdrawal request {} for ${:.2}",
                 id,
