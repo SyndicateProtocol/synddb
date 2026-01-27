@@ -137,8 +137,8 @@ pub unsafe extern "C" fn synddb_attach(
 /// # Arguments
 /// * `db_path` - Path to `SQLite` database file
 /// * `sequencer_url` - URL of sequencer TEE
-/// * `flush_interval_ms` - Milliseconds between sender flushes (batching interval)
-/// * `snapshot_interval` - Number of changesets between automatic snapshots (0 = disabled)
+/// * `flush_interval_ms` - Milliseconds between sender flushes (must be > 0)
+/// * `snapshot_interval` - Number of changesets between automatic snapshots (must be > 0)
 /// * `out_handle` - Output pointer to receive `SyndDB` handle
 ///
 /// # Returns

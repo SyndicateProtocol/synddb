@@ -55,8 +55,8 @@ SyndDBError synddb_attach(
  *
  * @param db_path Path to SQLite database file
  * @param sequencer_url URL of sequencer TEE
- * @param flush_interval_ms Milliseconds between sender flushes (batching interval)
- * @param snapshot_interval Number of changesets between snapshots (0 = disabled)
+ * @param flush_interval_ms Milliseconds between sender flushes (must be > 0)
+ * @param snapshot_interval Number of changesets between snapshots (must be > 0)
  * @param out_handle Output pointer to receive SyndDB handle
  * @return SYNDDB_SUCCESS on success, error code otherwise
  */

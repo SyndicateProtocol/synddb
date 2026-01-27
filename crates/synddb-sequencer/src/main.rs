@@ -58,7 +58,10 @@ async fn main() -> Result<()> {
     let (batcher, local_transport): (Option<BatcherHandle>, Option<Arc<LocalTransport>>) =
         match config.publisher_type {
             PublisherType::None => {
-                info!("Publisher disabled (messages will not be persisted)");
+                warn!(
+                    "Publisher is DISABLED - messages will NOT be persisted! \
+                    Set PUBLISHER_TYPE=local or PUBLISHER_TYPE=gcs for production."
+                );
                 (None, None)
             }
             PublisherType::Local => {
@@ -171,7 +174,10 @@ async fn main() -> Result<()> {
         info!("Attestation verification enabled");
         Some(Arc::new(AttestationVerifier::new(attestation_config)))
     } else {
-        info!("Attestation verification disabled");
+        warn!(
+            "Attestation verification is DISABLED. \
+            In production, set VERIFY_ATTESTATION=true to verify client TEE tokens."
+        );
         None
     };
 

@@ -4,7 +4,10 @@
 //! sequenced messages to maintain a replica of the sequenced state.
 
 use crate::{
-    apply::applier::ChangesetApplier,
+    apply::{
+        applier::ChangesetApplier,
+        audit::{DeferralReason, PendingChangeset, PendingChangesetStore},
+    },
     config::ValidatorConfig,
     error::ValidatorError,
     rules::RuleRegistry,
@@ -16,10 +19,20 @@ use crate::{
     },
 };
 use anyhow::{Context, Result};
+use rusqlite::Connection;
 use std::{sync::Arc, time::Duration};
-use synddb_shared::types::message::SignedBatch;
+use synddb_shared::types::message::{MessageType, SignedBatch, SignedMessage};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
+
+/// Result of applying a message with audit trail handling
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyResult {
+    /// Message was applied successfully
+    Applied,
+    /// Message was stored as pending due to schema mismatch (audit trail enabled)
+    StoredAsPending,
+}
 
 /// Core validator that syncs and applies state from the sequencer
 pub struct Validator {
@@ -31,6 +44,8 @@ pub struct Validator {
     applier: ChangesetApplier,
     /// State persistence for crash recovery
     state: StateStore,
+    /// Pending changeset store for audit trail (always enabled)
+    pending_store: PendingChangesetStore,
     /// Sync poll interval
     sync_interval: Duration,
     /// Shutdown receiver
@@ -64,6 +79,15 @@ impl Validator {
         let applier = ChangesetApplier::new(&config.database_path)?;
         let state = StateStore::new(&config.state_db_path)?;
 
+        // Initialize pending changeset store (always enabled for audit trail)
+        let pending_conn = if config.pending_changesets_db_path == ":memory:" {
+            Connection::open_in_memory()
+        } else {
+            Connection::open(&config.pending_changesets_db_path)
+        }
+        .context("Failed to open pending changesets database")?;
+        let pending_store = PendingChangesetStore::new(pending_conn)?;
+
         info!(
             sequencer_pubkey = %config.sequencer_pubkey,
             database = %config.database_path,
@@ -78,6 +102,7 @@ impl Validator {
             verifier,
             applier,
             state,
+            pending_store,
             sync_interval: config.sync_interval,
             shutdown_rx,
             gap_retry_count: config.gap_retry_count,
@@ -99,11 +124,17 @@ impl Validator {
         let applier = ChangesetApplier::in_memory()?;
         let state = StateStore::in_memory()?;
 
+        // Create in-memory pending store for testing (always enabled)
+        let pending_conn = Connection::open_in_memory()
+            .context("Failed to open in-memory pending changesets database")?;
+        let pending_store = PendingChangesetStore::new(pending_conn)?;
+
         Ok(Self {
             fetcher,
             verifier,
             applier,
             state,
+            pending_store,
             sync_interval: Duration::from_millis(100),
             shutdown_rx,
             gap_retry_count: 3,
@@ -140,8 +171,152 @@ impl Validator {
     }
 
     /// Get a reference to the database connection (for queries)
-    pub const fn connection(&self) -> &rusqlite::Connection {
+    pub const fn connection(&self) -> &Connection {
         &self.applier.conn
+    }
+
+    /// Get the count of pending changesets awaiting verification
+    pub fn pending_changeset_count(&self) -> Result<u64> {
+        self.pending_store.count()
+    }
+
+    /// Apply a message with schema mismatch handling
+    ///
+    /// If the message fails due to schema mismatch, the changeset is stored for
+    /// later verification when a snapshot arrives, and `Ok(ApplyResult::StoredAsPending)`
+    /// is returned to allow sync to continue.
+    ///
+    /// For snapshot messages, pending changesets are verified after application.
+    ///
+    /// Returns:
+    /// - `Ok(ApplyResult::Applied)` - message was applied to the database
+    /// - `Ok(ApplyResult::StoredAsPending)` - changeset stored for later verification
+    /// - `Err(...)` - non-recoverable error
+    fn apply_message_with_audit(&mut self, message: &SignedMessage) -> Result<ApplyResult> {
+        let result = self
+            .applier
+            .apply_message_with_rules(message, self.rules.as_ref());
+
+        match result {
+            Ok(()) => {
+                // If this was a snapshot, verify pending changesets
+                if message.message_type == MessageType::Snapshot {
+                    self.verify_pending_changesets_after_snapshot(message.sequence)?;
+                }
+                Ok(ApplyResult::Applied)
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+
+                // Check if this is a schema mismatch error
+                let is_schema_mismatch = error_msg.contains("Schema mismatch")
+                    || error_msg.contains("don't exist")
+                    || error_msg.contains("column");
+
+                if is_schema_mismatch && message.message_type == MessageType::Changeset {
+                    // Store as pending for later verification
+                    let reason = if error_msg.contains("don't exist") {
+                        // Extract table name from error if possible
+                        DeferralReason::MissingTable(
+                            error_msg
+                                .split(':')
+                                .next_back()
+                                .unwrap_or("unknown")
+                                .trim()
+                                .to_string(),
+                        )
+                    } else {
+                        DeferralReason::ColumnMismatch {
+                            table: "unknown".to_string(),
+                            expected: 0,
+                            actual: 0,
+                        }
+                    };
+
+                    let pending = PendingChangeset {
+                        sequence: message.sequence,
+                        data: message.payload.clone(),
+                        reason,
+                    };
+
+                    self.pending_store.store(&pending)?;
+
+                    // Check pending count and warn if accumulating
+                    let pending_count = self.pending_store.count().unwrap_or(0);
+                    if pending_count > 100 {
+                        error!(
+                            pending_count,
+                            sequence = message.sequence,
+                            "Large number of pending changesets - snapshot required urgently"
+                        );
+                    } else if pending_count > 10 {
+                        warn!(
+                            pending_count,
+                            sequence = message.sequence,
+                            "Pending changesets accumulating - waiting for snapshot"
+                        );
+                    } else {
+                        warn!(
+                            sequence = message.sequence,
+                            error = %error_msg,
+                            "Stored changeset as pending due to schema mismatch - sync will continue"
+                        );
+                    }
+
+                    // Return success - changeset is stored for later verification
+                    return Ok(ApplyResult::StoredAsPending);
+                }
+
+                // Not a schema mismatch - propagate error
+                Err(e)
+            }
+        }
+    }
+
+    /// Verify pending changesets after a snapshot has been applied
+    fn verify_pending_changesets_after_snapshot(&self, snapshot_sequence: u64) -> Result<()> {
+        let pending_count = self.pending_store.count()?;
+        if pending_count == 0 {
+            return Ok(());
+        }
+
+        info!(
+            snapshot_sequence,
+            pending_count, "Verifying pending changesets after snapshot"
+        );
+
+        // Get pending changesets up to this snapshot
+        let pending = self.pending_store.get_all()?;
+        let relevant: Vec<_> = pending
+            .into_iter()
+            .filter(|p| p.sequence < snapshot_sequence)
+            .collect();
+
+        if relevant.is_empty() {
+            return Ok(());
+        }
+
+        // Verify the changesets
+        let result = crate::apply::audit::verify_changeset_chain(&self.applier.conn, &relevant)?;
+
+        info!(
+            verified = result.verified.len(),
+            failed = result.failed.len(),
+            "Pending changeset verification complete"
+        );
+
+        for failure in &result.failed {
+            warn!(
+                sequence = failure.sequence,
+                reason = %failure.reason,
+                "Changeset verification failed"
+            );
+        }
+
+        // Clear verified changesets up to the snapshot
+        self.pending_store.clear_up_to(snapshot_sequence)?;
+
+        Ok(())
     }
 
     /// Run the sync loop with callbacks for withdrawals and progress updates
@@ -371,13 +546,19 @@ impl Validator {
             on_withdrawal(&withdrawal);
         }
 
-        // 4. Apply to database with validation rules
-        self.applier
-            .apply_message_with_rules(&message, self.rules.as_ref())?;
+        // 4. Apply to database with audit trail handling
+        let apply_result = self.apply_message_with_audit(&message)?;
 
-        debug!(sequence, "Message applied");
+        match apply_result {
+            ApplyResult::Applied => {
+                debug!(sequence, "Message applied");
+            }
+            ApplyResult::StoredAsPending => {
+                debug!(sequence, "Message stored as pending (schema mismatch)");
+            }
+        }
 
-        // 5. Update state
+        // 5. Update state (even if stored as pending - we've processed this sequence)
         self.state.record_sync(sequence)?;
 
         info!(sequence, "Synced message");
@@ -476,13 +657,22 @@ impl Validator {
                 on_withdrawal(&withdrawal);
             }
 
-            // Apply to database with validation rules
-            self.applier
-                .apply_message_with_rules(message, self.rules.as_ref())?;
+            // Apply to database with audit trail handling
+            let apply_result = self.apply_message_with_audit(message)?;
 
-            debug!(sequence = message.sequence, "Message applied");
+            match apply_result {
+                ApplyResult::Applied => {
+                    debug!(sequence = message.sequence, "Message applied");
+                }
+                ApplyResult::StoredAsPending => {
+                    debug!(
+                        sequence = message.sequence,
+                        "Message stored as pending (schema mismatch)"
+                    );
+                }
+            }
 
-            // Update state
+            // Update state (even if stored as pending)
             self.state.record_sync(message.sequence)?;
             synced += 1;
         }
@@ -658,20 +848,28 @@ impl Validator {
                                 on_withdrawal(&withdrawal);
                             }
 
-                            // Apply with validation rules
-                            if let Err(e) = self
-                                .applier
-                                .apply_message_with_rules(message, self.rules.as_ref())
-                            {
-                                error!(
-                                    sequence = message.sequence,
-                                    error = %e,
-                                    "Failed to apply message"
-                                );
-                                return Err(e);
+                            // Apply with audit trail handling
+                            match self.apply_message_with_audit(message) {
+                                Ok(ApplyResult::Applied) => {
+                                    debug!(sequence = message.sequence, "Message applied");
+                                }
+                                Ok(ApplyResult::StoredAsPending) => {
+                                    debug!(
+                                        sequence = message.sequence,
+                                        "Message stored as pending (schema mismatch)"
+                                    );
+                                }
+                                Err(e) => {
+                                    error!(
+                                        sequence = message.sequence,
+                                        error = %e,
+                                        "Failed to apply message"
+                                    );
+                                    return Err(e);
+                                }
                             }
 
-                            // Record sync
+                            // Record sync (even if stored as pending)
                             self.state.record_sync(message.sequence)?;
                             on_sync(message.sequence);
                             next_sequence = message.sequence + 1;
@@ -856,7 +1054,7 @@ mod tests {
     }
 
     /// Create a changeset for testing
-    fn create_update_changeset(conn: &rusqlite::Connection, new_name: &str) -> Vec<u8> {
+    fn create_update_changeset(conn: &Connection, new_name: &str) -> Vec<u8> {
         let mut session = Session::new(conn).unwrap();
         session.attach(None::<&str>).unwrap();
 
@@ -871,7 +1069,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_one() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -935,7 +1133,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_to_head() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1084,7 +1282,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_batch() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1140,7 +1338,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_to_head_batched() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1200,7 +1398,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_sync_to_head_batched_fallback() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1289,7 +1487,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_batch_skip_already_synced() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1348,7 +1546,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_rejects_invalid_batch_signature() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
@@ -1409,7 +1607,7 @@ mod tests {
     #[tokio::test]
     async fn test_validator_rejects_tampered_batch_messages() {
         // Setup source database
-        let source = rusqlite::Connection::open_in_memory().unwrap();
+        let source = Connection::open_in_memory().unwrap();
         source
             .execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
             .unwrap();
