@@ -171,6 +171,20 @@ pub struct SequencerConfig {
     #[arg(long, env = "BATCH_FLUSH_INTERVAL", default_value = "5s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub batch_flush_interval: Duration,
+
+    // ========================================================================
+    // Outbound message monitor configuration
+    // ========================================================================
+    /// Path to the application's `SQLite` database for outbound message monitoring
+    ///
+    /// When set, the sequencer will poll this database for pending outbound
+    /// messages in the `message_log` table and track their status.
+    #[arg(long, env = "APP_DATABASE_PATH")]
+    pub app_database_path: Option<String>,
+
+    /// How often to poll for new outbound messages (in milliseconds)
+    #[arg(long, env = "OUTBOUND_POLL_INTERVAL_MS", default_value = "1000")]
+    pub outbound_poll_interval_ms: u64,
 }
 
 impl SequencerConfig {

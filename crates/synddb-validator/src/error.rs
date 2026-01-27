@@ -51,4 +51,15 @@ pub enum ValidatorError {
     // Configuration errors
     #[error("Configuration error: {0}")]
     ConfigError(String),
+
+    // Validation rule errors
+    #[error("Validation rule '{rule}' failed at sequence {sequence}: {reason}")]
+    ValidationRuleFailed {
+        /// Name of the rule that failed
+        rule: String,
+        /// Sequence number where validation failed
+        sequence: u64,
+        /// Human-readable reason for failure
+        reason: String,
+    },
 }

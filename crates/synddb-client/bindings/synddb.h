@@ -80,11 +80,27 @@ SyndDBError synddb_attach_with_config(
 SyndDBError synddb_publish(SyndDBHandle* handle);
 
 /**
- * Create a manual snapshot of the database
+ * Create and publish a snapshot to the sequencer
+ *
+ * Creates a complete database snapshot (schema + data) and sends it to the
+ * sequencer. Use this after schema changes (CREATE TABLE, etc.) since DDL
+ * is NOT captured in changesets.
+ *
+ * This is consistent with synddb_publish() for changesets:
+ * - synddb_publish() - sends pending changesets to sequencer
+ * - synddb_snapshot() - creates and sends snapshot to sequencer
+ *
+ * When to use:
+ * - After CREATE TABLE, ALTER TABLE, or other DDL statements
+ * - To create periodic recovery checkpoints
+ * - Before major migrations
  *
  * @param handle SyndDB handle from synddb_attach()
  * @param out_size Output pointer to receive snapshot size (optional, can be NULL)
  * @return SYNDDB_SUCCESS on success, error code otherwise
+ *
+ * Example:
+ *   synddb_snapshot(handle, NULL);  // Creates AND publishes
  */
 SyndDBError synddb_snapshot(SyndDBHandle* handle, size_t* out_size);
 

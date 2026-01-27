@@ -1,5 +1,9 @@
 //! Example demonstrating automatic snapshot creation based on changeset count
 //!
+//! This example shows two types of automatic snapshots:
+//! 1. **DDL-triggered**: Snapshots created automatically after schema changes
+//! 2. **Interval-based**: Snapshots created every N changesets
+//!
 //! **Complexity:** Intermediate
 //! **Features:** Automatic snapshots, custom configuration
 //! **Prerequisites:** Sequencer running on localhost:8433
@@ -16,20 +20,8 @@ fn main() -> Result<()> {
 
     println!("=== SyndDB Automatic Snapshot Example ===\n");
 
-    // Create database
+    // Create database and attach SyndDB FIRST
     let conn = Box::leak(Box::new(Connection::open("auto_snapshot.db")?));
-
-    // Create schema
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY,
-            name TEXT,
-            value INTEGER
-        )",
-        [],
-    )?;
-
-    println!("✓ Database created\n");
 
     // Configure SyndDB with automatic snapshots every 5 changesets
     let config = Config {
@@ -42,14 +34,25 @@ fn main() -> Result<()> {
     println!("Config:");
     println!("  - Flush interval: {:?}", config.flush_interval);
     println!(
-        "  - Snapshot interval: {} changesets\n",
+        "  - Snapshot interval: {} changesets",
         config.snapshot_interval
     );
+    println!("  - Auto-snapshot on DDL: enabled (default)\n");
 
     // Attach SyndDB with custom config
-    let _synddb = SyndDB::attach_with_config(conn, config)?;
+    let synddb = SyndDB::attach_with_config(conn, config)?;
+    println!("✓ SyndDB attached\n");
 
-    println!("✓ SyndDB attached with automatic snapshots enabled\n");
+    // Create schema using execute_ddl() - triggers automatic snapshot!
+    println!("Creating schema (will trigger automatic DDL snapshot)...");
+    synddb.execute_ddl(
+        "CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            value INTEGER
+        )",
+    )?;
+    println!("✓ Schema created (DDL snapshot automatically published)\n");
 
     // Insert changesets and observe automatic snapshots
     println!("Inserting events (watch for automatic snapshots)...\n");

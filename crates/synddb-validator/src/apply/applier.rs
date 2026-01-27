@@ -68,8 +68,26 @@ impl ChangesetApplier {
     /// - `Snapshot`: Restore database from snapshot
     /// - `Withdrawal`: Log only (no database changes)
     pub fn apply_message(&mut self, message: &SignedMessage) -> Result<()> {
+        self.apply_message_with_rules(message, None)
+    }
+
+    /// Apply a signed message with optional validation rules
+    ///
+    /// If rules are provided, they are run after the changeset is applied
+    /// but before the transaction is committed. If any rule fails,
+    /// the transaction is rolled back and an error is returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The signed message to apply
+    /// * `rules` - Optional validation rules to run after applying the changeset
+    pub fn apply_message_with_rules(
+        &mut self,
+        message: &SignedMessage,
+        rules: Option<&crate::rules::RuleRegistry>,
+    ) -> Result<()> {
         match message.message_type {
-            MessageType::Changeset => self.apply_changeset_message(message),
+            MessageType::Changeset => self.apply_changeset_message_with_rules(message, rules),
             MessageType::Snapshot => self.apply_snapshot_message(message),
             MessageType::Withdrawal => {
                 debug!(
@@ -103,8 +121,12 @@ impl ChangesetApplier {
         })
     }
 
-    /// Apply a changeset message
-    fn apply_changeset_message(&mut self, message: &SignedMessage) -> Result<()> {
+    /// Apply a changeset message with optional validation rules
+    fn apply_changeset_message_with_rules(
+        &mut self,
+        message: &SignedMessage,
+        rules: Option<&crate::rules::RuleRegistry>,
+    ) -> Result<()> {
         let batch: ChangesetBatchRequest = self.decompress_and_parse(message, "changeset batch")?;
 
         debug!(
@@ -135,6 +157,11 @@ impl ChangesetApplier {
                     reason: format!("Changeset {} in batch {}: {e}", i, batch.batch_id),
                 }
             })?;
+        }
+
+        // Run validation rules before committing (if any)
+        if let Some(registry) = rules {
+            registry.validate_all(&tx, message.sequence)?;
         }
 
         tx.commit().map_err(|e| {
@@ -185,7 +212,8 @@ impl ChangesetApplier {
             DatabaseType::InMemory => {
                 static COUNTER: AtomicU64 = AtomicU64::new(0);
                 let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-                std::env::temp_dir().join(format!("synddb_snapshot_restore_{id}.db"))
+                let pid = std::process::id();
+                std::env::temp_dir().join(format!("synddb_snapshot_restore_{pid}_{id}.db"))
             }
         };
 
@@ -476,14 +504,15 @@ mod tests {
             sync::atomic::{AtomicU64, Ordering},
         };
 
-        // Use atomic counter for unique file names in parallel tests
+        // Use atomic counter + process ID for unique file names in parallel tests.
+        // Process ID is critical for nextest which runs each test in a separate process,
+        // causing static counters to reset and thread IDs to always be ThreadId(1).
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let thread_id = std::thread::current().id();
+        let pid = std::process::id();
 
         // Create a file-based database with some data (so we can read the bytes)
-        let temp_path =
-            std::env::temp_dir().join(format!("test_snapshot_source_{id}_{thread_id:?}.db"));
+        let temp_path = std::env::temp_dir().join(format!("test_snapshot_source_{pid}_{id}.db"));
         let _ = fs::remove_file(&temp_path); // clean up from previous runs
 
         {
@@ -543,10 +572,17 @@ mod tests {
 
     #[test]
     fn test_snapshot_restore_to_file() {
-        use std::fs;
+        use std::{
+            fs,
+            sync::atomic::{AtomicU64, Ordering},
+        };
 
-        // Create a file-based applier
-        let temp_path = std::env::temp_dir().join("test_snapshot_target.db");
+        // Create a file-based applier with unique path for parallel test execution.
+        // Use both process ID and atomic counter for consistency with other temp file paths.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let pid = std::process::id();
+        let temp_path = std::env::temp_dir().join(format!("test_snapshot_target_{pid}_{id}.db"));
         let temp_path_str = temp_path.to_str().unwrap();
 
         // Clean up any previous test
