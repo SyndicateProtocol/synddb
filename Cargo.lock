@@ -396,7 +396,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tracing",
  "wasmtimer",
 ]
@@ -442,7 +442,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tracing",
  "url",
  "wasmtimer",
@@ -624,7 +624,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tracing",
  "url",
  "wasmtimer",
@@ -640,7 +640,7 @@ dependencies = [
  "alloy-transport",
  "reqwest",
  "serde_json",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tracing",
  "url",
 ]
@@ -1061,9 +1061,9 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.8.7"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b098575ebe77cb6d14fc7f32749631a6e44edbef6b796f89b020e99ba20d425"
+checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
 dependencies = [
  "axum-core",
  "bytes",
@@ -1086,7 +1086,7 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -1113,9 +1113,9 @@ dependencies = [
 
 [[package]]
 name = "axum-prometheus"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42e1a6651f119707ec6c416f38fdb5be223707627fe6d47f912850634c106215"
+checksum = "dd44522c72edf6a45dfdd73ea201937bdaa8610cdf473151f694900837ab3879"
 dependencies = [
  "axum",
  "bytes",
@@ -1124,10 +1124,10 @@ dependencies = [
  "http-body",
  "matchit",
  "metrics",
- "metrics-exporter-prometheus",
- "pin-project",
+ "metrics-exporter-prometheus 0.18.1",
+ "pin-project-lite",
  "tokio",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tower-http",
 ]
 
@@ -2261,7 +2261,7 @@ dependencies = [
  "tokio-stream",
  "tonic 0.14.2",
  "tonic-prost",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tracing",
 ]
 
@@ -3146,11 +3146,25 @@ dependencies = [
  "indexmap 2.12.0",
  "ipnet",
  "metrics",
- "metrics-util",
+ "metrics-util 0.19.1",
  "quanta",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "metrics-exporter-prometheus"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3589659543c04c7dc5526ec858591015b87cd8746583b51b48ef4353f99dbcda"
+dependencies = [
+ "base64",
+ "indexmap 2.12.0",
+ "metrics",
+ "metrics-util 0.20.1",
+ "quanta",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -3162,6 +3176,22 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "hashbrown 0.15.5",
+ "metrics",
+ "quanta",
+ "rand 0.9.2",
+ "rand_xoshiro",
+ "sketches-ddsketch",
+]
+
+[[package]]
+name = "metrics-util"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdfb1365fea27e6dd9dc1dbc19f570198bc86914533ad639dae939635f096be4"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "hashbrown 0.16.1",
  "metrics",
  "quanta",
  "rand 0.9.2",
@@ -3731,7 +3761,7 @@ dependencies = [
  "synddb-chain-monitor",
  "synddb-client",
  "tokio",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -3757,7 +3787,7 @@ dependencies = [
  "axum",
  "clap",
  "hex",
- "metrics-exporter-prometheus",
+ "metrics-exporter-prometheus 0.16.2",
  "rusqlite",
  "synddb-bootstrap",
  "synddb-shared",
@@ -3975,7 +4005,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4184,7 +4214,7 @@ dependencies = [
  "tokio-native-tls",
  "tokio-rustls",
  "tokio-util",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tower-http",
  "tower-service",
  "url",
@@ -5133,7 +5163,7 @@ dependencies = [
  "humantime-serde",
  "k256",
  "metrics",
- "metrics-exporter-prometheus",
+ "metrics-exporter-prometheus 0.16.2",
  "reqwest",
  "rusqlite",
  "serde",
@@ -5145,7 +5175,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tower-http",
  "tracing",
  "uuid",
@@ -5163,7 +5193,7 @@ dependencies = [
  "hex",
  "k256",
  "metrics",
- "metrics-exporter-prometheus",
+ "metrics-exporter-prometheus 0.16.2",
  "opentelemetry 0.29.1",
  "opentelemetry-otlp",
  "opentelemetry_sdk 0.29.0",
@@ -5214,7 +5244,7 @@ dependencies = [
  "humantime-serde",
  "k256",
  "metrics",
- "metrics-exporter-prometheus",
+ "metrics-exporter-prometheus 0.16.2",
  "reqwest",
  "rusqlite",
  "serde",
@@ -5225,7 +5255,7 @@ dependencies = [
  "synddb-storage",
  "thiserror 2.0.17",
  "tokio",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tower-http",
  "tracing",
  "uuid",
@@ -5635,7 +5665,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -5674,9 +5704,9 @@ dependencies = [
 
 [[package]]
 name = "tower"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d039ad9159c98b70ecfd540b2573b97f7f52c3e8d9f8ad57a24b916a536975f9"
+checksum = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
 dependencies = [
  "futures-core",
  "futures-util",
@@ -5693,9 +5723,9 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.6.6"
+version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adc82fd73de2a9722ac5da747f12383d2bfdb93591ee6c58486e0097890f05f2"
+checksum = "d4e6559d53cc268e5031cd8429d05415bc4cb4aefc4aa5d6cc35fbf5b924a1f8"
 dependencies = [
  "bitflags",
  "bytes",
@@ -5704,7 +5734,7 @@ dependencies = [
  "http-body",
  "iri-string",
  "pin-project-lite",
- "tower 0.5.2",
+ "tower 0.5.3",
  "tower-layer",
  "tower-service",
  "tracing",
