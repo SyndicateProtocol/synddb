@@ -105,18 +105,30 @@ contracts/                    # Solidity contracts (project root)
 - Rust toolchain (1.70+)
 - Python 3.10+
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) (for Anvil and contract deployment)
-- OpenSSL (for key generation)
+- [just](https://github.com/casey/just) command runner (optional, for easier setup)
 
 ### Run the Demo
 
-The dev environment script starts all components including Anvil with deployed contracts:
+The easiest way to run the price oracle example is using `just` from the project root:
 
 ```bash
 # From the SyndDB root directory
+just examples::price-oracle
+```
+
+This command:
+1. Builds the price-oracle-validator binary
+2. Sets up the Python virtual environment
+3. Deploys contracts to Anvil (starts Anvil if needed)
+4. Starts the sequencer and validator
+5. Runs the price fetcher with mock data
+
+Alternatively, use the dev environment script for more options:
+
+```bash
 cd examples/price-oracle
 
 # Run with consistent mock APIs (validator accepts)
-# This starts: Anvil, deploys contracts, sequencer, validator, fetcher
 ./scripts/dev-env.sh
 
 # Run with divergent mock APIs (validator rejects!)
@@ -140,29 +152,35 @@ When running with Anvil, the script will:
 
 ### Manual Setup
 
-1. **Build the custom validator:**
+1. **Deploy contracts** (starts Anvil if needed):
+   ```bash
+   just deploy
+   ```
+
+2. **Build the custom validator:**
    ```bash
    cargo build --release -p price-oracle-validator
    ```
 
-2. **Start the sequencer:**
+3. **Start the sequencer** (key is generated automatically at startup):
    ```bash
-   SIGNING_KEY=$(openssl rand -hex 32) \
-   DATABASE_PATH=./data/sequencer.db \
+   mkdir -p ./data/price-oracle
+   BIND_ADDRESS=127.0.0.1:8433 \
+   DATABASE_PATH=./data/price-oracle/sequencer.db \
    ./target/release/synddb-sequencer
    ```
 
-3. **Start the custom validator:**
+4. **Start the custom validator** (fetches sequencer pubkey automatically):
    ```bash
-   SEQUENCER_PUBKEY="<from sequencer logs>" \
    SEQUENCER_URL="http://localhost:8433" \
-   DATABASE_PATH=./data/validator.db \
-   STATE_DB_PATH=./data/validator_state.db \
+   DATABASE_PATH=./data/price-oracle/validator.db \
+   STATE_DB_PATH=./data/price-oracle/validator_state.db \
+   PENDING_CHANGESETS_DB_PATH=./data/price-oracle/pending_changesets.db \
    MAX_PRICE_DIFFERENCE_BPS=100 \
    ./target/release/price-oracle-validator
    ```
 
-4. **Run the Python fetcher:**
+5. **Run the Python fetcher:**
    ```bash
    cd examples/price-oracle
    python3 -m venv venv
@@ -170,7 +188,7 @@ When running with Anvil, the script will:
    pip install -r app/requirements.txt
 
    python -m app.fetcher \
-     --db ./data/prices.db \
+     --db ../../data/price-oracle/prices.db \
      --sequencer-url http://localhost:8433 \
      --mock \
      --interval 10

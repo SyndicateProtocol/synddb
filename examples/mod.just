@@ -36,11 +36,17 @@ _build-price-oracle:
 _setup-price-oracle:
     cd price-oracle && python3 -m venv venv && ./venv/bin/pip install -q -r app/requirements.txt
 
+# Deploy contracts (calls parent recipe)
+[no-cd]
+[group('price-oracle')]
+[private]
+_deploy-contracts:
+    just deploy
+
 # Run price oracle example (full environment)
 [no-cd]
 [group('price-oracle')]
-price-oracle: _build-price-oracle _setup-price-oracle
-    just deploy
+price-oracle: _build-price-oracle _setup-price-oracle _deploy-contracts
     #!/usr/bin/env bash
     set -euxo pipefail
     trap 'kill $(jobs -p) 2>/dev/null' EXIT
@@ -56,6 +62,7 @@ price-oracle: _build-price-oracle _setup-price-oracle
     SEQUENCER_URL=http://127.0.0.1:{{sequencer_port}} \
     DATABASE_PATH={{data_dir}}/price-oracle/validator.db \
     STATE_DB_PATH={{data_dir}}/price-oracle/validator_state.db \
+    PENDING_CHANGESETS_DB_PATH={{data_dir}}/price-oracle/pending_changesets.db \
     BIND_ADDRESS=127.0.0.1:{{validator_port}} \
     MAX_PRICE_DIFFERENCE_BPS=100 \
     ./target/release/price-oracle-validator &
@@ -93,8 +100,7 @@ _build-prediction-market:
 # Run prediction market example (CLI mode)
 [no-cd]
 [group('prediction-market')]
-prediction-market: _build-prediction-market
-    just deploy
+prediction-market: _build-prediction-market _deploy-contracts
     #!/usr/bin/env bash
     set -euxo pipefail
     trap 'kill $(jobs -p) 2>/dev/null' EXIT
@@ -142,8 +148,7 @@ prediction-market: _build-prediction-market
 # Run prediction market HTTP server
 [no-cd]
 [group('prediction-market')]
-prediction-market-http: _build-prediction-market
-    just deploy
+prediction-market-http: _build-prediction-market _deploy-contracts
     #!/usr/bin/env bash
     set -euxo pipefail
     trap 'kill $(jobs -p) 2>/dev/null' EXIT

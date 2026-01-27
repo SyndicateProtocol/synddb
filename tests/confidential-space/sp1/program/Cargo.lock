@@ -311,14 +311,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d758ba1b47b00caf47f24925c0074ecb20d6dfcffe7f6d53395c0465674841a"
 
 [[package]]
-name = "gcp-confidential-space"
+name = "gcp-attestation"
 version = "0.1.0"
 dependencies = [
- "alloy",
  "rsa",
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "gcp-confidential-space"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "gcp-attestation",
 ]
 
 [[package]]

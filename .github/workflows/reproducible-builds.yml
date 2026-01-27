@@ -8,6 +8,10 @@ on:
   push:
     branches:
       - main
+      # TEMPORARY: Remove example-app after development, then clean up tags:
+      #   gcloud artifacts docker tags delete $REGION-docker.pkg.dev/$PROJECT/$REPO/synddb-sequencer:example-app-edge
+      #   gcloud artifacts docker tags delete $REGION-docker.pkg.dev/$PROJECT/$REPO/synddb-validator:example-app-edge
+      - example-app
     tags:
       - 'v*'  # Release tags (e.g., v1.0.0)
     paths:
@@ -247,6 +251,12 @@ jobs:
             # Main branch push: sha + edge
             echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA,$REGISTRY/synddb-sequencer:edge" >> $GITHUB_OUTPUT
             echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA,$REGISTRY/synddb-validator:edge" >> $GITHUB_OUTPUT
+            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/example-app" ]]; then
+            # TEMPORARY: example-app branch push: sha + example-app-edge
+            echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA,$REGISTRY/synddb-sequencer:example-app-edge" >> $GITHUB_OUTPUT
+            echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA,$REGISTRY/synddb-validator:example-app-edge" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event_name }}" == "push" ]]; then
