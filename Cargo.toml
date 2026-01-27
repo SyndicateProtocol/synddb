@@ -25,19 +25,22 @@ repository = "https://github.com/syndicate-io/synddb"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.41", features = ["full"] }
+tokio = { version = "1.48", features = ["full"] }
 
 # Database
+# TODO: Update to rusqlite 0.38+ when ready - has breaking changes:
+# - Removed ToSql for u64 (use i64 instead)
+# - Removed FromSql for usize (use i64 and convert)
 rusqlite = { version = "0.32", features = ["bundled", "backup", "session"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9"
+serde-saphyr = "0.0"
 
 # Error handling
 anyhow = "1.0"
-thiserror = "1"
+thiserror = "2"
 
 # Logging
 tracing = "0.1"
@@ -50,21 +53,23 @@ clap = { version = "4.5", features = ["derive"] }
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 axum = { version = "0.8", features = ["json"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "request-id"] }
 
 # Unix domain socket support
-hyperlocal = "0.8"
-hyper = { version = "0.14", features = ["client", "http1"] }
+hyperlocal = "0.9"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
 
 # Channels and concurrency
 crossbeam-channel = "0.5"
 
 # Enum utilities
-strum = { version = "0.26", features = ["derive"] }
+strum = { version = "0.27", features = ["derive"] }
 
 # Utils
-rand = "0.8"
-uuid = { version = "1.0", features = ["v4"] }
+rand = "0.9"
+uuid = { version = "1.11", features = ["v4"] }
 humantime-serde = "1.1"
 humantime = "2"
 hex = "0.4"
@@ -80,7 +85,7 @@ coset = "0.3"
 serde_bytes = "0.11"
 
 # Blockchain / Cryptography
-alloy = { version = "1.0.25", features = [
+alloy = { version = "1.1", features = [
   "provider-ws",
   "rpc-types",
   "sol-types",
@@ -89,8 +94,20 @@ k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
 url = { version = "2.5", features = ["serde"] }
 async-trait = "0.1"
 
-# Google Cloud
-google-cloud-storage = "0.22"
+# Google Cloud (official SDK)
+google-cloud-storage = "1.5"
+
+# Metrics (using metrics facade with Prometheus exporter)
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+axum-prometheus = "0.8"
+
+# OpenTelemetry / Distributed Tracing
+opentelemetry = "0.29"
+opentelemetry_sdk = { version = "0.29", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.29", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.30"
+tracing-stackdriver = { version = "0.10", features = ["opentelemetry"] }
 
 [workspace.lints.rust]
 # TEMPORARY allowances, remove before prod

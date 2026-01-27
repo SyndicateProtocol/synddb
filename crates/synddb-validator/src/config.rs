@@ -155,6 +155,20 @@ pub struct ValidatorConfig {
     #[arg(long, env = "LOG_JSON", default_value = "false")]
     pub log_json: bool,
 
+    /// Enable OpenTelemetry distributed tracing (requires otel feature)
+    ///
+    /// When enabled, traces are exported to the OTLP endpoint specified by
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://localhost:4317`).
+    #[arg(long, env = "OTEL_ENABLED", default_value = "false")]
+    pub otel_enabled: bool,
+
+    /// GCP project ID for Cloud Trace log correlation
+    ///
+    /// When set along with `otel_enabled`, logs are formatted for Cloud Logging
+    /// with automatic trace correlation (logging.googleapis.com/trace fields).
+    #[arg(long, env = "GCP_PROJECT_ID")]
+    pub gcp_project_id: Option<String>,
+
     /// Graceful shutdown timeout
     #[arg(long, env = "SHUTDOWN_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]

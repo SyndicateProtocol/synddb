@@ -5,4 +5,5 @@
 //! - Signature API (default port 8081): Bridge signature retrieval for relayers
 
 pub mod api;
+pub mod request_id;
 pub mod signatures;

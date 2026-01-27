@@ -16,8 +16,10 @@ tokio = { version = "1.41", features = ["rt-multi-thread", "macros"] }
 reqwest = { version = "0.12", features = ["json"] }
 
 # Unix domain socket for attestation service
-hyperlocal = "0.8"
-hyper = { version = "0.14", features = ["client", "http1"] }
+hyperlocal = "0.9"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -46,7 +48,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Google Cloud Storage (optional, for uploading samples)
-google-cloud-storage = { version = "0.22", optional = true }
+google-cloud-storage = { version = "1.5", optional = true }
+bytes = { version = "1", optional = true }
 
 # RSA signature verification
 rsa = { version = "0.9", features = ["sha2"] }
@@ -54,7 +57,7 @@ sha2 = { version = "0.10", features = ["oid"] }
 
 [features]
 default = []
-gcs = ["google-cloud-storage"]
+gcs = ["google-cloud-storage", "bytes"]
 
 [[bin]]
 name = "cs-attestation-sample"

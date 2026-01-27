@@ -173,3 +173,16 @@ gs://{bucket}/{prefix}/
 - The `SIGNING_KEY` must be kept secret - it signs all sequenced messages
 - In production, run in a TEE (GCP Confidential Space) with attestation enabled
 - The sequencer verifies client attestation tokens when `tee` feature is enabled
+
+## GCP Confidential Space Deployment
+
+When deploying to Confidential Space, configure the following VM metadata:
+
+| Metadata Key | Value | Description |
+|--------------|-------|-------------|
+| `tee-image-reference` | `<image-uri>` | Container image to run |
+| `tee-container-log-redirect` | `true` | **Required for logging** - redirects stdout/stderr to Cloud Logging |
+
+The service account running the VM must have the `roles/logging.logWriter` role for logs to appear in Cloud Logging.
+
+**Note:** Unlike GKE or Cloud Run, Confidential Space does not automatically ingest container logs. The `tee-container-log-redirect` metadata must be explicitly set.

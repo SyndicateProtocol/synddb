@@ -21,12 +21,23 @@ use synddb_sequencer::{
     },
     transport::local::{LocalTransport, LocalTransportConfig},
 };
-use synddb_shared::{keys::EvmKeyManager, runtime};
+use synddb_shared::{keys::EvmKeyManager, metrics, telemetry};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = SequencerConfig::parse();
-    runtime::init_logging(config.log_json);
+
+    // Initialize tracing with optional OpenTelemetry export and Cloud Trace correlation
+    let _tracing_guard = telemetry::init_tracing(
+        "synddb-sequencer",
+        config.log_json,
+        config.otel_enabled,
+        config.gcp_project_id.clone(),
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {e}"))?;
+
+    // Initialize Prometheus metrics exporter
+    let metrics_handle = metrics::init_metrics();
 
     info!("SyndDB Sequencer starting...");
 
@@ -177,7 +188,7 @@ async fn main() -> Result<()> {
     };
 
     // Create the HTTP router
-    let mut app = create_router(state);
+    let mut app = create_router(state, metrics_handle);
 
     // Create shutdown channel for background tasks
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
