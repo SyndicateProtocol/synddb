@@ -168,7 +168,7 @@ jobs:
           file artifacts/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ffi-lib-${{ matrix.platform }}-${{ matrix.arch }}
           path: artifacts/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
@@ -239,7 +239,7 @@ jobs:
           Get-ChildItem artifacts/${{ matrix.lib_dir }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ffi-lib-${{ matrix.platform }}-${{ matrix.arch }}
           path: artifacts/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
