@@ -26,7 +26,7 @@ pub enum BootstrapState {
     GeneratingKey,
     /// Fetching attestation token
     FetchingAttestation,
-    /// Generating SP1 proof
+    /// Generating RISC Zero proof
     GeneratingProof,
     /// Registering key via relayer
     RegisteringKey,

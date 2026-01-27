@@ -28,7 +28,7 @@ pub struct BootstrapConfig {
     pub relayer_url: Option<String>,
 
     /// Proof generation mode
-    #[arg(long, env = "SP1_PROVER_MODE", default_value = "service", value_enum)]
+    #[arg(long, env = "PROVER_MODE", default_value = "service", value_enum)]
     pub prover_mode: ProverMode,
 
     /// Proof service URL (required when `prover_mode=service`)

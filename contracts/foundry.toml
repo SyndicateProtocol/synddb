@@ -8,7 +8,6 @@ optimizer_runs = 200
 via_ir = true           # Required to avoid "Stack too deep" errors
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
-    "@sp1-contracts/=lib/sp1-contracts/contracts/src/",
 ]
 
 [lint]

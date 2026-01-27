@@ -4,7 +4,7 @@ This directory contains tooling for GCP Confidential Space TEE attestation:
 
 1. **Sample capture workload** - Runs in GCP CS VM to capture real attestation tokens
 2. **Verification library** - `crates/gcp-attestation/` crate for verifying attestations
-3. **SP1 integration** - `sp1/` directory for generating ZK proofs of attestation
+3. **RISC Zero integration** - `crates/synddb-bootstrap/risc0/` for generating ZK proofs of attestation
 
 ## Directory Structure
 
@@ -13,8 +13,6 @@ tests/confidential-space/
 ├── src/
 │   ├── main.rs          # Attestation capture workload (runs in GCP CS VM)
 │   └── verify.rs        # Local verification binary
-├── sp1/
-│   └── script/          # Proof generation script
 ├── samples/             # Captured attestation tokens
 ├── deploy.sh            # Build and deploy to GCP
 ├── setup-gcp.sh         # One-time GCP infrastructure setup
@@ -22,7 +20,8 @@ tests/confidential-space/
 
 # Related crates:
 crates/gcp-attestation/                    # Core attestation verification library
-crates/synddb-bootstrap/sp1/program/       # SP1 zkVM program
+crates/synddb-bootstrap/risc0/program/     # RISC Zero zkVM program
+services/proof-service/                    # GPU proof generation service
 ```
 
 ## Quick Start
@@ -51,22 +50,9 @@ cargo run --bin verify-sample
 cargo test -p gcp-attestation
 ```
 
-### 3. Generate SP1 ZK Proof
+### 3. Generate RISC Zero ZK Proof
 
-```bash
-cd sp1/script
-
-# Test execution (no proof, fast)
-cargo run --release --bin gcp-cs-prover -- --execute \
-  --sample ../../samples/samples_*.json
-
-# Generate actual ZK proof (~5-10 minutes)
-cargo run --release --bin gcp-cs-prover -- --prove \
-  --sample ../../samples/samples_*.json
-
-# Get verification key for Solidity contract (from proof-service)
-cd ../../services/proof-service && cargo run --release --bin sp1-vkey
-```
+The proof generation is done by the proof-service. See `services/proof-service/README.md` for details.
 
 ---
 
@@ -76,7 +62,7 @@ cd ../../services/proof-service && cargo run --release --bin sp1-vkey
 2. Fetches attestation tokens from the local TEE attestation service
 3. Captures the raw JWT tokens with decoded headers/claims
 4. Fetches Google's JWKS (public keys) for signature verification
-5. Outputs everything as JSON for SP1 development
+5. Outputs everything as JSON for RISC Zero development
 
 ## Output Format
 
@@ -108,9 +94,9 @@ The workload produces a JSON bundle like:
 }
 ```
 
-## SP1 On-Chain Verification
+## RISC Zero On-Chain Verification
 
-The SP1 program verifies attestations inside a zkVM and produces public values for on-chain verification:
+The RISC Zero program verifies attestations inside a zkVM and produces public values for on-chain verification:
 
 | Public Value | Description |
 |--------------|-------------|
@@ -118,16 +104,19 @@ The SP1 program verifies attestations inside a zkVM and produces public values f
 | `validity_window_start` | Token issued-at timestamp |
 | `validity_window_end` | Token expiration timestamp |
 | `image_digest_hash` | keccak256 of container image digest |
+| `tee_signing_key` | Ethereum address derived from EVM public key |
 | `secboot` | Whether secure boot was enabled |
 | `audience_hash` | keccak256 of audience string |
+| `image_signature_*` | secp256k1 signature components (r, s, v) |
 
 ### Hand-off to Solidity Developer
 
-After running `--prove`, provide your colleague with:
+After generating proofs, provide:
 
-1. **Proof file**: `sp1/script/gcp_cs_attestation_proof.bin`
-2. **Verification key**: Output of `cargo run --release --bin sp1-vkey` (from `services/proof-service/`)
-3. **PublicValuesStruct**: Defined in `crates/synddb-bootstrap/sp1/program/src/types.rs`
+1. **Public values**: ABI-encoded `PublicValuesStruct` from the proof output
+2. **Proof bytes**: RISC Zero Groth16 seal
+3. **Image ID**: Get via `GET /image-id` on the proof service
+4. **PublicValuesStruct**: Defined in `crates/synddb-bootstrap/risc0/program/src/types.rs`
 
 ---
 

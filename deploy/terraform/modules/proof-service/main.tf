@@ -7,7 +7,7 @@ terraform {
   }
 }
 
-# Cloud Run v2 service for SP1 Network Prover (offloads proving to Succinct)
+# Cloud Run v2 service for RISC Zero GPU proof generation
 resource "google_cloud_run_v2_service" "proof_service" {
   name     = var.service_name
   location = var.region
@@ -41,24 +41,19 @@ resource "google_cloud_run_v2_service" "proof_service" {
       }
 
       resources {
-        limits = {
-          cpu    = var.cpu_limit
-          memory = var.memory_limit
-        }
+        limits = merge(
+          {
+            cpu    = var.cpu_limit
+            memory = var.memory_limit
+          },
+          # Add GPU resource limit for RISC Zero proving
+          var.enable_gpu ? { "nvidia.com/gpu" = tostring(var.gpu_count) } : {}
+        )
         cpu_idle          = false
         startup_cpu_boost = true
       }
 
-      env {
-        name  = "SP1_PROVER"
-        value = "network"
-      }
-
-      env {
-        name  = "NETWORK_PRIVATE_KEY"
-        value = var.sp1_network_private_key
-      }
-
+      # Environment variables
       env {
         name  = "LOG_JSON"
         value = "true"
@@ -66,7 +61,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
 
       env {
         name  = "RUST_LOG"
-        value = "info"
+        value = "info,risc0_zkvm=debug"
       }
 
       startup_probe {
@@ -91,8 +86,18 @@ resource "google_cloud_run_v2_service" "proof_service" {
       }
     }
 
+    # GPU node selector for RISC Zero proving
+    dynamic "node_selector" {
+      for_each = var.enable_gpu ? [1] : []
+      content {
+        accelerator = var.gpu_type
+      }
+    }
+
     annotations = {
       "run.googleapis.com/startup-cpu-boost" = "true"
+      # Force new revision when image changes - use digest as annotation value
+      "synddb.io/image-digest" = regex("sha256:[a-f0-9]+", var.container_image)
     }
 
     max_instance_request_concurrency = var.concurrency

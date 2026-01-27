@@ -160,7 +160,7 @@ Verifies SQL operations before settlement:
 
 Solidity contracts for on-chain settlement:
 - **Bridge.sol** - Cross-chain message passing and withdrawals
-- **Attestation verification** - TEE attestation via SP1 ZK proofs
+- **Attestation verification** - TEE attestation via RISC Zero ZK proofs
 
 [Contract Documentation](contracts/README.md)
 

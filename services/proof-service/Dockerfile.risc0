@@ -1,0 +1,79 @@
+# RISC Zero proof generation service with GPU (CUDA) support
+#
+# Build: docker build -f Dockerfile.risc0 -t proof-service-risc0 .
+# Run:   docker run --gpus all -p 8083:8083 proof-service-risc0
+#
+# This Dockerfile builds the proof service to use RISC Zero's native GPU proving
+# with CUDA, compiling to a native binary that works directly on Cloud Run L4 GPUs.
+
+# Build stage - CUDA development image with Rust
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS builder
+
+# Prevent interactive prompts during apt-get
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    cmake \
+    pkg-config \
+    libssl-dev \
+    clang \
+    git \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install RISC Zero toolchain
+# This installs the rzup tool and then the risc0 toolchain
+RUN curl -L https://risczero.com/install | bash && \
+    /root/.risc0/bin/rzup install
+
+# Add rzup to PATH
+ENV PATH="/root/.risc0/bin:${PATH}"
+
+WORKDIR /app
+
+# Copy the entire repo context (needed for workspace dependencies)
+COPY . .
+
+# Build the proof service with CUDA support
+# The proof-service's build.rs uses risc0-build::embed_methods() which compiles
+# the guest program for the riscv32im-risc0-zkvm-elf target automatically.
+# Target L4 GPU (Ada Lovelace, compute 8.9). The build doesn't have a GPU present
+# so -arch=native fails - we must specify the target explicitly.
+# Also include sm_80 (Ampere A100) for compatibility with other GPU types.
+WORKDIR /app/services/proof-service
+ENV NVCC_APPEND_FLAGS="-gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_89,code=sm_89"
+RUN cargo build --release --features cuda
+
+# Runtime stage - CUDA runtime image (minimal footprint)
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the built binary
+COPY --from=builder /app/services/proof-service/target/release/proof-service /app/proof-service
+
+# RISC Zero configuration
+# No external prover configuration needed - uses local GPU
+ENV BIND_ADDRESS=0.0.0.0:8083
+ENV RUST_LOG=info,risc0_zkvm=debug
+
+# GPU compute requires NVIDIA Container Toolkit at runtime
+# Cloud Run automatically provides GPU access when configured
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+EXPOSE 8083
+
+CMD ["/app/proof-service"]

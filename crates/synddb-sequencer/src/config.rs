@@ -203,7 +203,7 @@ pub struct SequencerConfig {
     /// When enabled, the sequencer will:
     /// 1. Generate an ephemeral signing key
     /// 2. Fetch a TEE attestation token
-    /// 3. Generate an SP1 proof via the proof service
+    /// 3. Generate a RISC Zero proof via the proof service
     /// 4. Submit the proof to the `TeeKeyManager` contract
     /// 5. Wait for on-chain confirmation before accepting requests
     #[arg(long, env = "ENABLE_KEY_BOOTSTRAP", default_value = "false")]
@@ -225,7 +225,7 @@ pub struct SequencerConfig {
     #[arg(long, env = "RELAYER_URL")]
     pub relayer_url: Option<String>,
 
-    /// URL of the proof service for generating SP1 proofs
+    /// URL of the proof service for generating RISC Zero proofs
     #[arg(long, env = "PROOF_SERVICE_URL")]
     pub proof_service_url: Option<String>,
 

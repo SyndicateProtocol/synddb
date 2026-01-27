@@ -152,6 +152,11 @@ resource "google_cloud_run_v2_service" "relayer" {
     }
 
     max_instance_request_concurrency = var.concurrency
+
+    annotations = {
+      # Force new revision when image changes - use digest as annotation value
+      "synddb.io/image-digest" = regex("sha256:[a-f0-9]+", var.container_image)
+    }
   }
 
   labels = var.labels

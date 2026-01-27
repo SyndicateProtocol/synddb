@@ -29,7 +29,7 @@ gcloud auth application-default login
 ```
 
 This outputs:
-- `ATTESTATION_VERIFIER_VKEY` - SP1 verification key (stable)
+- `RISC0_IMAGE_ID` - RISC Zero program image ID (stable)
 - `EXPECTED_IMAGE_DIGEST_HASH` - Hash of allowed Docker images
 - `EXPIRATION_TOLERANCE` - 24 hours (86400 seconds)
 

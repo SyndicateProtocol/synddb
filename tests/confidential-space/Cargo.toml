@@ -2,7 +2,7 @@
 name = "cs-attestation-sample"
 version = "0.1.0"
 edition = "2021"
-description = "Captures attestation tokens from GCP Confidential Space for SP1 verification development"
+description = "Captures attestation tokens from GCP Confidential Space for RISC Zero verification development"
 publish = false
 
 # This is a standalone test workload, not part of the main workspace

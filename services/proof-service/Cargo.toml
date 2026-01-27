@@ -2,7 +2,7 @@
 name = "proof-service"
 version = "0.1.0"
 edition = "2021"
-description = "SP1 network proof generation service for TEE attestation"
+description = "RISC Zero GPU proof generation service for TEE attestation"
 publish = false
 
 # Standalone service, not part of main workspace
@@ -12,9 +12,12 @@ publish = false
 name = "proof-service"
 path = "src/main.rs"
 
-[[bin]]
-name = "sp1-vkey"
-path = "src/vkey.rs"
+[features]
+default = []
+# Enable CUDA GPU acceleration for RISC Zero proving
+cuda = ["risc0-zkvm/cuda"]
+# Enable Metal GPU acceleration (macOS)
+metal = ["risc0-zkvm/metal"]
 
 [dependencies]
 # Web framework
@@ -26,24 +29,22 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 serde = { version = "1.0", features = ["derive"] }
 hex = "0.4"
 
-# SP1 SDK for network proof generation
+# RISC Zero SDK for local GPU proof generation
 #
-# We use Succinct's Prover Network (auction mode) instead of local proving because:
-# - GPU proving requires Moongate's Docker-in-Docker architecture which doesn't work
-#   on Cloud Run or similar container platforms (closed-source dependency)
-#   See: https://docs.succinct.xyz/docs/provers/cluster-development/architecture#node
-# - CPU proving optimizations (RUSTFLAGS="-C target-cpu=native -C target-feature=+avx512f")
-#   are not needed for network proving since proof generation is offloaded
+# RISC Zero compiles to a native CUDA binary that works directly on Cloud Run
+# with L4 GPUs.
 #
-# native-gnark is required for local verification of proofs returned from the network.
-# Without it, the SDK tries to use Docker for gnark verification, which fails on Cloud Run.
-sp1-sdk = { version = "5.2", features = ["network", "native-gnark"] }
+# Features:
+# - Default: CPU proving (slower but portable)
+# - cuda: Enable NVIDIA GPU acceleration (use for production)
+# - metal: Enable Apple GPU acceleration (for local dev on Mac)
+risc0-zkvm = { version = "3.0.4", features = ["prove"] }
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
 gcp-attestation = { path = "../../crates/gcp-attestation" }
 
-# SP1 program types (PublicValuesStruct for decoding proof outputs)
-gcp-cs-attestation-sp1-program = { path = "../../crates/synddb-bootstrap/sp1/program", default-features = false }
+# RISC Zero program types (PublicValuesStruct for decoding proof outputs)
+gcp-cs-attestation-risc0-program = { path = "../../crates/synddb-bootstrap/risc0/program", default-features = false }
 
 # Solidity types
 alloy = { version = "1.0", default-features = false, features = ["sol-types"] }
@@ -62,4 +63,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 reqwest = { version = "0.12", features = ["json"] }
 
 [build-dependencies]
-sp1-build = "5.2"
+risc0-build = "3.0.4"
+
+[package.metadata.risc0]
+methods = ["../../crates/synddb-bootstrap/risc0/program"]
