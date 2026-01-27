@@ -99,6 +99,12 @@ impl ChangesetSender {
                 }
                 recv(shutdown_rx) -> _ => {
                     info!("Shutdown signal received");
+                    // Drain any remaining changesets from the channel before exiting
+                    while let Ok(cs) = changeset_rx.try_recv() {
+                        debug!("Draining changeset: seq={}, size={} bytes", cs.sequence, cs.data.len());
+                        self.buffer_size += cs.data.len();
+                        self.buffer.push(cs);
+                    }
                     self.flush().await;
                     break;
                 }

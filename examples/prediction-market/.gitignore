@@ -1,0 +1,8 @@
+# Development data directory (created by dev-env.sh)
+.dev-data/
+
+# SQLite databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

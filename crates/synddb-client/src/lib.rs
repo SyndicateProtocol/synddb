@@ -1,61 +1,132 @@
-//! `SyndDB` Client Library - `SQLite` Session Extension Wrapper
+//! `SyndDB` Client Library - `SQLite` Replication for Blockchain Applications
 //!
-//! This library captures `SQLite` changesets and sends them to the `SyndDB` sequencer.
-//! It runs in the application's TEE and does NOT contain any signing keys.
+//! This library captures `SQLite` changesets and sends them to the `SyndDB` sequencer
+//! for ordering, signing, and publication to data availability layers.
 //!
-//! # Usage
+//! # Quick Start
+//!
+//! The simplest way to use `SyndDB` is with [`SyndDB::open()`], which manages the
+//! connection internally:
+//!
+//! ```rust,no_run
+//! use synddb_client::SyndDB;
+//!
+//! // Open database with replication enabled
+//! let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+//!
+//! // Use the connection for normal SQLite operations
+//! synddb.connection().execute(
+//!     "CREATE TABLE IF NOT EXISTS trades (id INTEGER, amount INTEGER)",
+//!     [],
+//! )?;
+//!
+//! // Use the transaction helper for multi-statement transactions
+//! synddb.transaction(|tx| {
+//!     tx.execute("INSERT INTO trades VALUES (1, 100)", [])?;
+//!     tx.execute("INSERT INTO trades VALUES (2, 200)", [])?;
+//!     Ok(())
+//! })?;
+//!
+//! // Check replication status
+//! let stats = synddb.stats();
+//! println!("Published: {} changesets", stats.published_changesets);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! # Advanced Usage
+//!
+//! For more control, use [`SyndDB::attach()`] with an existing connection:
 //!
 //! ```rust,no_run
 //! use rusqlite::Connection;
 //! use synddb_client::SyndDB;
 //!
-//! // Connection requires 'static lifetime (see "Why `'static` lifetime?" section below)
+//! // Create connection with 'static lifetime (required by SQLite Session Extension)
 //! let conn = Box::leak(Box::new(Connection::open("app.db")?));
 //! let synddb = SyndDB::attach(conn, "http://sequencer:8433")?;
 //!
-//! // Use SQLite normally - changesets are captured automatically
-//! conn.execute("CREATE TABLE trades (id INTEGER, amount INTEGER)", [])?;
-//! conn.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![1, 100])?;
-//!
-//! // For transactions, use unchecked_transaction() instead of transaction()
+//! // Use unchecked_transaction() for transactions (see Transactions section)
 //! let tx = conn.unchecked_transaction()?;
-//! tx.execute("INSERT INTO trades VALUES (?1, ?2)", rusqlite::params![2, 200])?;
+//! tx.execute("INSERT INTO trades VALUES (1, 100)", [])?;
 //! tx.commit()?;
 //!
-//! // Publish changesets to sequencer
 //! synddb.publish()?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Publishing
+//! # Publishing Strategies
 //!
-//! You must call [`SyndDB::publish()`] to send captured changesets to the sequencer:
-//! - After committing a transaction
-//! - After a batch of related operations
-//! - Periodically in long-running applications
+//! `SyndDB` supports different strategies for when to publish changesets:
 //!
-//! Changesets are also published when `SyndDB` is dropped (graceful shutdown).
+//! - **Timer** (default): Automatically publishes every 1 second
+//! - **Manual**: Only publishes when you call [`SyndDB::publish()`]
+//!
+//! Configure via [`Config::publish_strategy`]:
+//!
+//! ```rust,no_run
+//! use synddb_client::{Config, PublishStrategy, SyndDB};
+//!
+//! let config = Config {
+//!     sequencer_url: "http://sequencer:8433".parse().unwrap(),
+//!     publish_strategy: PublishStrategy::Manual,
+//!     ..Default::default()
+//! };
+//! let synddb = SyndDB::open_with_config("app.db", config)?;
+//!
+//! // With Manual strategy, you control when to publish
+//! synddb.connection().execute("INSERT INTO trades VALUES (1, 100)", [])?;
+//! synddb.publish()?; // Explicitly send to sequencer
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 //!
 //! # Transactions
 //!
-//! Use [`Connection::unchecked_transaction()`] instead of [`Connection::transaction()`]
-//! because `SyndDB` holds an immutable borrow of the connection for the Session Extension.
+//! When using [`SyndDB::attach()`] with an external connection, you must use
+//! [`Connection::unchecked_transaction()`] instead of [`Connection::transaction()`].
+//! This is because `SyndDB` holds a reference to the connection for the Session Extension.
+//!
+//! The [`SyndDB::transaction()`] helper handles this automatically:
+//!
+//! ```rust,no_run
+//! # use synddb_client::SyndDB;
+//! # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+//! // Recommended: use the transaction helper
+//! synddb.transaction(|tx| {
+//!     tx.execute("UPDATE balances SET amount = amount - 100 WHERE id = 1", [])?;
+//!     tx.execute("UPDATE balances SET amount = amount + 100 WHERE id = 2", [])?;
+//!     Ok(())
+//! })?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! # Monitoring Replication
+//!
+//! Check replication health and statistics:
+//!
+//! ```rust,no_run
+//! # use synddb_client::SyndDB;
+//! # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+//! // Get current stats
+//! let stats = synddb.stats();
+//! println!("Pending: {}", stats.pending_changesets);
+//! println!("Published: {}", stats.published_changesets);
+//! println!("Healthy: {}", stats.is_healthy);
+//!
+//! // Quick health check
+//! if synddb.is_healthy() {
+//!     println!("Sequencer is reachable");
+//! }
+//!
+//! // Check pending count
+//! println!("{} changesets waiting to be sent", synddb.pending_count());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 //!
 //! # Thread Safety
 //!
-//! The Session Extension is only accessed from the main thread. Background threads
-//! handle network I/O but only receive `Vec<u8>` bytes through channels.
-//!
-//! # Why `'static` lifetime?
-//!
-//! `SyndDB` requires `&'static Connection` because the `SQLite` Session Extension is stored
-//! in thread-local storage, which requires `'static` bounds. We use `Box::leak` to satisfy
-//! this requirement. This means the Connection is intentionally never dropped - cleanup
-//! happens at process exit. This is acceptable for typical single-connection-per-process
-//! usage but means `SQLite`'s `Drop` cleanup (closing file handles, WAL checkpoint) won't run.
-//!
-//! `SyndDB` itself is dropped normally and performs graceful shutdown (publishing pending
-//! changesets, joining background threads).
+//! The `SQLite` Session Extension is only accessed from the main thread. Background
+//! threads handle network I/O but only receive serialized bytes through channels.
+//! All stats are thread-safe and can be read from any thread.
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
@@ -63,6 +134,8 @@ use rusqlite::Connection;
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
+    path::Path,
+    sync::Arc,
     thread,
 };
 use tracing::{debug, info, warn};
@@ -74,6 +147,7 @@ pub mod retry;
 pub mod sender;
 pub mod session;
 pub mod snapshot_sender;
+pub mod stats;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;
@@ -85,20 +159,43 @@ pub mod chain_monitor_integration;
 use chain_monitor_integration::ChainMonitorHandle;
 
 pub use attestation::{is_confidential_space, AttestationClient, TokenType};
-pub use config::Config;
+pub use config::{Config, PublishStrategy};
 use recovery::FailedBatchRecovery;
 use sender::ChangesetSender;
 use session::SessionMonitor;
 pub use session::Snapshot;
 use snapshot_sender::SnapshotSender;
+pub use stats::{StatsHandle, StatsSnapshot};
 
 /// Main handle to `SyndDB` client
 ///
-/// Attaches to a `SQLite` connection and automatically captures changesets.
-/// Dropping this handle will stop changeset capture and publish pending data.
-#[derive(Debug)]
+/// Provides `SQLite` replication by capturing changesets and sending them to a sequencer.
+///
+/// # Creating an Instance
+///
+/// - [`SyndDB::open()`] - Simplest way, manages connection internally
+/// - [`SyndDB::open_with_config()`] - Full control over configuration
+/// - [`SyndDB::attach()`] - Attach to existing connection (advanced)
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use synddb_client::SyndDB;
+///
+/// let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+///
+/// synddb.connection().execute("INSERT INTO trades VALUES (1, 100)", [])?;
+///
+/// synddb.transaction(|tx| {
+///     tx.execute("INSERT INTO trades VALUES (2, 200)", [])?;
+///     Ok(())
+/// })?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct SyndDB {
-    /// Session monitor for capturing changesets (includes publish thread)
+    /// Connection reference (always valid for lifetime of `SyndDB`)
+    conn: &'static Connection,
+    /// Session monitor for capturing changesets
     monitor: Option<SessionMonitor>,
     /// Channel to send shutdown signal to changeset sender
     changeset_shutdown_tx: Sender<()>,
@@ -109,9 +206,22 @@ pub struct SyndDB {
     /// Handle to background snapshot sender thread
     snapshot_handle: Option<thread::JoinHandle<()>>,
     /// Optional recovery storage for failed batches
-    recovery: Option<std::sync::Arc<FailedBatchRecovery>>,
+    recovery: Option<Arc<FailedBatchRecovery>>,
     /// Optional chain monitor handle (enabled with `chain-monitor` feature)
     chain_monitor: Option<ChainMonitorHandle>,
+    /// Shared replication statistics
+    stats: StatsHandle,
+}
+
+impl std::fmt::Debug for SyndDB {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyndDB")
+            .field("monitor", &self.monitor.is_some())
+            .field("recovery", &self.recovery.is_some())
+            .field("chain_monitor", &self.chain_monitor.is_some())
+            .field("stats", &self.stats)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Statistics about failed batches in recovery storage
@@ -124,33 +234,110 @@ pub struct RecoveryStats {
 }
 
 impl SyndDB {
-    /// Attach to an existing `SQLite` connection
+    // =========================================================================
+    // Constructors
+    // =========================================================================
+
+    /// Open a database with replication enabled
     ///
-    /// This will:
-    /// 1. Enable `SQLite` Session Extension on the connection
-    /// 2. Register update hooks to detect changes
-    /// 3. Start a background thread to send changesets to sequencer
+    /// This is the simplest way to use `SyndDB`. It creates and manages the `SQLite`
+    /// connection internally, hiding the complexity of lifetime management.
     ///
     /// # Arguments
     ///
-    /// * `conn` - `SQLite` connection to monitor (must have `'static` lifetime)
-    /// * `sequencer_url` - URL of the sequencer TEE (e.g. "<https://sequencer:8433>")
+    /// * `path` - Path to the `SQLite` database file
+    /// * `sequencer_url` - URL of the sequencer (e.g., `"http://sequencer:8433"`)
     ///
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use rusqlite::Connection;
-    /// # use synddb_client::SyndDB;
-    /// // Note: Connection must have 'static lifetime
+    /// use synddb_client::SyndDB;
+    ///
+    /// let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+    /// synddb.connection().execute("INSERT INTO trades VALUES (1, 100)", [])?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn open<P: AsRef<Path>>(path: P, sequencer_url: &str) -> Result<Self> {
+        let url =
+            synddb_shared::parse::parse_url(sequencer_url).map_err(|e| anyhow::anyhow!("{}", e))?;
+        Self::open_with_config(
+            path,
+            Config {
+                sequencer_url: url,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Open a database with custom configuration
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use synddb_client::{Config, PublishStrategy, SyndDB};
+    ///
+    /// let config = Config {
+    ///     sequencer_url: "http://sequencer:8433".parse().unwrap(),
+    ///     publish_strategy: PublishStrategy::Manual,
+    ///     ..Default::default()
+    /// };
+    /// let synddb = SyndDB::open_with_config("app.db", config)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn open_with_config<P: AsRef<Path>>(path: P, config: Config) -> Result<Self> {
+        let conn = Connection::open(path)?;
+        // Leak the connection to get 'static lifetime (required by SQLite Session Extension)
+        let conn: &'static Connection = Box::leak(Box::new(conn));
+        Self::attach_with_config(conn, config)
+    }
+
+    /// Open an in-memory database with replication enabled
+    ///
+    /// Useful for testing or temporary data that doesn't need persistence.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use synddb_client::SyndDB;
+    ///
+    /// let synddb = SyndDB::open_in_memory("http://sequencer:8433")?;
+    /// synddb.connection().execute("CREATE TABLE test (id INTEGER)", [])?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn open_in_memory(sequencer_url: &str) -> Result<Self> {
+        let url =
+            synddb_shared::parse::parse_url(sequencer_url).map_err(|e| anyhow::anyhow!("{}", e))?;
+        let conn = Connection::open_in_memory()?;
+        let conn: &'static Connection = Box::leak(Box::new(conn));
+        Self::attach_with_config(
+            conn,
+            Config {
+                sequencer_url: url,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Attach to an existing `SQLite` connection (advanced)
+    ///
+    /// Use this when you need direct control over the connection. Note that the
+    /// connection must have `'static` lifetime, typically achieved via `Box::leak`.
+    ///
+    /// For most cases, prefer [`SyndDB::open()`] which handles this automatically.
+    ///
+    /// # Arguments
+    ///
+    /// * `conn` - `SQLite` connection with `'static` lifetime
+    /// * `sequencer_url` - URL of the sequencer TEE
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rusqlite::Connection;
+    /// use synddb_client::SyndDB;
+    ///
     /// let conn = Box::leak(Box::new(Connection::open("app.db")?));
-    /// let synddb = SyndDB::attach(conn, "https://sequencer:8433")?;
-    ///
-    /// // Perform database operations...
-    /// conn.execute("INSERT INTO users VALUES (?1, ?2)", rusqlite::params![1, "Alice"])?;
-    ///
-    /// // Changesets are automatically published every 1 second
-    /// // You can also manually publish for critical transactions:
-    /// synddb.publish()?;
+    /// let synddb = SyndDB::attach(conn, "http://sequencer:8433")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn attach(conn: &'static Connection, sequencer_url: &str) -> Result<Self> {
@@ -165,10 +352,14 @@ impl SyndDB {
         )
     }
 
-    /// Attach with custom configuration
+    /// Attach to an existing connection with custom configuration
     pub fn attach_with_config(conn: &'static Connection, config: Config) -> Result<Self> {
         info!("Attaching SyndDB client to SQLite connection");
         info!("Sequencer URL: {}", config.sequencer_url);
+        info!("Publish strategy: {:?}", config.publish_strategy);
+
+        // Create shared stats handle
+        let stats = stats::new_stats_handle();
 
         // Create channels for communication
         let (changeset_tx, changeset_rx) = bounded(config.buffer_size);
@@ -198,7 +389,7 @@ impl SyndDB {
             let recovery_path = temp_dir.join(db_name);
 
             match FailedBatchRecovery::new(recovery_path) {
-                Ok(r) => Some(std::sync::Arc::new(r)),
+                Ok(r) => Some(Arc::new(r)),
                 Err(e) => {
                     warn!(
                         "Failed to initialize recovery storage: {}. Continuing without recovery.",
@@ -298,6 +489,7 @@ impl SyndDB {
         info!("SyndDB client attached successfully");
 
         Ok(Self {
+            conn,
             monitor: Some(monitor),
             changeset_shutdown_tx,
             snapshot_shutdown_tx,
@@ -305,8 +497,77 @@ impl SyndDB {
             snapshot_handle,
             recovery,
             chain_monitor,
+            stats,
         })
     }
+
+    // =========================================================================
+    // Connection Access
+    // =========================================================================
+
+    /// Get a reference to the underlying `SQLite` connection
+    ///
+    /// Use this for executing SQL queries and commands.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use synddb_client::SyndDB;
+    /// # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+    /// synddb.connection().execute("INSERT INTO trades VALUES (1, 100)", [])?;
+    ///
+    /// let count: i64 = synddb.connection().query_row(
+    ///     "SELECT COUNT(*) FROM trades",
+    ///     [],
+    ///     |row| row.get(0),
+    /// )?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub const fn connection(&self) -> &Connection {
+        self.conn
+    }
+
+    /// Execute a transaction with automatic handling
+    ///
+    /// This method:
+    /// 1. Starts a transaction using `unchecked_transaction()` (required for `SyndDB`)
+    /// 2. Calls your closure with the transaction
+    /// 3. Commits on success, rolls back on error
+    /// 4. Publishes changesets after commit
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use synddb_client::SyndDB;
+    /// # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+    /// synddb.transaction(|tx| {
+    ///     tx.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1", [])?;
+    ///     tx.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2", [])?;
+    ///     Ok(())
+    /// })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Why `unchecked_transaction`?
+    ///
+    /// `SyndDB` holds a reference to the connection for the `SQLite` Session Extension.
+    /// The standard `transaction()` method tries to take a mutable borrow, which conflicts.
+    /// `unchecked_transaction()` bypasses this check, which is safe because `SyndDB` only
+    /// reads from the connection during changeset extraction.
+    pub fn transaction<T, F>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
+    {
+        let tx = self.conn.unchecked_transaction()?;
+        let result = f(&tx)?;
+        tx.commit()?;
+        self.publish()?;
+        Ok(result)
+    }
+
+    // =========================================================================
+    // Publishing
+    // =========================================================================
 
     /// Publish all pending changesets to the sequencer
     ///
@@ -412,6 +673,77 @@ impl SyndDB {
             None => Ok(None),
         }
     }
+
+    // =========================================================================
+    // Replication Status
+    // =========================================================================
+
+    /// Get a snapshot of current replication statistics
+    ///
+    /// Returns information about pending changesets, published count, and health status.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use synddb_client::SyndDB;
+    /// # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+    /// let stats = synddb.stats();
+    /// println!("Pending: {} changesets", stats.pending_changesets);
+    /// println!("Published: {} changesets", stats.published_changesets);
+    /// println!("Failed: {} attempts", stats.failed_publishes);
+    /// println!("Healthy: {}", stats.is_healthy);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn stats(&self) -> StatsSnapshot {
+        StatsSnapshot::from_stats(&self.stats)
+    }
+
+    /// Check if the sequencer is reachable
+    ///
+    /// Returns `true` if the last health check succeeded. Note that this is a cached
+    /// value and may not reflect the current state if the network changed recently.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use synddb_client::SyndDB;
+    /// # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+    /// if synddb.is_healthy() {
+    ///     println!("Sequencer is reachable");
+    /// } else {
+    ///     println!("Warning: sequencer may be unreachable");
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn is_healthy(&self) -> bool {
+        self.stats.is_healthy()
+    }
+
+    /// Get the number of changesets waiting to be published
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use synddb_client::SyndDB;
+    /// # let synddb = SyndDB::open("app.db", "http://sequencer:8433")?;
+    /// let pending = synddb.pending_count();
+    /// if pending > 100 {
+    ///     println!("Warning: {} changesets waiting", pending);
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn pending_count(&self) -> usize {
+        self.stats.pending_count()
+    }
+
+    /// Get the total number of successfully published changesets
+    pub fn published_count(&self) -> u64 {
+        self.stats.published_count()
+    }
+
+    // =========================================================================
+    // Lifecycle
+    // =========================================================================
 
     /// Gracefully shutdown the client, publishing any pending changesets and snapshots
     pub fn shutdown(mut self) -> Result<()> {

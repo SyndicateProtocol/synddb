@@ -1,0 +1,51 @@
+[package]
+name = "prediction-market"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "prediction_market"
+path = "src/lib.rs"
+
+[[bin]]
+name = "prediction-market"
+path = "src/main.rs"
+
+[features]
+default = []
+chain-monitor = [
+  "synddb-chain-monitor",
+  "alloy",
+  "async-trait",
+  "crossbeam-channel",
+  "url",
+]
+
+[dependencies]
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+synddb-client = { path = "../../crates/synddb-client" }
+
+# HTTP server dependencies
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Optional chain monitor dependencies
+synddb-chain-monitor = { path = "../../crates/synddb-chain-monitor", optional = true }
+alloy = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+crossbeam-channel = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
