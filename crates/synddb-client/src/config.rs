@@ -1,22 +1,12 @@
 //! Configuration for `SyndDB` client
 
 use crate::attestation::TokenType;
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use synddb_chain_monitor::config::ChainMonitorConfig;
 use synddb_shared::parse::parse_url;
 use url::Url;
-
-/// Strategy for when to publish changesets to the sequencer
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-pub enum PublishStrategy {
-    /// Publish only when `publish()` is called manually
-    Manual,
-    /// Publish automatically on a timer (default: every 1 second)
-    #[default]
-    Timer,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -63,11 +53,6 @@ pub struct Config {
     #[arg(long, env = "ATTESTATION_TOKEN_TYPE", default_value = "oidc", value_parser = parse_token_type)]
     pub attestation_token_type: TokenType,
 
-    /// Strategy for when to publish changesets
-    #[arg(long, env = "PUBLISH_STRATEGY", default_value = "timer", value_enum)]
-    #[serde(default)]
-    pub publish_strategy: PublishStrategy,
-
     /// Chain monitor configuration (optional, only enabled with "chain-monitor" feature)
     #[command(flatten)]
     #[serde(default)]
@@ -78,12 +63,6 @@ pub struct Config {
     /// that existed before `SyndDB` was attached.
     #[arg(long, env = "AUTO_SNAPSHOT_ON_ATTACH", default_value = "true")]
     pub auto_snapshot_on_attach: bool,
-
-    /// Automatically create and publish a snapshot after DDL statements
-    /// (CREATE, ALTER, DROP) are executed through `SyndDB` methods.
-    /// This ensures validators can always reconstruct the schema.
-    #[arg(long, env = "AUTO_SNAPSHOT_AFTER_DDL", default_value = "true")]
-    pub auto_snapshot_after_ddl: bool,
 }
 
 impl Default for Config {

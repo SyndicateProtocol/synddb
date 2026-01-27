@@ -26,9 +26,11 @@ impl TestRunner {
                     "Expected sequence 0, got {}",
                     message.sequence
                 );
+                // First message can be either Snapshot (if auto_snapshot_on_attach) or Changeset
                 ensure!(
-                    message.message_type == MessageType::Changeset,
-                    "Expected Changeset type"
+                    message.message_type == MessageType::Changeset
+                        || message.message_type == MessageType::Snapshot,
+                    "Expected Changeset or Snapshot type"
                 );
                 ensure!(
                     message.signer.starts_with("0x"),

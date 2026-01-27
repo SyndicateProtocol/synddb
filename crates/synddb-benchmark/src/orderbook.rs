@@ -43,7 +43,7 @@ impl<'a> OrderbookSimulator<'a> {
     /// Publish changesets if `SyndDB` is attached
     fn try_publish(&self) {
         if let Some(synddb) = self.synddb {
-            if let Err(e) = synddb.publish() {
+            if let Err(e) = synddb.publish_changeset() {
                 // Log at trace level - network errors are expected without sequencer
                 tracing::trace!("Publish failed: {}", e);
             }

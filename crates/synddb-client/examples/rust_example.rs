@@ -68,8 +68,8 @@ fn main() -> Result<()> {
     println!("\nWaiting 2 seconds for automatic publish...");
     std::thread::sleep(std::time::Duration::from_secs(2));
 
-    // You can also manually publish for critical transactions:
-    // synddb.publish()?;
+    // You can also force immediate publish for critical transactions:
+    // synddb.publish_changeset()?;
 
     println!("\n✓ Example completed successfully");
 

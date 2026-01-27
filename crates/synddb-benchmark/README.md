@@ -567,10 +567,10 @@ docker compose -f tests/e2e/docker-compose.yml up --build --abort-on-container-e
 When `SEQUENCER_URL` is set, the benchmark:
 1. Attaches `SyndDB` client to the SQLite connection
 2. Runs transactions normally (inserts, updates, etc.)
-3. Calls `synddb.publish()` after each transaction batch to send changesets
+3. Calls `synddb.publish_changeset()` after each transaction batch to force immediate publication
 4. Changesets are signed by the sequencer and published to the storage layer
 
-The benchmark uses the safe API pattern where `publish()` is called explicitly after transactions complete, ensuring thread-safe changeset extraction.
+The benchmark uses the safe API pattern where `publish_changeset()` is called explicitly after transactions complete, ensuring thread-safe changeset extraction.
 
 ## Encoding Format Benchmark
 

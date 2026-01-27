@@ -13,8 +13,8 @@ Usage:
     conn.execute("INSERT INTO trades VALUES (?, ?)", (1, 100))
     conn.commit()
 
-    # IMPORTANT: Call publish() after commits to send changesets
-    synddb.publish()
+    # Optionally force immediate publish (auto-publishes every second)
+    synddb.publish_changeset()
 
     # Create a snapshot (optional)
     synddb.snapshot()
@@ -224,28 +224,28 @@ class SyndDB:
 
         return cls(handle)
 
-    def publish(self):
+    def publish_changeset(self):
         """
-        Publish all pending changesets to the sequencer
+        Publish all pending changesets to the sequencer immediately
 
-        Call this after committing transactions to send changesets to the sequencer.
-        Also called automatically on detach for graceful shutdown.
+        Changesets are automatically published on a timer. Use this to force
+        immediate publication for low-latency or high-value changes.
 
         Raises:
             RuntimeError: If publish fails
 
         Example:
-            >>> synddb.publish()
+            >>> synddb.publish_changeset()
         """
         if not self._handle:
             raise RuntimeError("SyndDB handle already detached")
 
-        result = _lib.synddb_publish(self._handle)
+        result = _lib.synddb_publish_changeset(self._handle)
 
         if result != SyndDBError.SUCCESS:
             error_msg = _lib.synddb_last_error()
             error_str = error_msg.decode('utf-8') if error_msg else "Unknown error"
-            raise RuntimeError(f"Failed to publish (error {result}): {error_str}")
+            raise RuntimeError(f"Failed to publish changeset (error {result}): {error_str}")
 
     def snapshot(self) -> int:
         """
@@ -255,8 +255,8 @@ class SyndDB:
         to the sequencer. Use this after schema changes (CREATE TABLE, etc.)
         since DDL is NOT captured in changesets.
 
-        This is consistent with publish() for changesets:
-        - publish() - sends pending changesets to sequencer
+        This is consistent with publish_changeset() for changesets:
+        - publish_changeset() - sends pending changesets to sequencer
         - snapshot() - creates and sends snapshot to sequencer
 
         When to use:

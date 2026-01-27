@@ -133,7 +133,7 @@
 //! }
 //! ```
 
-// Placeholder struct - implement when adding Arweave support
+// TODO: Implement ArweaveTransport - see module-level documentation above for detailed plan
 #[derive(Debug)]
 pub struct ArweaveTransport {
     _private: (),

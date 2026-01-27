@@ -28,8 +28,8 @@ fn main() -> Result<()> {
     tx.execute("INSERT INTO trades VALUES (?1, ?2)", params![2, 200])?;
     tx.commit()?;
 
-    // IMPORTANT: Call publish() after commits to send changesets to sequencer
-    synddb.publish()?;
+    // Optionally force immediate publish (auto-publishes every second)
+    synddb.publish_changeset()?;
 
     Ok(())
 }
@@ -96,7 +96,7 @@ db.prepare("INSERT INTO trades VALUES (?, ?)").run(1, 100);
 
 ## Publishing Changesets
 
-You **must** call `synddb.publish()` to send captured changesets to the sequencer:
+Changesets are automatically published every second (configurable via `flush_interval`). Use `publish_changeset()` to force immediate publication for low-latency or high-value changes:
 
 ```rust
 // After a transaction or batch of operations
@@ -105,16 +105,14 @@ tx.execute("INSERT INTO orders ...", params![...])?;
 tx.execute("UPDATE balances ...", params![...])?;
 tx.commit()?;
 
-// Publish the changesets
-synddb.publish()?;
+// Force immediate publish (optional - auto-publishes every second)
+synddb.publish_changeset()?;
 ```
 
-**When to call `publish()`:**
-- After committing a transaction
-- After a batch of related operations
-- Periodically in long-running applications (e.g., every second)
-
-**Why manual publishing?** SQLite's Session Extension cannot safely extract changesets from within database hooks. The application must call `publish()` when the database is in a stable state (not mid-operation).
+**When to call `publish_changeset()`:**
+- For low-latency changes that shouldn't wait for the next timer tick
+- For high-value operations where immediate confirmation is important
+- Before graceful shutdown (also called automatically on `Drop`)
 
 Changesets are also automatically published when `SyndDB` is dropped (graceful shutdown).
 
