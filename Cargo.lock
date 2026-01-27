@@ -3234,6 +3234,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "prediction-market"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "clap",
+ "crossbeam-channel",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "synddb-chain-monitor",
+ "synddb-client",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "primitive-types"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

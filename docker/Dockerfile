@@ -33,8 +33,9 @@ WORKDIR /app
 # Copy workspace manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Copy all crates and tests
+# Copy all crates, examples, and tests
 COPY crates/ ./crates/
+COPY examples/ ./examples/
 COPY tests/ ./tests/
 
 # Build all workspace binaries in release mode
