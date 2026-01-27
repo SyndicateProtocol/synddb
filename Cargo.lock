@@ -5118,11 +5118,9 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-prometheus",
- "bytes",
  "ciborium",
  "clap",
  "gcp-attestation",
- "google-cloud-storage",
  "hex",
  "humantime",
  "humantime-serde",
@@ -5136,6 +5134,7 @@ dependencies = [
  "strum",
  "synddb-bootstrap",
  "synddb-shared",
+ "synddb-storage",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -5177,6 +5176,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "synddb-storage"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "google-cloud-auth",
+ "google-cloud-storage",
+ "percent-encoding",
+ "reqwest",
+ "serde_json",
+ "synddb-shared",
+ "thiserror 2.0.17",
+ "tracing",
+]
+
+[[package]]
 name = "synddb-validator"
 version = "0.1.0"
 dependencies = [
@@ -5188,7 +5202,6 @@ dependencies = [
  "ciborium",
  "clap",
  "fallible-streaming-iterator",
- "google-cloud-storage",
  "hex",
  "humantime",
  "humantime-serde",
@@ -5202,6 +5215,7 @@ dependencies = [
  "strum",
  "synddb-bootstrap",
  "synddb-shared",
+ "synddb-storage",
  "thiserror 2.0.17",
  "tokio",
  "tower 0.5.2",

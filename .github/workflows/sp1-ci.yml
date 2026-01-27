@@ -5,8 +5,8 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "crates/synddb-bootstrap/sp1/**"
+      - "crates/gcp-attestation/**"
       - "tests/confidential-space/sp1/**"
-      - "tests/confidential-space/gcp-confidential-space/**"
       - ".github/workflows/sp1-ci.yml"
 
   push:
@@ -14,8 +14,8 @@ on:
       - main
     paths:
       - "crates/synddb-bootstrap/sp1/**"
+      - "crates/gcp-attestation/**"
       - "tests/confidential-space/sp1/**"
-      - "tests/confidential-space/gcp-confidential-space/**"
 
   # Allow manual trigger
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.83.0"
+          toolchain: "1.92.0"
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -48,7 +48,6 @@ jobs:
           workspaces: |
             crates/synddb-bootstrap/sp1/program
             tests/confidential-space/sp1/script
-            tests/confidential-space/gcp-confidential-space
 
       - name: Install SP1 toolchain
         run: |

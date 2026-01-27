@@ -6,6 +6,10 @@ import {console} from "forge-std/console.sol";
 import {AttestationVerifier} from "src/attestation/AttestationVerifier.sol";
 import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
 
+/// @dev SP1 Verifier Gateway for Groth16 proofs (deterministic CREATE2, same on all networks)
+/// See: https://github.com/succinctlabs/sp1-contracts/tree/main/contracts/deployments
+address constant SP1_VERIFIER_GATEWAY_GROTH16 = 0x397A5f7f3dBd538f23DE225B51f532c34448dA9B;
+
 /**
  * @title DeployAttestationVerifier
  * @notice Deployment script for TEE attestation verification contracts
@@ -13,7 +17,7 @@ import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
  */
 contract DeployAttestationVerifier is Script {
     function run() external returns (AttestationVerifier, TeeKeyManager) {
-        address verifier = vm.envAddress("SP1_VERIFIER_CONTRACT_ADDRESS");
+        address verifier = vm.envOr("SP1_VERIFIER_CONTRACT_ADDRESS", SP1_VERIFIER_GATEWAY_GROTH16);
         bytes32 attestationVerifierVKey = vm.envBytes32("ATTESTATION_VERIFIER_VKEY");
         bytes32 expectedImageDigestHash = vm.envBytes32("EXPECTED_IMAGE_DIGEST_HASH");
         uint64 expirationTolerance = uint64(vm.envUint("EXPIRATION_TOLERANCE"));
