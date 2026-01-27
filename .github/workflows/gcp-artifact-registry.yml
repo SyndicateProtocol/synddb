@@ -43,7 +43,7 @@ jobs:
       relayer: ${{ steps.filter.outputs.relayer }}
       price-oracle: ${{ steps.filter.outputs.price-oracle }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check for path changes
         uses: dorny/paths-filter@v3
@@ -103,7 +103,7 @@ jobs:
         image: [sequencer, validator]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Read BuildKit version from shared config (single source of truth)
       - name: Get BuildKit version
@@ -262,7 +262,7 @@ jobs:
             dockerfile: docker/reproducible/validator.Dockerfile
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -545,7 +545,7 @@ jobs:
           remove_tool_cache: false
           remove_swap: false
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: steps.check.outputs.should_build == 'true'
 
       - name: Authenticate to Google Cloud
