@@ -1,0 +1,37 @@
+# Dependabot configuration
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+
+version: 2
+updates:
+  # Rust dependencies
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      # Group alloy crates together (blockchain primitives)
+      alloy:
+        patterns:
+          - "alloy*"
+      # Group tokio ecosystem
+      tokio:
+        patterns:
+          - "tokio*"
+      # Group serde ecosystem
+      serde:
+        patterns:
+          - "serde*"
+      # Group tracing ecosystem
+      tracing:
+        patterns:
+          - "tracing*"
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5

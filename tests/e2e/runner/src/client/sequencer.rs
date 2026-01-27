@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use synddb_shared::types::{
     cbor::batch::CborBatch,
     message::{SignedBatch, SignedMessage},
-    payloads::{ChangesetBatchRequest, ChangesetData, SnapshotData, SnapshotRequest},
+    payloads::{
+        BatchListItem, ChangesetBatchRequest, ChangesetData, SnapshotData, SnapshotRequest,
+    },
 };
 use url::Url;
 
@@ -20,13 +22,6 @@ pub(crate) struct SequencerStatus {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct StorageLatest {
     pub sequence: Option<u64>,
-}
-
-/// Batch info response from /storage/batches
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct BatchInfo {
-    pub start_sequence: u64,
-    pub end_sequence: u64,
 }
 
 /// Sequence response from sequencer
@@ -97,7 +92,7 @@ impl SequencerClient {
     }
 
     /// List all batches from the storage layer
-    pub(crate) async fn list_batches(&self) -> Result<Vec<BatchInfo>> {
+    pub(crate) async fn list_batches(&self) -> Result<Vec<BatchListItem>> {
         let url = self.base_url.join("/storage/batches")?;
         self.client
             .get(url)

@@ -30,6 +30,7 @@ use std::{
 use synddb_shared::types::{
     cbor::{batch::CborBatch, message::CborSignedMessage},
     message::SignedMessage,
+    payloads::BatchListItem,
 };
 use tracing::{debug, info};
 
@@ -117,16 +118,9 @@ struct StoredBatch {
 ///
 /// Thread-safe storage that can be shared with HTTP handlers.
 /// Supports both in-memory and `SQLite` file backends.
+#[derive(Clone)]
 pub struct LocalTransport {
     storage: Arc<StorageInner>,
-}
-
-impl Clone for LocalTransport {
-    fn clone(&self) -> Self {
-        Self {
-            storage: Arc::clone(&self.storage),
-        }
-    }
 }
 
 impl std::fmt::Debug for LocalTransport {
@@ -246,11 +240,13 @@ impl LocalTransport {
                 state
                     .batches
                     .values()
-                    .map(|stored| BatchInfo {
-                        start_sequence: stored.start_sequence,
-                        end_sequence: stored.end_sequence,
-                        reference: format!("local://{}", stored.start_sequence),
-                        content_hash: stored.content_hash,
+                    .map(|stored| {
+                        BatchInfo::with_hash(
+                            stored.start_sequence,
+                            stored.end_sequence,
+                            format!("local://{}", stored.start_sequence),
+                            stored.content_hash,
+                        )
                     })
                     .collect()
             }
@@ -267,12 +263,12 @@ impl LocalTransport {
                     let content_hash_blob: Vec<u8> = row.get(2)?;
                     let mut content_hash = [0u8; 32];
                     content_hash.copy_from_slice(&content_hash_blob);
-                    Ok(BatchInfo {
+                    Ok(BatchInfo::with_hash(
                         start_sequence,
                         end_sequence,
-                        reference: format!("local://{start_sequence}"),
+                        format!("local://{start_sequence}"),
                         content_hash,
-                    })
+                    ))
                 })
                 .unwrap()
                 .filter_map(Result::ok)
@@ -503,13 +499,6 @@ impl TransportPublisher for LocalTransport {
 // ============================================================================
 // HTTP Handlers
 // ============================================================================
-
-/// Response for batch list endpoint
-#[derive(serde::Serialize)]
-struct BatchListItem {
-    start_sequence: u64,
-    end_sequence: u64,
-}
 
 /// Response for latest endpoint
 #[derive(serde::Serialize)]

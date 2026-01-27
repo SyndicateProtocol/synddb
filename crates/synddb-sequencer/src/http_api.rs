@@ -1,9 +1,63 @@
 //! HTTP API for the sequencer node
 //!
-//! Provides endpoints for:
-//! - Receiving changeset batches from synddb-client
-//! - Receiving withdrawal requests
-//! - Health and status checks
+//! This module implements the HTTP API that clients use to submit data
+//! to the sequencer for ordering and signing.
+//!
+//! # Endpoints
+//!
+//! ## Data Submission
+//!
+//! | Endpoint | Method | Content-Type | Description |
+//! |----------|--------|--------------|-------------|
+//! | `/changesets` | POST | `application/cbor` | Submit changeset batch |
+//! | `/snapshots` | POST | `application/cbor` | Submit database snapshot |
+//! | `/withdrawals` | POST | `application/cbor` | Submit withdrawal request |
+//!
+//! ## Operational
+//!
+//! | Endpoint | Method | Description |
+//! |----------|--------|-------------|
+//! | `/health` | GET | Liveness probe (always returns 200 OK) |
+//! | `/ready` | GET | Readiness probe (checks batcher health) |
+//! | `/status` | GET | Current sequence number and signer address |
+//! | `/batch/stats` | GET | CBOR batch statistics |
+//! | `/batch/flush` | POST | Force flush pending batch to storage |
+//!
+//! # Wire Format
+//!
+//! All data submission endpoints accept CBOR-encoded payloads with
+//! `Content-Type: application/cbor`. See [`synddb_shared::types::payloads`]
+//! for payload structures:
+//!
+//! - [`ChangesetBatchRequest`] for `/changesets`
+//! - [`SnapshotRequest`] for `/snapshots`
+//! - [`WithdrawalRequest`] for `/withdrawals`
+//!
+//! # Response Format
+//!
+//! Successful data submissions return JSON with:
+//!
+//! ```json
+//! {
+//!   "sequence": 42,
+//!   "timestamp": 1700000000,
+//!   "message_hash": "0x...",
+//!   "signature": "0x...",
+//!   "signer": "0x..."
+//! }
+//! ```
+//!
+//! # Error Handling
+//!
+//! Errors are returned as JSON with appropriate HTTP status codes:
+//!
+//! - `400 Bad Request` - Invalid payload or parameters
+//! - `401 Unauthorized` - Invalid attestation token
+//! - `500 Internal Server Error` - Signing or storage failure
+//!
+//! [`ChangesetBatchRequest`]: synddb_shared::types::payloads::ChangesetBatchRequest
+//! [`SnapshotRequest`]: synddb_shared::types::payloads::SnapshotRequest
+//! [`WithdrawalRequest`]: synddb_shared::types::payloads::WithdrawalRequest
 
 use axum::{
     extract::State,

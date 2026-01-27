@@ -25,54 +25,49 @@
 use crate::sync::fetcher::{BatchInfo, StorageFetcher};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use synddb_shared::types::{
-    cbor::batch::CborBatch,
-    message::{SignedBatch, SignedMessage},
+use synddb_shared::{
+    gcs::GcsConfig,
+    types::{
+        batch::parse_batch_filename,
+        cbor::batch::CborBatch,
+        message::{SignedBatch, SignedMessage},
+    },
 };
 use tracing::{debug, info, warn};
 
 /// Google Cloud Storage fetcher
 pub struct GcsFetcher {
     client: google_cloud_storage::client::Client,
-    bucket: String,
-    prefix: String,
+    config: GcsConfig,
 }
 
 impl std::fmt::Debug for GcsFetcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GcsFetcher")
-            .field("bucket", &self.bucket)
-            .field("prefix", &self.prefix)
+            .field("bucket", &self.config.bucket)
+            .field("prefix", &self.config.prefix)
+            .field("emulator", &self.config.is_emulator())
             .finish()
     }
 }
 
 impl GcsFetcher {
-    /// Create a new GCS fetcher
+    /// Create a new GCS fetcher from config
     ///
     /// Uses default credentials (`GOOGLE_APPLICATION_CREDENTIALS` env var,
     /// workload identity, or metadata server).
     ///
-    /// If `emulator_host` is provided, uses anonymous authentication and
+    /// If `emulator_host` is set in config, uses anonymous authentication and
     /// connects to the specified emulator instead of real GCS.
-    pub async fn new(
-        bucket: String,
-        prefix: String,
-        emulator_host: Option<String>,
-    ) -> Result<Self> {
+    pub async fn from_config(config: GcsConfig) -> Result<Self> {
         use google_cloud_storage::client::{Client, ClientConfig};
 
-        // Normalize emulator_host: treat empty strings as None
-        let emulator_host = emulator_host.filter(|s| !s.is_empty());
-
-        let client_config = if let Some(ref emulator_host) = emulator_host {
-            // Emulator mode: use anonymous auth and custom endpoint
+        let client_config = if let Some(ref emulator_host) = config.emulator_host {
             info!(emulator_host = %emulator_host, "Using GCS emulator");
             let mut cfg = ClientConfig::default().anonymous();
             cfg.storage_endpoint = emulator_host.clone();
             cfg
         } else {
-            // Production mode: use real GCS with authentication
             ClientConfig::default()
                 .with_auth()
                 .await
@@ -81,34 +76,25 @@ impl GcsFetcher {
 
         let client = Client::new(client_config);
 
-        info!(bucket = %bucket, prefix = %prefix, "GCS fetcher initialized");
+        info!(bucket = %config.bucket, prefix = %config.prefix, "GCS fetcher initialized");
 
-        Ok(Self {
-            client,
-            bucket,
-            prefix,
-        })
+        Ok(Self { client, config })
     }
 
-    /// Parse a batch filename to extract start and end sequence numbers
+    /// Create a new GCS fetcher (convenience constructor)
     ///
-    /// Expected format: `{start:012}_{end:012}.cbor.zst`
-    ///
-    /// Returns `Some((start, end))` if valid, `None` otherwise
-    fn parse_batch_filename(filename: &str) -> Option<(u64, u64)> {
-        if !filename.ends_with(".cbor.zst") {
-            return None;
+    /// Prefer `from_config()` for more control. This method is kept for
+    /// backwards compatibility.
+    pub async fn new(
+        bucket: String,
+        prefix: String,
+        emulator_host: Option<String>,
+    ) -> Result<Self> {
+        let mut config = GcsConfig::new(bucket).with_prefix(prefix);
+        if let Some(host) = emulator_host {
+            config = config.with_emulator_host(host);
         }
-
-        let without_ext = &filename[..filename.len() - 9];
-        let mut parts = without_ext.split('_');
-        let start = parts.next()?.parse::<u64>().ok()?;
-        let end = parts.next()?.parse::<u64>().ok()?;
-        // Ensure no extra parts
-        if parts.next().is_some() {
-            return None;
-        }
-        Some((start, end))
+        Self::from_config(config).await
     }
 
     /// Download data from GCS
@@ -116,7 +102,7 @@ impl GcsFetcher {
         use google_cloud_storage::http::objects::{download::Range, get::GetObjectRequest};
 
         let request = GetObjectRequest {
-            bucket: self.bucket.clone(),
+            bucket: self.config.bucket.clone(),
             object: path.to_string(),
             ..Default::default()
         };
@@ -200,9 +186,9 @@ impl StorageFetcher for GcsFetcher {
     async fn list_batches(&self) -> Result<Vec<BatchInfo>> {
         use google_cloud_storage::http::objects::list::ListObjectsRequest;
 
-        let prefix = format!("{}/batches/", self.prefix);
+        let prefix = format!("{}/batches/", self.config.prefix);
         let request = ListObjectsRequest {
-            bucket: self.bucket.clone(),
+            bucket: self.config.bucket.clone(),
             prefix: Some(prefix),
             ..Default::default()
         };
@@ -215,7 +201,7 @@ impl StorageFetcher for GcsFetcher {
                     .iter()
                     .filter_map(|obj| {
                         let filename = obj.name.rsplit('/').next()?;
-                        let (start, end) = Self::parse_batch_filename(filename)?;
+                        let (start, end) = parse_batch_filename(filename)?;
                         debug!(filename, start, end, "Parsed batch file");
                         Some(BatchInfo::new(start, end, obj.name.clone()))
                     })
@@ -235,9 +221,9 @@ impl StorageFetcher for GcsFetcher {
         use google_cloud_storage::http::objects::list::ListObjectsRequest;
 
         // Find batch that starts with this sequence
-        let prefix = format!("{}/batches/{:012}_", self.prefix, start_sequence);
+        let prefix = format!("{}/batches/{:012}_", self.config.prefix, start_sequence);
         let request = ListObjectsRequest {
-            bucket: self.bucket.clone(),
+            bucket: self.config.bucket.clone(),
             prefix: Some(prefix),
             ..Default::default()
         };
@@ -294,102 +280,24 @@ impl StorageFetcher for GcsFetcher {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use synddb_shared::types::batch::format_batch_filename;
 
     #[test]
     fn test_batch_path_format() {
         let prefix = "sequencer";
-        let path = format!("{}/batches/{:012}_{:012}.cbor.zst", prefix, 1, 50);
+        let path = format!("{}/batches/{}", prefix, format_batch_filename(1, 50));
         assert_eq!(path, "sequencer/batches/000000000001_000000000050.cbor.zst");
 
-        let path = format!("{}/batches/{:012}_{:012}.cbor.zst", prefix, 0, 0);
+        let path = format!("{}/batches/{}", prefix, format_batch_filename(0, 0));
         assert_eq!(path, "sequencer/batches/000000000000_000000000000.cbor.zst");
 
         let path = format!(
-            "{}/batches/{:012}_{:012}.cbor.zst",
-            prefix, 999_999_999_999_u64, 999_999_999_999_u64
+            "{}/batches/{}",
+            prefix,
+            format_batch_filename(999_999_999_999, 999_999_999_999)
         );
         assert_eq!(path, "sequencer/batches/999999999999_999999999999.cbor.zst");
     }
-
-    #[test]
-    fn test_parse_batch_filename() {
-        let result = GcsFetcher::parse_batch_filename("000000000001_000000000050.cbor.zst");
-        assert_eq!(result, Some((1, 50)));
-
-        let result = GcsFetcher::parse_batch_filename("000000001000_000000002000.cbor.zst");
-        assert_eq!(result, Some((1000, 2000)));
-
-        // Single message batch
-        let result = GcsFetcher::parse_batch_filename("000000000042_000000000042.cbor.zst");
-        assert_eq!(result, Some((42, 42)));
-    }
-
-    #[test]
-    fn test_parse_batch_filename_invalid() {
-        // Missing extension
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050"),
-            None
-        );
-
-        // Wrong extension (legacy JSON format no longer supported)
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050.json"),
-            None
-        );
-
-        // Wrong extension
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050.txt"),
-            None
-        );
-
-        // Missing underscore
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001000000000050.cbor.zst"),
-            None
-        );
-
-        // Extra underscore
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050_extra.cbor.zst"),
-            None
-        );
-
-        // Non-numeric
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("abcdef_ghijkl.cbor.zst"),
-            None
-        );
-
-        // Empty
-        assert_eq!(GcsFetcher::parse_batch_filename(""), None);
-
-        // Just .zst (not .cbor.zst)
-        assert_eq!(
-            GcsFetcher::parse_batch_filename("000000000001_000000000050.zst"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_batch_filename_sorting() {
-        // Verify that batch filenames sort correctly lexicographically
-        let mut filenames = vec![
-            "000000000051_000000000100.cbor.zst",
-            "000000000101_000000000150.cbor.zst",
-            "000000000001_000000000050.cbor.zst",
-        ];
-        filenames.sort();
-
-        assert_eq!(
-            filenames,
-            vec![
-                "000000000001_000000000050.cbor.zst",
-                "000000000051_000000000100.cbor.zst",
-                "000000000101_000000000150.cbor.zst",
-            ]
-        );
-    }
 }
+
+// Additional tests for parse_batch_filename are in synddb-shared::types::batch

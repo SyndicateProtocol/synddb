@@ -2,53 +2,11 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use synddb_shared::types::message::{SignedBatch, SignedMessage};
 
-/// Metadata about a batch file in the storage layer.
-///
-/// Used to build an in-memory index of available batches for efficient
-/// sequential fetching without repeated list operations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BatchInfo {
-    /// First sequence number in this batch (inclusive)
-    pub start_sequence: u64,
-    /// Last sequence number in this batch (inclusive)
-    pub end_sequence: u64,
-    /// Path or identifier to fetch this batch (format depends on fetcher)
-    pub path: String,
-}
-
-impl BatchInfo {
-    /// Create a new `BatchInfo`
-    pub fn new(start_sequence: u64, end_sequence: u64, path: impl Into<String>) -> Self {
-        Self {
-            start_sequence,
-            end_sequence,
-            path: path.into(),
-        }
-    }
-
-    /// Check if this batch contains the given sequence number
-    pub const fn contains(&self, sequence: u64) -> bool {
-        sequence >= self.start_sequence && sequence <= self.end_sequence
-    }
-
-    /// Number of messages in this batch
-    pub const fn len(&self) -> u64 {
-        if self.is_empty() {
-            0
-        } else {
-            self.end_sequence - self.start_sequence + 1
-        }
-    }
-
-    /// Check if batch is empty (should never happen in practice)
-    pub const fn is_empty(&self) -> bool {
-        self.end_sequence < self.start_sequence
-    }
-}
+// Re-export BatchInfo from shared crate for backwards compatibility
+pub use synddb_shared::types::batch::BatchInfo;
 
 /// Trait for fetching messages from a storage layer
 ///
@@ -134,36 +92,4 @@ pub trait StorageFetcher: Send + Sync + Debug {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_batch_info_contains() {
-        let info = BatchInfo::new(10, 20, "batch.json");
-
-        assert!(!info.contains(9));
-        assert!(info.contains(10));
-        assert!(info.contains(15));
-        assert!(info.contains(20));
-        assert!(!info.contains(21));
-    }
-
-    #[test]
-    fn test_batch_info_len() {
-        let info = BatchInfo::new(1, 50, "batch.json");
-        assert_eq!(info.len(), 50);
-
-        let single = BatchInfo::new(42, 42, "single.json");
-        assert_eq!(single.len(), 1);
-    }
-
-    #[test]
-    fn test_batch_info_is_empty() {
-        let normal = BatchInfo::new(1, 10, "batch.json");
-        assert!(!normal.is_empty());
-
-        let single = BatchInfo::new(5, 5, "single.json");
-        assert!(!single.is_empty());
-    }
-}
+// Tests for BatchInfo are in synddb-shared::types::batch

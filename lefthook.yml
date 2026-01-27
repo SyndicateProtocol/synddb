@@ -1,0 +1,33 @@
+# Lefthook - Git hooks manager
+# Install: brew install lefthook OR cargo install lefthook
+# Setup: just hooks-install
+#
+# https://github.com/evilmartians/lefthook
+
+pre-commit:
+  parallel: true
+  commands:
+    rust-fmt:
+      glob: "*.rs"
+      run: cargo +nightly fmt --all
+      stage_fixed: true
+      fail_text: "Rust formatting failed"
+
+    solidity-fmt:
+      glob: "*.sol"
+      root: "contracts/"
+      run: forge fmt
+      stage_fixed: true
+      fail_text: "Solidity formatting failed"
+
+    toml-fmt:
+      glob: "*.toml"
+      run: taplo fmt "**/Cargo.toml"
+      stage_fixed: true
+      fail_text: "TOML formatting failed"
+
+pre-push:
+  commands:
+    test:
+      run: cargo test --workspace --lib --quiet
+      fail_text: "Tests failed. Run 'just test' to see details."
