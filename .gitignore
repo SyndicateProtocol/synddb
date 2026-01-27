@@ -31,7 +31,7 @@ target
 *.db-shm
 *.db-wal
 
-# Environment variables
+# Environment variables (create .env for local overrides - see justfile for defaults)
 .env
 .env.*
 !.env.example
@@ -41,3 +41,6 @@ target
 
 # GCS test credentials
 tests/e2e-gcs/.credentials/
+
+# Local development data
+.synddb/

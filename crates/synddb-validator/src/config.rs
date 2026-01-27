@@ -5,6 +5,27 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, time::Duration};
 use strum::{EnumIter, IntoEnumIterator};
 
+/// Well-known addresses for local Anvil development.
+///
+/// These addresses are deterministic when deploying with `./scripts/deploy-local.sh`.
+/// Only use these for local development - production deployments must set real addresses.
+pub mod local_defaults {
+    /// Anvil chain ID
+    pub const CHAIN_ID: u64 = 31337;
+
+    /// Bridge contract address (deployed at nonce 1 from Anvil account 0)
+    pub const BRIDGE_CONTRACT: &str = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
+
+    /// `MockWETH` address (deployed at nonce 0 from Anvil account 0)
+    pub const WETH: &str = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
+
+    /// `PriceOracle` address (deployed at nonce 3 from Anvil account 0)
+    pub const PRICE_ORACLE: &str = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9";
+
+    /// Sequencer public key (corresponds to Anvil account 0 private key)
+    pub const SEQUENCER_PUBKEY: &str = "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5";
+}
+
 /// Available fetcher types for retrieving messages from the storage layer
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum, EnumIter,
@@ -198,12 +219,15 @@ impl ValidatorConfig {
     /// Validate bridge signer configuration
     ///
     /// Returns an error if bridge signer is enabled but required fields are missing.
+    /// When chain ID is 31337 (Anvil), uses local development defaults for missing values.
     pub fn validate_bridge_config(&self) -> Result<(), String> {
         if !self.bridge_signer {
             return Ok(());
         }
 
-        if self.bridge_contract.is_none() {
+        let is_local = self.bridge_chain_id == Some(local_defaults::CHAIN_ID);
+
+        if self.bridge_contract.is_none() && !is_local {
             return Err("--bridge-contract is required when --bridge-signer is enabled".into());
         }
 
@@ -216,6 +240,16 @@ impl ValidatorConfig {
         }
 
         Ok(())
+    }
+
+    /// Get bridge contract address, using local default for Anvil (chain ID 31337)
+    ///
+    /// Returns `None` if `bridge_contract` is not set and not running on Anvil.
+    pub fn bridge_contract_with_local_fallback(&self) -> Option<String> {
+        self.bridge_contract.clone().or_else(|| {
+            (self.bridge_chain_id == Some(local_defaults::CHAIN_ID))
+                .then(|| local_defaults::BRIDGE_CONTRACT.to_string())
+        })
     }
 }
 
@@ -329,5 +363,68 @@ mod tests {
 
         assert!(!config.batch_sync_enabled);
         assert_eq!(config.batch_index_refresh_interval, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_bridge_contract_local_fallback_anvil() {
+        // When chain ID is 31337, bridge contract should use local default if not set
+        let config = ValidatorConfig::parse_from([
+            "synddb-validator",
+            "--sequencer-pubkey",
+            TEST_PUBKEY,
+            "--bridge-signer",
+            "--bridge-chain-id",
+            "31337",
+            "--bridge-signing-key",
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        ]);
+
+        assert_eq!(
+            config.bridge_contract_with_local_fallback(),
+            Some(local_defaults::BRIDGE_CONTRACT.to_string())
+        );
+        // Validation should pass for Anvil chain without explicit bridge-contract
+        assert!(config.validate_bridge_config().is_ok());
+    }
+
+    #[test]
+    fn test_bridge_contract_local_fallback_non_anvil() {
+        // When chain ID is NOT 31337, bridge contract should NOT use local default
+        let config = ValidatorConfig::parse_from([
+            "synddb-validator",
+            "--sequencer-pubkey",
+            TEST_PUBKEY,
+            "--bridge-signer",
+            "--bridge-chain-id",
+            "1", // Mainnet
+            "--bridge-signing-key",
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        ]);
+
+        assert_eq!(config.bridge_contract_with_local_fallback(), None);
+        // Validation should fail for non-Anvil chain without explicit bridge-contract
+        assert!(config.validate_bridge_config().is_err());
+    }
+
+    #[test]
+    fn test_bridge_contract_explicit_overrides_fallback() {
+        // Explicitly set bridge contract should be used even on Anvil
+        let config = ValidatorConfig::parse_from([
+            "synddb-validator",
+            "--sequencer-pubkey",
+            TEST_PUBKEY,
+            "--bridge-signer",
+            "--bridge-chain-id",
+            "31337",
+            "--bridge-contract",
+            "0x1111111111111111111111111111111111111111",
+            "--bridge-signing-key",
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        ]);
+
+        assert_eq!(
+            config.bridge_contract_with_local_fallback(),
+            Some("0x1111111111111111111111111111111111111111".to_string())
+        );
     }
 }
