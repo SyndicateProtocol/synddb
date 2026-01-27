@@ -37,18 +37,18 @@ impl SnapshotSender {
         config: Config,
         recovery: Option<Arc<FailedBatchRecovery>>,
         attestation: Option<AttestationClient>,
-    ) -> Self {
+    ) -> Result<Self, SendError> {
         let client = Client::builder()
             .timeout(config.snapshot_request_timeout)
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(SendError::Http)?;
 
-        Self {
+        Ok(Self {
             config,
             client,
             recovery,
             attestation,
-        }
+        })
     }
 
     pub(crate) async fn run(self, snapshot_rx: Receiver<Snapshot>, shutdown_rx: Receiver<()>) {
@@ -159,7 +159,7 @@ impl SnapshotSender {
             .config
             .sequencer_url
             .join("snapshots")
-            .expect("valid URL path");
+            .map_err(|e| SendError::InvalidUrl(e.to_string()))?;
 
         // Serialize to CBOR
         let cbor_bytes = request.to_cbor().map_err(SendError::Cbor)?;

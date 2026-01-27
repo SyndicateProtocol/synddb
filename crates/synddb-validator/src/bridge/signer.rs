@@ -64,9 +64,9 @@ impl BridgeSigner {
     /// if not explicitly configured.
     pub fn new(config: &ValidatorConfig) -> Result<Self> {
         let bridge_contract: Address = config
-            .bridge_contract_with_local_fallback()
+            .bridge_address_with_local_fallback()
             .context(
-                "--bridge-contract is required (or use --bridge-chain-id 31337 for local default)",
+                "--bridge-address is required (or use --bridge-chain-id 31337 for local default)",
             )?
             .parse()
             .context("Invalid bridge contract address")?;
@@ -246,7 +246,7 @@ mod tests {
             "--sequencer-pubkey",
             TEST_PUBKEY,
             "--bridge-signer",
-            "--bridge-contract",
+            "--bridge-address",
             "0x1234567890abcdef1234567890abcdef12345678",
             "--bridge-chain-id",
             "1",

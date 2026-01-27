@@ -193,6 +193,9 @@ pub struct SequenceResponse {
     pub signature: String,
     /// Sequencer address
     pub signer: String,
+    /// Warning message if batch publishing failed (message was sequenced but may not be persisted)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_warning: Option<String>,
 }
 
 impl From<SequenceReceipt> for SequenceResponse {
@@ -203,7 +206,17 @@ impl From<SequenceReceipt> for SequenceResponse {
             message_hash: receipt.message_hash,
             signature: receipt.signature,
             signer: receipt.signer,
+            batch_warning: None,
         }
+    }
+}
+
+impl SequenceResponse {
+    /// Add a batch warning to the response
+    #[must_use]
+    pub fn with_batch_warning(mut self, warning: String) -> Self {
+        self.batch_warning = Some(warning);
+        self
     }
 }
 
@@ -386,7 +399,7 @@ async fn receive_changesets(
         })?;
 
     // Send to batcher for batching if configured
-    if let Some(batcher) = &state.batcher {
+    let batch_warning = if let Some(batcher) = &state.batcher {
         if let Err(e) = batcher.add_message(cbor_message).await {
             warn!(
                 sequence = receipt.sequence,
@@ -394,8 +407,13 @@ async fn receive_changesets(
                 "Failed to add to batcher (sequencing succeeded)"
             );
             crate::metrics::record_error("batcher_add");
+            Some(format!("Batch publishing failed: {e}"))
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     info!(
         sequence = receipt.sequence,
@@ -403,7 +421,12 @@ async fn receive_changesets(
         "Changeset batch sequenced"
     );
 
-    Ok((StatusCode::CREATED, Json(SequenceResponse::from(receipt))))
+    let mut response = SequenceResponse::from(receipt);
+    if let Some(warning) = batch_warning {
+        response = response.with_batch_warning(warning);
+    }
+
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 /// Receive and sequence a withdrawal request (CBOR format)
@@ -480,7 +503,7 @@ async fn receive_withdrawal(
         })?;
 
     // Send to batcher for batching if configured
-    if let Some(batcher) = &state.batcher {
+    let batch_warning = if let Some(batcher) = &state.batcher {
         if let Err(e) = batcher.add_message(cbor_message).await {
             warn!(
                 sequence = receipt.sequence,
@@ -488,8 +511,13 @@ async fn receive_withdrawal(
                 "Failed to add to batcher (sequencing succeeded)"
             );
             crate::metrics::record_error("batcher_add");
+            Some(format!("Batch publishing failed: {e}"))
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     info!(
         sequence = receipt.sequence,
@@ -497,7 +525,12 @@ async fn receive_withdrawal(
         "Withdrawal request sequenced"
     );
 
-    Ok((StatusCode::CREATED, Json(SequenceResponse::from(receipt))))
+    let mut response = SequenceResponse::from(receipt);
+    if let Some(warning) = batch_warning {
+        response = response.with_batch_warning(warning);
+    }
+
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 /// Receive and sequence a database snapshot (CBOR format)
@@ -548,7 +581,7 @@ async fn receive_snapshot(
         })?;
 
     // Send to batcher for batching if configured
-    if let Some(batcher) = &state.batcher {
+    let batch_warning = if let Some(batcher) = &state.batcher {
         if let Err(e) = batcher.add_message(cbor_message).await {
             warn!(
                 sequence = receipt.sequence,
@@ -556,8 +589,13 @@ async fn receive_snapshot(
                 "Failed to add to batcher (sequencing succeeded)"
             );
             crate::metrics::record_error("batcher_add");
+            Some(format!("Batch publishing failed: {e}"))
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     info!(
         sequence = receipt.sequence,
@@ -566,7 +604,12 @@ async fn receive_snapshot(
         "Snapshot sequenced"
     );
 
-    Ok((StatusCode::CREATED, Json(SequenceResponse::from(receipt))))
+    let mut response = SequenceResponse::from(receipt);
+    if let Some(warning) = batch_warning {
+        response = response.with_batch_warning(warning);
+    }
+
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 /// Health check endpoint (liveness probe)

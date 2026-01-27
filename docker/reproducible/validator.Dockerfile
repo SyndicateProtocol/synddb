@@ -91,7 +91,7 @@ RUN find /app -type f -exec touch -d "@0" {} +
 
 # Build with reproducible profile (single codegen unit, LTO, panic=abort)
 # --locked ensures Cargo.lock is respected exactly
-RUN cargo build --profile reproducible --locked -p synddb-validator
+RUN cargo build --profile reproducible --locked -p synddb-validator --features tee
 
 # Strip the binary for consistent output (removes variable metadata)
 RUN strip --strip-all /app/target/reproducible/synddb-validator

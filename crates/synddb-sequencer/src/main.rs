@@ -65,12 +65,14 @@ async fn main() -> Result<()> {
 
             let bootstrap_config = BootstrapConfig {
                 enable_key_bootstrap: true,
-                bridge_address: config.bridge_contract_address.clone(),
+                bridge_address: config.bridge_address.clone(),
                 rpc_url: config.bootstrap_rpc_url.clone(),
                 chain_id: config.bootstrap_chain_id,
                 relayer_url: config.relayer_url.clone(),
                 proof_service_url: config.proof_service_url.clone(),
                 attestation_audience: config.attestation_audience.clone(),
+                cosign_signature: config.cosign_signature.clone(),
+                cosign_pubkey: config.cosign_pubkey.clone(),
                 proof_timeout: config.proof_timeout,
                 bootstrap_timeout: config.bootstrap_timeout,
                 prover_mode: ProverMode::Service,

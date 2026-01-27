@@ -10,6 +10,13 @@ use synddb_client::{AttestationClient, TokenType};
 use synddb_shared::keys::EvmKeyManager;
 use tracing::{debug, info, warn};
 
+/// Parse a hex string (with or without 0x prefix) into bytes
+fn parse_hex_bytes(hex_str: &str, field_name: &str) -> Result<Vec<u8>, BootstrapError> {
+    let hex_str = hex_str.trim_start_matches("0x");
+    hex::decode(hex_str)
+        .map_err(|e| BootstrapError::Config(format!("Invalid {} hex encoding: {}", field_name, e)))
+}
+
 /// Current state of the bootstrap process
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootstrapState {
@@ -161,12 +168,21 @@ impl BootstrapStateMachine {
             config.relayer_url.clone().unwrap(),
             bridge_address,
             config.chain_id.unwrap(),
+            config.relayer_timeout,
         );
 
         // Step 2: Fetch attestation token
         self.state = BootstrapState::FetchingAttestation;
         let attestation = self.fetch_attestation_with_retry(config).await?;
         self.attestation_token = Some(attestation.clone());
+
+        // Parse cosign signature and pubkey from config (validated in config.validate())
+        let cosign_signature = parse_hex_bytes(
+            config.cosign_signature.as_deref().unwrap(),
+            "COSIGN_SIGNATURE",
+        )?;
+        let cosign_pubkey =
+            parse_hex_bytes(config.cosign_pubkey.as_deref().unwrap(), "COSIGN_PUBKEY")?;
 
         // Step 3: Generate proof
         self.state = BootstrapState::GeneratingProof;
@@ -180,6 +196,8 @@ impl BootstrapStateMachine {
                 &attestation,
                 &audience,
                 &key_manager.public_key(),
+                &cosign_signature,
+                &cosign_pubkey,
                 config.proof_max_retries,
             )
             .await?;
@@ -246,12 +264,15 @@ impl BootstrapStateMachine {
     }
 
     /// Generate proof with retry
+    #[allow(clippy::too_many_arguments)]
     async fn generate_proof_with_retry(
         &self,
         client: &ProofClient,
         attestation: &str,
         audience: &str,
         public_key: &[u8; 64],
+        cosign_signature: &[u8],
+        cosign_pubkey: &[u8],
         max_retries: u32,
     ) -> Result<ProofResponse, BootstrapError> {
         let mut last_error = None;
@@ -260,7 +281,13 @@ impl BootstrapStateMachine {
             info!(attempt, max_retries, "Generating proof...");
 
             match client
-                .generate_proof(attestation, audience, public_key)
+                .generate_proof(
+                    attestation,
+                    audience,
+                    public_key,
+                    cosign_signature,
+                    cosign_pubkey,
+                )
                 .await
             {
                 Ok(proof) => return Ok(proof),

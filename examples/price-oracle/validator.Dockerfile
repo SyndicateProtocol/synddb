@@ -16,8 +16,8 @@ COPY crates ./crates
 COPY examples ./examples
 COPY tests ./tests
 
-# Build the custom validator
-RUN cargo build --release -p price-oracle-validator
+# Build the custom validator with TEE support
+RUN cargo build --release -p price-oracle-validator --features tee
 
 # Runtime stage - minimal image
 FROM debian:trixie-slim

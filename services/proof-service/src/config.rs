@@ -7,7 +7,9 @@ use clap::Parser;
 #[command(author, version, about)]
 pub struct Config {
     /// Address to bind the HTTP server
-    #[arg(long, env = "BIND_ADDRESS", default_value = "0.0.0.0:8080")]
+    ///
+    /// Default port 8083 avoids conflict with validator (8080) and relayer (8082).
+    #[arg(long, env = "BIND_ADDRESS", default_value = "0.0.0.0:8083")]
     pub bind_address: String,
 
     /// Enable JSON logging output

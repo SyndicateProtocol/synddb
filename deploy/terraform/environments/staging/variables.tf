@@ -115,8 +115,10 @@ variable "bridge_chain_id" {
 variable "tee_bootstrap" {
   description = "TEE key bootstrap configuration. Set to null to disable."
   type = object({
-    rpc_url              = string # RPC URL for verifying key registration
-    attestation_audience = string # Expected audience for attestation tokens
+    rpc_url              = string           # RPC URL for verifying key registration
+    attestation_audience = string           # Expected audience for attestation tokens
+    cosign_signature     = optional(string) # Cosign signature over image digest (64 bytes, hex)
+    cosign_pubkey        = optional(string) # Cosign P-256 public key (64 or 65 bytes, hex)
   })
   default = null
 }

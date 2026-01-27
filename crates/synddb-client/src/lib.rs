@@ -167,7 +167,7 @@ use std::{
     sync::Arc,
     thread,
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub mod attestation;
 pub mod config;
@@ -501,9 +501,12 @@ impl SyndDB {
                     .build()
                     .expect("Failed to create tokio runtime for snapshot sender")
                     .block_on(async {
-                        SnapshotSender::new(cfg, rec, att)
-                            .run(snapshot_rx, snapshot_shutdown_rx)
-                            .await
+                        match SnapshotSender::new(cfg, rec, att) {
+                            Ok(sender) => sender.run(snapshot_rx, snapshot_shutdown_rx).await,
+                            Err(e) => {
+                                error!("Failed to create snapshot sender: {}", e);
+                            }
+                        }
                     });
             })
         };
@@ -519,14 +522,17 @@ impl SyndDB {
                     .build()
                     .expect("Failed to create tokio runtime for changeset sender")
                     .block_on(async {
-                        ChangesetSender::new(
+                        match ChangesetSender::new(
                             config_clone,
                             recovery_clone,
                             attestation_client,
                             stats_clone,
-                        )
-                        .run(changeset_rx, changeset_shutdown_rx)
-                        .await
+                        ) {
+                            Ok(sender) => sender.run(changeset_rx, changeset_shutdown_rx).await,
+                            Err(e) => {
+                                error!("Failed to create changeset sender: {}", e);
+                            }
+                        }
                     });
             }
         });
