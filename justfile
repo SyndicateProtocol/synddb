@@ -415,3 +415,187 @@ docker-detached:
 [group('docker')]
 docker-down:
     docker compose down -v
+
+# ============================================================================
+# Reproducible Builds (for Confidential Space / TEE verification)
+# ============================================================================
+# BuildKit version pinned for reproducibility (shared with CI via docker/reproducible/buildkit.version)
+
+buildkit_version := "moby/buildkit:" + trim(read("docker/reproducible/buildkit.version"))
+buildkit_builder := "synddb-repro"
+
+# Set up BuildKit builder with pinned version for reproducible builds
+[group('reproducible')]
+repro-setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if docker buildx inspect {{ buildkit_builder }} >/dev/null 2>&1; then
+        echo "Builder '{{ buildkit_builder }}' already exists"
+    else
+        echo "Creating builder '{{ buildkit_builder }}' with {{ buildkit_version }}"
+        docker buildx create --name {{ buildkit_builder }} --driver docker-container --driver-opt image={{ buildkit_version }}
+    fi
+    docker buildx inspect {{ buildkit_builder }} --bootstrap
+
+# Build reproducible sequencer image (distroless)
+[group('reproducible')]
+repro-sequencer: repro-setup
+    SOURCE_DATE_EPOCH=0 docker buildx build \
+        --builder {{ buildkit_builder }} \
+        --no-cache \
+        --provenance=false \
+        --sbom=false \
+        --build-arg SOURCE_DATE_EPOCH=0 \
+        --platform linux/amd64 \
+        --output type=docker,rewrite-timestamp=true \
+        -f docker/reproducible/sequencer.Dockerfile \
+        -t synddb-sequencer:reproducible .
+
+# Build reproducible validator image (distroless)
+[group('reproducible')]
+repro-validator: repro-setup
+    SOURCE_DATE_EPOCH=0 docker buildx build \
+        --builder {{ buildkit_builder }} \
+        --no-cache \
+        --provenance=false \
+        --sbom=false \
+        --build-arg SOURCE_DATE_EPOCH=0 \
+        --platform linux/amd64 \
+        --output type=docker,rewrite-timestamp=true \
+        -f docker/reproducible/validator.Dockerfile \
+        -t synddb-validator:reproducible .
+
+# Build debug sequencer image (has shell)
+[group('reproducible')]
+repro-sequencer-debug: repro-setup
+    SOURCE_DATE_EPOCH=0 docker buildx build \
+        --builder {{ buildkit_builder }} \
+        --no-cache \
+        --provenance=false \
+        --sbom=false \
+        --build-arg SOURCE_DATE_EPOCH=0 \
+        --platform linux/amd64 \
+        --output type=docker,rewrite-timestamp=true \
+        --target debug \
+        -f docker/reproducible/sequencer.Dockerfile \
+        -t synddb-sequencer:debug .
+
+# Build debug validator image (has shell)
+[group('reproducible')]
+repro-validator-debug: repro-setup
+    SOURCE_DATE_EPOCH=0 docker buildx build \
+        --builder {{ buildkit_builder }} \
+        --no-cache \
+        --provenance=false \
+        --sbom=false \
+        --build-arg SOURCE_DATE_EPOCH=0 \
+        --platform linux/amd64 \
+        --output type=docker,rewrite-timestamp=true \
+        --target debug \
+        -f docker/reproducible/validator.Dockerfile \
+        -t synddb-validator:debug .
+
+# Build all reproducible images (production)
+[group('reproducible')]
+repro-all: repro-sequencer repro-validator
+
+# Build all debug images
+[group('reproducible')]
+repro-all-debug: repro-sequencer-debug repro-validator-debug
+
+# Show image digests for verification
+[group('reproducible')]
+repro-verify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Reproducible Image Digests ==="
+    echo ""
+    echo "Sequencer:"
+    docker inspect synddb-sequencer:reproducible --format='  Image ID: {{ "{{" }}.Id{{ "}}" }}' 2>/dev/null || echo "  (not built)"
+    docker inspect synddb-sequencer:reproducible --format='  Created:  {{ "{{" }}.Created{{ "}}" }}' 2>/dev/null || true
+    echo ""
+    echo "Validator:"
+    docker inspect synddb-validator:reproducible --format='  Image ID: {{ "{{" }}.Id{{ "}}" }}' 2>/dev/null || echo "  (not built)"
+    docker inspect synddb-validator:reproducible --format='  Created:  {{ "{{" }}.Created{{ "}}" }}' 2>/dev/null || true
+
+# Artifact Registry configuration
+
+ar_registry := "us-central1-docker.pkg.dev/synddb-infra/synddb"
+
+# Verify local builds match published images
+[group('reproducible')]
+verify-build tag="edge":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== Building Reproducible Images Locally ==="
+    echo ""
+    just repro-all
+
+    echo ""
+    echo "=== Fetching Published Images ==="
+    echo ""
+    docker pull {{ ar_registry }}/synddb-sequencer:{{ tag }}
+    docker pull {{ ar_registry }}/synddb-validator:{{ tag }}
+
+    echo ""
+    echo "=== Comparing Image Hashes ==="
+    echo ""
+
+    LOCAL_SEQ=$(docker inspect synddb-sequencer:reproducible --format='{{ "{{" }}.Id{{ "}}" }}')
+    LOCAL_VAL=$(docker inspect synddb-validator:reproducible --format='{{ "{{" }}.Id{{ "}}" }}')
+    REMOTE_SEQ=$(docker inspect {{ ar_registry }}/synddb-sequencer:{{ tag }} --format='{{ "{{" }}.Id{{ "}}" }}')
+    REMOTE_VAL=$(docker inspect {{ ar_registry }}/synddb-validator:{{ tag }} --format='{{ "{{" }}.Id{{ "}}" }}')
+
+    echo "Sequencer:"
+    echo "  Local:  $LOCAL_SEQ"
+    echo "  Remote: $REMOTE_SEQ"
+    if [ "$LOCAL_SEQ" = "$REMOTE_SEQ" ]; then
+        echo "  ✓ MATCH"
+    else
+        echo "  ✗ MISMATCH"
+        FAILED=1
+    fi
+
+    echo ""
+    echo "Validator:"
+    echo "  Local:  $LOCAL_VAL"
+    echo "  Remote: $REMOTE_VAL"
+    if [ "$LOCAL_VAL" = "$REMOTE_VAL" ]; then
+        echo "  ✓ MATCH"
+    else
+        echo "  ✗ MISMATCH"
+        FAILED=1
+    fi
+
+    echo ""
+    if [ "${FAILED:-0}" = "1" ]; then
+        echo "=== VERIFICATION FAILED ==="
+        exit 1
+    else
+        echo "=== All Images Verified! ==="
+    fi
+
+# Verify cosign signatures on published images
+[group('reproducible')]
+verify-signatures tag="edge":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== Verifying Cosign Signatures ==="
+    echo ""
+    echo "Sequencer:"
+    cosign verify {{ ar_registry }}/synddb-sequencer:{{ tag }} \
+        --certificate-identity-regexp='https://github.com/SyndicateProtocol/synddb/.*' \
+        --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+        | head -20
+
+    echo ""
+    echo "Validator:"
+    cosign verify {{ ar_registry }}/synddb-validator:{{ tag }} \
+        --certificate-identity-regexp='https://github.com/SyndicateProtocol/synddb/.*' \
+        --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+        | head -20
+
+    echo ""
+    echo "=== All Signatures Verified! ==="

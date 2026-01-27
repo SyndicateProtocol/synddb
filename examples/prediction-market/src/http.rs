@@ -9,10 +9,23 @@
 //! a `PredictionMarket` across async tasks. This example uses a simple approach:
 //! store configuration in state and create a connection per request.
 //!
-//! Production apps might use:
+//! # Production Considerations
+//!
+//! **WARNING**: This example creates a new database connection for each HTTP request.
+//! This is simple but has significant limitations:
+//!
+//! - **No connection pooling**: Each request opens a new `SQLite` connection, which
+//!   has overhead and can exhaust file descriptors under high load.
+//! - **No rate limiting**: There's no protection against resource exhaustion from
+//!   many concurrent requests.
+//! - **Memory leaks**: Each `PredictionMarket` instance leaks its connection via
+//!   `Box::leak` (see [`crate::app::PredictionMarket::new`] for details).
+//!
+//! For production use, consider:
 //! - A connection pool (r2d2, deadpool-sqlite)
 //! - `tokio::task::spawn_blocking` with a connection per task
 //! - A dedicated database thread with channels
+//! - Rate limiting middleware (tower-governor, axum-ratelimit)
 
 use std::sync::Arc;
 
@@ -333,6 +346,38 @@ impl From<Withdrawal> for WithdrawalJson {
 #[derive(Debug)]
 pub struct AppError(anyhow::Error);
 
+impl AppError {
+    /// Check if the underlying error is a "not found" type error
+    fn is_not_found(&self) -> bool {
+        // Check for rusqlite's QueryReturnedNoRows
+        if let Some(rusqlite_err) = self.0.downcast_ref::<rusqlite::Error>() {
+            if matches!(rusqlite_err, rusqlite::Error::QueryReturnedNoRows) {
+                return true;
+            }
+        }
+        // Also check error message for "not found" as a fallback
+        let msg = self.0.to_string().to_lowercase();
+        msg.contains("not found") || msg.contains("no rows")
+    }
+
+    /// Check if the underlying error is a bad request type error
+    fn is_bad_request(&self) -> bool {
+        let msg = self.0.to_string().to_lowercase();
+        msg.contains("insufficient") || msg.contains("already")
+    }
+
+    /// Get a user-friendly error message
+    fn user_message(&self) -> String {
+        // Check for rusqlite's QueryReturnedNoRows and provide a clearer message
+        if let Some(rusqlite_err) = self.0.downcast_ref::<rusqlite::Error>() {
+            if matches!(rusqlite_err, rusqlite::Error::QueryReturnedNoRows) {
+                return "Resource not found".to_string();
+            }
+        }
+        self.0.to_string()
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         #[derive(Serialize)]
@@ -340,11 +385,9 @@ impl IntoResponse for AppError {
             error: String,
         }
 
-        let status = if self.0.to_string().contains("not found") {
+        let status = if self.is_not_found() {
             StatusCode::NOT_FOUND
-        } else if self.0.to_string().contains("insufficient")
-            || self.0.to_string().contains("already")
-        {
+        } else if self.is_bad_request() {
             StatusCode::BAD_REQUEST
         } else {
             StatusCode::INTERNAL_SERVER_ERROR
@@ -353,7 +396,7 @@ impl IntoResponse for AppError {
         (
             status,
             Json(ErrorResponse {
-                error: self.0.to_string(),
+                error: self.user_message(),
             }),
         )
             .into_response()
