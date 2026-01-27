@@ -1,91 +1,183 @@
 # SyndDB Staging Environment - Base Sepolia
 #
-# Fill in the values marked with TODO and rename to terraform.tfvars
+# Template for deploying SyndDB infrastructure with the price oracle example.
 #
-# Deployment order:
-#   1. Deploy contracts to Base Sepolia (see Step 2 below)
-#   2. Fill in contract addresses in this file
-#   3. Run: cd deploy/terraform/environments/staging && terraform init && terraform apply
+# =============================================================================
+# QUICK START
+# =============================================================================
+#
+# 1. Deploy contracts (see PREREQUISITES below)
+#
+# 2. Copy this template:
+#    cp base-sepolia.tfvars.template terraform.tfvars
+#
+#    NOTE: terraform.tfvars is gitignored in SyndDB. If you fork this repo,
+#    ensure your .gitignore also excludes it - it contains private keys.
+#
+# 3. Fill in required values:
+#    - project_id: Your GCP project
+#    - sp1_network_private_key: Key with PROVE tokens
+#    - gcs_bucket_name: Globally unique bucket name
+#    - tee_bootstrap.key_manager_address: Your TeeKeyManager contract
+#    - tee_bootstrap.attestation_audience: Your domain
+#    - bridge_contract_address: Your Bridge contract
+#    - price_oracle_contract_address: Your PriceOracle contract
+#
+# 4. Deploy infrastructure:
+#    terraform init && terraform plan && terraform apply
+#
+# 5. Test (Base Sepolia):
+#    cast send --rpc-url https://sepolia.base.org \
+#        <your-price-oracle-address> \
+#        "requestPrice(string,uint256)" "BTC" 0
+#
+# =============================================================================
+# PREREQUISITES
+# =============================================================================
+#
+# Deploy contracts to Base Sepolia:
+#
+#   # 1. Create .env with your private key and API key:
+#   cp .env.defaults .env
+#   # Edit .env and set:
+#   #   PRIVATE_KEY=<your-deployer-private-key>
+#   #   ETHERSCAN_API_KEY=<your-basescan-api-key>
+#
+#   # 2. Deploy contracts:
+#   just contracts::deploy-base-sepolia
+#
+# Note down the deployed addresses for use in this config.
+# Basescan: https://sepolia.basescan.org
 #
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # GCP Project Configuration
 # -----------------------------------------------------------------------------
+# Your GCP project where infrastructure will be deployed.
+# Create a project at https://console.cloud.google.com or use an existing one.
+# Required APIs are enabled automatically by Terraform.
 
-# TODO: Your GCP project ID
-project_id = "TODO_YOUR_GCP_PROJECT_ID"
+project_id = "my-gcp-project"  # TODO: Your GCP project ID
 
 region = "us-central1"
 zone   = "us-central1-a"
 
 # -----------------------------------------------------------------------------
+# SP1 Network Prover
+# -----------------------------------------------------------------------------
+# Offloads ZK proof generation to Succinct's hosted infrastructure.
+# Required for TEE attestation proofs.
+#
+# Setup:
+#   1. Generate a key: cast wallet new
+#   2. Fund with PROVE tokens on Ethereum mainnet: https://explorer.succinct.xyz
+#   3. Docs: https://docs.succinct.xyz/docs/sp1/prover-network/quickstart
+#
+# The private key authenticates proof requests to the SP1 Network.
+# PROVE tokens are consumed per proof generated.
+
+sp1_network_private_key = ""  # TODO: Secp256k1 private key (0x prefixed, 64 hex chars)
+
+# -----------------------------------------------------------------------------
 # Container Images
 # -----------------------------------------------------------------------------
-# Using edge tag from Artifact Registry. Change to specific version for stability.
+# Pre-built images from synddb-infra Artifact Registry.
+# Use :edge for latest builds or pin to specific SHA for stability.
+# These are public - no changes needed unless using custom builds.
 
 sequencer_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-sequencer:edge"
 proof_service_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/proof-service:edge"
-
-# For price oracle example, use the custom validator with price consistency rules
-# For other use cases, use: us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-validator:edge
 validator_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle-validator:edge"
 
 # -----------------------------------------------------------------------------
 # Storage
 # -----------------------------------------------------------------------------
+# GCS bucket for batch storage. Must be globally unique across all of GCP.
+# Naming convention: <project>-synddb-<environment>
+# The bucket stores sequenced changesets before DA publication.
 
-# TODO: Unique bucket name for batch storage (must be globally unique)
-gcs_bucket_name = "TODO_YOUR_PROJECT-synddb-staging"
+gcs_bucket_name = "my-gcp-project-synddb-staging"  # TODO: Globally unique bucket name
 
 # -----------------------------------------------------------------------------
 # Artifact Registry
 # -----------------------------------------------------------------------------
+# Controls where Terraform creates IAM bindings for pulling container images.
+#
+# Core images (sequencer, proof-service) always come from synddb-infra.
+# App images (validator, price-oracle) default to synddb-infra but can be
+# overridden if you're hosting custom images in your own registry.
+#
+# To use custom app images:
+#   1. Set app_artifact_registry_project to your GCP project
+#   2. Update validator_image/price_oracle_image URLs to point to your registry
+#   3. Ensure your images are in <location>-docker.pkg.dev/<project>/<repository>/
 
 artifact_registry_location   = "us-central1"
 artifact_registry_repository = "synddb"
 
+# Uncomment to use custom app images from your own registry:
+# app_artifact_registry_project = "my-gcp-project"
+
 # -----------------------------------------------------------------------------
 # Instance Configuration
 # -----------------------------------------------------------------------------
+# Machine types for Confidential VMs. Must use AMD SEV-compatible types (n2d-*).
+# n2d-standard-2: 2 vCPU, 8GB RAM - sufficient for staging workloads.
+# For production, consider n2d-standard-4 or higher.
+#
+# Estimated monthly cost (us-central1, 24/7):
+#   n2d-standard-2 Confidential VM: ~$75/month each
+#   2 VMs (sequencer + validator): ~$150/month
+#   Cloud Run proof-service: scales to zero, pay per request
+#   GCS storage: ~$0.02/GB/month
 
 sequencer_machine_type = "n2d-standard-2"
 validator_machine_type = "n2d-standard-2"
 
 # -----------------------------------------------------------------------------
-# TEE Bootstrap Configuration (Base Sepolia)
+# TEE Bootstrap Configuration
 # -----------------------------------------------------------------------------
-# These values come from contract deployment (Step 2)
+# Configuration for TEE key registration on-chain.
+# When a TEE instance starts, it generates an ephemeral signing key and
+# registers it with the TeeKeyManager contract via an attestation proof.
+#
+# PREREQUISITE: Deploy contracts first. See contracts/README.md for instructions.
+# You'll deploy: AttestationVerifier, TeeKeyManager, Bridge, and your app contract.
+#
+# key_manager_address: Your deployed TeeKeyManager contract address
+# rpc_url: RPC endpoint for bootstrap transactions
+#          Public endpoint works, but use Alchemy/Infura for reliability
+# chain_id: Base Sepolia = 84532
+# attestation_audience: Unique identifier for your deployment
+#                       Format: https://<your-domain>/<app-name>
+#                       Used to scope TEE attestations to your application
 
 tee_bootstrap = {
-  # TODO: TeeKeyManager contract address (from contract deployment)
-  key_manager_address = "0xTODO_TEE_KEY_MANAGER_ADDRESS"
-
-  # TODO: Base Sepolia RPC URL (Alchemy, Infura, or public)
-  rpc_url = "https://base-sepolia.g.alchemy.com/v2/TODO_YOUR_API_KEY"
-
-  # Base Sepolia chain ID
-  chain_id = 84532
-
-  # TODO: Your staging domain for attestation audience
-  attestation_audience = "https://TODO_YOUR_STAGING_DOMAIN"
+  key_manager_address  = "0x0000000000000000000000000000000000000000"  # TODO: Your TeeKeyManager
+  rpc_url              = "https://sepolia.base.org"  # TODO: Use Alchemy/Infura for reliability
+                                                     # Base Mainnet: https://mainnet.base.org
+  chain_id             = 84532                       # Base Mainnet: 8453
+  attestation_audience = "https://example.com/price-oracle"  # TODO: Your domain
 }
 
 # -----------------------------------------------------------------------------
-# Bridge Signer Configuration (for Price Oracle)
+# Bridge Signer Configuration
 # -----------------------------------------------------------------------------
+# Enables validators to sign bridge messages for cross-chain state sync.
+# The Bridge contract verifies these signatures before accepting state updates.
+# Deploy Bridge contract alongside TeeKeyManager (see contracts/README.md).
 
-enable_bridge_signer = true
-
-# TODO: Bridge contract address (from contract deployment)
-bridge_contract_address = "0xTODO_BRIDGE_ADDRESS"
-
-# Base Sepolia chain ID
-bridge_chain_id = 84532
+enable_bridge_signer    = true
+bridge_contract_address = "0x0000000000000000000000000000000000000000"  # TODO: Your Bridge contract
+bridge_chain_id         = 84532  # Base Mainnet: 8453
 
 # -----------------------------------------------------------------------------
 # Batching Configuration
 # -----------------------------------------------------------------------------
+# Controls how changesets are batched before DA publication.
+# batch_max_messages: Max changesets per batch (higher = more efficient, higher latency)
+# batch_flush_interval: Max time to wait before publishing (lower = lower latency)
 
 batch_max_messages   = 100
 batch_flush_interval = "2s"
@@ -93,48 +185,62 @@ batch_flush_interval = "2s"
 # -----------------------------------------------------------------------------
 # Price Oracle Configuration
 # -----------------------------------------------------------------------------
-# The price oracle runs in Confidential Space alongside sequencer/validator
-# Image is built automatically by CI and pushed to Artifact Registry
+# Configuration for the price oracle example application.
+#
+# price_oracle_image: Container that fetches prices and writes to SyndDB
+# price_oracle_contract_address: On-chain contract for price queries
+#
+# price_oracle_config:
+#   coingecko_api_key: Optional - free tier has rate limits (30 req/min)
+#                      Get key at https://www.coingecko.com/en/api/pricing
+#   cmc_api_key: Optional CoinMarketCap key for redundancy
+#                Get key at https://coinmarketcap.com/api/
+#   fetch_interval: Seconds between price fetches (60 = 1 minute)
+#   assets: Cryptocurrency symbols to track
+#   chain_monitor_enabled: Watch for on-chain price requests
 
-price_oracle_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle:edge"
-
-# TODO: PriceOracle contract address (from contract deployment)
-price_oracle_contract_address = "0xTODO_PRICE_ORACLE_ADDRESS"
+price_oracle_image            = "us-central1-docker.pkg.dev/synddb-infra/synddb/price-oracle:edge"
+price_oracle_contract_address = "0x0000000000000000000000000000000000000000"  # TODO: Your PriceOracle contract
 
 price_oracle_config = {
-  # API keys (optional - free tier works without)
-  coingecko_api_key = ""
-  cmc_api_key       = ""
-
-  # Fetch interval in seconds
-  fetch_interval = 60
-
-  # Assets to track
-  assets = ["BTC", "ETH", "SOL"]
-
-  # Enable chain monitor to watch for on-chain price requests
-  chain_monitor_enabled = true
+  coingecko_api_key     = ""  # Optional: CoinGecko API key
+  cmc_api_key           = ""  # Optional: CoinMarketCap API key
+  fetch_interval        = 60
+  assets                = ["BTC", "ETH", "SOL"]
+  chain_monitor_enabled = false  # Set true to watch for on-chain price requests
 }
 
 # -----------------------------------------------------------------------------
-# Relayer Configuration (Optional - for gas funding)
+# Relayer Configuration (Optional)
 # -----------------------------------------------------------------------------
-# Uncomment and fill in to enable the relayer service
+# The relayer funds gas for TEE instances to submit transactions.
+# Only needed if TEE instances don't have their own ETH for gas.
+# Uncomment and configure if using gas sponsorship.
+#
+# rpc_url: RPC for transaction submission (use private RPC for reliability)
+# treasury_address: GasTreasury contract holding sponsored ETH
+# required_audience_hash: keccak256 of attestation_audience (for verification)
+#                         Generate: cast keccak "https://example.com/price-oracle"
+# allowed_image_digests: Restrict to specific container image hashes
 
 # relayer_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-relayer:edge"
 #
 # relayer_config = {
-#   rpc_url                = "https://base-sepolia.g.alchemy.com/v2/TODO_YOUR_API_KEY"
-#   chain_id               = 84532
-#   key_manager_address    = "0xTODO_TEE_KEY_MANAGER_ADDRESS"
-#   treasury_address       = "0xTODO_GAS_TREASURY_ADDRESS"
-#   required_audience_hash = "0xTODO_KECCAK256_OF_AUDIENCE"
-#   allowed_image_digests  = ["0xTODO_SEQUENCER_IMAGE_DIGEST", "0xTODO_VALIDATOR_IMAGE_DIGEST"]
+#   rpc_url                = "https://sepolia.base.org"  # Base Mainnet: https://mainnet.base.org
+#   chain_id               = 84532                       # Base Mainnet: 8453
+#   key_manager_address    = "0x0000000000000000000000000000000000000000"  # Same as tee_bootstrap
+#   treasury_address       = "0x0000000000000000000000000000000000000000"  # TODO: Deploy GasTreasury
+#   # To generate: cast keccak "https://example.com/price-oracle"
+#   # Must match your tee_bootstrap.attestation_audience value
+#   required_audience_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"  # TODO
+#   allowed_image_digests  = []
 # }
 
 # -----------------------------------------------------------------------------
 # Labels
 # -----------------------------------------------------------------------------
+# Resource labels for organization and cost tracking in GCP.
+# All resources will be tagged with these labels.
 
 labels = {
   environment = "staging"
@@ -142,53 +248,3 @@ labels = {
   project     = "synddb"
   chain       = "base-sepolia"
 }
-
-# =============================================================================
-# DEPLOYMENT INSTRUCTIONS
-# =============================================================================
-#
-# Step 1: Set up Foundry wallet
-#   cast wallet import deployer --interactive
-#
-# Step 2: Deploy contracts to Base Sepolia
-#   cd contracts
-#
-#   ADMIN_ADDRESS="0xYOUR_ADMIN_ADDRESS" \
-#   SEQUENCER_ADDRESS="0xYOUR_ADMIN_ADDRESS" \
-#   forge script script/DeployLocalDevEnv.s.sol:DeployLocalDevEnv \
-#       --rpc-url https://sepolia.base.org \
-#       --account deployer \
-#       --etherscan-api-key $BASESCAN_API_KEY \
-#       --verify \
-#       --broadcast \
-#       -vvv
-#
-#   Record the output addresses:
-#     - TeeKeyManager:  0x...
-#     - Bridge:         0x...
-#     - PriceOracle:    0x...
-#
-# Step 3: Fill in TODO values above with deployed contract addresses
-#   (Container images are built automatically by CI)
-#
-# Step 4: Deploy infrastructure
-#   cd deploy/terraform/environments/staging
-#   cp base-sepolia.tfvars.template terraform.tfvars
-#   # Edit terraform.tfvars with your values
-#   terraform init
-#   terraform plan
-#   terraform apply
-#
-# Step 5: Verify deployment
-#   terraform output
-#   gcloud compute instances list --filter="name~synddb-staging"
-#
-# Step 6: Test end-to-end
-#   # Request a price on-chain
-#   cast send --rpc-url https://sepolia.base.org --account deployer \
-#       $PRICE_ORACLE_CONTRACT_ADDRESS "requestPrice(string)" "BTC"
-#
-#   # Check logs
-#   gcloud compute instances get-serial-port-output synddb-staging-price-oracle --zone us-central1-a
-#
-# =============================================================================

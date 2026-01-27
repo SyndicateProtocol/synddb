@@ -64,12 +64,13 @@ _deploy-local:
     ./scripts/deploy-local.sh
 
 # Deploy Bridge to Base Sepolia
+# Requires: PRIVATE_KEY and ETHERSCAN_API_KEY in .env
 [confirm('This will deploy to Base Sepolia testnet. Continue?')]
 [group('deploy')]
 deploy-base-sepolia:
     forge script script/DeployBridge.s.sol:DeployBridge \
         --rpc-url base_sepolia \
-        --account deployer \
+        --private-key ${PRIVATE_KEY} \
         --etherscan-api-key ${ETHERSCAN_API_KEY} \
         --verify \
         --broadcast \

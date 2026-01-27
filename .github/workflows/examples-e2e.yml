@@ -19,56 +19,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  prediction-market-e2e:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
-    name: Prediction Market E2E
+  example-e2e:
+    name: ${{ matrix.name }} E2E
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Prediction Market
+            dir: prediction-market
+          - name: Price Oracle
+            dir: price-oracle
     defaults:
       run:
-        working-directory: examples/prediction-market
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and start services
-        run: docker compose up -d --build --wait
-        timeout-minutes: 20
-
-      - name: Wait for services to be healthy
-        run: |
-          echo "Waiting for sequencer to be healthy..."
-          for i in {1..60}; do
-            if curl -sf http://localhost:8433/health > /dev/null 2>&1; then
-              echo "Sequencer is healthy"
-              break
-            fi
-            echo "Waiting... ($i/60)"
-            sleep 2
-          done
-
-      - name: Run E2E tests
-        run: ./e2e-test.sh
-
-      - name: Show logs on failure
-        if: failure()
-        run: docker compose logs
-
-      - name: Cleanup
-        if: always()
-        run: docker compose down -v --remove-orphans
-
-  price-oracle-e2e:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
-    name: Price Oracle E2E
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: examples/price-oracle
+        working-directory: examples/${{ matrix.dir }}
 
     steps:
       - uses: actions/checkout@v4
@@ -104,7 +69,6 @@ jobs:
         run: docker compose down -v --remove-orphans
 
   price-oracle-unit-tests:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Price Oracle Python Tests
     runs-on: ubuntu-latest
     timeout-minutes: 10

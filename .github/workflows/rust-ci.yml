@@ -29,7 +29,6 @@ env:
 
 jobs:
   lint-toml:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: TOML Format
     runs-on: ubuntu-latest
     steps:
@@ -54,7 +53,6 @@ jobs:
         run: just lint-toml
 
   lint-deps:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Unused Dependencies
     runs-on: ubuntu-latest
     steps:
@@ -82,7 +80,6 @@ jobs:
         run: cargo machete tests/confidential-space
 
   lint-fmt:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Rust Format
     runs-on: ubuntu-latest
     steps:
@@ -103,7 +100,6 @@ jobs:
         run: cargo +nightly fmt --all --check --manifest-path tests/confidential-space/Cargo.toml
 
   lint:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Clippy Lints
     runs-on: ubuntu-latest
     steps:
@@ -132,7 +128,6 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
 
   test:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -159,7 +154,6 @@ jobs:
         run: cargo test --workspace --doc --exclude synddb-e2e --exclude synddb-e2e-gcs
 
   test-stress:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Session Stress Test
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -179,7 +173,6 @@ jobs:
         run: just test-stress
 
   test-integration:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Client Integration Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -199,7 +192,6 @@ jobs:
         run: just test-integration
 
   fuzz:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: SQLite Fuzzer
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -221,7 +213,6 @@ jobs:
           PROPTEST_CASES: "256"
 
   fuzz-e2e:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: E2E Pipeline Fuzzer
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -248,7 +239,6 @@ jobs:
           PROPTEST_CASES: "10"
 
   justfile-validate:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Justfile Validation
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -273,7 +263,6 @@ jobs:
           just --list examples
 
   examples:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Examples Compile
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -297,7 +286,6 @@ jobs:
           cargo build --package price-oracle-validator
 
   coverage:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Code Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -327,7 +315,6 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   security-audit:
-    if: github.event.pull_request.draft == false || github.event_name == 'push'
     name: Security Audit
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -85,7 +85,7 @@ variable "tee_bootstrap" {
     key_manager_address  = string # TeeKeyManager contract address
     rpc_url              = string # RPC URL for bootstrap transactions
     chain_id             = number # Chain ID for bootstrap transactions
-    proof_service_url    = string # URL of GPU proof service
+    proof_service_url    = string # URL of proof service for attestation proofs
     attestation_audience = string # Expected audience for attestation tokens
   })
   default = null

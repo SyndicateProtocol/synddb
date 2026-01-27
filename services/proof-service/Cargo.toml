@@ -19,7 +19,8 @@ serde = { version = "1.0", features = ["derive"] }
 hex = "0.4"
 
 # SP1 SDK for proof generation
-sp1-sdk = "5.0"
+# native-gnark: Compiles Groth16 prover natively (requires Go 1.22) instead of using Docker
+sp1-sdk = { version = "5.0", features = ["native-gnark"] }
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
 gcp-attestation = { path = "../../crates/gcp-attestation" }

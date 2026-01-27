@@ -77,13 +77,14 @@ module "iam" {
   project_id                   = var.project_id
   name_prefix                  = "synddb-staging"
   gcs_bucket_name              = module.storage.bucket_name
-  artifact_registry_location   = var.artifact_registry_location
-  artifact_registry_repository = var.artifact_registry_repository
+  artifact_registry_location    = var.artifact_registry_location
+  artifact_registry_repository  = var.artifact_registry_repository
+  app_artifact_registry_project = var.app_artifact_registry_project
 
   depends_on = [module.storage]
 }
 
-# Proof Service (deployed when TEE bootstrap is enabled)
+# Proof Service (SP1 Network Prover - offloads to Succinct's infrastructure)
 module "proof_service" {
   count  = var.tee_bootstrap != null ? 1 : 0
   source = "../../modules/proof-service"
@@ -93,6 +94,7 @@ module "proof_service" {
   service_name          = "synddb-staging-proof"
   container_image       = var.proof_service_image
   service_account_email = module.iam.proof_service_account_email
+  sp1_network_private_key = var.sp1_network_private_key
   ingress               = "internal"
   allow_unauthenticated = false
   min_instances         = 0  # Scale to zero when idle
