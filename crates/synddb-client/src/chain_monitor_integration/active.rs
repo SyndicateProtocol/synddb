@@ -4,17 +4,20 @@ use crate::chain_handler::{DepositData, DepositHandler};
 use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver};
 use rusqlite::Connection;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use synddb_chain_monitor::{config::ChainMonitorConfig, monitor::ChainMonitor};
-use tracing::{debug, error, info};
+use tokio::sync::watch;
+use tracing::{debug, error, info, warn};
 
 /// Handle for an active chain monitor
 ///
 /// This manages a background thread that monitors blockchain events and
 /// processes deposits into a local `SQLite` database.
 pub struct ChainMonitorHandle {
-    /// Background thread handle
-    _handle: thread::JoinHandle<()>,
+    /// Background thread handle (Option to allow taking in Drop)
+    handle: Option<JoinHandle<()>>,
+    /// Shutdown signal sender
+    shutdown_tx: watch::Sender<bool>,
     /// Channel receiving deposit data from chain monitor
     deposit_rx: Receiver<DepositData>,
     /// `SQLite` connection for inserting deposits
@@ -27,7 +30,7 @@ impl std::fmt::Debug for ChainMonitorHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChainMonitorHandle")
             .field("table_name", &self.table_name)
-            .field("running", &true)
+            .field("running", &self.handle.is_some())
             .finish()
     }
 }
@@ -51,6 +54,9 @@ impl ChainMonitorHandle {
         // Create channel for deposit data
         let (deposit_tx, deposit_rx) = bounded::<DepositData>(100);
 
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
         // Start chain monitor thread
         let handle = thread::spawn(move || {
             tokio::runtime::Builder::new_current_thread()
@@ -65,9 +71,10 @@ impl ChainMonitorHandle {
                     match ChainMonitor::new(config, handler).await {
                         Ok(mut monitor) => {
                             info!("Chain monitor started successfully");
-                            if let Err(e) = monitor.run().await {
+                            if let Err(e) = monitor.run(shutdown_rx).await {
                                 error!("Chain monitor error: {}", e);
                             }
+                            info!("Chain monitor stopped");
                         }
                         Err(e) => {
                             error!("Failed to start chain monitor: {}", e);
@@ -94,7 +101,8 @@ impl ChainMonitorHandle {
         info!("Deposits table '{}' ready", table_name);
 
         Ok(Self {
-            _handle: handle,
+            handle: Some(handle),
+            shutdown_tx,
             deposit_rx,
             conn,
             table_name,
@@ -147,10 +155,31 @@ impl ChainMonitorHandle {
 
         Ok(count)
     }
+
+    /// Gracefully shutdown the chain monitor
+    ///
+    /// This signals the monitor to stop and waits for the background thread to exit.
+    /// Called automatically on Drop, but can be called explicitly for more control.
+    pub fn shutdown(&mut self) {
+        // Signal shutdown
+        if let Err(e) = self.shutdown_tx.send(true) {
+            warn!("Failed to send shutdown signal: {}", e);
+        }
+
+        // Wait for thread to finish
+        if let Some(handle) = self.handle.take() {
+            debug!("Waiting for chain monitor thread to exit...");
+            match handle.join() {
+                Ok(()) => info!("Chain monitor thread exited cleanly"),
+                Err(e) => error!("Chain monitor thread panicked: {:?}", e),
+            }
+        }
+    }
 }
 
 impl Drop for ChainMonitorHandle {
     fn drop(&mut self) {
-        debug!("Chain monitor handle dropped - thread will terminate on process exit");
+        debug!("ChainMonitorHandle dropping, initiating shutdown");
+        self.shutdown();
     }
 }

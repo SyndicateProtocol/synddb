@@ -235,7 +235,7 @@ async fn main() -> Result<()> {
         };
 
         info!("Attestation verification enabled");
-        Some(Arc::new(AttestationVerifier::new(attestation_config)))
+        Some(Arc::new(AttestationVerifier::new(attestation_config)?))
     } else {
         warn!(
             "Attestation verification is DISABLED. \

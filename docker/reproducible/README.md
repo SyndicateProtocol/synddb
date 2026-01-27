@@ -76,6 +76,7 @@ panic = "abort"    # Removes unwinding tables that can vary
 | `SOURCE_DATE_EPOCH=0` | Standard for reproducible builds. Sets all timestamps to Unix epoch (1970-01-01). |
 | Pinned BuildKit version | Different versions may hash layers differently. Version is defined in `buildkit.version` (shared between CI and local builds). |
 | Pinned base images by digest | Tags like `rust:1.92` can change. Digests (`sha256:...`) are immutable. |
+| `DEBIAN_SNAPSHOT` | Pins apt packages to a specific date via snapshot.debian.org. Without this, package updates break reproducibility. |
 
 ### Dockerfile Steps
 
@@ -135,6 +136,36 @@ docker inspect gcr.io/distroless/cc-debian13 --format='{{index .RepoDigests 0}}'
 ```
 
 Then update the `ARG` values in the Dockerfiles.
+
+## Debian Snapshot Pinning
+
+The Dockerfiles use [snapshot.debian.org](https://snapshot.debian.org) to pin apt packages to a specific point in time. This ensures:
+
+1. **Long-term reproducibility**: The same package versions are available years later
+2. **No drift**: Package updates don't silently change your builds
+
+The snapshot date is configured via the `DEBIAN_SNAPSHOT` build arg (format: `YYYYMMDDTHHMMSSZ`).
+
+### Updating the Snapshot
+
+When upgrading packages or setting up a new reproducible build:
+
+```bash
+# Use today's date (or a recent known-good date)
+date -u +%Y%m%dT000000Z
+# Output: 20260104T000000Z
+
+# Verify the snapshot exists
+curl -I "https://snapshot.debian.org/archive/debian/20260101T000000Z/"
+```
+
+Update `DEBIAN_SNAPSHOT` in the Dockerfiles, then rebuild and verify the image hash.
+
+### Notes
+
+- Snapshots are typically available within a few hours of the timestamp
+- Use midnight (`T000000Z`) for cleaner dates
+- The snapshot service is maintained by Debian and has been reliable since 2010
 
 ## Confidential Space Labels
 

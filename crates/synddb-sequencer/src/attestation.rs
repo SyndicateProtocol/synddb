@@ -200,22 +200,28 @@ pub struct AttestationVerifier {
 
 impl AttestationVerifier {
     /// Create a new attestation verifier
-    pub fn new(config: AttestationConfig) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be created.
+    pub fn new(config: AttestationConfig) -> Result<Self, AttestationError> {
         info!(
             audience = %config.expected_audience,
             verify_tee = config.verify_tee_claims,
             "Attestation verifier initialized"
         );
 
-        Self {
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| AttestationError::Config(format!("Failed to create HTTP client: {e}")))?;
+
+        Ok(Self {
             config,
             jwks_cache: Arc::new(RwLock::new(None)),
             jwks_uri_cache: Arc::new(RwLock::new(None)),
-            http_client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("Failed to create HTTP client"),
-        }
+            http_client,
+        })
     }
 
     /// Verify an attestation token with full cryptographic signature verification
@@ -235,10 +241,13 @@ impl AttestationVerifier {
             .ok_or_else(|| AttestationError::NoMatchingKey(kid.clone()))?;
 
         // Get current time for validation
+        // SystemTime::now() can only fail if system clock is before UNIX epoch (1970),
+        // which would indicate a misconfigured system. Default to 0 which will cause
+        // token validation to fail with a clear error rather than panicking.
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
 
         // Verify the token using the shared library
         let result = verify_attestation(
@@ -401,7 +410,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_jwt_format() {
-        let verifier = AttestationVerifier::new(test_config());
+        let verifier = AttestationVerifier::new(test_config()).expect("Failed to create verifier");
 
         // Missing parts
         let result = verifier.verify("invalid").await;
@@ -446,7 +455,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Only run when explicitly requested (requires network)
     async fn test_fetch_jwks() {
-        let verifier = AttestationVerifier::new(test_config());
+        let verifier = AttestationVerifier::new(test_config()).expect("Failed to create verifier");
         let jwks = verifier.fetch_jwks().await.expect("Failed to fetch JWKS");
 
         assert!(!jwks.keys.is_empty(), "JWKS should contain keys");

@@ -2,7 +2,7 @@
 
 use crate::{
     attestation::AttestationClient, config::Config, recovery::FailedBatchRecovery,
-    retry::retry_with_backoff, session::Changeset,
+    retry::retry_with_backoff, session::Changeset, stats::StatsHandle,
 };
 use crossbeam_channel::{select, Receiver};
 use reqwest::Client;
@@ -43,6 +43,7 @@ pub struct ChangesetSender {
     last_flush: Instant,
     recovery: Option<Arc<FailedBatchRecovery>>,
     attestation: Option<AttestationClient>,
+    stats: StatsHandle,
 }
 
 impl ChangesetSender {
@@ -50,6 +51,7 @@ impl ChangesetSender {
         config: Config,
         recovery: Option<Arc<FailedBatchRecovery>>,
         attestation: Option<AttestationClient>,
+        stats: StatsHandle,
     ) -> Self {
         let client = Client::builder()
             .timeout(config.snapshot_request_timeout)
@@ -64,6 +66,7 @@ impl ChangesetSender {
             last_flush: Instant::now(),
             recovery,
             attestation,
+            stats,
         }
     }
 
@@ -88,6 +91,7 @@ impl ChangesetSender {
                                 buffer_count = self.buffer.len() + 1,
                                 "Received changeset"
                             );
+                            self.stats.increment_pending();
                             self.buffer_size += cs.data.len();
                             self.buffer.push(cs);
 
@@ -107,6 +111,7 @@ impl ChangesetSender {
                     // Drain any remaining changesets from the channel before exiting
                     while let Ok(cs) = changeset_rx.try_recv() {
                         debug!("Draining changeset: seq={}, size={} bytes", cs.sequence, cs.data.len());
+                        self.stats.increment_pending();
                         self.buffer_size += cs.data.len();
                         self.buffer.push(cs);
                     }
@@ -164,6 +169,8 @@ impl ChangesetSender {
             batch.attestation_token.is_some()
         );
 
+        let batch_count = batch.changesets.len();
+
         // Send with retries
         match retry_with_backoff("send_changeset_batch", self.config.max_retries, || {
             self.send_batch(&batch)
@@ -173,9 +180,9 @@ impl ChangesetSender {
             Ok(()) => {
                 info!(
                     "Successfully sent batch {} ({} changesets)",
-                    batch_id,
-                    batch.changesets.len()
+                    batch_id, batch_count
                 );
+                self.stats.record_push(batch_count).await;
                 self.buffer_size = 0;
                 self.last_flush = Instant::now();
                 return;
@@ -185,6 +192,7 @@ impl ChangesetSender {
                     "Failed to send batch after {} attempts: {}",
                     self.config.max_retries, e
                 );
+                self.stats.record_failure();
             }
         }
 
@@ -205,6 +213,10 @@ impl ChangesetSender {
                 changesets_raw.len()
             );
         }
+
+        // Decrement pending since these changesets are no longer being tracked
+        // (they're either saved to recovery or dropped)
+        self.stats.decrement_pending(batch_count);
     }
 
     async fn send_batch(&self, batch: &ChangesetBatchRequest) -> Result<(), SendError> {

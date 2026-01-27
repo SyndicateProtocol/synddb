@@ -39,13 +39,11 @@ pub struct EthClient {
 fn handle_rpc_error(name: &str, err: &RpcError<TransportErrorKind>) {
     error!("{}: {}", name, err);
     if let RpcError::Transport(err) = err {
-        assert!(
-            err.is_retry_err(),
-            "{}: {}: {}",
-            name,
-            "fatal transport error",
-            err
-        );
+        if !err.is_retry_err() {
+            // Log fatal errors but don't panic - the retry loop will continue
+            // and attempt reconnection, which may succeed if the error was transient
+            error!("{}: fatal transport error (will retry): {}", name, err);
+        }
     }
 }
 

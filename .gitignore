@@ -46,3 +46,20 @@ tests/e2e-gcs/.credentials/
 
 # Local development data
 .synddb/
+
+# Terraform
+# - terraform.tfvars: contains secrets/project-specific values, NEVER commit
+# - *.tfvars.example: safe templates with placeholders, DO commit
+# - *.tfvars.<env>: templates like base-sepolia, DO commit (no secrets)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfplan

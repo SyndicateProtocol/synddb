@@ -2794,11 +2794,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "gcp-confidential-space"
+name = "gcp-cs-attestation-sp1-program"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "gcp-attestation",
 ]
 
 [[package]]
@@ -2807,7 +2806,8 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "clap",
- "gcp-confidential-space",
+ "gcp-attestation",
+ "gcp-cs-attestation-sp1-program",
  "hex",
  "serde",
  "serde_json",

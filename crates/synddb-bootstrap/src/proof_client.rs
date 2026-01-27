@@ -13,8 +13,8 @@ struct ProofRequest {
     pub jwt_token: String,
     /// Expected audience claim
     pub expected_audience: String,
-    /// TEE public key (64-byte uncompressed, hex-encoded)
-    pub tee_public_key: String,
+    /// EVM public key (64-byte uncompressed secp256k1, hex-encoded)
+    pub evm_public_key: String,
 }
 
 /// Response from the proof service
@@ -64,17 +64,17 @@ impl ProofClient {
         &self,
         jwt_token: &str,
         expected_audience: &str,
-        tee_public_key: &[u8; 64],
+        evm_public_key: &[u8; 64],
     ) -> Result<ProofResponse, BootstrapError> {
         // Check for mock mode
         if self.service_url.starts_with("mock://") {
-            return self.generate_mock_proof(tee_public_key);
+            return self.generate_mock_proof(evm_public_key);
         }
 
         let request = ProofRequest {
             jwt_token: jwt_token.to_string(),
             expected_audience: expected_audience.to_string(),
-            tee_public_key: format!("0x{}", hex::encode(tee_public_key)),
+            evm_public_key: format!("0x{}", hex::encode(evm_public_key)),
         };
 
         info!(
@@ -140,12 +140,12 @@ impl ProofClient {
     /// Generate a mock proof for testing
     fn generate_mock_proof(
         &self,
-        tee_public_key: &[u8; 64],
+        evm_public_key: &[u8; 64],
     ) -> Result<ProofResponse, BootstrapError> {
         warn!("Using MOCK prover - proofs will NOT be valid on-chain");
 
         // Derive address from public key (same as EvmKeyManager)
-        let hash = alloy::primitives::keccak256(tee_public_key);
+        let hash = alloy::primitives::keccak256(evm_public_key);
         let address = Address::from_slice(&hash[12..]);
 
         debug!(address = %address, "Generated mock proof");
