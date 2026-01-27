@@ -44,6 +44,11 @@ pub struct BootstrapConfig {
     #[serde(with = "humantime_serde")]
     pub proof_timeout: Duration,
 
+    /// Timeout for proof service health checks (default: 10 seconds)
+    #[arg(long, env = "PROOF_HEALTH_CHECK_TIMEOUT", default_value = "10s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub proof_health_check_timeout: Duration,
+
     /// Total bootstrap timeout
     #[arg(long, env = "BOOTSTRAP_TIMEOUT", default_value = "15m", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
@@ -56,6 +61,24 @@ pub struct BootstrapConfig {
     /// Maximum retries for relayer requests
     #[arg(long, env = "RELAYER_MAX_RETRIES", default_value = "3")]
     pub relayer_max_retries: u32,
+
+    /// Timeout for relayer key registration requests (default: 3 minutes)
+    ///
+    /// This covers the time for the relayer to submit the transaction and
+    /// wait for on-chain confirmation.
+    #[arg(long, env = "RELAYER_TIMEOUT", default_value = "3m", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub relayer_timeout: Duration,
+
+    /// Cosign signature over the image digest (64 bytes r||s, hex-encoded with 0x prefix)
+    /// This is the ECDSA P-256 signature produced by cosign when signing the container image.
+    #[arg(long, env = "COSIGN_SIGNATURE")]
+    pub cosign_signature: Option<String>,
+
+    /// Cosign public key (64 or 65 bytes, hex-encoded with 0x prefix)
+    /// P-256 public key: either 64 bytes (x||y) or 65 bytes (0x04||x||y uncompressed)
+    #[arg(long, env = "COSIGN_PUBKEY")]
+    pub cosign_pubkey: Option<String>,
 }
 
 impl Default for BootstrapConfig {
@@ -70,9 +93,13 @@ impl Default for BootstrapConfig {
             proof_service_url: None,
             attestation_audience: None,
             proof_timeout: Duration::from_secs(600),
+            proof_health_check_timeout: Duration::from_secs(10),
             bootstrap_timeout: Duration::from_secs(900),
             proof_max_retries: 3,
             relayer_max_retries: 3,
+            relayer_timeout: Duration::from_secs(180),
+            cosign_signature: None,
+            cosign_pubkey: None,
         }
     }
 }
@@ -111,6 +138,19 @@ impl BootstrapConfig {
         if self.prover_mode == ProverMode::Service && self.proof_service_url.is_none() {
             return Err(crate::BootstrapError::Config(
                 "PROOF_SERVICE_URL is required when prover_mode is 'service'".into(),
+            ));
+        }
+
+        // Cosign signature and pubkey are required for on-chain verification
+        if self.cosign_signature.is_none() {
+            return Err(crate::BootstrapError::Config(
+                "COSIGN_SIGNATURE is required when bootstrap is enabled".into(),
+            ));
+        }
+
+        if self.cosign_pubkey.is_none() {
+            return Err(crate::BootstrapError::Config(
+                "COSIGN_PUBKEY is required when bootstrap is enabled".into(),
             ));
         }
 

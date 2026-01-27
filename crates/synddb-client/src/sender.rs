@@ -18,6 +18,8 @@ pub enum SendError {
     Http(reqwest::Error),
     #[error("CBOR serialization error: {0}")]
     Cbor(ciborium::ser::Error<std::io::Error>),
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
 }
 
 impl From<&Changeset> for ChangesetData {
@@ -52,13 +54,13 @@ impl ChangesetSender {
         recovery: Option<Arc<FailedBatchRecovery>>,
         attestation: Option<AttestationClient>,
         stats: StatsHandle,
-    ) -> Self {
+    ) -> Result<Self, SendError> {
         let client = Client::builder()
             .timeout(config.snapshot_request_timeout)
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(SendError::Http)?;
 
-        Self {
+        Ok(Self {
             config,
             client,
             buffer: Vec::new(),
@@ -67,7 +69,7 @@ impl ChangesetSender {
             recovery,
             attestation,
             stats,
-        }
+        })
     }
 
     pub(crate) async fn run(
@@ -224,7 +226,7 @@ impl ChangesetSender {
             .config
             .sequencer_url
             .join("changesets")
-            .expect("valid URL path");
+            .map_err(|e| SendError::InvalidUrl(e.to_string()))?;
 
         // Serialize to CBOR
         let cbor_bytes = batch.to_cbor().map_err(SendError::Cbor)?;

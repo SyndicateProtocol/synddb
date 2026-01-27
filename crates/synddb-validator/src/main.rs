@@ -76,12 +76,14 @@ async fn main() -> Result<()> {
 
         let bootstrap_config = BootstrapConfig {
             enable_key_bootstrap: true,
-            bridge_address: config.bridge_contract_address.clone(),
+            bridge_address: config.bridge_address.clone(),
             rpc_url: config.bootstrap_rpc_url.clone(),
             chain_id: config.bootstrap_chain_id,
             relayer_url: config.relayer_url.clone(),
             proof_service_url: config.proof_service_url.clone(),
             attestation_audience: config.attestation_audience.clone(),
+            cosign_signature: config.cosign_signature.clone(),
+            cosign_pubkey: config.cosign_pubkey.clone(),
             proof_timeout: config.proof_timeout,
             bootstrap_timeout: config.bootstrap_timeout,
             prover_mode: ProverMode::Service,
@@ -319,8 +321,17 @@ async fn create_fetcher(config: &ValidatorConfig) -> Result<Arc<dyn StorageFetch
             let url = config.sequencer_url.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("SEQUENCER_URL is required when fetcher_type=http")
             })?;
-            info!(url = %url, "Using HTTP fetcher");
-            let fetcher = synddb_validator::sync::providers::http::HttpFetcher::new(url);
+            info!(
+                url = %url,
+                timeout_secs = config.http_fetcher_timeout.as_secs(),
+                max_retries = config.http_fetcher_max_retries,
+                "Using HTTP fetcher"
+            );
+            let fetcher = synddb_validator::sync::providers::http::HttpFetcher::with_config(
+                url,
+                config.http_fetcher_timeout,
+                config.http_fetcher_max_retries,
+            );
             Ok(Arc::new(fetcher))
         }
         FetcherType::Gcs => {

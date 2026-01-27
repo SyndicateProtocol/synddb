@@ -60,3 +60,4 @@ LABEL "tee.launch_policy.allow_env_override"="RUST_LOG,DATABASE_PATH,SEQUENCER_U
 LABEL "tee.launch_policy.log_redirect"="always"
 
 ENTRYPOINT ["python", "-m", "app.main"]
+CMD ["run-daemon"]

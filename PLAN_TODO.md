@@ -497,3 +497,150 @@ When refreshing this TODO list, follow these steps:
 10. **Verify against crate READMEs** - Each crate's README may list planned features
 
 After updates, organize items by priority (P0/P1/P2) and update the Implementation Checklist.
+
+---
+
+## Documentation Status (Last Updated: 2025-01-05)
+
+This section tracks the accuracy of each PLAN/SPEC file compared to actual implementation.
+
+### SPEC.md - Mostly Accurate
+
+| Section | Status | Notes |
+|---------|--------|-------|
+| Architecture overview | ✅ Accurate | Two-VM TEE model correctly described |
+| Application + Client | ✅ Accurate | Client library architecture matches |
+| Sequencer Service | ✅ Accurate | Matches implementation |
+| Read Replicas / Validators | ✅ Accurate | Core functionality described correctly |
+| Verifiability Model | ✅ Accurate | SQL-as-audit-trail concept unchanged |
+| Bridge / Message Passing | ⚠️ Partial | Some features like SSE streaming unimplemented |
+
+**Status**: No major changes needed - describes design philosophy accurately.
+
+---
+
+### PLAN_SEQUENCER.md
+
+| Component | PLAN Status | Actual Status |
+|-----------|-------------|---------------|
+| HTTP Receiver | Planned | ✅ Implemented (`http_api.rs`) |
+| Batcher | Planned | ✅ Implemented (`batcher.rs`) |
+| CBOR + zstd compression | Planned | ✅ Implemented |
+| **Publishers** | | |
+| └─ GCS | Planned | ✅ Implemented (`transport/gcs.rs`) |
+| └─ Local | Planned | ✅ Implemented (`transport/local.rs`) |
+| └─ Arweave | Planned | ⚠️ Documentation only (deprioritized) |
+| └─ Celestia | Planned | ❌ Not started (deprioritized) |
+| └─ EigenDA | Planned | ❌ Not started (deprioritized) |
+| └─ IPFS | Planned | ❌ Not started (deprioritized) |
+| Graceful shutdown | Planned | ✅ Implemented |
+| TEE attestation | Planned | ✅ Implemented (`attestation.rs`) |
+| **Message Passing** | | |
+| └─ Inbound queue | Planned | ✅ Implemented (`messages/queue.rs`) |
+| └─ Outbound monitor | Planned | ✅ Implemented (`messages/outbound.rs`) |
+| └─ REST API | Planned | ✅ Implemented (`messages/api.rs`) |
+| └─ SSE streaming | Planned | ❌ Not implemented |
+| Persistent queue | Planned | ❌ Not implemented |
+| Key rotation | Planned | ❌ Not implemented |
+| Prometheus metrics | Planned | ⚠️ Stats exist, `/metrics` endpoint missing |
+
+**Status**: Core functionality implemented. DA publishers deprioritized to GCS-only.
+
+---
+
+### PLAN_VALIDATOR.md
+
+| Component | PLAN Status | Actual Status |
+|-----------|-------------|---------------|
+| Storage Syncer | Planned | ✅ Implemented (`sync/`) |
+| **Fetchers** | | |
+| └─ HTTP | Planned | ✅ Implemented (`sync/providers/http.rs`) |
+| └─ GCS | Planned | ✅ Implemented (`sync/providers/gcs.rs`) |
+| └─ Arweave | Planned | ❌ Not started (deprioritized) |
+| └─ Celestia | Planned | ❌ Not started (deprioritized) |
+| Signature Verifier | Planned | ✅ Implemented (`sync/verifier.rs`) |
+| Changeset Applier | Planned | ✅ Implemented (`apply/`) |
+| Query Server (REST) | Planned | ✅ Implemented (`http/`) |
+| Query Server (JSON-RPC) | Planned | ❌ Not implemented |
+| Query Server (WebSocket) | Planned | ❌ Not implemented |
+| Bridge Signer Mode | Planned | ✅ Implemented (`bridge/`) |
+| **TEE Integration** | | |
+| └─ ConfidentialValidator | Extensive code | ❌ Not implemented (documented only) |
+| └─ Validator key management | Extensive code | ❌ Not implemented |
+| └─ SP1 zkVM proofs | Extensive code | ❌ Not implemented |
+| Extension System | Planned | ❌ Not implemented |
+| Gap detection/retry | Planned | ✅ Implemented |
+| Prometheus metrics | Planned | ❌ `metrics.rs` is empty with TODOs |
+
+**Status**: Core sync/apply/verify implemented. Contains ~500 lines of aspirational code samples (ConfidentialValidator, Kubernetes configs) that are NOT implemented.
+
+---
+
+### PLAN_BRIDGE.md
+
+| Component | PLAN Status | Actual Status |
+|-----------|-------------|---------------|
+| Bridge.sol | Planned | ✅ Implemented |
+| ModuleCheckRegistry.sol | Planned | ✅ Implemented |
+| IModuleCheck interface | Planned | ✅ Implemented |
+| ETH/WETH handling | Planned | ✅ Implemented |
+| **Modules** | | |
+| └─ ERC20TotalSupplyCheckModule | Planned | ✅ Implemented |
+| └─ ERC20MaxSupplyIncreaseModule | Planned | ✅ Implemented |
+| └─ MessageOrderingModule | Planned | ✅ Implemented |
+| └─ ValidatorSignatureThresholdModule | Planned | ✅ Implemented |
+| **Attestation (not in original plan)** | | |
+| └─ AttestationVerifier.sol | N/A | ✅ Implemented (newer) |
+| └─ TeeKeyManager.sol | N/A | ✅ Implemented (newer) |
+| └─ GasTreasury.sol | N/A | ✅ Implemented (newer) |
+
+**Status**: Implementation has EXCEEDED the plan - more contracts exist than documented.
+
+---
+
+### PLAN_MESSAGE_PASSING.md
+
+| Component | PLAN Status | Actual Status |
+|-----------|-------------|---------------|
+| Inbound message HTTP API | Planned | ✅ Implemented |
+| Inbound SSE streaming | Planned | ❌ Not implemented |
+| Outbound message monitor | Planned | ✅ Implemented |
+| Consistency Enforcer | Extensive code | ❌ Not implemented |
+| Progressive Degradation | Extensive code | ❌ Not implemented |
+| State Commitments | Extensive code | ❌ Not implemented |
+| Recovery Manager | Extensive code | ❌ Not implemented |
+| Application Alerter | Extensive code | ❌ Not implemented |
+
+**Status**: Contains ~1000+ lines of aspirational code samples that are NOT implemented. Only basic inbound/outbound HTTP API exists.
+
+---
+
+### PLAN_DEPLOYMENT.md
+
+| Component | Status |
+|-----------|--------|
+| Docker setup | ✅ Ready |
+| Health checks | ✅ Ready |
+| Logging | ✅ Ready |
+| GCS integration | ✅ Ready |
+| TEE attestation | ⚠️ Documented with known limitations |
+| TEE key bootstrap flow | ✅ Documented |
+| App-level metrics | ❌ Not implemented |
+| Alerting | ❌ Not implemented |
+| Runbooks | ❌ Not written |
+
+**Status**: Accurate for current deployment readiness.
+
+---
+
+### Documentation Accuracy Summary
+
+| File | Accuracy | Action Needed |
+|------|----------|---------------|
+| `SPEC.md` | ✅ High | None |
+| `PLAN_SEQUENCER.md` | ✅ High | Mark DA publishers as deprioritized |
+| `PLAN_VALIDATOR.md` | ⚠️ Medium | Mark TEE code samples as future work |
+| `PLAN_BRIDGE.md` | ⚠️ Medium | Add newer attestation contracts |
+| `PLAN_MESSAGE_PASSING.md` | ⚠️ Low | Mark extensive code samples as future work |
+| `PLAN_DEPLOYMENT.md` | ✅ High | None |
+| `PLAN_TODO.md` | ✅ High | This file - keep updated |

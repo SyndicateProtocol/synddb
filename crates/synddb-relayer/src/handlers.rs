@@ -288,26 +288,41 @@ struct AttestationFields {
     tee_signing_key: alloy::primitives::Address,
 }
 
-/// Extract attestation fields from public values
+/// Extract attestation fields from ABI-encoded public values
 ///
-/// The public values struct layout:
-/// - bytes 0-31: `jwk_key_hash` (32 bytes)
-/// - bytes 32-39: `validity_window_start` (8 bytes, packed)
-/// - bytes 40-47: `validity_window_end` (8 bytes, packed)
-/// - bytes 48-79: `image_digest_hash` (32 bytes)
-/// - bytes 80-99: `tee_signing_key` (20 bytes)
-/// - byte 100: secboot (1 byte)
-/// - byte 101: `dbgstat_disabled` (1 byte)
-/// - bytes 102-133: `audience_hash` (32 bytes)
+/// The `PublicValuesStruct` is ABI-encoded by the SP1 program, meaning each field
+/// occupies a 32-byte slot regardless of its actual size:
+///
+/// | Slot | Bytes     | Field                    | Notes                           |
+/// |------|-----------|--------------------------|-------------------------------- |
+/// | 0    | 0-31      | `jwk_key_hash`           | bytes32                         |
+/// | 1    | 32-63     | `validity_window_start`  | uint64, right-aligned           |
+/// | 2    | 64-95     | `validity_window_end`    | uint64, right-aligned           |
+/// | 3    | 96-127    | `image_digest_hash`      | bytes32                         |
+/// | 4    | 128-159   | `tee_signing_key`        | address, right-aligned (140-159)|
+/// | 5    | 160-191   | `secboot`                | bool, right-aligned             |
+/// | 6    | 192-223   | `dbgstat_disabled`       | bool, right-aligned             |
+/// | 7    | 224-255   | `audience_hash`          | bytes32                         |
+/// | 8    | 256-287   | `cosign_signature_r`     | bytes32                         |
+/// | 9    | 288-319   | `cosign_signature_s`     | bytes32                         |
+/// | 10   | 320-351   | `cosign_pubkey_x`        | bytes32                         |
+/// | 11   | 352-383   | `cosign_pubkey_y`        | bytes32                         |
+///
+/// Total: 384 bytes (12 slots × 32 bytes)
 fn extract_attestation_fields(public_values: &[u8]) -> Option<AttestationFields> {
-    // Need at least 134 bytes for the full struct
-    if public_values.len() < 134 {
+    // ABI-encoded struct is 12 slots × 32 bytes = 384 bytes
+    if public_values.len() < 384 {
         return None;
     }
 
-    let image_digest: [u8; 32] = public_values[48..80].try_into().ok()?;
-    let tee_signing_key: [u8; 20] = public_values[80..100].try_into().ok()?;
-    let audience_hash: [u8; 32] = public_values[102..134].try_into().ok()?;
+    // Slot 3: image_digest_hash (bytes32, full slot)
+    let image_digest: [u8; 32] = public_values[96..128].try_into().ok()?;
+
+    // Slot 4: tee_signing_key (address is 20 bytes, right-aligned in 32-byte slot)
+    let tee_signing_key: [u8; 20] = public_values[140..160].try_into().ok()?;
+
+    // Slot 7: audience_hash (bytes32, full slot)
+    let audience_hash: [u8; 32] = public_values[224..256].try_into().ok()?;
 
     Some(AttestationFields {
         image_digest: B256::from(image_digest),
@@ -322,20 +337,20 @@ mod tests {
 
     #[test]
     fn test_extract_attestation_fields() {
-        // Create mock public values with known values
-        let mut public_values = vec![0u8; 134];
+        // Create mock ABI-encoded public values (12 slots × 32 bytes = 384 bytes)
+        let mut public_values = vec![0u8; 384];
 
-        // Set image digest at bytes 48-80
+        // Slot 3 (bytes 96-128): image_digest_hash
         let expected_digest = B256::from([0xAB; 32]);
-        public_values[48..80].copy_from_slice(expected_digest.as_slice());
+        public_values[96..128].copy_from_slice(expected_digest.as_slice());
 
-        // Set TEE signing key at bytes 80-100
+        // Slot 4 (bytes 128-160): tee_signing_key (address is right-aligned, bytes 140-160)
         let expected_key = alloy::primitives::Address::from([0xCD; 20]);
-        public_values[80..100].copy_from_slice(expected_key.as_slice());
+        public_values[140..160].copy_from_slice(expected_key.as_slice());
 
-        // Set audience hash at bytes 102-134
+        // Slot 7 (bytes 224-256): audience_hash
         let expected_audience = B256::from([0xEF; 32]);
-        public_values[102..134].copy_from_slice(expected_audience.as_slice());
+        public_values[224..256].copy_from_slice(expected_audience.as_slice());
 
         let extracted = extract_attestation_fields(&public_values);
         assert!(extracted.is_some());
@@ -348,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_extract_attestation_fields_too_short() {
-        let public_values = vec![0u8; 100]; // Too short
+        let public_values = vec![0u8; 300]; // Too short (needs 384 bytes)
         let extracted = extract_attestation_fields(&public_values);
         assert!(extracted.is_none());
     }

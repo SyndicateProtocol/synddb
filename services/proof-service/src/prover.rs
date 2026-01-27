@@ -20,10 +20,8 @@ pub struct AttestationProver {
 impl AttestationProver {
     /// Create a new prover using environment configuration
     ///
-    /// The SP1_PROVER environment variable controls which prover backend to use:
-    /// - Not set or "cpu": Use local CPU prover
-    /// - "cuda": Use local GPU prover (requires CUDA)
-    /// - "network": Use SP1 Network Prover (requires NETWORK_PRIVATE_KEY)
+    /// Uses the SP1 Network Prover which offloads proof generation to Succinct's
+    /// hosted infrastructure. Requires the `NETWORK_PRIVATE_KEY` environment variable.
     pub fn new() -> Self {
         info!("Initializing SP1 prover from environment");
         Self {
@@ -38,6 +36,8 @@ impl AttestationProver {
     /// * `jwk` - JWK public key that signed the token
     /// * `expected_audience` - Expected audience claim
     /// * `evm_public_key` - 64-byte uncompressed secp256k1 public key for EVM signing
+    /// * `cosign_signature` - 64-byte cosign signature (r || s) over the image digest
+    /// * `cosign_pubkey` - 64 or 65 byte cosign public key (P-256 / secp256r1)
     ///
     /// # Returns
     /// The SP1 proof with public values
@@ -47,6 +47,8 @@ impl AttestationProver {
         jwk: &JwkKey,
         expected_audience: &str,
         evm_public_key: &[u8; 64],
+        cosign_signature: &[u8],
+        cosign_pubkey: &[u8],
     ) -> Result<SP1ProofWithPublicValues> {
         info!("Starting proof generation");
 
@@ -56,6 +58,8 @@ impl AttestationProver {
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
         stdin.write(&evm_public_key.to_vec());
+        stdin.write(&cosign_signature.to_vec());
+        stdin.write(&cosign_pubkey.to_vec());
 
         // Setup proving and verification keys
         debug!("Setting up proving keys");
@@ -87,6 +91,8 @@ impl AttestationProver {
         jwk: &JwkKey,
         expected_audience: &str,
         evm_public_key: &[u8; 64],
+        cosign_signature: &[u8],
+        cosign_pubkey: &[u8],
     ) -> Result<Vec<u8>> {
         info!("Executing program in test mode");
 
@@ -95,6 +101,8 @@ impl AttestationProver {
         stdin.write(jwk);
         stdin.write(&expected_audience.to_string());
         stdin.write(&evm_public_key.to_vec());
+        stdin.write(&cosign_signature.to_vec());
+        stdin.write(&cosign_pubkey.to_vec());
 
         let (output, report) = self
             .client
@@ -133,14 +141,22 @@ struct JwksResponse {
     keys: Vec<JwkKey>,
 }
 
+/// Default timeout for JWKS HTTP requests (30 seconds)
+const JWKS_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl JwksCache {
     /// Create a new JWKS cache
     pub fn new(discovery_url: String, cache_ttl_secs: u64) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(JWKS_HTTP_TIMEOUT)
+            .build()
+            .expect("Failed to build HTTP client for JWKS cache");
+
         Self {
             keys: Arc::new(RwLock::new(None)),
             discovery_url,
             cache_ttl_secs,
-            client: reqwest::Client::new(),
+            client,
         }
     }
 

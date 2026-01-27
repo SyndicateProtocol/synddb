@@ -30,3 +30,7 @@ metrics-exporter-prometheus = { workspace = true }
 
 # Database
 rusqlite = { workspace = true }
+
+[features]
+default = []
+tee = ["synddb-validator/tee"]
