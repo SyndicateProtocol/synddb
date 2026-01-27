@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS markets (
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
--- Accounts table - user balances
+-- Accounts table - user balances (in cents)
+-- Default balance of 1,000,000 cents ($10,000) for demo/testing convenience
 CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,

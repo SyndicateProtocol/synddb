@@ -31,9 +31,6 @@ anyhow = { workspace = true }
 # Async runtime
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
 
-# Cryptography
-alloy = { workspace = true, features = ["signers"] }
-
 # Serialization
 ciborium = { workspace = true }
 zstd = { workspace = true }

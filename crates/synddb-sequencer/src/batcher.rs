@@ -12,13 +12,16 @@
 
 use crate::{
     config::BatchConfig,
-    signer::MessageSigner,
     transport::traits::{PublishMetadata, TransportError, TransportPublisher},
 };
 use k256::ecdsa::Signature;
 use std::{sync::Arc, time::Instant};
-use synddb_shared::types::cbor::{
-    batch::CborBatch, error::CborError, message::CborSignedMessage, verify::signature_from_bytes,
+use synddb_shared::{
+    keys::EvmKeyManager,
+    types::cbor::{
+        batch::CborBatch, error::CborError, message::CborSignedMessage,
+        verify::signature_from_bytes,
+    },
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -158,7 +161,7 @@ impl BatcherHandle {
 pub struct Batcher {
     config: BatchConfig,
     transport: Arc<dyn TransportPublisher>,
-    signer: Arc<MessageSigner>,
+    key_manager: Arc<EvmKeyManager>,
     pending: Vec<PendingMessage>,
     pending_bytes: usize,
     stats: BatchStats,
@@ -181,14 +184,14 @@ impl Batcher {
     pub fn spawn(
         config: BatchConfig,
         transport: Arc<dyn TransportPublisher>,
-        signer: Arc<MessageSigner>,
+        key_manager: Arc<EvmKeyManager>,
     ) -> BatcherHandle {
         let (tx, rx) = mpsc::channel(1024);
 
         let batcher = Self {
             config: config.clone(),
             transport,
-            signer,
+            key_manager,
             pending: Vec::new(),
             pending_bytes: 0,
             stats: BatchStats::default(),
@@ -316,7 +319,7 @@ impl Batcher {
             .unwrap()
             .as_secs();
 
-        let signer_pubkey = self.signer.public_key();
+        let signer_pubkey = self.key_manager.public_key();
 
         // Create and sign the batch
         let batch = CborBatch::new(messages, created_at, signer_pubkey, |data| {
@@ -371,7 +374,7 @@ impl Batcher {
 
         let hash = keccak256(data);
         let sig = self
-            .signer
+            .key_manager
             .sign_raw_sync(&hash.0)
             .map_err(|e| CborError::Signing(e.to_string()))?;
 

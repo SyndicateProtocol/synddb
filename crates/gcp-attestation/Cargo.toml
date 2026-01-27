@@ -1,0 +1,27 @@
+[package]
+name = "gcp-attestation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "GCP Confidential Space attestation verification library"
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+std = ["serde/std", "serde_json/std", "rsa/std", "sha2/std"]
+
+[dependencies]
+# RSA signature verification (no_std compatible)
+rsa = { version = "0.9", default-features = false, features = ["sha2"] }
+sha2 = { version = "0.10", default-features = false }
+
+# Serialization for JWT claims (no_std compatible)
+serde = { version = "1.0", default-features = false, features = [
+  "derive",
+  "alloc",
+] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }

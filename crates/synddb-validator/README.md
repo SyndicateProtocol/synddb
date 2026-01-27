@@ -41,11 +41,11 @@ SEQUENCER_PUBKEY=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed7
 SEQUENCER_URL=http://localhost:8433 \
 cargo run -p synddb-validator
 
-# Run with GCS fetcher
+# Run with GCS fetcher (select via FETCHER_TYPE)
 SEQUENCER_PUBKEY=8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5 \
 FETCHER_TYPE=gcs \
 GCS_BUCKET=my-bucket \
-cargo run -p synddb-validator --features gcs
+cargo run -p synddb-validator
 
 # With JSON logging
 RUST_LOG=debug LOG_JSON=true cargo run -p synddb-validator
@@ -172,7 +172,7 @@ STATE_DB_PATH=:memory: \
 cargo run -p synddb-validator
 
 # Build release binary
-cargo build -p synddb-validator --release --features gcs
+cargo build -p synddb-validator --release
 ```
 
 ## Storage

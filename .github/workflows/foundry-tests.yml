@@ -78,27 +78,32 @@ jobs:
 
       - name: Verify deterministic addresses
         run: |
+          # Load expected addresses from .env.defaults (single source of truth)
+          set -a
+          source .env.defaults
+          set +a
+
           # Check that addresses match expected values
           ADDRESSES=$(cat .synddb/local-addresses.json)
 
           # Verify WETH address (nonce 0)
           WETH=$(echo "$ADDRESSES" | jq -r '.contracts.weth')
-          if [ "$WETH" != "0x5FbDB2315678afecb367f032d93F642f64180aa3" ]; then
-            echo "WETH address mismatch: $WETH"
+          if [ "$WETH" != "$WETH_ADDRESS" ]; then
+            echo "WETH address mismatch: $WETH (expected $WETH_ADDRESS)"
             exit 1
           fi
 
           # Verify Bridge address (nonce 1)
           BRIDGE=$(echo "$ADDRESSES" | jq -r '.contracts.bridge')
-          if [ "$BRIDGE" != "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512" ]; then
-            echo "Bridge address mismatch: $BRIDGE"
+          if [ "$BRIDGE" != "$BRIDGE_ADDRESS" ]; then
+            echo "Bridge address mismatch: $BRIDGE (expected $BRIDGE_ADDRESS)"
             exit 1
           fi
 
           # Verify PriceOracle address (nonce 3, after grantRole)
           ORACLE=$(echo "$ADDRESSES" | jq -r '.contracts.priceOracle')
-          if [ "$ORACLE" != "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9" ]; then
-            echo "PriceOracle address mismatch: $ORACLE"
+          if [ "$ORACLE" != "$PRICE_ORACLE_ADDRESS" ]; then
+            echo "PriceOracle address mismatch: $ORACLE (expected $PRICE_ORACLE_ADDRESS)"
             exit 1
           fi
 
@@ -106,13 +111,18 @@ jobs:
 
       - name: Verify contracts are deployed
         run: |
+          # Load addresses from .env.defaults
+          set -a
+          source .env.defaults
+          set +a
+
           # Check that contracts have code at expected addresses
-          BRIDGE_CODE=$(cast code 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512 --rpc-url http://127.0.0.1:8545)
+          BRIDGE_CODE=$(cast code "$BRIDGE_ADDRESS" --rpc-url "$ANVIL_RPC_URL")
           if [ "$BRIDGE_CODE" == "0x" ]; then
             echo "Bridge contract has no code"
             exit 1
           fi
-          echo "Bridge contract verified at 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+          echo "Bridge contract verified at $BRIDGE_ADDRESS"
 
       - name: Cleanup
         if: always()

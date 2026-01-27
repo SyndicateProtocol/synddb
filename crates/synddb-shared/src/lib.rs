@@ -3,6 +3,7 @@
 //! This crate provides common types and utilities used across the `SyndDB` ecosystem:
 //!
 //! - [`gcs`]: Google Cloud Storage configuration
+//! - [`keys`]: TEE key management (secure key generation)
 //! - [`parse`]: CLI argument parsing helpers
 //! - [`prelude`]: Convenient re-exports of common types
 //! - [`runtime`]: Tokio runtime utilities
@@ -17,6 +18,7 @@
 //! ```
 
 pub mod gcs;
+pub mod keys;
 pub mod parse;
 pub mod prelude;
 pub mod runtime;

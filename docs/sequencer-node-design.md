@@ -495,7 +495,7 @@ SIGNING_KEY=<hex-private-key> ./synddb-sequencer
 
 **Usage**:
 ```bash
-SIGNING_KEY=<key> GCS_BUCKET=my-bucket ./synddb-sequencer --features gcs
+SIGNING_KEY=<key> PUBLISHER_TYPE=gcs GCS_BUCKET=my-bucket ./synddb-sequencer
 ```
 
 **Storage Layout**:

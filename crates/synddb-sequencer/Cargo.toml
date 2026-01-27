@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 # Workspace crates
 synddb-shared = { path = "../synddb-shared" }
+gcp-attestation = { path = "../gcp-attestation" }
 
 # Core async and CLI
 tokio = { workspace = true, features = ["full"] }
@@ -44,7 +45,6 @@ k256 = { workspace = true }
 hex = { workspace = true }
 
 # Utilities
-base64 = { workspace = true }
 async-trait = { workspace = true }
 strum = { workspace = true }
 
@@ -54,27 +54,23 @@ reqwest = { workspace = true }
 # Compression
 zstd = { workspace = true }
 
-# Hashing
-sha2 = { workspace = true }
-
 # Local SQLite storage
 rusqlite = { workspace = true }
 
-# Google Cloud Storage
-google-cloud-storage = { workspace = true, optional = true }
+# Google Cloud Storage (always compiled for runtime transport selection)
+google-cloud-storage = { workspace = true }
 
 [features]
 default = []
-gcs = ["google-cloud-storage"]
 
 # TODO: Implement additional DA layer transports
-# See PLAN_TODO.md for tracking and crates/synddb-sequencer/src/transport/ for implementation plans
-tee = [] # TEE-specific functionality
+# When implemented, dependencies should be non-optional for runtime selection.
+# See PLAN_TODO.md for tracking and crates/synddb-sequencer/src/transport/
+tee = []      # TEE-specific functionality
 celestia = [] # Celestia DA layer
-eigenda = [] # EigenDA layer
-ipfs = [] # IPFS storage
-arweave = [
-] # Arweave permanent storage (see transport/arweave.rs for detailed plan)
+eigenda = []  # EigenDA layer
+ipfs = []     # IPFS storage
+arweave = []  # Arweave permanent storage
 
 [dev-dependencies]
 tempfile = "3.24.0"

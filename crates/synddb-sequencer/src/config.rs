@@ -94,13 +94,6 @@ pub struct SequencerConfig {
     #[arg(long, env = "BIND_ADDRESS", default_value = "0.0.0.0:8433")]
     pub bind_address: SocketAddr,
 
-    /// Private key for signing messages (hex-encoded, without 0x prefix)
-    ///
-    /// This key is used to sign all sequenced messages. The corresponding
-    /// public address can be verified by clients and on-chain contracts.
-    #[arg(long, env = "SIGNING_KEY")]
-    pub signing_key: String,
-
     /// Request timeout for HTTP operations
     #[arg(long, env = "REQUEST_TIMEOUT", default_value = "30s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
@@ -200,18 +193,8 @@ impl SequencerConfig {
     }
 
     /// Create config with defaults for testing
-    ///
-    /// Uses `parse_from` with a dummy signing key to get clap defaults,
-    /// then replaces with the provided key.
-    pub fn with_signing_key(signing_key: impl Into<String>) -> Self {
-        // We need to provide the required --signing-key arg
-        let mut config = Self::parse_from([
-            "synddb-sequencer",
-            "--signing-key",
-            "0000000000000000000000000000000000000000000000000000000000000001",
-        ]);
-        config.signing_key = signing_key.into();
-        config
+    pub fn for_testing() -> Self {
+        Self::parse_from(["synddb-sequencer"])
     }
 
     // =========================================================================
@@ -289,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_config_defaults() {
-        let config = SequencerConfig::with_signing_key("a".repeat(64));
+        let config = SequencerConfig::for_testing();
 
         assert_eq!(
             config.bind_address,

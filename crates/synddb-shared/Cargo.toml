@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 # Ethereum types and URL parsing
-alloy = { workspace = true, features = ["signers"] }
+alloy = { workspace = true, features = ["signers", "signer-local"] }
 url = { workspace = true }
 
 # Serialization for shared types

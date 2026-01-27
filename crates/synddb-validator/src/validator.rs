@@ -72,8 +72,12 @@ impl Validator {
         shutdown_rx: watch::Receiver<bool>,
     ) -> Result<Self> {
         // Parse sequencer public key from hex
-        let verifier = SignatureVerifier::from_hex(&config.sequencer_pubkey)
-            .context("Invalid sequencer public key")?;
+        let pubkey = config
+            .sequencer_pubkey
+            .as_ref()
+            .context("sequencer_pubkey must be set (call resolve_sequencer_pubkey first)")?;
+        let verifier =
+            SignatureVerifier::from_hex(pubkey).context("Invalid sequencer public key")?;
 
         // Initialize components
         let applier = ChangesetApplier::new(&config.database_path)?;
@@ -89,7 +93,7 @@ impl Validator {
         let pending_store = PendingChangesetStore::new(pending_conn)?;
 
         info!(
-            sequencer_pubkey = %config.sequencer_pubkey,
+            sequencer_pubkey = %pubkey,
             database = %config.database_path,
             gap_retry_count = config.gap_retry_count,
             gap_skip_on_failure = config.gap_skip_on_failure,

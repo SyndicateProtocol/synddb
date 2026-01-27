@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.91-bookworm AS builder
+FROM rust:1.92-trixie AS builder
 
 # Install clang for bindgen (needed for rusqlite bundled feature)
 RUN apt-get update && apt-get install -y clang && rm -rf /var/lib/apt/lists/*
@@ -16,7 +16,7 @@ COPY tests ./tests
 RUN cargo build --release -p prediction-market -p synddb-sequencer
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \

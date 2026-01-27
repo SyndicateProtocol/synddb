@@ -23,9 +23,12 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Load .env if present (for optional local overrides)
+# Load .env.defaults for local development configuration
+# To override values, create .env (gitignored) and source it before running just,
+# or use direnv with .envrc
 
 set dotenv-load := true
+set dotenv-filename := ".env.defaults"
 
 # Export all variables as environment variables
 
@@ -39,49 +42,26 @@ mod contracts 'contracts/mod.just'
 mod examples 'examples/mod.just'
 
 # ============================================================================
-# Shared Configuration (Single Source of Truth)
+# Configuration from .env.defaults
 # ============================================================================
+# All values are loaded from .env.defaults. To override, set environment
+# variables before running just, or create .env and source it.
 #
-# All local development defaults are defined here. No .env file needed!
-# To override any value, create a .env file (gitignored) with your custom values.
-#
-# ============================================================================
-# Well-known Anvil addresses and keys (DO NOT USE IN PRODUCTION)
-# These are deterministic test accounts - safe to commit
+# These variables reference the dotenv values for use in recipes:
 
-anvil_key_0 := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-anvil_key_1 := "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
-anvil_address_0 := "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-anvil_address_1 := "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
-
-# Sequencer public key (derived from anvil_key_0)
-
-sequencer_pubkey := "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5"
-
-# Deterministic contract addresses (from deploy-local.sh with Anvil account 0)
-
-bridge_address := "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
-weth_address := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
-price_oracle_address := "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
-
-# Network configuration
-
-anvil_rpc_url := "http://127.0.0.1:8545"
-anvil_chain_id := "31337"
-
-# Default ports
-
-anvil_port := "8545"
-sequencer_port := "8433"
-validator_port := "8080"
-
-# Data directories
-
-data_dir := "./data"
-
-# Logging (can override with RUST_LOG env var)
-
-rust_log := "info"
+anvil_key_0 := env_var('ANVIL_KEY_0')
+anvil_key_1 := env_var('ANVIL_KEY_1')
+anvil_address_0 := env_var('ANVIL_ADDRESS_0')
+anvil_address_1 := env_var('ANVIL_ADDRESS_1')
+bridge_address := env_var('BRIDGE_ADDRESS')
+weth_address := env_var('WETH_ADDRESS')
+price_oracle_address := env_var('PRICE_ORACLE_ADDRESS')
+anvil_rpc_url := env_var('ANVIL_RPC_URL')
+anvil_chain_id := env_var('ANVIL_CHAIN_ID')
+anvil_port := env_var('ANVIL_PORT')
+sequencer_port := env_var('SEQUENCER_PORT')
+validator_port := env_var('VALIDATOR_PORT')
+data_dir := env_var('DATA_DIR')
 
 # ============================================================================
 # Default & Help
@@ -90,6 +70,89 @@ rust_log := "info"
 # Show available commands (grouped)
 default:
     @just --list --unsorted
+
+# ============================================================================
+# Info
+# ============================================================================
+
+# Show configured addresses and keys
+[group('info')]
+info:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Anvil Accounts ==="
+    echo "Account 0 (admin/deployer):"
+    echo "  Address: {{ anvil_address_0 }}"
+    echo "  Key:     {{ anvil_key_0 }}"
+    echo ""
+    echo "Account 1 (sequencer):"
+    echo "  Address: {{ anvil_address_1 }}"
+    echo "  Key:     {{ anvil_key_1 }}"
+    echo ""
+    echo "=== Contract Addresses ==="
+    echo "  WETH:         {{ weth_address }}"
+    echo "  Bridge:       {{ bridge_address }}"
+    echo "  Price Oracle: {{ price_oracle_address }}"
+    echo ""
+    echo "=== Service URLs ==="
+    echo "  Anvil RPC:  {{ anvil_rpc_url }}"
+    echo "  Sequencer:  http://127.0.0.1:{{ sequencer_port }}"
+    echo "  Validator:  http://127.0.0.1:{{ validator_port }}"
+
+# Fetch live status from services (sequencer, validator, validator-signer, or all)
+
+# Usage: just service-status [service]  (default: all)
+[group('info')]
+service-status service="all":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    fetch_status() {
+        local name="$1" url="$2"
+        echo "=== $name ==="
+        if curl -s "$url" > /tmp/service_status.json 2>/dev/null; then
+            jq '.' /tmp/service_status.json
+            rm -f /tmp/service_status.json
+        else
+            echo "(not running)"
+        fi
+        echo ""
+    }
+    case "{{ service }}" in
+        all)
+            fetch_status "Sequencer Status" "http://127.0.0.1:{{ sequencer_port }}/status"
+            fetch_status "Validator Status" "http://127.0.0.1:{{ validator_port }}/status"
+            fetch_status "Validator Signer Info" "http://127.0.0.1:8081/info"
+            ;;
+        sequencer)
+            fetch_status "Sequencer Status" "http://127.0.0.1:{{ sequencer_port }}/status"
+            ;;
+        validator)
+            fetch_status "Validator Status" "http://127.0.0.1:{{ validator_port }}/status"
+            ;;
+        validator-signer)
+            fetch_status "Validator Signer Info" "http://127.0.0.1:8081/info"
+            ;;
+        *)
+            echo "Unknown service: {{ service }}"
+            echo "Valid services: all, sequencer, validator, validator-signer"
+            exit 1
+            ;;
+    esac
+
+# Alias: Fetch sequencer status
+[group('info')]
+info-sequencer:
+    @just service-status sequencer
+
+# Alias: Fetch validator status
+[group('info')]
+info-validator:
+    @just service-status validator
+
+# Alias: Fetch validator signer info (bridge mode)
+[group('info')]
+info-validator-signer:
+    @just service-status validator-signer
 
 # ============================================================================
 # Local Development
@@ -129,31 +192,104 @@ deploy-fresh:
 anvil:
     anvil --port {{ anvil_port }}
 
-# Run sequencer with local defaults
+# Fund a dynamically generated wallet from Anvil
+
+# Usage: just fund-wallet <address> [amount_eth]
+[group('components')]
+fund-wallet address amount="1":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Funding {{ address }} with {{ amount }} ETH..."
+    cast send --rpc-url {{ anvil_rpc_url }} \
+        --private-key {{ anvil_key_0 }} \
+        "{{ address }}" \
+        --value "{{ amount }}ether"
+    BALANCE=$(cast balance --rpc-url {{ anvil_rpc_url }} "{{ address }}" --ether)
+    echo "Done. New balance: $BALANCE ETH"
+
+# Fund service wallets from Anvil (sequencer, validator-signer, or all)
+
+# Usage: just fund-service [service] [amount_eth]  (default: all, 1 ETH)
+[group('components')]
+fund-service service="all" amount="1":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    fund_one() {
+        local name="$1" url="$2" jq_path="$3"
+        echo "=== Funding $name ==="
+        RESPONSE=$(curl -s "$url" 2>/dev/null) || true
+        if [ -z "$RESPONSE" ]; then
+            echo "(not running)"
+            echo ""
+            return 0
+        fi
+        SIGNER_ADDRESS=$(echo "$RESPONSE" | jq -r "$jq_path" 2>/dev/null) || true
+        if [ -z "$SIGNER_ADDRESS" ] || [ "$SIGNER_ADDRESS" = "null" ]; then
+            echo "(no signer address available)"
+            echo ""
+            return 0
+        fi
+        echo "Address: $SIGNER_ADDRESS"
+        cast send --rpc-url {{ anvil_rpc_url }} \
+            --private-key {{ anvil_key_0 }} \
+            "$SIGNER_ADDRESS" \
+            --value "{{ amount }}ether" > /dev/null
+        BALANCE=$(cast balance --rpc-url {{ anvil_rpc_url }} "$SIGNER_ADDRESS" --ether)
+        echo "Funded {{ amount }} ETH. New balance: $BALANCE ETH"
+        echo ""
+    }
+    case "{{ service }}" in
+        all)
+            fund_one "Sequencer" "http://127.0.0.1:{{ sequencer_port }}/status" ".signer_address"
+            fund_one "Validator Signer" "http://127.0.0.1:8081/info" ".signer"
+            ;;
+        sequencer)
+            fund_one "Sequencer" "http://127.0.0.1:{{ sequencer_port }}/status" ".signer_address"
+            ;;
+        validator-signer)
+            fund_one "Validator Signer" "http://127.0.0.1:8081/info" ".signer"
+            ;;
+        *)
+            echo "Unknown service: {{ service }}"
+            echo "Valid services: all, sequencer, validator-signer"
+            exit 1
+            ;;
+    esac
+
+# Alias: Fund the sequencer's dynamically generated wallet
+[group('components')]
+fund-sequencer amount="1":
+    @just fund-service sequencer "{{ amount }}"
+
+# Alias: Fund the validator's bridge signer wallet
+[group('components')]
+fund-validator amount="1":
+    @just fund-service validator-signer "{{ amount }}"
+
+# Run sequencer (key is generated at startup)
 [group('components')]
 sequencer:
     mkdir -p {{ data_dir }}
-    SIGNING_KEY={{ anvil_key_0 }} \
     BIND_ADDRESS=127.0.0.1:{{ sequencer_port }} \
     DATABASE_PATH={{ data_dir }}/sequencer.db \
     cargo run -p synddb-sequencer --release
 
-# Run validator with local defaults
+# Run validator with local defaults (fetches pubkey from sequencer)
 [group('components')]
 validator:
     mkdir -p {{ data_dir }}
-    SEQUENCER_PUBKEY={{ sequencer_pubkey }} \
     SEQUENCER_URL=http://127.0.0.1:{{ sequencer_port }} \
     DATABASE_PATH={{ data_dir }}/validator.db \
     STATE_DB_PATH={{ data_dir }}/validator_state.db \
     PENDING_CHANGESETS_DB_PATH={{ data_dir }}/pending_changesets.db \
     cargo run -p synddb-validator --release
 
-# Run validator with bridge signer enabled
+# Run validator with bridge signer enabled (key generated at startup, fetches pubkey from sequencer)
+
+# Note: If on-chain operations are needed, run `just fund-sequencer` after startup
 [group('components')]
 validator-bridge:
     mkdir -p {{ data_dir }}
-    SEQUENCER_PUBKEY={{ sequencer_pubkey }} \
     SEQUENCER_URL=http://127.0.0.1:{{ sequencer_port }} \
     DATABASE_PATH={{ data_dir }}/validator.db \
     STATE_DB_PATH={{ data_dir }}/validator_state.db \
@@ -161,7 +297,6 @@ validator-bridge:
     BRIDGE_SIGNER=true \
     BRIDGE_CONTRACT={{ bridge_address }} \
     BRIDGE_CHAIN_ID=31337 \
-    BRIDGE_SIGNING_KEY={{ anvil_key_0 }} \
     cargo run -p synddb-validator --release
 
 # ============================================================================
@@ -599,3 +734,91 @@ verify-signatures tag="edge":
 
     echo ""
     echo "=== All Signatures Verified! ==="
+
+# Base images for reproducible builds (update version tags here when upgrading)
+
+repro_rust_image := "rust:1.92-trixie"
+repro_debian_image := "debian:trixie-slim"
+repro_distroless_image := "gcr.io/distroless/cc-debian13"
+
+# Check for newer base image digests
+[group('reproducible')]
+check-digests:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== Checking Base Image Digests ==="
+    echo ""
+    echo "Fetching latest digests from registries..."
+    echo ""
+
+    RUST_LATEST=$(docker manifest inspect {{ repro_rust_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest' 2>/dev/null || echo "failed to fetch")
+    DEBIAN_LATEST=$(docker manifest inspect {{ repro_debian_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest' 2>/dev/null || echo "failed to fetch")
+    DISTROLESS_LATEST=$(docker manifest inspect {{ repro_distroless_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest' 2>/dev/null || echo "failed to fetch")
+
+    echo "{{ repro_rust_image }}"
+    echo "  Latest: $RUST_LATEST"
+    CURRENT=$(grep 'ARG RUST_IMAGE_DIGEST=' docker/reproducible/sequencer.Dockerfile | head -1 | cut -d= -f2)
+    echo "  Current: $CURRENT"
+    [ "$RUST_LATEST" = "$CURRENT" ] && echo "  ✓ Up to date" || echo "  ⚠ Update available"
+    echo ""
+
+    echo "{{ repro_debian_image }}"
+    echo "  Latest: $DEBIAN_LATEST"
+    CURRENT=$(grep 'ARG DEBIAN_IMAGE_DIGEST=' docker/reproducible/sequencer.Dockerfile | head -1 | cut -d= -f2)
+    echo "  Current: $CURRENT"
+    [ "$DEBIAN_LATEST" = "$CURRENT" ] && echo "  ✓ Up to date" || echo "  ⚠ Update available"
+    echo ""
+
+    echo "{{ repro_distroless_image }}"
+    echo "  Latest: $DISTROLESS_LATEST"
+    CURRENT=$(grep 'ARG DISTROLESS_IMAGE_DIGEST=' docker/reproducible/sequencer.Dockerfile | head -1 | cut -d= -f2)
+    echo "  Current: $CURRENT"
+    [ "$DISTROLESS_LATEST" = "$CURRENT" ] && echo "  ✓ Up to date" || echo "  ⚠ Update available"
+
+# Update base image digests in reproducible Dockerfiles
+[confirm("Update all digest pins in reproducible Dockerfiles?")]
+[group('reproducible')]
+update-digests:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== Updating Base Image Digests ==="
+    echo ""
+
+    RUST=$(docker manifest inspect {{ repro_rust_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest')
+    DEBIAN=$(docker manifest inspect {{ repro_debian_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest')
+    DISTROLESS=$(docker manifest inspect {{ repro_distroless_image }} -v 2>/dev/null | jq -r '.Descriptor.digest // .digest')
+
+    if [ -z "$RUST" ] || [ -z "$DEBIAN" ] || [ -z "$DISTROLESS" ]; then
+        echo "Error: Failed to fetch one or more digests"
+        exit 1
+    fi
+
+    echo "New digests:"
+    echo "  Rust:       $RUST"
+    echo "  Debian:     $DEBIAN"
+    echo "  Distroless: $DISTROLESS"
+    echo ""
+
+    # Detect OS for sed compatibility
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        SED_INPLACE="sed -i ''"
+    else
+        SED_INPLACE="sed -i"
+    fi
+
+    for f in docker/reproducible/*.Dockerfile; do
+        echo "Updating $f..."
+        $SED_INPLACE "s|ARG RUST_IMAGE_DIGEST=.*|ARG RUST_IMAGE_DIGEST=${RUST}|" "$f"
+        $SED_INPLACE "s|ARG DEBIAN_IMAGE_DIGEST=.*|ARG DEBIAN_IMAGE_DIGEST=${DEBIAN}|" "$f"
+        $SED_INPLACE "s|ARG DISTROLESS_IMAGE_DIGEST=.*|ARG DISTROLESS_IMAGE_DIGEST=${DISTROLESS}|" "$f"
+    done
+
+    echo ""
+    echo "=== Digests Updated ==="
+    echo ""
+    echo "Next steps:"
+    echo "  1. Review changes: git diff docker/reproducible/"
+    echo "  2. Build and test: just repro-all"
+    echo "  3. Commit: git add docker/reproducible/ && git commit -m 'chore: update base image digests'"

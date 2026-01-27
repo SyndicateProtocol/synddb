@@ -243,10 +243,16 @@ jobs:
             fi
             echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            # Branch push: sha + edge (edge = latest on main)
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            # Main branch push: sha + edge
             echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA,$REGISTRY/synddb-sequencer:edge" >> $GITHUB_OUTPUT
             echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA,$REGISTRY/synddb-validator:edge" >> $GITHUB_OUTPUT
+            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            # Non-main branch push: sha only (no edge to avoid overwriting)
+            echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
           else

@@ -1,5 +1,5 @@
 # Build stage for Rust components
-FROM rust:1.91-bookworm AS rust-builder
+FROM rust:1.92-trixie AS rust-builder
 
 # Install clang for bindgen (needed for rusqlite bundled feature)
 RUN apt-get update && apt-get install -y clang && rm -rf /var/lib/apt/lists/*
@@ -18,7 +18,7 @@ RUN cargo build --release -p synddb-sequencer && \
     cargo build --release -p price-oracle-validator
 
 # Python application stage
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-trixie
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \

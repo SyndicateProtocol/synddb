@@ -5,6 +5,23 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, time::Duration};
 use strum::{EnumIter, IntoEnumIterator};
 
+/// Response from the sequencer's `/status` endpoint
+#[derive(Debug, Deserialize)]
+struct SequencerStatus {
+    #[allow(dead_code)]
+    current_sequence: u64,
+    #[allow(dead_code)]
+    signer_address: String,
+    signer_pubkey: String,
+}
+
+/// Fetch the sequencer's public key from its `/status` endpoint
+async fn fetch_sequencer_pubkey(sequencer_url: &str) -> Result<String, reqwest::Error> {
+    let url = format!("{}/status", sequencer_url.trim_end_matches('/'));
+    let response: SequencerStatus = reqwest::get(&url).await?.json().await?;
+    Ok(response.signer_pubkey)
+}
+
 /// Well-known addresses for local Anvil development.
 ///
 /// These addresses are deterministic when deploying with `./scripts/deploy-local.sh`.
@@ -21,9 +38,6 @@ pub mod local_defaults {
 
     /// `PriceOracle` address (deployed at nonce 3 from Anvil account 0)
     pub const PRICE_ORACLE: &str = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9";
-
-    /// Sequencer public key (corresponds to Anvil account 0 private key)
-    pub const SEQUENCER_PUBKEY: &str = "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5";
 }
 
 /// Available fetcher types for retrieving messages from the storage layer
@@ -90,9 +104,12 @@ pub struct ValidatorConfig {
     /// Expected sequencer public key (for signature verification)
     ///
     /// This should be the 64-byte uncompressed public key in hex format (128 hex chars),
-    /// with optional "0x" prefix. The sequencer logs its public key at startup.
+    /// with optional "0x" prefix.
+    ///
+    /// If not provided, the validator will fetch the public key from the sequencer's
+    /// `/status` endpoint at startup (requires `--sequencer-url` to be set).
     #[arg(long, env = "SEQUENCER_PUBKEY")]
-    pub sequencer_pubkey: String,
+    pub sequencer_pubkey: Option<String>,
 
     /// Fetcher type for retrieving messages from storage layer
     #[arg(long, env = "FETCHER_TYPE", value_enum, default_value = "http")]
@@ -158,10 +175,6 @@ pub struct ValidatorConfig {
     #[arg(long, env = "BRIDGE_CHAIN_ID")]
     pub bridge_chain_id: Option<u64>,
 
-    /// Signing key for bridge operations (hex private key, required if --bridge-signer)
-    #[arg(long, env = "BRIDGE_SIGNING_KEY")]
-    pub bridge_signing_key: Option<String>,
-
     /// Endpoint to serve signatures for relayers
     #[arg(
         long,
@@ -211,6 +224,24 @@ impl ValidatorConfig {
         ])
     }
 
+    /// Get the sequencer public key, either from config or by fetching from sequencer
+    ///
+    /// Returns an error if neither `sequencer_pubkey` nor `sequencer_url` is set.
+    pub async fn resolve_sequencer_pubkey(&self) -> Result<String, String> {
+        if let Some(ref pubkey) = self.sequencer_pubkey {
+            return Ok(pubkey.clone());
+        }
+
+        // Fetch from sequencer
+        let url = self.sequencer_url.as_ref().ok_or(
+            "Either --sequencer-pubkey or --sequencer-url must be set for pubkey discovery",
+        )?;
+
+        fetch_sequencer_pubkey(url)
+            .await
+            .map_err(|e| format!("Failed to fetch public key from sequencer: {e}"))
+    }
+
     /// Check if bridge signer mode is enabled
     pub const fn is_bridge_signer(&self) -> bool {
         self.bridge_signer
@@ -220,6 +251,7 @@ impl ValidatorConfig {
     ///
     /// Returns an error if bridge signer is enabled but required fields are missing.
     /// When chain ID is 31337 (Anvil), uses local development defaults for missing values.
+    /// Note: signing key is generated automatically inside the TEE, not provided via config.
     pub fn validate_bridge_config(&self) -> Result<(), String> {
         if !self.bridge_signer {
             return Ok(());
@@ -233,10 +265,6 @@ impl ValidatorConfig {
 
         if self.bridge_chain_id.is_none() {
             return Err("--bridge-chain-id is required when --bridge-signer is enabled".into());
-        }
-
-        if self.bridge_signing_key.is_none() {
-            return Err("--bridge-signing-key is required when --bridge-signer is enabled".into());
         }
 
         Ok(())
@@ -334,17 +362,13 @@ impl ValidatorConfig {
     }
 
     /// Configure bridge signer mode
+    ///
+    /// Note: signing key is generated automatically inside the TEE.
     #[must_use]
-    pub fn with_bridge_signer(
-        mut self,
-        contract: impl Into<String>,
-        chain_id: u64,
-        signing_key: impl Into<String>,
-    ) -> Self {
+    pub fn with_bridge_signer(mut self, contract: impl Into<String>, chain_id: u64) -> Self {
         self.bridge_signer = true;
         self.bridge_contract = Some(contract.into());
         self.bridge_chain_id = Some(chain_id);
-        self.bridge_signing_key = Some(signing_key.into());
         self
     }
 }
@@ -356,6 +380,14 @@ mod tests {
     // 64-byte uncompressed public key corresponding to test private key
     // ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
     const TEST_PUBKEY: &str = "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5";
+
+    /// Clear all bridge-related env vars that might be set by .env.defaults
+    fn clear_bridge_env_vars() {
+        std::env::remove_var("BRIDGE_SIGNER");
+        std::env::remove_var("BRIDGE_CONTRACT");
+        std::env::remove_var("BRIDGE_CHAIN_ID");
+        std::env::remove_var("BRIDGE_SIGNATURE_ENDPOINT");
+    }
 
     #[test]
     fn test_config_defaults() {
@@ -393,7 +425,7 @@ mod tests {
     fn test_config_test_helper() {
         let config = ValidatorConfig::with_sequencer_pubkey(TEST_PUBKEY);
 
-        assert_eq!(config.sequencer_pubkey, TEST_PUBKEY);
+        assert_eq!(config.sequencer_pubkey, Some(TEST_PUBKEY.to_string()));
         assert_eq!(config.database_path, ":memory:");
     }
 
@@ -408,8 +440,6 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678",
             "--bridge-chain-id",
             "1",
-            "--bridge-signing-key",
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         ]);
 
         assert!(config.bridge_signer);
@@ -418,12 +448,14 @@ mod tests {
             Some("0x1234567890abcdef1234567890abcdef12345678".to_string())
         );
         assert_eq!(config.bridge_chain_id, Some(1));
-        assert!(config.bridge_signing_key.is_some());
         assert!(config.validate_bridge_config().is_ok());
     }
 
     #[test]
     fn test_bridge_signer_validation_missing_contract() {
+        // Clear env vars that might be set by .env.defaults
+        clear_bridge_env_vars();
+
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
             "--sequencer-pubkey",
@@ -471,8 +503,6 @@ mod tests {
             "--bridge-signer",
             "--bridge-chain-id",
             "31337",
-            "--bridge-signing-key",
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         ]);
 
         assert_eq!(
@@ -485,6 +515,9 @@ mod tests {
 
     #[test]
     fn test_bridge_contract_local_fallback_non_anvil() {
+        // Clear env vars that might be set by .env.defaults
+        clear_bridge_env_vars();
+
         // When chain ID is NOT 31337, bridge contract should NOT use local default
         let config = ValidatorConfig::parse_from([
             "synddb-validator",
@@ -493,8 +526,6 @@ mod tests {
             "--bridge-signer",
             "--bridge-chain-id",
             "1", // Mainnet
-            "--bridge-signing-key",
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         ]);
 
         assert_eq!(config.bridge_contract_with_local_fallback(), None);
@@ -514,8 +545,6 @@ mod tests {
             "31337",
             "--bridge-contract",
             "0x1111111111111111111111111111111111111111",
-            "--bridge-signing-key",
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         ]);
 
         assert_eq!(

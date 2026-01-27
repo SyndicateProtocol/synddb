@@ -42,8 +42,8 @@ synddb-client (App TEE)
 # Run with a signing key (required)
 SIGNING_KEY=<hex-private-key> cargo run -p synddb-sequencer
 
-# With GCS persistence
-SIGNING_KEY=<key> GCS_BUCKET=my-bucket cargo run -p synddb-sequencer --features gcs
+# With GCS persistence (select via PUBLISHER_TYPE)
+SIGNING_KEY=<key> PUBLISHER_TYPE=gcs GCS_BUCKET=my-bucket cargo run -p synddb-sequencer
 
 # With JSON logging
 SIGNING_KEY=<key> RUST_LOG=debug RUST_LOG_JSON=true cargo run -p synddb-sequencer
@@ -55,7 +55,8 @@ SIGNING_KEY=<key> RUST_LOG=debug RUST_LOG_JSON=true cargo run -p synddb-sequence
 |----------|----------|---------|-------------|
 | `SIGNING_KEY` | Yes | - | Hex-encoded secp256k1 private key |
 | `BIND_ADDRESS` | No | `0.0.0.0:8433` | HTTP server bind address |
-| `GCS_BUCKET` | No | - | GCS bucket for persistence (requires `gcs` feature) |
+| `PUBLISHER_TYPE` | No | `local` | Transport type: `local` (SQLite) or `gcs` |
+| `GCS_BUCKET` | No | - | GCS bucket for persistence (when `PUBLISHER_TYPE=gcs`) |
 | `GCS_PREFIX` | No | `sequencer` | Path prefix within GCS bucket |
 | `REQUEST_TIMEOUT` | No | `30s` | Request timeout for HTTP operations |
 | `MAX_MESSAGE_SIZE` | No | `10485760` | Maximum message size in bytes (10MB) |
@@ -118,16 +119,16 @@ curl -X POST http://localhost:8080/withdrawals \
 | `attestation` | TEE attestation token verification (GCP Confidential Space) |
 | `publish` | Pluggable storage backends (GCS, mock) |
 
-## Features
+## Transports
 
-| Feature | Description |
-|---------|-------------|
-| `gcs` | Enable Google Cloud Storage publisher |
-| `tee` | Enable TEE attestation verification |
-| `celestia` | Celestia DA publisher (stub) |
-| `eigenda` | EigenDA publisher (stub) |
-| `ipfs` | IPFS publisher (stub) |
-| `arweave` | Arweave publisher (stub) |
+Storage transports are selected at runtime via `PUBLISHER_TYPE`:
+
+| Transport | Description |
+|-----------|-------------|
+| `local` (default) | SQLite-based local storage |
+| `gcs` | Google Cloud Storage |
+
+Future transports (Celestia, EigenDA, Arweave) will be added as runtime options.
 
 ## Development
 
@@ -140,7 +141,7 @@ SIGNING_KEY=ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
   cargo run -p synddb-sequencer
 
 # Build release binary
-cargo build -p synddb-sequencer --release --features gcs
+cargo build -p synddb-sequencer --release
 ```
 
 ## Storage Layout

@@ -579,19 +579,24 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use tower::ServiceExt;
 
-    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
-
     fn test_router() -> Router {
-        // Use a unique temp file for each test to avoid conflicts
-        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        // Use atomic counter + process ID for guaranteed uniqueness across
+        // concurrent test threads and processes
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let db_path = format!(
             "/tmp/prediction_market_test_{}_{}.db",
             std::process::id(),
-            counter
+            id
         );
-        // Remove any existing file
+        // Remove any existing files (including WAL files from previous runs)
         let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(format!("{db_path}-shm"));
+        let _ = std::fs::remove_file(format!("{db_path}-wal"));
         // Initialize schema
+        // Note: PredictionMarket uses Box::leak, so connections remain open for process
+        // lifetime. Temp files accumulate in /tmp but are cleaned by the OS on reboot.
+        // For production test suites, consider using in-memory databases instead.
         let _ = PredictionMarket::new(&db_path, None).unwrap();
         create_router(db_path, None)
     }
