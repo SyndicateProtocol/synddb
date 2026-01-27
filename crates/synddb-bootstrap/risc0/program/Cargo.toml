@@ -1,0 +1,36 @@
+[package]
+name = "gcp-cs-attestation-risc0-program"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone crate (uses alloy 1.0 for RISC Zero compatibility)
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "gcp-cs-attestation-risc0-program"
+path = "src/main.rs"
+# Only build the binary when zkvm feature is enabled (built by risc0-build for zkVM target)
+required-features = ["zkvm"]
+
+[features]
+default = ["zkvm"]
+# Enable std for use outside zkVM (e.g., proof-service decoding outputs)
+std = []
+# Enable zkVM dependencies (disabled when used as a library)
+zkvm = ["risc0-zkvm", "gcp-attestation"]
+
+[dependencies]
+# Solidity types for PublicValuesStruct (no_std compatible core crates)
+alloy-primitives = { version = "1.5", default-features = false }
+alloy-sol-types = { version = "1.4", default-features = false }
+
+# zkVM runtime (only needed when building the RISC Zero program binary)
+# default-features = false is REQUIRED for guest programs
+risc0-zkvm = { version = "3.0.4", default-features = false, optional = true }
+
+# Attestation verification (only needed when building the RISC Zero program binary)
+gcp-attestation = { path = "../../../gcp-attestation", default-features = false, optional = true }

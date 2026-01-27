@@ -1,13 +1,13 @@
 # Proof Service
 
-SP1 proof generation service for TEE attestation verification using the Succinct Network Prover.
+RISC Zero GPU proof generation service for TEE attestation verification.
 
-This service receives GCP Confidential Space attestation tokens from TEE services (sequencers/validators) and generates SP1 zero-knowledge proofs that can be verified on-chain. The proofs attest that:
+This service receives GCP Confidential Space attestation tokens from TEE services (sequencers/validators) and generates RISC Zero zero-knowledge proofs that can be verified on-chain. The proofs attest that:
 
 1. The JWT token was signed by Google's JWKS keys
 2. The TEE is running the expected container image
 3. Secure boot is enabled and debug mode is disabled
-4. The cosign signature over the image digest is valid
+4. The image signature is valid (secp256k1 ECDSA for on-chain ecrecover)
 
 ## Architecture
 
@@ -17,11 +17,11 @@ TEE Service                    Proof Service                  On-Chain
     │  POST /prove                 │                              │
     │  {jwt_token, audience,       │                              │
     │   evm_public_key,            │                              │
-    │   cosign_signature,          │                              │
-    │   cosign_pubkey}             │                              │
+    │   image_signature}           │                              │
     ├─────────────────────────────►│                              │
     │                              │  Fetch JWKS from Google      │
-    │                              │  Generate SP1 proof (network)│
+    │                              │  Generate RISC Zero proof    │
+    │                              │  (local GPU)                 │
     │                              │                              │
     │  {public_values, proof,      │                              │
     │   tee_address}               │                              │
@@ -31,7 +31,7 @@ TEE Service                    Proof Service                  On-Chain
     │  (public_values, proof)      │                              │
     ├─────────────────────────────────────────────────────────────►│
     │                              │                  Verify proof │
-    │                              │         Verify cosign (P256) │
+    │                              │        Verify image signature │
     │                              │              Register TEE key │
 ```
 
@@ -47,8 +47,7 @@ Generate a proof for an attestation token.
   "jwt_token": "eyJ...",
   "expected_audience": "https://...",
   "evm_public_key": "0x...",
-  "cosign_signature": "0x...",
-  "cosign_pubkey": "0x..."
+  "image_signature": "0x..."
 }
 ```
 
@@ -57,8 +56,7 @@ Generate a proof for an attestation token.
 | `jwt_token` | string | Raw JWT attestation token from GCP Confidential Space |
 | `expected_audience` | string | Expected audience claim in the JWT |
 | `evm_public_key` | hex string | 64-byte uncompressed secp256k1 public key (no 0x04 prefix) |
-| `cosign_signature` | hex string | 64-byte ECDSA P-256 signature (r \|\| s) over image digest |
-| `cosign_pubkey` | hex string | 64 or 65-byte P-256 public key (x \|\| y or 0x04 \|\| x \|\| y) |
+| `image_signature` | hex string | 65-byte secp256k1 ECDSA signature (r \|\| s \|\| v) over keccak256(image_digest) |
 
 **Response (200):**
 ```json
@@ -71,13 +69,13 @@ Generate a proof for an attestation token.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `public_values` | hex string | ABI-encoded `PublicValuesStruct` for on-chain verification |
-| `proof_bytes` | hex string | SP1 Groth16 proof bytes |
+| `public_values` | hex string | ABI-encoded `PublicValuesStruct` (journal) for on-chain verification |
+| `proof_bytes` | hex string | RISC Zero Groth16 proof bytes (seal) |
 | `tee_address` | address | Ethereum address derived from the EVM public key |
 
-**Response (503):** Prover is busy generating another proof.
+**Response (400):** Permanent error (invalid inputs, expired JWT). Do not retry.
 
-**Response (500):** Proof generation failed (check `error` and `details` fields).
+**Response (503):** Transient error (service unavailable). May retry.
 
 ### GET /health
 
@@ -86,10 +84,22 @@ Health check endpoint.
 **Response:**
 ```json
 {
-  "status": "ready",
-  "prover_busy": false
+  "status": "ready"
 }
 ```
+
+### GET /image-id
+
+Get the RISC Zero image ID for contract configuration.
+
+**Response:**
+```json
+{
+  "image_id": "0x..."
+}
+```
+
+The image ID is a bytes32 value that identifies the RISC Zero program. This is needed when configuring the on-chain verifier contract.
 
 ## Public Values Structure
 
@@ -105,62 +115,62 @@ struct PublicValuesStruct {
     bool secboot;                 // Secure boot enabled
     bool dbgstat_disabled;        // Debug mode disabled (production)
     bytes32 audience_hash;        // Hash of audience claim
-    bytes32 cosign_signature_r;   // Cosign signature R component (P-256)
-    bytes32 cosign_signature_s;   // Cosign signature S component (P-256)
-    bytes32 cosign_pubkey_x;      // Cosign public key X coordinate (P-256)
-    bytes32 cosign_pubkey_y;      // Cosign public key Y coordinate (P-256)
+    bytes32 image_sig_r;          // Image signature R component (secp256k1)
+    bytes32 image_sig_s;          // Image signature S component (secp256k1)
+    uint8 image_sig_v;            // Image signature V component (secp256k1)
 }
 ```
 
-The on-chain `AttestationVerifier` contract:
-1. Verifies the SP1 proof using the verification key
+The on-chain `RiscZeroAttestationVerifier` contract:
+1. Verifies the RISC Zero Groth16 proof using the image ID
 2. Checks the JWK hash is trusted (Google's signing keys)
 3. Validates the timestamp window
 4. Requires secure boot and production mode
 5. Verifies the image digest matches the expected value
-6. Verifies the cosign signature using the RIP-7212 P256 precompile
-7. Checks the cosign public key is in the trusted registry
+6. Recovers the image signer address using ecrecover
+7. Checks the recovered address is in the trusted registry
 
 ## Configuration
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `BIND_ADDRESS` | `0.0.0.0:8080` | HTTP server listen address |
+| `BIND_ADDRESS` | `0.0.0.0:8083` | HTTP server listen address |
 | `LOG_JSON` | `false` | Enable JSON log output |
-| `SP1_PROVER` | `network` | Prover backend (network only) |
-| `NETWORK_PRIVATE_KEY` | (required) | Secp256k1 private key for SP1 Network Prover |
 | `GOOGLE_OIDC_DISCOVERY_URL` | GCP default | OIDC discovery endpoint for JWKS |
 | `JWKS_CACHE_TTL_SECS` | `3600` | How long to cache Google's public keys |
 
-### SP1 Network Prover
+## GPU Support
 
-This service uses the [SP1 Network Prover](https://docs.succinct.xyz/prover-network/overview.html), which offloads proof generation to Succinct's hosted infrastructure. This requires:
+RISC Zero supports native GPU proving via CUDA. When deployed on Cloud Run with L4 GPUs, proof generation takes approximately 2-5 minutes.
 
-1. A secp256k1 private key with PROVE tokens (set via `NETWORK_PRIVATE_KEY`)
-2. Network connectivity to Succinct's prover network
-
-Proof generation typically takes 2-5 minutes depending on network load.
+Features:
+- **Default**: CPU proving (slower but portable)
+- **cuda**: NVIDIA GPU acceleration (use for production)
+- **metal**: Apple GPU acceleration (for local development on Mac)
 
 ## Deployment
 
 ### Local Development
 
 ```bash
-# Build
-cargo build --release
+# Build (CPU proving)
+cargo build --release -p proof-service
 
-# Run with network prover
-NETWORK_PRIVATE_KEY=<your-key> ./target/release/proof-service
+# Build with CUDA support
+cargo build --release -p proof-service --features cuda
+
+# Run
+./target/release/proof-service
 ```
 
 ### Docker
 
 ```bash
-# Build image
-docker build -t proof-service .
+# Build image with CUDA support
+docker build -f Dockerfile.risc0 -t proof-service .
 
-# Run
-docker run -p 8080:8080 -e NETWORK_PRIVATE_KEY=<key> proof-service
+# Run with GPU
+docker run --gpus all -p 8083:8083 proof-service
 ```
 
 ### Cloud Run
@@ -168,7 +178,7 @@ docker run -p 8080:8080 -e NETWORK_PRIVATE_KEY=<key> proof-service
 The service is deployed via Terraform in `deploy/terraform/modules/proof-service/`. See the staging environment for configuration examples.
 
 Key settings:
-- 1 vCPU, 512MB RAM (lightweight since proving is offloaded)
+- L4 GPU for proof generation
 - 60-minute timeout for proof generation
 - Single instance, concurrency of 1
 
@@ -180,27 +190,30 @@ Key settings:
 
 3. **Attestation Freshness**: JWT tokens expire after 1 hour. The proof embeds the validity window.
 
-4. **Cosign Verification**: The cosign signature is passed through the proof and verified on-chain using the P256 precompile. The on-chain contract maintains a registry of trusted cosign public keys.
+4. **Image Signature Verification**: The image signature is embedded in the proof and verified on-chain using ecrecover. The on-chain contract maintains a registry of trusted signer addresses.
 
 ## Development
 
 ### Prerequisites
 
 - Rust 1.75+
-- SP1 toolchain: `curl -L https://sp1.succinct.xyz | bash && sp1up`
+- RISC Zero toolchain: `curl -L https://risczero.com/install | bash && rzup install`
 
-### Building the SP1 Program
+### Building the RISC Zero Program
 
-The SP1 program is built automatically via `build.rs`:
+The RISC Zero program is built automatically via `build.rs`:
 
 ```bash
-# The program is at crates/synddb-bootstrap/sp1/program/
+# The program is at crates/synddb-bootstrap/risc0/program/
 cargo build -p proof-service
 ```
 
 ### Testing
 
+The proof-service can be tested locally using CPU proving (no GPU required):
+
 ```bash
-# Run with mock prover (no real proof generation)
-SP1_PROVER=mock cargo run
+cargo run -p proof-service
 ```
+
+For GPU testing, ensure CUDA is installed and use the `cuda` feature.

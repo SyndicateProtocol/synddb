@@ -85,7 +85,7 @@ module "iam" {
   depends_on = [module.storage]
 }
 
-# Proof Service (SP1 Network Prover - offloads to Succinct's infrastructure)
+# Proof Service (RISC Zero GPU Prover)
 module "proof_service" {
   count  = var.tee_bootstrap != null ? 1 : 0
   source = "../../modules/proof-service"
@@ -95,15 +95,15 @@ module "proof_service" {
   service_name          = "synddb-staging-proof"
   container_image       = var.proof_service_image
   service_account_email = module.iam.proof_service_account_email
-  sp1_network_private_key = var.sp1_network_private_key
   ingress               = "internal"
   allow_unauthenticated = false
   min_instances         = 0  # Scale to zero when idle
   max_instances         = 1
-  # SP1 Groth16 verification: 16GB+ memory per docs.succinct.xyz/docs/sp1/getting-started/hardware-requirements
-  # CPU requirement is lower for verification vs proving (we use network proving)
-  cpu_limit             = "4"
-  memory_limit          = "16Gi"
+  # RISC Zero GPU proving requires 8 CPU and 32GB memory with L4 GPU
+  enable_gpu            = true
+  gpu_type              = "nvidia-l4"
+  cpu_limit             = "8"
+  memory_limit          = "32Gi"
   labels                = var.labels
 
   # Allow sequencer, validator, and price oracle to invoke the proof service

@@ -97,6 +97,9 @@ Common files that should be gitignored:
 - Terraform variable files with real values (`*.tfvars` with secrets)
 - Any file containing RPC URLs with API keys
 
+### Version Numbers
+Claude tends to use outdated versions of libraries and packages. When specifying a version number anywhere (Cargo.toml, package.json, Dockerfile, documentation, etc.), always verify it is the latest version by searching the web. Do not rely on training data for version information.
+
 ### Documentation (SPEC and PLAN files)
 The `SPEC.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
 - After making major implementation changes, update the corresponding SPEC and PLAN files to reflect the new state
@@ -289,7 +292,7 @@ Both sequencers and validators generate ephemeral signing keys at startup. This 
 - **Do NOT** persist keys between service restarts
 - Keys are generated fresh inside the TEE on each startup
 
-When a service restarts with a new key, a new TEE attestation proof must be generated via the SP1 zkVM and submitted to the bridge contract. This registers the new public key on-chain, allowing the bridge to verify signatures from the new instance. This is the intended deployment model - keys are bound to TEE instances, not externally managed.
+When a service restarts with a new key, a new TEE attestation proof must be generated via RISC Zero zkVM and submitted to the bridge contract. This registers the new public key on-chain, allowing the bridge to verify signatures from the new instance. This is the intended deployment model - keys are bound to TEE instances, not externally managed.
 
 ### TEE Boundary Considerations
 The sequencer and validator run inside TEEs (Trusted Execution Environments). When suggesting refactors or architectural changes to these Rust components:

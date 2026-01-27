@@ -32,16 +32,9 @@ variable "proof_service_image" {
 }
 
 variable "enable_proof_service" {
-  description = "Enable proof service for SP1 attestation proofs"
+  description = "Enable proof service for RISC Zero attestation proofs"
   type        = bool
   default     = false
-}
-
-variable "sp1_network_private_key" {
-  description = "SP1 Network private key for proof generation (Secp256k1 key with PROVE tokens)"
-  type        = string
-  sensitive   = true
-  default     = ""
 }
 
 variable "relayer_image" {

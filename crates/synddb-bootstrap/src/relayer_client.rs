@@ -94,7 +94,7 @@ impl std::fmt::Debug for RelayerClient {
 struct RegisterKeyRequest {
     /// Hex-encoded public values from attestation
     pub public_values: String,
-    /// Hex-encoded SP1 proof bytes
+    /// Hex-encoded RISC Zero proof bytes
     pub proof_bytes: String,
     /// Signature deadline (Unix timestamp)
     pub deadline: u64,

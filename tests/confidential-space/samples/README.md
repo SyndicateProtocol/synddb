@@ -38,7 +38,7 @@ Each JSON file contains:
 | `samples[].signing_input` | The signed data: base64url(header).base64url(payload) |
 | `jwks` | Google's public keys for signature verification |
 | `oidc_discovery` | OIDC configuration from Google |
-| `instructions` | Verification steps for SP1 developers |
+| `instructions` | Verification steps for developers |
 
 ## Key Claims
 
@@ -52,7 +52,7 @@ The attestation tokens contain claims that prove the workload is running in a ge
 
 ## Usage
 
-These samples are used for developing and testing SP1 on-chain attestation verification without needing to run a Confidential Space VM every time.
+These samples are used for developing and testing RISC Zero on-chain attestation verification without needing to run a Confidential Space VM every time.
 
 ## Verifying Samples
 
@@ -69,12 +69,9 @@ cargo run --bin verify-sample
 cargo test -p gcp-attestation
 ```
 
-### Option 3: SP1 zkVM execution
+### Option 3: RISC Zero proof generation
 
-```bash
-cd tests/confidential-space/sp1/script
-cargo run --release --bin gcp-cs-prover -- --execute --sample ../../samples/*.json
-```
+Use the proof-service to generate proofs from these attestation samples. See `services/proof-service/README.md` for details.
 
 ## Example Output
 

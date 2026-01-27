@@ -124,7 +124,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
      * @notice Registers a new sequencer key with attestation proof
      * @dev Anyone can call this. If registration is restricted, key goes to pending state.
      * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The SP1 proof bytes
+     * @param proofBytes The ZK proof bytes
      * @return publicKey The registered key address
      */
     function registerSequencerKey(bytes calldata publicValues, bytes calldata proofBytes)
@@ -139,7 +139,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
      * @notice Registers a new validator key with attestation proof
      * @dev Anyone can call this. If registration is restricted, key goes to pending state.
      * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The SP1 proof bytes
+     * @param proofBytes The ZK proof bytes
      * @return publicKey The registered key address
      */
     function registerValidatorKey(bytes calldata publicValues, bytes calldata proofBytes)
@@ -153,7 +153,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     /**
      * @notice Registers a sequencer key via signature (for keys without gas)
      * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The SP1 proof bytes
+     * @param proofBytes The ZK proof bytes
      * @param deadline Timestamp after which the signature expires
      * @param signature EIP-712 signature from the TEE key
      * @return publicKey The registered key address
@@ -173,7 +173,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     /**
      * @notice Registers a validator key via signature (for keys without gas)
      * @param publicValues The encoded public values from the attestation
-     * @param proofBytes The SP1 proof bytes
+     * @param proofBytes The ZK proof bytes
      * @param deadline Timestamp after which the signature expires
      * @param signature EIP-712 signature from the TEE key
      * @return publicKey The registered key address

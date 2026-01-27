@@ -1,12 +1,14 @@
-//! GPU-accelerated SP1 proof generation service
+//! RISC Zero GPU proof generation service
 //!
-//! This service generates ZK proofs for GCP Confidential Space attestation tokens.
-//! It runs outside the TEE and is called by TEE services during key bootstrapping.
+//! This service generates ZK proofs for GCP Confidential Space attestation tokens
+//! using RISC Zero's native GPU proving (CUDA). RISC Zero compiles to a native
+//! binary that works directly on Cloud Run with L4 GPUs.
 //!
 //! # Endpoints
 //!
 //! - `POST /prove` - Generate a proof for an attestation token
 //! - `GET /health` - Health check
+//! - `GET /image-id` - Get the RISC Zero image ID for contract configuration
 
 mod config;
 mod prover;
@@ -49,12 +51,19 @@ struct ProveRequest {
 /// Response from proof generation
 #[derive(Debug, Serialize)]
 struct ProveResponse {
-    /// ABI-encoded PublicValuesStruct (hex with 0x prefix)
+    /// ABI-encoded PublicValuesStruct / journal (hex with 0x prefix)
     public_values: String,
-    /// SP1 proof bytes (hex with 0x prefix)
+    /// RISC Zero Groth16 proof bytes / seal (hex with 0x prefix)
     proof_bytes: String,
     /// Derived TEE address (for verification)
     tee_address: String,
+}
+
+/// Response for image ID endpoint
+#[derive(Debug, Serialize)]
+struct ImageIdResponse {
+    /// RISC Zero image ID as bytes32 (hex with 0x prefix)
+    image_id: String,
 }
 
 /// Error response
@@ -91,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Initializing proof service");
 
-    // Initialize prover (this loads the SP1 ELF)
+    // Initialize prover (this loads the RISC Zero ELF)
     let prover = AttestationProver::new();
 
     // Initialize JWKS cache
@@ -106,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/prove", post(prove_handler))
         .route("/health", get(health_handler))
+        .route("/image-id", get(image_id_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -161,19 +171,10 @@ async fn prove_handler(
 /// Check if an error message indicates a permanent failure that should not be retried.
 ///
 /// Permanent errors include:
-/// - Insufficient PROVE token balance
-/// - Resource exhaustion (quota exceeded)
 /// - Invalid inputs that won't change on retry
+/// - JWT/attestation errors
 fn is_permanent_error(error_msg: &str) -> bool {
     let error_lower = error_msg.to_lowercase();
-
-    // SP1 Network balance/quota errors
-    if error_lower.contains("insufficient balance") {
-        return true;
-    }
-    if error_lower.contains("resource has been exhausted") {
-        return true;
-    }
 
     // Input validation errors
     if error_lower.contains("invalid") && error_lower.contains("key") {
@@ -188,6 +189,11 @@ fn is_permanent_error(error_msg: &str) -> bool {
         return true;
     }
     if error_lower.contains("jwk not found") {
+        return true;
+    }
+
+    // Attestation verification failures
+    if error_lower.contains("invalid gcp") {
         return true;
     }
 
@@ -226,7 +232,7 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
     info!("Found matching JWK");
 
     // Generate proof (this is CPU/GPU intensive and takes minutes)
-    let proof = state.prover.generate_proof(
+    let proof_output = state.prover.generate_proof(
         &request.jwt_token,
         &jwk,
         &request.expected_audience,
@@ -235,16 +241,20 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
     )?;
 
     // Decode public values to get TEE address
-    let public_values = decode_public_values(proof.public_values.as_slice())?;
-
-    // Get proof bytes in Solidity-compatible format for on-chain verification
-    // This includes the verifier route selector in the first 4 bytes
-    let proof_bytes = proof.bytes();
+    let public_values = decode_public_values(&proof_output.public_values)?;
 
     Ok(ProveResponse {
-        public_values: format!("0x{}", hex::encode(proof.public_values.as_slice())),
-        proof_bytes: format!("0x{}", hex::encode(proof_bytes)),
+        public_values: format!("0x{}", hex::encode(&proof_output.public_values)),
+        proof_bytes: format!("0x{}", hex::encode(&proof_output.proof_bytes)),
         tee_address: format!("{}", public_values.tee_signing_key),
+    })
+}
+
+/// Handle image ID requests (for contract configuration)
+async fn image_id_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let image_id_bytes = state.prover.image_id_bytes32();
+    Json(ImageIdResponse {
+        image_id: format!("0x{}", hex::encode(image_id_bytes)),
     })
 }
 

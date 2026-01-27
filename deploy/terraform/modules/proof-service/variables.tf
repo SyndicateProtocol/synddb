@@ -25,29 +25,42 @@ variable "service_account_email" {
   type        = string
 }
 
-# SP1 Network Prover
-variable "sp1_network_private_key" {
-  description = "SP1 Network private key for proof generation (Secp256k1 key with PROVE tokens)"
-  type        = string
-  sensitive   = true
+# GPU Configuration (for RISC Zero)
+variable "enable_gpu" {
+  description = "Enable GPU for RISC Zero proving. Defaults to true."
+  type        = bool
+  default     = true
 }
 
-# Resource Limits (small instance - heavy work offloaded to SP1 Network)
-variable "cpu_limit" {
-  description = "CPU limit"
+variable "gpu_type" {
+  description = "GPU type for RISC Zero proving (nvidia-l4, nvidia-tesla-t4)"
   type        = string
-  default     = "1"
+  default     = "nvidia-l4"
+}
+
+variable "gpu_count" {
+  description = "Number of GPUs to attach"
+  type        = number
+  default     = 1
+}
+
+# Resource Limits
+# RISC Zero GPU proving requires larger instances with GPU resources
+variable "cpu_limit" {
+  description = "CPU limit. For GPU instances, minimum 4 cores recommended."
+  type        = string
+  default     = "8"
 }
 
 variable "memory_limit" {
-  description = "Memory limit"
+  description = "Memory limit. For GPU instances, 32Gi recommended."
   type        = string
-  default     = "512Mi"
+  default     = "32Gi"
 }
 
 # Scaling
 variable "timeout_seconds" {
-  description = "Request timeout in seconds (max 3600 for Groth16/PLONK proofs)"
+  description = "Request timeout in seconds (max 3600 for Groth16 proofs)"
   type        = number
   default     = 3600
 }
@@ -65,9 +78,9 @@ variable "min_instances" {
 }
 
 variable "concurrency" {
-  description = "Maximum concurrent requests per instance. Set high since most request time is spent waiting on SP1 Network. Cloud Run auto-scales based on CPU utilization (~60% target) during verification."
+  description = "Maximum concurrent requests per instance. For RISC Zero GPU proving, set to 1 since GPU proving is resource-intensive."
   type        = number
-  default     = 10
+  default     = 1
 }
 
 # Access Control
