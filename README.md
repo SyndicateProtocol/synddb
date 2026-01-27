@@ -30,19 +30,50 @@ SyndDB/
 └── README.md               # This file
 ```
 
-## Quick Start
+## Prerequisites
 
-### 1. Install & Build
+Install the required tools:
 
 ```bash
-git clone https://github.com/anthropics/synddb
-cd SyndDB
+# Rust (via rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup toolchain install nightly  # Required for formatting
+
+# Command runner and git hooks
+brew install just lefthook
+
+# Solidity development (optional, for smart contracts)
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+<details>
+<summary>Additional CI tools (for running full checks locally)</summary>
+
+```bash
+# TOML formatter and unused dependency checker
+brew install taplo
+cargo install cargo-machete cargo-nextest
+```
+
+</details>
+
+## Quick Start
+
+### 1. Clone & Build
+
+```bash
+git clone https://github.com/SyndicateProtocol/synddb
+cd synddb
 cargo build --workspace --release
+
+# Install git hooks (recommended)
+just hooks-install
 ```
 
 ### 2. Local Development
 
-Use `just` for common tasks (install: `brew install just` or `cargo install just`):
+Use `just` for all development tasks:
 
 ```bash
 # Start full dev environment (Anvil + contracts + sequencer)
@@ -64,12 +95,10 @@ just
 ./scripts/dev-env.sh --validator   # Include validator
 ```
 
-Deployed addresses are deterministic and saved to `.synddb/local-addresses.json`:
+Deployed addresses are deterministic and defined in the `justfile`:
 - Bridge: `0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512`
 - MockWETH: `0x5FbDB2315678afecb367f032d93F642f64180aa3`
 - PriceOracle: `0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9`
-
-See `.env.local.example` for ready-to-use environment configuration.
 
 ### 3. Try the Benchmark Tool (Optional)
 
@@ -167,53 +196,32 @@ Performance scales with hardware and can be tuned via transaction batching, cach
 ## Development
 
 ```bash
-# Build all crates
-cargo build --workspace
-
-# Run tests
-cargo test --workspace
+just              # Show all available commands
+just build        # Build all crates
+just test         # Run tests
+just check        # Run all lints (fmt, clippy, deps, toml)
+just fmt          # Auto-fix formatting issues
+just fix          # Auto-fix all fixable issues
 
 # Run benchmark with detailed logging
 RUST_LOG=debug cargo run --package synddb-benchmark -- run --rate 100
 ```
 
-### Run All CI Checks Locally
+### Available Just Commands
 
-First, install required tools:
-```bash
-cargo install taplo-cli@0.9.0 cargo-machete@0.7.0 cargo-nextest
-rustup toolchain install nightly
-```
+| Command | Description |
+|---------|-------------|
+| `just dev` | Start full dev environment |
+| `just test` | Run unit tests |
+| `just check` | Run all lints |
+| `just fmt` | Format all code |
+| `just lint` | Run Clippy |
+| `just docs` | Build and open documentation |
+| `just watch` | Watch mode with live rebuild |
+| `just outdated` | Show outdated dependencies |
+| `just audit` | Security vulnerability scan |
 
-**Check all (CI equivalent - non-destructive):**
-```bash
-taplo lint "**/Cargo.toml" && taplo fmt --check "**/Cargo.toml" && cargo machete && cargo +nightly fmt --all --check && cargo clippy --workspace --all-targets --all-features && cargo nextest run --workspace --all-features && cargo test --workspace --doc
-```
-
-**Fix all issues automatically:**
-```bash
-taplo fmt "**/Cargo.toml" && cargo +nightly fmt --all && cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged
-```
-*Note: `cargo-machete` only reports unused deps - you must remove them manually from Cargo.toml files.*
-
-**Run checks individually:**
-```bash
-# Cargo.toml validation and formatting check
-taplo lint "**/Cargo.toml" && taplo fmt --check "**/Cargo.toml"
-
-# Find unused dependencies (manual removal required)
-cargo machete
-
-# Rust formatting check
-cargo +nightly fmt --all --check
-
-# Linting
-cargo clippy --workspace --all-targets --all-features
-
-# Tests
-cargo nextest run --workspace --all-features
-cargo test --workspace --doc
-```
+Run `just` to see all available commands grouped by category.
 
 ## Architecture
 
@@ -232,9 +240,10 @@ Applications continue using SQLite normally - the client library operates transp
 
 ## Requirements
 
-- Rust 1.90.0 or later
-- SQLite 3.x (bundled with rusqlite)
-- Docker (for running E2E tests: `cargo test -p synddb-e2e` and `cargo test -p synddb-e2e-gcs`)
+- **Rust 1.90.0+** with nightly toolchain (for formatting)
+- **just** and **lefthook** (see [Prerequisites](#prerequisites))
+- **Docker** (optional, for E2E tests)
+- **Foundry** (optional, for smart contract development)
 
 ## License
 

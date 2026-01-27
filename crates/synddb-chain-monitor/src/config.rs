@@ -90,36 +90,42 @@ impl ChainMonitorConfig {
     }
 
     /// Set the event signature filter.
+    #[must_use]
     pub const fn with_event_signature(mut self, signature: B256) -> Self {
         self.event_signature = Some(signature);
         self
     }
 
     /// Set the event store database path.
+    #[must_use]
     pub fn with_event_store_path(mut self, path: impl Into<String>) -> Self {
         self.event_store_path = path.into();
         self
     }
 
     /// Set the request timeout.
+    #[must_use]
     pub const fn with_request_timeout(mut self, timeout: Duration) -> Self {
         self.monitor_request_timeout = timeout;
         self
     }
 
     /// Set the `get_logs` timeout.
+    #[must_use]
     pub const fn with_get_logs_timeout(mut self, timeout: Duration) -> Self {
         self.get_logs_timeout = timeout;
         self
     }
 
     /// Set the channel size for WebSocket subscriptions.
+    #[must_use]
     pub const fn with_channel_size(mut self, size: usize) -> Self {
         self.channel_size = size;
         self
     }
 
     /// Set the retry interval.
+    #[must_use]
     pub const fn with_retry_interval(mut self, interval: Duration) -> Self {
         self.retry_interval = interval;
         self

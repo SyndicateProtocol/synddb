@@ -1,4 +1,32 @@
 //! HTTP API endpoints for validator health and status
+//!
+//! This module provides operational endpoints for monitoring validator state.
+//! Unlike the sequencer's HTTP API, the validator API is read-only and provides
+//! health checks and synchronization status.
+//!
+//! # Endpoints
+//!
+//! | Endpoint | Method | Description |
+//! |----------|--------|-------------|
+//! | `/health` | GET | Liveness probe (always returns 200 OK) |
+//! | `/healthz` | GET | Alias for `/health` (Kubernetes convention) |
+//! | `/ready` | GET | Readiness probe (503 if not running) |
+//! | `/status` | GET | Sync status and last sequence number |
+//!
+//! # Status Response
+//!
+//! The `/status` endpoint returns JSON:
+//!
+//! ```json
+//! {
+//!   "running": true,
+//!   "last_sequence": 42,
+//!   "last_sync_time": 1700000000
+//! }
+//! ```
+//!
+//! - `last_sequence` is `null` if the validator has never synced
+//! - `last_sync_time` is a Unix timestamp (seconds)
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};

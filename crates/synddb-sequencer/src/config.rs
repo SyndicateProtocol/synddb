@@ -203,15 +203,83 @@ impl SequencerConfig {
     ///
     /// Uses `parse_from` with a dummy signing key to get clap defaults,
     /// then replaces with the provided key.
-    pub fn with_signing_key(signing_key: String) -> Self {
+    pub fn with_signing_key(signing_key: impl Into<String>) -> Self {
         // We need to provide the required --signing-key arg
         let mut config = Self::parse_from([
             "synddb-sequencer",
             "--signing-key",
             "0000000000000000000000000000000000000000000000000000000000000001",
         ]);
-        config.signing_key = signing_key;
+        config.signing_key = signing_key.into();
         config
+    }
+
+    // =========================================================================
+    // Builder methods for testing
+    // =========================================================================
+
+    /// Set the bind address
+    #[must_use]
+    pub const fn with_bind_address(mut self, addr: SocketAddr) -> Self {
+        self.bind_address = addr;
+        self
+    }
+
+    /// Set the publisher type
+    #[must_use]
+    pub const fn with_publisher_type(mut self, publisher_type: PublisherType) -> Self {
+        self.publisher_type = publisher_type;
+        self
+    }
+
+    /// Set the local storage path for `SQLite` backend
+    #[must_use]
+    pub fn with_local_storage_path(mut self, path: impl Into<String>) -> Self {
+        self.local_storage_path = Some(path.into());
+        self
+    }
+
+    /// Set the GCS bucket
+    #[must_use]
+    pub fn with_gcs_bucket(mut self, bucket: impl Into<String>) -> Self {
+        self.gcs_bucket = Some(bucket.into());
+        self
+    }
+
+    /// Set the GCS prefix
+    #[must_use]
+    pub fn with_gcs_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.gcs_prefix = prefix.into();
+        self
+    }
+
+    /// Set the GCS emulator host for testing
+    #[must_use]
+    pub fn with_gcs_emulator_host(mut self, host: impl Into<String>) -> Self {
+        self.gcs_storage_emulator_host = Some(host.into());
+        self
+    }
+
+    /// Set the request timeout
+    #[must_use]
+    pub const fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
+    }
+
+    /// Enable attestation verification
+    #[must_use]
+    pub const fn with_verify_attestation(mut self, verify: bool) -> Self {
+        self.verify_attestation = verify;
+        self
+    }
+
+    /// Set batch configuration
+    #[must_use]
+    pub const fn with_batch_config(mut self, max_messages: usize, max_bytes: usize) -> Self {
+        self.batch_max_messages = max_messages;
+        self.batch_max_bytes = max_bytes;
+        self
     }
 }
 
