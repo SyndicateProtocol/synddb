@@ -1,9 +1,5 @@
 name: Rust CI
 
-# COST OPTIMIZATION:
-# Quick format/lint checks run first. Expensive jobs (tests, fuzz, coverage)
-# only start after quick checks pass, avoiding wasted compute on simple errors.
-
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review] # Run on all non-draft PRs

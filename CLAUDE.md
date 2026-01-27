@@ -77,9 +77,15 @@ git add path/to/file1.rs path/to/file2.rs
 Similarly, avoid `git restore .` or `git checkout .` to discard changes. Other files in the working directory may contain work from parallel sessions that should be preserved. Only restore specific files you intend to discard.
 
 ### Force Pushing
-Never force push (`git push --force` or `git push -f`) if there is any alternative. Force pushing rewrites history and can cause problems for collaborators who have already pulled the branch.
+Never force push (`git push --force`, `git push -f`, or `git push --force-with-lease`) under any circumstances. Force pushing rewrites history and causes problems for collaborators. It also destroys valuable context about what was tried and why.
 
-If you need to fix a prior commit (typo, missing file, etc.), do not use `git commit --amend` followed by force push. Instead, make the correction and create a new commit. This preserves history and avoids the need for force pushing.
+**CRITICAL**: Even when the user asks you to "revert" or "undo" a change, do NOT use `git commit --amend` followed by force push. Instead, create a NEW commit that makes the correction. This preserves the history of what was tried.
+
+Example - if you added something in commit A and the user says "remove that, it wasn't needed":
+- **WRONG**: `git commit --amend` + `git push --force`
+- **RIGHT**: Create a new commit B that removes the change
+
+The commit history showing "we tried X, then removed it because Y" is valuable context that should be preserved.
 
 ### Hard Reset
 Never run `git reset --hard` without asking for explicit confirmation first. Hard resets discard all uncommitted changes in the working directory, which can permanently delete work from parallel sessions. Always ask the user before running any variant of `git reset --hard`.
@@ -194,55 +200,7 @@ cargo test -p synddb-sequencer
 
 ## Justfile
 
-The project uses [just](https://github.com/casey/just) as a command runner for local development. The justfile is the single source of truth for all development defaults (Anvil keys, contract addresses, ports).
-
-**When to use:** Both local development and CI. The justfile is the single source of truth - CI jobs call the same recipes you run locally.
-
-**Quick start:**
-```bash
-just              # Show all available commands
-just dev          # Start full local environment (Anvil + contracts + sequencer)
-just check        # Run all CI checks locally
-just test         # Run tests
-```
-
-**Modules:** Recipes are organized into modules for contracts and examples:
-```bash
-just contracts::build    # Build Solidity contracts
-just contracts::test     # Run contract tests
-just examples::price-oracle      # Run price oracle example
-```
-
-**CI recipes:** Integration tests that start/stop services:
-```bash
-just stress-test         # Run stress test with sequencer
-just client-integration  # Run client integration tests
-just fuzz-ci             # Run fuzzer with CI iterations
-```
-
-### Language Features Used
-
-| Feature | Purpose | Example |
-|---------|---------|---------|
-| `set shell` | Bash strict mode for all recipes | `set shell := ["bash", "-euo", "pipefail", "-c"]` |
-| `set dotenv-load` | Load `.env` for optional overrides | Users can create `.env` to customize defaults |
-| `set export` | Export all variables as env vars | Variables available to all recipes |
-| `mod` | Organize recipes into modules | `mod contracts 'contracts/mod.just'` |
-| `[group()]` | Group recipes in `just --list` | `[group('dev')]`, `[group('test')]` |
-| `[confirm()]` | Require confirmation for destructive ops | `[confirm('Remove all data?')]` |
-| Variables | Single source of truth for config | `anvil_key_0 := "ac097..."` |
-
-### Configuration
-
-All local dev defaults are defined in the justfile. No `.env` file is needed for basic development. To override any value, create a `.env` file (gitignored):
-
-```bash
-# .env (optional - for local overrides only)
-RUST_LOG=debug
-sequencer_port=9000
-```
-
-**Reference:** [Just Manual](https://just.systems/man/en/)
+The project uses [just](https://github.com/casey/just) as a command runner. The justfile is primarily used by CI workflows for linting, testing, and reproducible builds. For local development, use cargo/forge commands directly.
 
 ## Code Style
 
@@ -326,24 +284,32 @@ When adding a new env var:
 ### Terraform Environments
 Infrastructure is managed via Terraform in `deploy/terraform/environments/`:
 - `staging/` - Test environment on Base Sepolia
-- `prod/` - Production environment
 
-### Updating Image Digests and Signatures
-When updating Terraform configurations with new image digests and signatures, use the `get-image-info` script:
+### Automated Updates
+- **Docker base image digests**: Dependabot monitors `docker/reproducible/` and opens PRs when base images have updates
+- **Image signatures and RISC Zero image IDs**: The `gcp-artifact-registry.yml` workflow automatically generates these when building and pushing images
+
+### Manual Image Info Lookup
+When manually updating Terraform configurations with image digests and signatures, use the `get-image-info` script:
 
 ```bash
 # Get digest and signature for an image tag
 echo '{"image": "us-central1-docker.pkg.dev/synddb-infra/synddb/sequencer:latest"}' | \
   ./deploy/terraform/scripts/get-image-info.sh
-
-# Get signature for a specific digest
-echo '{"image": "us-central1-docker.pkg.dev/synddb-infra/synddb/sequencer@sha256:abc123..."}' | \
-  ./deploy/terraform/scripts/get-image-info.sh
 ```
 
-The script outputs JSON with `digest`, `signature`, and `found` fields. Use these values to update the corresponding Terraform variables.
+The script outputs JSON with `digest`, `signature`, and `found` fields.
 
 **Requirements:** `oras` CLI must be installed.
+
+### Updating Terraform tfvars Files
+When modifying private tfvars files (e.g., `terraform.tfvars`), check if the corresponding template file (e.g., `base-sepolia.tfvars.template`) needs updating:
+
+1. **Update keys only in templates** - Add new variable names to template files, but use placeholder values (e.g., `"0x0000..."`, `""`, `"your-value-here"`)
+2. **Protect private data** - Never copy actual values from `terraform.tfvars` into templates. Templates are committed to the repo and must not contain secrets, API keys, private keys, or real contract addresses
+3. **Confirm before adding** - Always ask for confirmation before adding a variable to a template file. The variable may be intentionally private and should not appear in the template at all
+
+Template files (like `base-sepolia.tfvars.template`) serve as documentation for required variables while `terraform.tfvars` holds the actual private values.
 
 ### Deleting Infrastructure
 Cloud Run v2 services have `deletion_protection = true` by default. To delete:

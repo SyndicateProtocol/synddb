@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
 import {Bridge} from "src/Bridge.sol";
 import {IAttestationVerifier} from "src/interfaces/IAttestationVerifier.sol";
+import {KeyType} from "src/types/DataTypes.sol";
 
 contract MockAttestationVerifierForKeyManager is IAttestationVerifier {
     address public nextReturnedKey;
@@ -21,7 +22,7 @@ contract MockAttestationVerifierForKeyManager is IAttestationVerifier {
 /**
  * @title TeeKeyManagerTest
  * @notice Test suite for TeeKeyManager key rotation functions
- * @dev Tests removeKey, getValidKeys, keyCount, and addKeyWithSignature
+ * @dev Tests removeKey, getKeys, keyCount, and addKeyWithSignature
  */
 contract TeeKeyManagerTest is Test {
     TeeKeyManager public keyManager;
@@ -34,8 +35,8 @@ contract TeeKeyManagerTest is Test {
     uint256 internal teePrivateKey;
     address internal teeAddress;
 
-    event SequencerKeyAdded(address indexed key, uint256 expiresAt);
-    event KeyRemoved(address indexed key);
+    event KeyAdded(KeyType indexed keyType, address indexed key, uint256 expiresAt);
+    event KeyRemoved(KeyType indexed keyType, address indexed key);
     event KeysRevoked();
 
     function setUp() public {
@@ -57,48 +58,48 @@ contract TeeKeyManagerTest is Test {
     function test_RemoveSequencerKey_Success() public {
         // Add a key first
         mockVerifier.setNextReturnedKey(teeAddress);
-        bridge.registerSequencerKey(bytes("proof"), bytes("values"));
+        bridge.registerKey(KeyType.Sequencer, bytes("proof"), bytes("values"));
 
-        assertEq(keyManager.sequencerKeyCount(), 1);
-        keyManager.isSequencerKeyValid(teeAddress); // Should not revert
+        assertEq(keyManager.keyCount(KeyType.Sequencer), 1);
+        keyManager.isKeyValid(KeyType.Sequencer, teeAddress); // Should not revert
 
         // Remove the key
-        vm.expectEmit(true, false, false, false);
-        emit KeyRemoved(teeAddress);
+        vm.expectEmit(true, true, false, false);
+        emit KeyRemoved(KeyType.Sequencer, teeAddress);
 
-        bridge.removeSequencerKey(teeAddress);
+        bridge.removeKey(KeyType.Sequencer, teeAddress);
 
-        assertEq(keyManager.sequencerKeyCount(), 0);
+        assertEq(keyManager.keyCount(KeyType.Sequencer), 0);
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.InvalidPublicKey.selector, teeAddress));
-        keyManager.isSequencerKeyValid(teeAddress);
+        keyManager.isKeyValid(KeyType.Sequencer, teeAddress);
     }
 
     function test_RemoveSequencerKey_RevertsWhenNotOwner() public {
         // Add a key first
         mockVerifier.setNextReturnedKey(teeAddress);
-        bridge.registerSequencerKey(bytes("proof"), bytes("values"));
+        bridge.registerKey(KeyType.Sequencer, bytes("proof"), bytes("values"));
 
         // Try to remove as non-owner
         vm.prank(address(0x123));
         vm.expectRevert();
-        bridge.removeSequencerKey(teeAddress);
+        bridge.removeKey(KeyType.Sequencer, teeAddress);
     }
 
     function test_RemoveSequencerKey_RevertsWhenKeyNotExists() public {
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.InvalidPublicKey.selector, teeAddress));
-        bridge.removeSequencerKey(teeAddress);
+        bridge.removeKey(KeyType.Sequencer, teeAddress);
     }
 
     function test_GetSequencerKeys_Empty() public view {
-        address[] memory keys = keyManager.getSequencerKeys();
+        address[] memory keys = keyManager.getKeys(KeyType.Sequencer);
         assertEq(keys.length, 0);
     }
 
     function test_GetSequencerKeys_SingleKey() public {
         mockVerifier.setNextReturnedKey(teeAddress);
-        bridge.registerSequencerKey(bytes("proof"), bytes("values"));
+        bridge.registerKey(KeyType.Sequencer, bytes("proof"), bytes("values"));
 
-        address[] memory keys = keyManager.getSequencerKeys();
+        address[] memory keys = keyManager.getKeys(KeyType.Sequencer);
         assertEq(keys.length, 1);
         assertEq(keys[0], teeAddress);
     }
@@ -109,37 +110,37 @@ contract TeeKeyManagerTest is Test {
         address key3 = address(0x3333);
 
         mockVerifier.setNextReturnedKey(key1);
-        bridge.registerSequencerKey(bytes("proof1"), bytes("values1"));
+        bridge.registerKey(KeyType.Sequencer, bytes("proof1"), bytes("values1"));
 
         mockVerifier.setNextReturnedKey(key2);
-        bridge.registerSequencerKey(bytes("proof2"), bytes("values2"));
+        bridge.registerKey(KeyType.Sequencer, bytes("proof2"), bytes("values2"));
 
         mockVerifier.setNextReturnedKey(key3);
-        bridge.registerSequencerKey(bytes("proof3"), bytes("values3"));
+        bridge.registerKey(KeyType.Sequencer, bytes("proof3"), bytes("values3"));
 
-        address[] memory keys = keyManager.getSequencerKeys();
+        address[] memory keys = keyManager.getKeys(KeyType.Sequencer);
         assertEq(keys.length, 3);
     }
 
     function test_KeyCount_TracksCorrectly() public {
-        assertEq(keyManager.sequencerKeyCount(), 0);
+        assertEq(keyManager.keyCount(KeyType.Sequencer), 0);
 
         // Add keys
         mockVerifier.setNextReturnedKey(address(0x1111));
-        bridge.registerSequencerKey(bytes("proof1"), bytes("values1"));
-        assertEq(keyManager.sequencerKeyCount(), 1);
+        bridge.registerKey(KeyType.Sequencer, bytes("proof1"), bytes("values1"));
+        assertEq(keyManager.keyCount(KeyType.Sequencer), 1);
 
         mockVerifier.setNextReturnedKey(address(0x2222));
-        bridge.registerSequencerKey(bytes("proof2"), bytes("values2"));
-        assertEq(keyManager.sequencerKeyCount(), 2);
+        bridge.registerKey(KeyType.Sequencer, bytes("proof2"), bytes("values2"));
+        assertEq(keyManager.keyCount(KeyType.Sequencer), 2);
 
         // Remove a key
-        bridge.removeSequencerKey(address(0x1111));
-        assertEq(keyManager.sequencerKeyCount(), 1);
+        bridge.removeKey(KeyType.Sequencer, address(0x1111));
+        assertEq(keyManager.keyCount(KeyType.Sequencer), 1);
 
         // Revoke all
         bridge.revokeAllKeys();
-        assertEq(keyManager.sequencerKeyCount(), 0);
+        assertEq(keyManager.keyCount(KeyType.Sequencer), 0);
     }
 
     function test_AddSequencerKeyWithSignature_Success() public {
@@ -157,13 +158,13 @@ contract TeeKeyManagerTest is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(teePrivateKey, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
 
-        vm.expectEmit(true, false, false, false);
-        emit SequencerKeyAdded(teeAddress, 0);
+        vm.expectEmit(true, true, false, false);
+        emit KeyAdded(KeyType.Sequencer, teeAddress, 0);
 
-        bridge.registerSequencerKeyWithSignature(publicValues, proofBytes, deadline, signature);
+        bridge.registerKeyWithSignature(KeyType.Sequencer, publicValues, proofBytes, deadline, signature);
 
-        keyManager.isSequencerKeyValid(teeAddress); // Should not revert
-        assertEq(keyManager.sequencerKeyCount(), 1);
+        keyManager.isKeyValid(KeyType.Sequencer, teeAddress); // Should not revert
+        assertEq(keyManager.keyCount(KeyType.Sequencer), 1);
     }
 
     function test_AddSequencerKeyWithSignature_RevertsWhenExpired() public {
@@ -182,7 +183,7 @@ contract TeeKeyManagerTest is Test {
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.expectRevert(TeeKeyManager.SignatureExpired.selector);
-        bridge.registerSequencerKeyWithSignature(publicValues, proofBytes, deadline, signature);
+        bridge.registerKeyWithSignature(KeyType.Sequencer, publicValues, proofBytes, deadline, signature);
     }
 
     function test_AddSequencerKeyWithSignature_RevertsWhenWrongSigner() public {
@@ -202,7 +203,7 @@ contract TeeKeyManagerTest is Test {
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.expectRevert(TeeKeyManager.InvalidSignature.selector);
-        bridge.registerSequencerKeyWithSignature(publicValues, proofBytes, deadline, signature);
+        bridge.registerKeyWithSignature(KeyType.Sequencer, publicValues, proofBytes, deadline, signature);
     }
 
     function test_AddSequencerKeyWithSignature_RevertsWhenKeyAlreadyExists() public {
@@ -213,7 +214,7 @@ contract TeeKeyManagerTest is Test {
         mockVerifier.setNextReturnedKey(teeAddress);
 
         // First, add the key directly
-        bridge.registerSequencerKey(bytes("other"), bytes("other"));
+        bridge.registerKey(KeyType.Sequencer, bytes("other"), bytes("other"));
 
         // Create signature
         bytes32 attestationHash = keccak256(abi.encodePacked(publicValues, proofBytes));
@@ -224,7 +225,7 @@ contract TeeKeyManagerTest is Test {
         bytes memory signature = abi.encodePacked(r, s, v);
 
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.KeyAlreadyExists.selector, teeAddress));
-        bridge.registerSequencerKeyWithSignature(publicValues, proofBytes, deadline, signature);
+        bridge.registerKeyWithSignature(KeyType.Sequencer, publicValues, proofBytes, deadline, signature);
     }
 
     function test_AddSequencerKeyWithSignature_AllowsRelayerSubmission() public {
@@ -246,30 +247,30 @@ contract TeeKeyManagerTest is Test {
         address relayer = address(0xBEEF);
         vm.prank(relayer);
 
-        bridge.registerSequencerKeyWithSignature(publicValues, proofBytes, deadline, signature);
+        bridge.registerKeyWithSignature(KeyType.Sequencer, publicValues, proofBytes, deadline, signature);
 
-        keyManager.isSequencerKeyValid(teeAddress); // Should not revert
+        keyManager.isKeyValid(KeyType.Sequencer, teeAddress); // Should not revert
     }
 
     function test_AddValidatorKey_Success() public {
         mockVerifier.setNextReturnedKey(teeAddress);
-        bridge.registerValidatorKey(bytes("proof"), bytes("values"));
+        bridge.registerKey(KeyType.Validator, bytes("proof"), bytes("values"));
 
-        assertEq(keyManager.validatorKeyCount(), 1);
-        keyManager.isValidatorKeyValid(teeAddress); // Should not revert
+        assertEq(keyManager.keyCount(KeyType.Validator), 1);
+        keyManager.isKeyValid(KeyType.Validator, teeAddress); // Should not revert
     }
 
     function test_RemoveValidatorKey_Success() public {
         mockVerifier.setNextReturnedKey(teeAddress);
-        bridge.registerValidatorKey(bytes("proof"), bytes("values"));
+        bridge.registerKey(KeyType.Validator, bytes("proof"), bytes("values"));
 
-        assertEq(keyManager.validatorKeyCount(), 1);
+        assertEq(keyManager.keyCount(KeyType.Validator), 1);
 
-        bridge.removeValidatorKey(teeAddress);
+        bridge.removeKey(KeyType.Validator, teeAddress);
 
-        assertEq(keyManager.validatorKeyCount(), 0);
+        assertEq(keyManager.keyCount(KeyType.Validator), 0);
         vm.expectRevert(abi.encodeWithSelector(TeeKeyManager.InvalidPublicKey.selector, teeAddress));
-        keyManager.isValidatorKeyValid(teeAddress);
+        keyManager.isKeyValid(KeyType.Validator, teeAddress);
     }
 
     function test_GetValidatorKeys_MultipleKeys() public {
@@ -277,12 +278,12 @@ contract TeeKeyManagerTest is Test {
         address key2 = address(0x2222);
 
         mockVerifier.setNextReturnedKey(key1);
-        bridge.registerValidatorKey(bytes("proof1"), bytes("values1"));
+        bridge.registerKey(KeyType.Validator, bytes("proof1"), bytes("values1"));
 
         mockVerifier.setNextReturnedKey(key2);
-        bridge.registerValidatorKey(bytes("proof2"), bytes("values2"));
+        bridge.registerKey(KeyType.Validator, bytes("proof2"), bytes("values2"));
 
-        address[] memory keys = keyManager.getValidatorKeys();
+        address[] memory keys = keyManager.getKeys(KeyType.Validator);
         assertEq(keys.length, 2);
     }
 }

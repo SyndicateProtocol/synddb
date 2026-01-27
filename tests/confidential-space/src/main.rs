@@ -199,8 +199,9 @@ async fn main() -> Result<()> {
         jwks,
         oidc_discovery,
         instructions: Instructions {
-            summary: "Use these samples to develop and test RISC Zero on-chain attestation verification"
-                .to_string(),
+            summary:
+                "Use these samples to develop and test RISC Zero on-chain attestation verification"
+                    .to_string(),
             verification_steps: vec![
                 "1. Parse the JWT: split raw_token by '.' into [header, payload, signature]"
                     .to_string(),

@@ -3,7 +3,7 @@ pragma solidity 0.8.30;
 
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 import {Bridge} from "src/Bridge.sol";
-import {SequencerSignature} from "src/types/DataTypes.sol";
+import {SequencerSignature, KeyType} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
 import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
 import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
@@ -13,11 +13,11 @@ import {WETH9} from "./mocks/WETH9.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
- * @title UseCase5_CrossChainNFT
+ * @title CrossChainNFTTest
  * @notice Tests cross-chain NFT transfers using ONFT (LayerZero) standard
  * @dev Demonstrates burn-and-mint pattern for omnichain NFTs
  */
-contract UseCase5_CrossChainNFT is UseCaseBaseTest {
+contract CrossChainNFTTest is UseCaseBaseTest {
     Bridge public sourceBridge;
     Bridge public destBridge;
     ValidatorSignatureThresholdModule public validatorModule;
@@ -51,7 +51,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
 
         // Register dest sequencer as a valid TEE key through bridge
         bytes memory destPublicValues = abi.encode(destSequencer);
-        destBridge.registerSequencerKey(destPublicValues, "");
+        destBridge.registerKey(KeyType.Sequencer, destPublicValues, "");
 
         destBridge.setMessageInitializer(destSequencer, true);
 

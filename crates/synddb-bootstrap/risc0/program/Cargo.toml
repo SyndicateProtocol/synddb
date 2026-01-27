@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Standalone crate (uses alloy 1.0 for RISC Zero compatibility)
+# Standalone workspace: compiles to riscv32im-risc0-zkvm-elf target (zkVM guest program)
+# Cannot be part of main workspace due to different target architecture and no_std requirements
 [workspace]
 
 [lib]
@@ -13,8 +14,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "gcp-cs-attestation-risc0-program"
 path = "src/main.rs"
-# Only build the binary when zkvm feature is enabled (built by risc0-build for zkVM target)
-required-features = ["zkvm"]
 
 [features]
 default = ["zkvm"]
