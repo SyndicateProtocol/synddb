@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 # Workspace crates
 synddb-shared = { path = "../synddb-shared" }
+synddb-storage = { path = "../synddb-storage" }
 gcp-attestation = { path = "../gcp-attestation" }
 synddb-bootstrap = { path = "../synddb-bootstrap", optional = true }
 
@@ -64,10 +65,6 @@ axum-prometheus = { workspace = true }
 
 # Local SQLite storage
 rusqlite = { workspace = true }
-
-# Google Cloud Storage (always compiled for runtime transport selection)
-google-cloud-storage = { workspace = true }
-bytes = "1"
 
 [features]
 default = []

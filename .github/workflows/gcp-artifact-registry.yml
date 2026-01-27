@@ -28,7 +28,8 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Don't cancel in-progress builds on main/tags - every merge should produce artifacts
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   # Build on multiple runners to verify cross-machine reproducibility
@@ -250,19 +251,13 @@ jobs:
             echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/example-app" ]]; then
-            # Main or example-app branch push: sha + edge
+            # Branch push: sha + edge
             echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA,$REGISTRY/synddb-sequencer:edge" >> $GITHUB_OUTPUT
             echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA,$REGISTRY/synddb-validator:edge" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            # Non-main branch push: sha only (no edge to avoid overwriting)
-            echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
-            echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
-            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
-            echo "is_release=false" >> $GITHUB_OUTPUT
           else
-            # Manual run (workflow_dispatch): sha only, no edge to avoid overwriting latest
+            # Manual run or other branch: sha only
             echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
@@ -420,24 +415,51 @@ jobs:
       id-token: write
 
     steps:
+      - name: Free disk space
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: false
+          remove_swap: false
+
       - uses: actions/checkout@v4
 
+      - name: Check which images need building
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            relayer:
+              - 'crates/synddb-relayer/**'
+              - 'docker/reproducible/relayer.Dockerfile'
+            proof-service:
+              - 'services/proof-service/**'
+              - 'crates/gcp-attestation/**'
+              - 'crates/synddb-bootstrap/sp1/program/**'
+
       - name: Authenticate to Google Cloud
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
         run: gcloud auth configure-docker ${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev --quiet
 
       - name: Set up Docker Buildx
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Generate image tags
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
         id: tags
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
@@ -454,16 +476,19 @@ jobs:
             fi
             echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/example-app" ]]; then
+            # Branch push: sha + edge
             echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA,$REGISTRY/synddb-relayer:edge" >> $GITHUB_OUTPUT
             echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA,$REGISTRY/proof-service:edge" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
           else
+            # Manual run or other branch: sha only
             echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
           fi
 
       - name: Build and push relayer
+        if: steps.changes.outputs.relayer == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -473,8 +498,12 @@ jobs:
           tags: ${{ steps.tags.outputs.relayer_tags }}
           cache-from: type=gha,scope=relayer
           cache-to: type=gha,mode=max,scope=relayer
+          # SLSA provenance attestation - proves this image was built by this workflow
+          provenance: mode=max
+          sbom: true
 
       - name: Build and push proof-service
+        if: steps.changes.outputs.proof-service == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -484,8 +513,12 @@ jobs:
           tags: ${{ steps.tags.outputs.proof_service_tags }}
           cache-from: type=gha,scope=proof-service
           cache-to: type=gha,mode=max,scope=proof-service
+          # SLSA provenance attestation - proves this image was built by this workflow
+          provenance: mode=max
+          sbom: true
 
       - name: Summary
+        if: steps.changes.outputs.relayer == 'true' || steps.changes.outputs.proof-service == 'true'
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
 

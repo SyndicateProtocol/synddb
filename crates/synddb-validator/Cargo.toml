@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 # Workspace crates
 synddb-shared = { path = "../synddb-shared" }
+synddb-storage = { path = "../synddb-storage" }
 synddb-bootstrap = { path = "../synddb-bootstrap", optional = true }
 
 # Core async and CLI
@@ -63,8 +64,6 @@ axum-prometheus = { workspace = true }
 # HTTP client (for HttpFetcher)
 reqwest = { workspace = true }
 
-# Google Cloud Storage
-google-cloud-storage = { workspace = true }
 
 [features]
 default = []

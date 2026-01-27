@@ -63,11 +63,10 @@ cd tests/confidential-space
 cargo run --bin verify-sample
 ```
 
-### Option 2: Using the gcp-confidential-space library
+### Option 2: Using the gcp-attestation library
 
 ```bash
-cd tests/confidential-space/gcp-confidential-space
-cargo test
+cargo test -p gcp-attestation
 ```
 
 ### Option 3: SP1 zkVM execution

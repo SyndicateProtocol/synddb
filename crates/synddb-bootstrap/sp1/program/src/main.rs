@@ -10,7 +10,8 @@
 sp1_zkvm::entrypoint!(main);
 
 use alloy::{primitives::keccak256, sol_types::SolType};
-use gcp_confidential_space::{verify_attestation, JwkKey, PublicValuesStruct};
+use gcp_attestation::{verify_attestation, JwkKey};
+use gcp_cs_attestation_sp1_program::PublicValuesStruct;
 
 pub fn main() {
     // Read inputs from the prover

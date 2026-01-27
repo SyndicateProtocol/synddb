@@ -21,10 +21,11 @@ hex = "0.4"
 # SP1 SDK for proof generation
 sp1-sdk = "5.0"
 
-# GCP attestation verification (for JWKS fetching)
-gcp-confidential-space = { path = "../../tests/confidential-space/gcp-confidential-space", features = [
-  "sp1",
-] }
+# GCP attestation verification (for JWKS fetching and JWT parsing)
+gcp-attestation = { path = "../../crates/gcp-attestation" }
+
+# SP1 program types (PublicValuesStruct for decoding proof outputs)
+gcp-cs-attestation-sp1-program = { path = "../../crates/synddb-bootstrap/sp1/program", default-features = false }
 
 # Solidity types
 alloy = { version = "1.0", default-features = false, features = ["sol-types"] }
