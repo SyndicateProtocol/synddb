@@ -33,7 +33,7 @@ concurrency:
 jobs:
   # Build on multiple runners to verify cross-machine reproducibility
   build:
-    name: Build (${{ matrix.runner }}, ${{ matrix.image }})
+    name: Reproducible Build (${{ matrix.runner }}, ${{ matrix.image }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -119,7 +119,7 @@ jobs:
 
   # Compare hashes across all runners
   verify-cross-machine:
-    name: Verify Cross-Machine Reproducibility
+    name: Reproducible Verify
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -185,7 +185,7 @@ jobs:
 
   # Publish reproducible images to Artifact Registry after verification passes
   publish-reproducible:
-    name: Publish Reproducible ${{ matrix.image }}
+    name: Reproducible Publish ${{ matrix.image }}
     needs: verify-cross-machine
     runs-on: ubuntu-latest
     permissions:
@@ -193,6 +193,7 @@ jobs:
       id-token: write  # Required for Workload Identity Federation
     strategy:
       fail-fast: false
+      max-parallel: 1  # Sequential builds to preserve reproducibility
       matrix:
         include:
           - image: sequencer
@@ -326,7 +327,7 @@ jobs:
   # Build and publish non-reproducible images (no TEE attestation required)
   # Runs in parallel using matrix strategy for faster builds
   publish-standard:
-    name: Publish ${{ matrix.image }}
+    name: Standard Publish ${{ matrix.image }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

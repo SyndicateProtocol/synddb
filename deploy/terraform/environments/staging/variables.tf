@@ -31,6 +31,19 @@ variable "proof_service_image" {
   type        = string
 }
 
+variable "enable_proof_service" {
+  description = "Enable proof service for SP1 attestation proofs"
+  type        = bool
+  default     = false
+}
+
+variable "sp1_network_private_key" {
+  description = "SP1 Network private key for proof generation (Secp256k1 key with PROVE tokens)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "relayer_image" {
   description = "Relayer container image URI"
   type        = string
@@ -77,6 +90,12 @@ variable "artifact_registry_location" {
 variable "artifact_registry_repository" {
   description = "Artifact Registry repository name"
   type        = string
+}
+
+variable "app_artifact_registry_project" {
+  description = "GCP project for app images (validator, price-oracle). Only needed if hosting custom images outside synddb-infra."
+  type        = string
+  default     = "synddb-infra"
 }
 
 # TEE Bootstrap (null = disabled)

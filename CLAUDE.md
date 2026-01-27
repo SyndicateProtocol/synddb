@@ -76,6 +76,14 @@ git add path/to/file1.rs path/to/file2.rs
 
 Similarly, avoid `git restore .` or `git checkout .` to discard changes. Other files in the working directory may contain work from parallel sessions that should be preserved. Only restore specific files you intend to discard.
 
+### Force Pushing
+Never force push (`git push --force` or `git push -f`) if there is any alternative. Force pushing rewrites history and can cause problems for collaborators who have already pulled the branch.
+
+If you need to fix a prior commit (typo, missing file, etc.), do not use `git commit --amend` followed by force push. Instead, make the correction and create a new commit. This preserves history and avoids the need for force pushing.
+
+### Hard Reset
+Never run `git reset --hard` without asking for explicit confirmation first. Hard resets discard all uncommitted changes in the working directory, which can permanently delete work from parallel sessions. Always ask the user before running any variant of `git reset --hard`.
+
 ### Documentation (SPEC and PLAN files)
 The `SPEC.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
 - After making major implementation changes, update the corresponding SPEC and PLAN files to reflect the new state

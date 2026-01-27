@@ -25,30 +25,24 @@ variable "service_account_email" {
   type        = string
 }
 
-# GPU Configuration
-variable "gpu_type" {
-  description = "GPU type"
+# SP1 Network Prover
+variable "sp1_network_private_key" {
+  description = "SP1 Network private key for proof generation (Secp256k1 key with PROVE tokens)"
   type        = string
-  default     = "nvidia-l4"
+  sensitive   = true
 }
 
-variable "gpu_count" {
-  description = "Number of GPUs"
-  type        = number
-  default     = 1
-}
-
-# Resource Limits
+# Resource Limits (small instance - heavy work offloaded to SP1 Network)
 variable "cpu_limit" {
   description = "CPU limit"
   type        = string
-  default     = "8"
+  default     = "1"
 }
 
 variable "memory_limit" {
   description = "Memory limit"
   type        = string
-  default     = "32Gi"
+  default     = "512Mi"
 }
 
 # Scaling

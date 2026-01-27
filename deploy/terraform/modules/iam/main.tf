@@ -110,28 +110,62 @@ resource "google_storage_bucket_iam_member" "validator_storage" {
   member = "serviceAccount:${google_service_account.validator.email}"
 }
 
-# Artifact Registry reader (for pulling container images)
+# Artifact Registry reader permissions
+#
+# Core images (sequencer, proof-service) are always in synddb-infra.
+# App images (validator, price-oracle) default to synddb-infra but can be overridden.
+#
+# All service accounts get access to synddb-infra for core images.
+# If app_artifact_registry_project differs, validator and price_oracle get additional access.
+
+locals {
+  # Core SyndDB images are always in synddb-infra
+  core_ar_project = "synddb-infra"
+  # App images default to synddb-infra, can be overridden for custom registries
+  app_ar_project = var.app_artifact_registry_project
+}
+
+# Core registry access (synddb-infra) - all service accounts need this
 resource "google_artifact_registry_repository_iam_member" "sequencer_ar" {
   count      = var.artifact_registry_repository != "" ? 1 : 0
-  project    = var.project_id
+  project    = local.core_ar_project
   location   = var.artifact_registry_location
   repository = var.artifact_registry_repository
   role       = "roles/artifactregistry.reader"
   member     = "serviceAccount:${google_service_account.sequencer.email}"
 }
 
-resource "google_artifact_registry_repository_iam_member" "validator_ar" {
+resource "google_artifact_registry_repository_iam_member" "validator_core_ar" {
   count      = var.artifact_registry_repository != "" ? 1 : 0
-  project    = var.project_id
+  project    = local.core_ar_project
   location   = var.artifact_registry_location
   repository = var.artifact_registry_repository
   role       = "roles/artifactregistry.reader"
   member     = "serviceAccount:${google_service_account.validator.email}"
 }
 
-resource "google_artifact_registry_repository_iam_member" "price_oracle_ar" {
+resource "google_artifact_registry_repository_iam_member" "price_oracle_core_ar" {
   count      = var.artifact_registry_repository != "" ? 1 : 0
-  project    = var.project_id
+  project    = local.core_ar_project
+  location   = var.artifact_registry_location
+  repository = var.artifact_registry_repository
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.price_oracle.email}"
+}
+
+# App registry access (user-provided) - only if different from core
+resource "google_artifact_registry_repository_iam_member" "validator_app_ar" {
+  count      = local.app_ar_project != local.core_ar_project ? 1 : 0
+  project    = local.app_ar_project
+  location   = var.artifact_registry_location
+  repository = var.artifact_registry_repository
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.validator.email}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "price_oracle_app_ar" {
+  count      = local.app_ar_project != local.core_ar_project ? 1 : 0
+  project    = local.app_ar_project
   location   = var.artifact_registry_location
   repository = var.artifact_registry_repository
   role       = "roles/artifactregistry.reader"
