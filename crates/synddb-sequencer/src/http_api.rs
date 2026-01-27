@@ -163,8 +163,13 @@ impl From<SequenceReceipt> for SequenceResponse {
 pub struct StatusResponse {
     /// Current sequence number (next to be assigned)
     pub current_sequence: u64,
-    /// Sequencer's Ethereum address
+    /// Sequencer's Ethereum address (checksummed, with 0x prefix)
     pub signer_address: String,
+    /// Sequencer's 64-byte public key (hex encoded with 0x prefix)
+    ///
+    /// This is the uncompressed secp256k1 public key used for signature verification.
+    /// Validators use this to verify COSE signatures on messages.
+    pub signer_pubkey: String,
 }
 
 /// Individual health check result
@@ -555,9 +560,11 @@ async fn readiness_check(
 
 /// Status endpoint - returns current sequence and signer info
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
+    let pubkey = state.inbox.key_manager().public_key();
     Json(StatusResponse {
         current_sequence: state.inbox.current_sequence(),
         signer_address: format!("{:?}", state.inbox.signer_address()),
+        signer_pubkey: format!("0x{}", hex::encode(pubkey)),
     })
 }
 
@@ -615,21 +622,20 @@ async fn batch_flush(State(state): State<AppState>) -> Result<Json<BatchFlushRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signer::MessageSigner;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
         response::Response,
     };
-    use synddb_shared::types::payloads::{ChangesetData, SnapshotData};
+    use synddb_shared::{
+        keys::EvmKeyManager,
+        types::payloads::{ChangesetData, SnapshotData},
+    };
     use tower::ServiceExt;
 
-    const TEST_PRIVATE_KEY: &str =
-        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-
     fn test_app() -> Router {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
+        let key_manager = Arc::new(EvmKeyManager::generate());
+        let inbox = Arc::new(Inbox::new(key_manager));
         let state = AppState {
             inbox,
             attestation_verifier: None,
@@ -694,6 +700,9 @@ mod tests {
 
         assert_eq!(status.current_sequence, 0);
         assert!(status.signer_address.starts_with("0x"));
+        // Public key should be 64 bytes (128 hex chars + 0x prefix)
+        assert!(status.signer_pubkey.starts_with("0x"));
+        assert_eq!(status.signer_pubkey.len(), 130);
     }
 
     #[tokio::test]
@@ -758,8 +767,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sequence_increments() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
+        let key_manager = Arc::new(EvmKeyManager::generate());
+        let inbox = Arc::new(Inbox::new(key_manager));
         let state = AppState {
             inbox: inbox.clone(),
             attestation_verifier: None,
@@ -974,8 +983,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_sequence_independence() {
-        let signer = MessageSigner::new(TEST_PRIVATE_KEY).unwrap();
-        let inbox = Arc::new(Inbox::new(signer));
+        let key_manager = Arc::new(EvmKeyManager::generate());
+        let inbox = Arc::new(Inbox::new(key_manager));
         let state = AppState {
             inbox: inbox.clone(),
             attestation_verifier: None,

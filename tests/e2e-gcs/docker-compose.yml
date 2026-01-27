@@ -21,8 +21,6 @@
 #   0 = All assertions passed
 #   1 = Assertions failed
 #
-# Note: This test requires the sequencer to be built with --features gcs
-
 services:
   # GCS Emulator (disabled via docker-compose.real-gcs.yml for real GCS testing)
   fake-gcs:
@@ -63,7 +61,7 @@ services:
     build:
       context: ../..
       dockerfile: docker/Dockerfile
-      target: sequencer-gcs
+      target: sequencer
     environment:
       RUST_LOG: info,synddb_sequencer=debug,google_cloud_storage=debug,reqwest=debug
       BIND_ADDRESS: "0.0.0.0:8433"

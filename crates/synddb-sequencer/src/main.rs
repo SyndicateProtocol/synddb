@@ -19,10 +19,9 @@ use synddb_sequencer::{
         create_messages_router, MessageApiState, OutboundMonitor, OutboundMonitorConfig,
         OutboundMonitorHandle,
     },
-    signer::MessageSigner,
     transport::local::{LocalTransport, LocalTransportConfig},
 };
-use synddb_shared::runtime;
+use synddb_shared::{keys::EvmKeyManager, runtime};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,19 +39,17 @@ async fn main() -> Result<()> {
 
     info!(bind_address = %config.bind_address, "Configuration loaded");
 
-    // Initialize the message signer
-    let signer = MessageSigner::new(&config.signing_key)
-        .context("Failed to initialize signer from SIGNING_KEY")?;
+    // Generate a fresh signing key inside the TEE
+    // The key is never logged or exposed outside the enclave
+    let key_manager = Arc::new(EvmKeyManager::generate());
 
-    // Log both address (for human readability) and public key (for verification)
-    let pubkey_hex = format!("0x{}", hex::encode(signer.public_key()));
+    // Log only the public key and address (safe to expose)
+    let pubkey_hex = format!("0x{}", hex::encode(key_manager.public_key()));
     info!(
-        address = %signer.address(),
+        address = %key_manager.address(),
         public_key = %pubkey_hex,
-        "Signer initialized"
+        "TEE signing key generated"
     );
-
-    let signer = Arc::new(signer);
 
     // Initialize CBOR batcher based on publisher_type
     let (batcher, local_transport): (Option<BatcherHandle>, Option<Arc<LocalTransport>>) =
@@ -91,52 +88,43 @@ async fn main() -> Result<()> {
                 let batcher = Batcher::spawn(
                     batch_config,
                     Arc::clone(&transport) as Arc<dyn TransportPublisher>,
-                    Arc::clone(&signer),
+                    Arc::clone(&key_manager),
                 );
                 (Some(batcher), Some(transport))
             }
             PublisherType::Gcs => {
-                #[cfg(feature = "gcs")]
-                {
-                    use synddb_sequencer::transport::gcs::{GcsTransport, GcsTransportConfig};
+                use synddb_sequencer::transport::gcs::{GcsTransport, GcsTransportConfig};
 
-                    let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
-                    })?;
+                let bucket = config.gcs_bucket.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("GCS_BUCKET is required when publisher_type=gcs")
+                })?;
 
-                    let mut transport_config =
-                        GcsTransportConfig::new(bucket).with_prefix(&config.gcs_prefix);
-                    if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
-                        transport_config = transport_config.with_emulator_host(emulator_host);
-                    }
-
-                    let transport = GcsTransport::new(transport_config)
-                        .await
-                        .context("Failed to initialize GCS transport")?;
-
-                    let batch_config = config.batch_config();
-                    info!(
-                        max_messages = batch_config.max_messages,
-                        max_bytes = batch_config.max_batch_bytes,
-                        flush_interval_ms = batch_config.flush_interval.as_millis(),
-                        "Initializing CBOR batcher with GCS transport"
-                    );
-
-                    (
-                        Some(Batcher::spawn(
-                            batch_config,
-                            Arc::new(transport),
-                            Arc::clone(&signer),
-                        )),
-                        None,
-                    )
+                let mut transport_config =
+                    GcsTransportConfig::new(bucket).with_prefix(&config.gcs_prefix);
+                if let Some(ref emulator_host) = config.gcs_storage_emulator_host {
+                    transport_config = transport_config.with_emulator_host(emulator_host);
                 }
-                #[cfg(not(feature = "gcs"))]
-                {
-                    anyhow::bail!(
-                        "publisher_type=gcs requires the 'gcs' feature. Compile with --features gcs"
-                    );
-                }
+
+                let transport = GcsTransport::new(transport_config)
+                    .await
+                    .context("Failed to initialize GCS transport")?;
+
+                let batch_config = config.batch_config();
+                info!(
+                    max_messages = batch_config.max_messages,
+                    max_bytes = batch_config.max_batch_bytes,
+                    flush_interval_ms = batch_config.flush_interval.as_millis(),
+                    "Initializing CBOR batcher with GCS transport"
+                );
+
+                (
+                    Some(Batcher::spawn(
+                        batch_config,
+                        Arc::new(transport),
+                        Arc::clone(&key_manager),
+                    )),
+                    None,
+                )
             }
         };
 
@@ -154,9 +142,9 @@ async fn main() -> Result<()> {
         )
     });
 
-    // Create the inbox (shares signer with publisher)
-    let inbox = Arc::new(Inbox::with_start_sequence_arc(
-        Arc::clone(&signer),
+    // Create the inbox (shares key manager with batcher)
+    let inbox = Arc::new(Inbox::with_start_sequence(
+        Arc::clone(&key_manager),
         start_sequence,
     ));
 

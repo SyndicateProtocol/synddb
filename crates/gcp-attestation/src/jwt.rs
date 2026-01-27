@@ -11,15 +11,16 @@ pub struct JwtHeader {
     /// Key ID (matches jwks.keys[].kid)
     pub kid: String,
     /// Token type (expected: JWT)
-    pub typ: String,
+    #[serde(default)]
+    pub typ: Option<String>,
 }
 
 /// GCP Confidential Space attestation claims
 ///
-/// Reference: https://cloud.google.com/confidential-computing/confidential-space/docs/reference/token-claims
+/// Reference: <https://cloud.google.com/confidential-computing/confidential-space/docs/reference/token-claims>
 #[derive(Debug, Deserialize)]
 pub struct GcpCsClaims {
-    /// Issuer (must be "https://confidentialcomputing.googleapis.com")
+    /// Issuer (must be "<https://confidentialcomputing.googleapis.com>")
     pub iss: String,
 
     /// Subject (instance resource path)
@@ -35,50 +36,72 @@ pub struct GcpCsClaims {
     pub iat: u64,
 
     /// Not before (Unix timestamp)
+    #[serde(default)]
     pub nbf: u64,
 
     /// Secure boot enabled
+    #[serde(default)]
     pub secboot: bool,
 
-    /// Hardware model (e.g., "GCP_AMD_SEV")
-    pub hwmodel: String,
+    /// Hardware model (e.g., "`GCP_AMD_SEV`")
+    #[serde(default)]
+    pub hwmodel: Option<String>,
 
-    /// Software name (expected: "CONFIDENTIAL_SPACE")
-    pub swname: String,
+    /// Software name (expected: "`CONFIDENTIAL_SPACE`")
+    #[serde(default)]
+    pub swname: Option<String>,
 
     /// Debug status ("enabled" or "disabled")
-    pub dbgstat: String,
+    #[serde(default)]
+    pub dbgstat: Option<String>,
 
     /// Nonce (optional, for replay protection)
     #[serde(default)]
     pub eat_nonce: Option<String>,
 
     /// Sub-modules containing container and GCE info
-    pub submods: SubMods,
+    #[serde(default)]
+    pub submods: Option<SubMods>,
 }
 
 /// Sub-modules in the attestation claims
 #[derive(Debug, Deserialize)]
 pub struct SubMods {
     /// Container information
-    pub container: ContainerInfo,
+    pub container: Option<ContainerInfo>,
 }
 
 /// Container information from attestation
 #[derive(Debug, Deserialize)]
 pub struct ContainerInfo {
     /// Container image digest (e.g., "sha256:...")
-    pub image_digest: String,
+    pub image_digest: Option<String>,
 
     /// Container image reference
-    pub image_reference: String,
+    pub image_reference: Option<String>,
+}
+
+impl GcpCsClaims {
+    /// Get the container image digest if available
+    pub fn image_digest(&self) -> Option<&str> {
+        self.submods
+            .as_ref()
+            .and_then(|s| s.container.as_ref())
+            .and_then(|c| c.image_digest.as_deref())
+    }
+
+    /// Check if debug mode is disabled (production mode)
+    pub fn is_debug_disabled(&self) -> bool {
+        self.dbgstat.as_deref() == Some("disabled")
+    }
 }
 
 /// JWK (JSON Web Key) for RSA public key
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwkKey {
     /// Algorithm (expected: RS256)
-    pub alg: String,
+    #[serde(default)]
+    pub alg: Option<String>,
 
     /// Key ID
     pub kid: String,
@@ -93,11 +116,12 @@ pub struct JwkKey {
     pub e: String,
 
     /// Key use (expected: sig)
-    #[serde(rename = "use")]
-    pub use_: String,
+    #[serde(rename = "use", default)]
+    pub use_: Option<String>,
 }
 
 /// Parsed JWT components
+#[derive(Debug)]
 pub struct ParsedJwt {
     /// Decoded header
     pub header: JwtHeader,
@@ -105,7 +129,7 @@ pub struct ParsedJwt {
     pub claims: GcpCsClaims,
     /// Raw signature bytes
     pub signature: Vec<u8>,
-    /// Signing input (header.payload in base64url)
+    /// Signing input (header.payload in base64url, as bytes)
     pub signing_input: Vec<u8>,
 }
 

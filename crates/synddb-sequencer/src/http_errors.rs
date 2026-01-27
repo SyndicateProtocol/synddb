@@ -31,7 +31,7 @@ pub enum SequencerError {
     Attestation(#[from] crate::attestation::AttestationError),
 
     #[error("Signing failed: {0}")]
-    Signing(#[from] crate::signer::SignerError),
+    Signing(#[from] synddb_shared::keys::KeyError),
 
     #[error("Inbox error: {0}")]
     Inbox(#[from] crate::inbox::InboxError),

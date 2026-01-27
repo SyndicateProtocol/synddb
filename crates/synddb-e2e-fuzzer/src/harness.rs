@@ -3,15 +3,17 @@
 //! Provides in-process testing of the full pipeline:
 //! source DB -> changeset capture -> sequencer -> validator -> replica DB
 
-use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use rusqlite::{session::Session, Connection};
 use std::sync::Arc;
-use synddb_sequencer::{inbox::Inbox, signer::MessageSigner};
-use synddb_shared::types::{
-    cbor::{message::CborMessageType, verify::verifying_key_from_bytes},
-    message::SignedMessage,
-    payloads::{ChangesetBatchRequest, ChangesetData, SnapshotData, SnapshotRequest},
+use synddb_sequencer::inbox::Inbox;
+use synddb_shared::{
+    keys::EvmKeyManager,
+    types::{
+        cbor::{message::CborMessageType, verify::verifying_key_from_bytes},
+        message::SignedMessage,
+        payloads::{ChangesetBatchRequest, ChangesetData, SnapshotData, SnapshotRequest},
+    },
 };
 use synddb_validator::{
     sync::{fetcher::StorageFetcher, providers::mock::MockFetcher},
@@ -19,10 +21,6 @@ use synddb_validator::{
 };
 use tokio::sync::watch;
 use tracing::debug;
-
-/// Test private key (Anvil default account #0)
-/// DO NOT use in production!
-const TEST_PRIVATE_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 /// E2E test harness that coordinates source DB, sequencer, and validator
 pub struct E2EHarness {
@@ -36,8 +34,6 @@ pub struct E2EHarness {
     validator: Validator,
     /// Sequencer public key (64 bytes, uncompressed, no prefix)
     pubkey: [u8; 64],
-    /// Private key signer for creating test messages
-    signer: PrivateKeySigner,
     /// Shutdown sender for validator
     _shutdown_tx: watch::Sender<bool>,
 }
@@ -56,11 +52,10 @@ impl E2EHarness {
     pub fn new() -> Result<Self> {
         let source_conn = Connection::open_in_memory().context("Failed to open source database")?;
 
-        // Setup sequencer
-        let message_signer =
-            MessageSigner::new(TEST_PRIVATE_KEY).context("Failed to create message signer")?;
-        let pubkey = message_signer.public_key();
-        let inbox = Inbox::new(message_signer);
+        // Setup sequencer with a fresh generated key
+        let key_manager = Arc::new(EvmKeyManager::generate());
+        let pubkey = key_manager.public_key();
+        let inbox = Inbox::new(key_manager);
 
         // Setup mock fetcher and validator
         let fetcher: Arc<MockFetcher> = Arc::new(MockFetcher::new());
@@ -69,18 +64,12 @@ impl E2EHarness {
         let validator = Validator::in_memory(fetcher_dyn, pubkey, shutdown_rx)
             .context("Failed to create validator")?;
 
-        // Parse signer for test message creation
-        let signer: PrivateKeySigner = TEST_PRIVATE_KEY
-            .parse()
-            .context("Failed to parse private key")?;
-
         Ok(Self {
             source_conn,
             inbox,
             fetcher,
             validator,
             pubkey,
-            signer,
             _shutdown_tx: shutdown_tx,
         })
     }

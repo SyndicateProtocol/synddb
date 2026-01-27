@@ -22,14 +22,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONTRACTS_DIR="$PROJECT_ROOT/contracts"
 
-# Well-known Anvil addresses (deterministic)
-ANVIL_ACCOUNT_0="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-ANVIL_PRIVATE_KEY_0="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-ANVIL_ACCOUNT_1="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+# Load configuration from .env.defaults (single source of truth)
+set -a
+# shellcheck source=../.env.defaults
+source "$PROJECT_ROOT/.env.defaults"
+set +a
 
-# Default ports
-ANVIL_PORT="${ANVIL_PORT:-8545}"
-RPC_URL="http://127.0.0.1:$ANVIL_PORT"
+# Map to script's expected variable names
+ANVIL_ACCOUNT_0="$ANVIL_ADDRESS_0"
+ANVIL_PRIVATE_KEY_0="0x$ANVIL_KEY_0"
+ANVIL_ACCOUNT_1="$ANVIL_ADDRESS_1"
+RPC_URL="$ANVIL_RPC_URL"
 
 # Output directory
 OUTPUT_DIR="$PROJECT_ROOT/.synddb"

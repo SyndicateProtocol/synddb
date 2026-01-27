@@ -8,13 +8,15 @@
 #
 # All recipes use [no-cd] to run from the project root since they
 # depend on binaries and configuration from the root directory.
+#
+# Note: Sequencer keys are generated dynamically at startup (TEE security model).
+# If you need to fund the sequencer's wallet for on-chain operations, use:
+#   just fund-sequencer
 
 # Use bash with strict mode
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Shared configuration (mirrors root justfile)
-anvil_key_0 := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-sequencer_pubkey := "8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5"
+# Shared configuration
 sequencer_port := "8433"
 validator_port := "8080"
 data_dir := "./data"
@@ -45,14 +47,12 @@ price-oracle: _build-price-oracle _setup-price-oracle
 
     echo "Starting sequencer..."
     mkdir -p {{data_dir}}/price-oracle
-    SIGNING_KEY={{anvil_key_0}} \
     BIND_ADDRESS=127.0.0.1:{{sequencer_port}} \
     DATABASE_PATH={{data_dir}}/price-oracle/sequencer.db \
     ./target/release/synddb-sequencer &
     sleep 2
 
     echo "Starting price oracle validator..."
-    SEQUENCER_PUBKEY={{sequencer_pubkey}} \
     SEQUENCER_URL=http://127.0.0.1:{{sequencer_port}} \
     DATABASE_PATH={{data_dir}}/price-oracle/validator.db \
     STATE_DB_PATH={{data_dir}}/price-oracle/validator_state.db \
@@ -101,7 +101,6 @@ prediction-market: _build-prediction-market
 
     echo "Starting sequencer..."
     mkdir -p {{data_dir}}/prediction-market
-    SIGNING_KEY={{anvil_key_0}} \
     BIND_ADDRESS=127.0.0.1:{{sequencer_port}} \
     DATABASE_PATH={{data_dir}}/prediction-market/sequencer.db \
     ./target/release/synddb-sequencer &
@@ -120,7 +119,6 @@ prediction-market: _build-prediction-market
     sleep 2
 
     echo "Starting validator..."
-    SEQUENCER_PUBKEY={{sequencer_pubkey}} \
     SEQUENCER_URL=http://127.0.0.1:{{sequencer_port}} \
     DATABASE_PATH={{data_dir}}/prediction-market/validator.db \
     STATE_DB_PATH={{data_dir}}/prediction-market/validator_state.db \
@@ -152,7 +150,6 @@ prediction-market-http: _build-prediction-market
 
     echo "Starting sequencer..."
     mkdir -p {{data_dir}}/prediction-market
-    SIGNING_KEY={{anvil_key_0}} \
     BIND_ADDRESS=127.0.0.1:{{sequencer_port}} \
     DATABASE_PATH={{data_dir}}/prediction-market/sequencer.db \
     ./target/release/synddb-sequencer &
@@ -168,7 +165,6 @@ prediction-market-http: _build-prediction-market
     sleep 2
 
     echo "Starting validator..."
-    SEQUENCER_PUBKEY={{sequencer_pubkey}} \
     SEQUENCER_URL=http://127.0.0.1:{{sequencer_port}} \
     DATABASE_PATH={{data_dir}}/prediction-market/validator.db \
     STATE_DB_PATH={{data_dir}}/prediction-market/validator_state.db \

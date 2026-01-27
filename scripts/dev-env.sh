@@ -20,15 +20,19 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Configuration
+# Load configuration from .env.defaults (single source of truth)
+set -a
+# shellcheck source=../.env.defaults
+source "$PROJECT_ROOT/.env.defaults"
+set +a
+
+# Allow environment overrides for ports and data dir
 ANVIL_PORT="${ANVIL_PORT:-8545}"
 SEQUENCER_PORT="${SEQUENCER_PORT:-8433}"
 VALIDATOR_PORT="${VALIDATOR_PORT:-8080}"
 DATA_DIR="${DATA_DIR:-$PROJECT_ROOT/data}"
 
-# Well-known Anvil keys (DO NOT USE IN PRODUCTION)
-ANVIL_KEY_0="ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-SEQUENCER_PUBKEY="8318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5"
+# Keys are loaded from .env.defaults (ANVIL_KEY_0, SEQUENCER_PUBKEY)
 
 # Options
 START_VALIDATOR=false

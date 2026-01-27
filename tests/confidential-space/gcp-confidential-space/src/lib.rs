@@ -1,29 +1,20 @@
-//! GCP Confidential Space attestation verification library
+//! GCP Confidential Space attestation verification library with SP1 support
 //!
-//! This library verifies JWT attestation tokens from Google's Confidential Space
-//! TEE environment. It can optionally be compiled with SP1 support for
-//! zero-knowledge proof generation.
+//! This library provides attestation verification for GCP Confidential Space TEE tokens.
+//! It wraps the core `gcp-attestation` crate and adds SP1-specific types for zero-knowledge
+//! proof generation.
 //!
 //! # Features
 //!
 //! - `std` (default) - Standard library support
 //! - `sp1` - Enable SP1-specific types (PublicValuesStruct with alloy sol! macro)
 //!
-//! # Key Differences from AWS Nitro
-//!
-//! | Feature | AWS Nitro | GCP Confidential Space |
-//! |---------|-----------|------------------------|
-//! | Format | CBOR/COSE_Sign1 | JWT (JSON Web Token) |
-//! | Signature | P-384 ECDSA | RS256 (RSA-2048 + SHA-256) |
-//! | Identity | PCR values (SHA-384) | image_digest (SHA-256) |
-//! | Trust anchor | AWS root certificate | Google JWKS public keys |
-//!
 //! # Usage
 //!
 //! ```ignore
-//! use gcp_confidential_space::{verify_gcp_cs_attestation, JwkKey};
+//! use gcp_confidential_space::{verify_attestation, JwkKey};
 //!
-//! let result = verify_gcp_cs_attestation(
+//! let result = verify_attestation(
 //!     &jwt_bytes,
 //!     &jwk_key,
 //!     Some("https://my-audience.example.com"),
@@ -36,7 +27,13 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-extern crate alloc;
+// Re-export everything from the shared gcp-attestation crate
+pub use gcp_attestation::*;
 
-pub mod attestation;
-pub mod jwt;
+// SP1-specific module containing PublicValuesStruct
+#[cfg(feature = "sp1")]
+pub mod sp1_types;
+
+// Re-export SP1 types at the crate root for convenience
+#[cfg(feature = "sp1")]
+pub use sp1_types::PublicValuesStruct;

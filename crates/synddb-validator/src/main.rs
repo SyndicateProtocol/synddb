@@ -21,21 +21,30 @@ use synddb_validator::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = ValidatorConfig::parse();
+    let mut config = ValidatorConfig::parse();
     runtime::init_logging(config.log_json);
-
-    info!(
-        expected_sequencer_pubkey = %config.sequencer_pubkey,
-        database = %config.database_path,
-        state_db = %config.state_db_path,
-        "`SyndDB` Validator starting"
-    );
 
     // Log supported fetcher types
     info!(
         supported = %FetcherType::supported_types().join(", "),
         selected = %config.fetcher_type,
         "Fetcher types"
+    );
+
+    // Resolve sequencer public key (fetch from sequencer if not provided)
+    let sequencer_pubkey = config
+        .resolve_sequencer_pubkey()
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    // Store resolved pubkey in config for use by Validator::new
+    config.sequencer_pubkey = Some(sequencer_pubkey.clone());
+
+    info!(
+        sequencer_pubkey = %sequencer_pubkey,
+        database = %config.database_path,
+        state_db = %config.state_db_path,
+        "`SyndDB` Validator starting"
     );
 
     config

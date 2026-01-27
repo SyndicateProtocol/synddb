@@ -25,9 +25,3 @@ pre-commit:
       run: taplo fmt "**/Cargo.toml"
       stage_fixed: true
       fail_text: "TOML formatting failed"
-
-pre-push:
-  commands:
-    test:
-      run: cargo test --workspace --lib --quiet
-      fail_text: "Tests failed. Run 'just test' to see details."
