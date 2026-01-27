@@ -50,7 +50,7 @@ End-to-end guide for integrating blockchain monitoring into SyndDB applications.
 
 1. Application writes to SQLite
 2. SessionMonitor captures changeset
-3. ChangesetSender publishes to sequencer
+3. ChangesetSender pushes to sequencer
 4. Sequencer signs and publishes to storage layer
 5. Replicas apply changesets
 
@@ -247,7 +247,7 @@ websocat wss://base-mainnet.g.alchemy.com/v2/YOUR_KEY
 3. Verify event signature (if specified)
 4. Check logs for errors
 
-### Changesets Not Publishing
+### Changesets Not Pushing
 
 1. Verify sequencer is running
 2. Check `sequencer_url` in config

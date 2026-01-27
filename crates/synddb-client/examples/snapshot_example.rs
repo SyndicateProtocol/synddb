@@ -2,8 +2,8 @@
 //!
 //! This example shows:
 //! - `execute_ddl()`: Execute DDL with automatic snapshot publishing
-//! - `create_snapshot()`: Creates a local snapshot (does NOT send to sequencer)
-//! - `publish_snapshot()`: Creates AND sends snapshot to sequencer
+//! - `create_snapshot()`: Creates a local snapshot (does NOT push to sequencer)
+//! - `snapshot()`: Creates AND pushes snapshot to sequencer
 //!
 //! Note: Since v0.2, DDL executed through `SyndDB` methods automatically triggers
 //! snapshot publishing. This ensures validators can always reconstruct schemas.
@@ -54,9 +54,9 @@ fn main() -> Result<()> {
     // Wait a moment for initial flush
     std::thread::sleep(std::time::Duration::from_secs(1));
 
-    // Create a LOCAL snapshot (does NOT send to sequencer)
+    // Create a LOCAL snapshot (does NOT push to sequencer)
     // Use this when you need the snapshot data locally (backup, testing, etc.)
-    println!("Creating local snapshot (not sent to sequencer)...");
+    println!("Creating local snapshot (not pushed to sequencer)...");
     let snapshot = synddb.create_snapshot()?;
 
     println!("✓ Snapshot created:");

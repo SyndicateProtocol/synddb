@@ -22,6 +22,7 @@ typedef enum {
     AttachError = 4,
     PublishError = 5,
     SnapshotError = 6,
+    InvalidUrl = 7,
 } SyndDBError;
 
 // FFI function declarations
@@ -34,12 +35,12 @@ extern SyndDBError synddb_attach(
 extern SyndDBError synddb_attach_with_config(
     const char* db_path,
     const char* sequencer_url,
-    unsigned long long flush_interval_ms,
+    unsigned long long push_interval_ms,
     unsigned long long snapshot_interval,
     SyndDBHandle** out_handle
 );
 
-extern SyndDBError synddb_publish(SyndDBHandle* handle);
+extern SyndDBError synddb_push(SyndDBHandle* handle);
 
 extern SyndDBError synddb_snapshot(
     SyndDBHandle* handle,
@@ -87,16 +88,16 @@ int main(void) {
     }
     printf("   ✓ Successfully attached to database\n\n");
 
-    // Test 4: Manual publish (should succeed even with no data)
-    printf("4. Testing synddb_publish()...\n");
-    result = synddb_publish(handle);
+    // Test 4: Manual push (should succeed even with no data)
+    printf("4. Testing synddb_push()...\n");
+    result = synddb_push(handle);
     if (result != Success) {
         const char* error = synddb_last_error();
-        printf("   ✗ Failed to publish: %s\n", error ? error : "(unknown error)");
+        printf("   ✗ Failed to push: %s\n", error ? error : "(unknown error)");
         synddb_detach(handle);
         return 1;
     }
-    printf("   ✓ Successfully published\n\n");
+    printf("   ✓ Successfully pushed\n\n");
 
     // Test 5: Create snapshot
     printf("5. Testing synddb_snapshot()...\n");

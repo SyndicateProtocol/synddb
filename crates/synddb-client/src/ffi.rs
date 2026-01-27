@@ -137,7 +137,7 @@ pub unsafe extern "C" fn synddb_attach(
 /// # Arguments
 /// * `db_path` - Path to `SQLite` database file
 /// * `sequencer_url` - URL of sequencer TEE
-/// * `flush_interval_ms` - Milliseconds between sender flushes (must be > 0)
+/// * `push_interval_ms` - Milliseconds between automatic pushes (must be > 0)
 /// * `snapshot_interval` - Number of changesets between automatic snapshots (must be > 0)
 /// * `out_handle` - Output pointer to receive `SyndDB` handle
 ///
@@ -152,7 +152,7 @@ pub unsafe extern "C" fn synddb_attach(
 pub unsafe extern "C" fn synddb_attach_with_config(
     db_path: *const c_char,
     sequencer_url: *const c_char,
-    flush_interval_ms: u64,
+    push_interval_ms: u64,
     snapshot_interval: u64,
     out_handle: *mut *mut SyndDBHandle,
 ) -> SyndDBError {
@@ -197,7 +197,7 @@ pub unsafe extern "C" fn synddb_attach_with_config(
 
     let config = Config {
         sequencer_url,
-        flush_interval: Duration::from_millis(flush_interval_ms),
+        push_interval: Duration::from_millis(push_interval_ms),
         snapshot_interval,
         ..Default::default()
     };
@@ -216,10 +216,10 @@ pub unsafe extern "C" fn synddb_attach_with_config(
     SyndDBError::Success
 }
 
-/// Manually publish all pending changesets immediately
+/// Push all pending changesets to the sequencer immediately
 ///
-/// Changesets are automatically published on a timer. Use this to force
-/// immediate publication for low-latency or high-value changes.
+/// Changesets are automatically pushed on a timer. Use this to force
+/// immediate push for low-latency or high-value changes.
 ///
 /// # Arguments
 /// * `handle` - `SyndDB` handle from `synddb_attach()`
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn synddb_attach_with_config(
 /// # Safety
 /// - `handle` must be a valid handle from `synddb_attach()`
 #[no_mangle]
-pub unsafe extern "C" fn synddb_publish_changeset(handle: *mut SyndDBHandle) -> SyndDBError {
+pub unsafe extern "C" fn synddb_push(handle: *mut SyndDBHandle) -> SyndDBError {
     clear_last_error();
 
     if handle.is_null() {
@@ -240,22 +240,13 @@ pub unsafe extern "C" fn synddb_publish_changeset(handle: *mut SyndDBHandle) -> 
 
     let synddb = &*(handle as *const SyndDB);
 
-    match synddb.publish_changeset() {
+    match synddb.push() {
         Ok(_) => SyndDBError::Success,
         Err(e) => {
-            set_last_error(format!("Failed to publish changeset: {}", e));
+            set_last_error(format!("Failed to push changeset: {}", e));
             SyndDBError::PublishError
         }
     }
-}
-
-/// Alias for `synddb_publish_changeset` - matches the C header declaration
-///
-/// # Safety
-/// - `handle` must be a valid handle from `synddb_attach()`
-#[no_mangle]
-pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBError {
-    synddb_publish_changeset(handle)
 }
 
 /// Create and publish a snapshot to the sequencer
@@ -266,11 +257,11 @@ pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBErro
 ///
 /// # Behavior
 ///
-/// This function is consistent with `synddb_publish()` for changesets:
-/// - `synddb_publish()` - extracts pending changesets and sends to sequencer
-/// - `synddb_snapshot()` - creates database snapshot and sends to sequencer
+/// This function is consistent with `synddb_push()` for changesets:
+/// - `synddb_push()` - pushes pending changesets to sequencer
+/// - `synddb_snapshot()` - creates database snapshot and pushes to sequencer
 ///
-/// Both operations send data to the sequencer immediately (synchronous).
+/// Both operations push data to the sequencer immediately (synchronous).
 ///
 /// # When to Use
 ///
@@ -314,7 +305,7 @@ pub unsafe extern "C" fn synddb_snapshot(
     let synddb = &*(handle as *const SyndDB);
 
     // Create AND publish snapshot to the sequencer (synchronous)
-    match synddb.publish_snapshot() {
+    match synddb.snapshot() {
         Ok(snapshot) => {
             if !out_size.is_null() {
                 *out_size = snapshot.data.len();
@@ -322,7 +313,7 @@ pub unsafe extern "C" fn synddb_snapshot(
             SyndDBError::Success
         }
         Err(e) => {
-            set_last_error(format!("Failed to publish snapshot: {}", e));
+            set_last_error(format!("Failed to create snapshot: {}", e));
             SyndDBError::SnapshotError
         }
     }
@@ -330,7 +321,7 @@ pub unsafe extern "C" fn synddb_snapshot(
 
 /// Detach `SyndDB` and free resources
 ///
-/// This will gracefully shutdown the client, publishing any pending changesets.
+/// This will gracefully shutdown the client, sending any pending changesets.
 ///
 /// # Arguments
 /// * `handle` - `SyndDB` handle from `synddb_attach()`
@@ -504,7 +495,7 @@ pub unsafe extern "C" fn synddb_execute_batch(
     // Auto-snapshot after DDL (always enabled for FFI - simplest DX)
     if SyndDB::is_ddl(sql_str) {
         info!("DDL executed via FFI, creating automatic snapshot");
-        if let Err(e) = synddb.publish_snapshot() {
+        if let Err(e) = synddb.snapshot() {
             warn!("Failed to auto-snapshot after DDL: {}. Continuing.", e);
             // Don't fail the execute - the DDL succeeded, snapshot is best-effort
         }

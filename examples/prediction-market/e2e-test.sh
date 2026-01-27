@@ -77,7 +77,7 @@ SEQUENCE=$(echo "$STATUS" | grep -o '"current_sequence":[0-9]*' | cut -d':' -f2)
 echo "  Current sequencer sequence: $SEQUENCE"
 
 if [ -z "$SEQUENCE" ] || [ "$SEQUENCE" -lt 1 ]; then
-    echo "  ERROR: No changesets were published to sequencer"
+    echo "  ERROR: No changesets were pushed to sequencer"
     echo "  Status response: $STATUS"
     exit 1
 fi

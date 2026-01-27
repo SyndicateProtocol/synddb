@@ -17,13 +17,13 @@ cargo run --package synddb-sequencer -- --config config/default.yaml
 
 #### [`rust_example.rs`](./rust_example.rs)
 **Complexity:** Beginner
-**Features:** Basic attachment, automatic publishing, manual publish
+**Features:** Basic attachment, automatic changeset sending, manual push
 **Run:** `cargo run --example rust_example`
 
 The simplest example showing how to integrate SyndDB into a Rust application. Demonstrates:
 - One-line integration with `SyndDB::attach()`
-- Automatic changeset publishing
-- Manual `publish()` calls
+- Automatic changeset sending
+- Manual `push()` calls
 - Realistic order book usage pattern
 
 ### Snapshot Operations
@@ -137,16 +137,35 @@ Outstanding comprehensive guide covering:
 - Memory management patterns
 - Thread safety considerations
 
-## Work-in-Progress Examples
+## Python Examples
 
-### Python Native Bindings
+### Python FFI Bindings
 
 #### [`python_example.py`](./python_example.py)
-**Status:** TODO - Native Python bindings not yet implemented
+**Complexity:** Beginner
+**Language:** Python
+**Run:**
+```bash
+# First, build the shared library
+cargo build --package synddb-client --features ffi --release
 
-This example shows the intended future API for native Python bindings. Currently non-functional.
+# Then run the example
+python3 python_example.py
+```
 
-**For Python integration today, use:** [`ffi/test.py`](./ffi/test.py) (ctypes FFI)
+Demonstrates the Python FFI bindings using the `synddb` module:
+- Loading the SyndDB library
+- Attaching to a database
+- Creating schemas and snapshots
+- Executing SQL with automatic changeset capture
+
+**Full Python API:** [`../bindings/python/synddb.py`](../bindings/python/synddb.py)
+
+The Python bindings provide:
+- `SyndDB` class for database operations
+- `MessageClient` class for message passing API
+- Context manager support (`with` statement)
+- Transaction support (`begin`, `commit`, `rollback`)
 
 ## Prerequisites
 
@@ -196,10 +215,11 @@ Most examples use default configuration. For custom settings:
 
 ```rust
 let config = Config {
-    flush_interval: Duration::from_millis(500),
+    push_interval: Duration::from_millis(500),
     snapshot_interval: 5, // Every 5 changesets
+    ..Default::default()
 };
-let synddb = SyndDB::attach_with_config(conn, sequencer_url, config)?;
+let synddb = SyndDB::attach_with_config(conn, config)?;
 ```
 
 ## Getting Help

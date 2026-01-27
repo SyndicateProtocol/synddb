@@ -15,14 +15,14 @@ pub struct Config {
     #[arg(long, env = "SEQUENCER_URL", default_value = "http://localhost:8433", value_parser = parse_url)]
     pub sequencer_url: Url,
 
-    /// Maximum number of changesets to buffer before publishing
+    /// Maximum number of changesets to buffer before sending
     #[arg(long, env = "BUFFER_SIZE", default_value = "100")]
     pub buffer_size: usize,
 
-    /// Maximum time to buffer changesets before sending (e.g., "1s")
-    #[arg(long, env = "FLUSH_INTERVAL", default_value = "1s", value_parser = humantime::parse_duration)]
+    /// How often to automatically push pending changesets (e.g., "1s")
+    #[arg(long, env = "PUSH_INTERVAL", default_value = "1s", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
-    pub flush_interval: Duration,
+    pub push_interval: Duration,
 
     /// Maximum size of a changeset batch in bytes
     #[arg(long, env = "MAX_BATCH_SIZE", default_value = "1048576")]

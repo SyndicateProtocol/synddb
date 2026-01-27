@@ -17,14 +17,14 @@ use tokio::sync::RwLock;
 pub struct ReplicationStats {
     /// Number of changesets pending in the buffer
     pub(crate) pending_changesets: AtomicUsize,
-    /// Number of changesets successfully published
-    pub(crate) published_changesets: AtomicU64,
-    /// Number of failed publish attempts
-    pub(crate) failed_publishes: AtomicU64,
+    /// Number of changesets successfully pushed
+    pub(crate) pushed_changesets: AtomicU64,
+    /// Number of failed push attempts
+    pub(crate) failed_pushes: AtomicU64,
     /// Whether the last health check succeeded
     pub(crate) last_health_check_ok: AtomicBool,
-    /// Time of last successful publish (protected by `RwLock` for `Instant`)
-    pub(crate) last_publish_time: RwLock<Option<Instant>>,
+    /// Time of last successful push (protected by `RwLock` for `Instant`)
+    pub(crate) last_push_time: RwLock<Option<Instant>>,
     /// Time of last successful health check
     pub(crate) last_health_check_time: RwLock<Option<Instant>>,
 }
@@ -40,10 +40,10 @@ impl ReplicationStats {
     pub fn new() -> Self {
         Self {
             pending_changesets: AtomicUsize::new(0),
-            published_changesets: AtomicU64::new(0),
-            failed_publishes: AtomicU64::new(0),
+            pushed_changesets: AtomicU64::new(0),
+            failed_pushes: AtomicU64::new(0),
             last_health_check_ok: AtomicBool::new(false),
-            last_publish_time: RwLock::new(None),
+            last_push_time: RwLock::new(None),
             last_health_check_time: RwLock::new(None),
         }
     }
@@ -53,14 +53,14 @@ impl ReplicationStats {
         self.pending_changesets.load(Ordering::Relaxed)
     }
 
-    /// Get total number of successfully published changesets
-    pub fn published_count(&self) -> u64 {
-        self.published_changesets.load(Ordering::Relaxed)
+    /// Get total number of successfully pushed changesets
+    pub fn pushed_count(&self) -> u64 {
+        self.pushed_changesets.load(Ordering::Relaxed)
     }
 
-    /// Get number of failed publish attempts
+    /// Get number of failed push attempts
     pub fn failed_count(&self) -> u64 {
-        self.failed_publishes.load(Ordering::Relaxed)
+        self.failed_pushes.load(Ordering::Relaxed)
     }
 
     /// Check if the last health check succeeded
@@ -78,17 +78,17 @@ impl ReplicationStats {
         self.pending_changesets.fetch_sub(n, Ordering::Relaxed);
     }
 
-    /// Record a successful publish
-    pub(crate) async fn record_publish(&self, count: usize) {
-        self.published_changesets
+    /// Record a successful push
+    pub(crate) async fn record_push(&self, count: usize) {
+        self.pushed_changesets
             .fetch_add(count as u64, Ordering::Relaxed);
         self.decrement_pending(count);
-        *self.last_publish_time.write().await = Some(Instant::now());
+        *self.last_push_time.write().await = Some(Instant::now());
     }
 
-    /// Record a failed publish
+    /// Record a failed push
     pub(crate) fn record_failure(&self) {
-        self.failed_publishes.fetch_add(1, Ordering::Relaxed);
+        self.failed_pushes.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record health check result
@@ -113,10 +113,10 @@ pub fn new_stats_handle() -> StatsHandle {
 pub struct StatsSnapshot {
     /// Number of changesets pending in buffer
     pub pending_changesets: usize,
-    /// Total changesets successfully published
-    pub published_changesets: u64,
-    /// Total failed publish attempts
-    pub failed_publishes: u64,
+    /// Total changesets successfully pushed
+    pub pushed_changesets: u64,
+    /// Total failed push attempts
+    pub failed_pushes: u64,
     /// Whether sequencer is reachable
     pub is_healthy: bool,
 }
@@ -126,8 +126,8 @@ impl StatsSnapshot {
     pub fn from_stats(stats: &ReplicationStats) -> Self {
         Self {
             pending_changesets: stats.pending_count(),
-            published_changesets: stats.published_count(),
-            failed_publishes: stats.failed_count(),
+            pushed_changesets: stats.pushed_count(),
+            failed_pushes: stats.failed_count(),
             is_healthy: stats.is_healthy(),
         }
     }

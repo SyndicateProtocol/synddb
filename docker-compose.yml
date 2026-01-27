@@ -94,7 +94,7 @@ services:
     command: ["run", "--db", "/data/orderbook.db", "--simple", "--duration", "60", "--rate", "100"]
 
   # Session stress test - verifies no SIGSEGV from Session race conditions
-  # This test runs continuous transactions with changeset publishing to verify
+  # This test runs continuous transactions with changeset pushing to verify
   # the safe API works correctly under load.
   stress_test:
     build:

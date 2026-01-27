@@ -134,10 +134,10 @@ impl PredictionMarket {
         self.synddb.is_some()
     }
 
-    /// Explicitly publish pending changesets to the sequencer immediately
-    pub fn publish_changeset(&self) -> Result<()> {
+    /// Push pending changesets to the sequencer immediately
+    pub fn push(&self) -> Result<()> {
         if let Some(ref synddb) = self.synddb {
-            synddb.publish_changeset()?;
+            synddb.push()?;
         }
         Ok(())
     }

@@ -11,7 +11,7 @@ cargo build --package synddb-client --features ffi --release
 
 2. Install dependencies:
 ```bash
-npm install ffi-napi ref-napi
+npm install koffi
 ```
 
 3. Copy `synddb.js` to your project or install from npm (when published):
@@ -41,7 +41,7 @@ const db = new Database('app.db');
 db.prepare('CREATE TABLE IF NOT EXISTS users (id INTEGER, name TEXT)').run();
 db.prepare('INSERT INTO users VALUES (?, ?)').run(1, 'Alice');
 
-// Changes are automatically published every 1 second
+// Changes are automatically sent every 1 second
 
 // Clean up when done (optional - Node.js GC will handle it)
 synddb.detach();
@@ -52,20 +52,20 @@ synddb.detach();
 ```javascript
 const { SyndDB } = require('./synddb');
 
-// Custom publish interval and snapshots
+// Custom push interval and snapshots
 const synddb = SyndDB.attachWithConfig(
   'app.db',
   'http://localhost:8433',
   {
-    publishIntervalMs: 500,   // Publish every 500ms
-    snapshotInterval: 100      // Snapshot every 100 changesets
+    pushIntervalMs: 500,      // Push every 500ms
+    snapshotInterval: 100     // Snapshot every 100 changesets
   }
 );
 ```
 
-### Manual Publishing
+### Manual Sending
 
-Changesets are published automatically every 1 second. For critical transactions, publish immediately:
+Changesets are pushed automatically every 1 second. For critical transactions, push immediately:
 
 ```javascript
 const { attach } = require('./synddb');
@@ -73,18 +73,18 @@ const Database = require('better-sqlite3');
 
 const synddb = attach('app.db', 'http://localhost:8433');
 
-// Critical transaction - publish immediately after commit
+// Critical transaction - push immediately after commit
 const db = new Database('app.db');
 db.prepare('INSERT INTO trades VALUES (?, ?)').run(1, 1000000);
-synddb.publishChangeset();  // Force immediate publish
+synddb.push();  // Force immediate push
 ```
 
-**When to call `publishChangeset()` manually:**
+**When to call `push()` manually:**
 - After critical transactions that must be sent immediately
 - Before application shutdown (handled automatically by `detach()`)
 - When you need to ensure data is sent before proceeding
 
-**When automatic publishing is sufficient:**
+**When automatic sending is sufficient:**
 - Normal application operations
 - High-throughput batch processing
 
@@ -99,7 +99,7 @@ using synddb = SyndDB.attach('app.db', 'http://localhost:8433');
   const db = new Database('app.db');
   db.prepare('INSERT INTO users VALUES (?, ?)').run(2, 'Bob');
 }
-// Automatically detaches and publishes on scope exit
+// Automatically detaches and sends on scope exit
 ```
 
 ## API Reference
@@ -122,14 +122,14 @@ Attach with custom configuration.
 - `dbPath` (string): Path to SQLite database file
 - `sequencerUrl` (string): URL of sequencer TEE
 - `options` (object):
-  - `publishIntervalMs` (number): Milliseconds between automatic publishes (default: 1000)
+  - `pushIntervalMs` (number): Milliseconds between automatic pushes (default: 1000)
   - `snapshotInterval` (number): Number of changesets between snapshots (default: 0 = disabled)
 
 **Returns:** SyndDB instance
 
-### `synddb.publishChangeset()`
+### `synddb.push()`
 
-Force immediate publication of all pending changesets.
+Force immediate push of all pending changesets.
 
 ### `synddb.snapshot()`
 
@@ -146,7 +146,7 @@ This creates a complete database snapshot (schema + data) and sends it to the se
 
 ### `synddb.detach()`
 
-Gracefully shutdown and free resources. Publishes any pending changesets.
+Gracefully shutdown and free resources. Sends any pending changesets.
 
 ### `version()`
 
@@ -157,12 +157,12 @@ Get library version string.
 ## Requirements
 
 - Node.js 14+
-- `ffi-napi` and `ref-napi` packages
+- `koffi` package (pure JavaScript FFI, no native compilation)
 - libsynddb_client shared library (built from Rust)
 
 ## How It Works
 
-This wrapper uses Node.js's `ffi-napi` to call the C FFI functions exported by the Rust library. No compilation or build tools required on the Node.js side - just install the dependencies and go!
+This wrapper uses [koffi](https://koffi.dev/) to call the C FFI functions exported by the Rust library. Unlike `ffi-napi`, koffi requires no native compilation - just install the package and go!
 
 The Rust library is compiled once to a shared library (`.so`, `.dylib`, or `.dll`), then all language bindings use the same binary.
 
