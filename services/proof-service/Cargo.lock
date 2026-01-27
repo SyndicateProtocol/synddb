@@ -4480,7 +4480,6 @@ dependencies = [
  "alloy",
  "anyhow",
  "axum 0.8.8",
- "bincode",
  "clap",
  "gcp-attestation",
  "gcp-cs-attestation-sp1-program",

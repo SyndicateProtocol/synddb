@@ -164,12 +164,16 @@ impl BootstrapStateMachine {
             .parse()
             .map_err(|e| BootstrapError::Config(format!("Invalid bridge address: {e}")))?;
 
+        let rpc_url = config.rpc_url.as_ref().unwrap();
+
         let relayer_client = RelayerClient::new(
             config.relayer_url.clone().unwrap(),
             bridge_address,
+            rpc_url,
             config.chain_id.unwrap(),
             config.relayer_timeout,
-        );
+        )
+        .await?;
 
         // Step 2: Fetch attestation token
         self.state = BootstrapState::FetchingAttestation;

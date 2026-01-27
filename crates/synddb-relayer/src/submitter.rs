@@ -31,6 +31,8 @@ sol! {
             uint256 deadline,
             bytes calldata signature
         ) external returns (address publicKey);
+
+        function teeKeyManager() external view returns (address);
     }
 
     #[sol(rpc)]
@@ -44,7 +46,9 @@ sol! {
 pub(crate) struct RelayerSubmitter {
     rpc_url: String,
     bridge_address: Address,
+    tee_key_manager_address: Address,
     signer: PrivateKeySigner,
+    tx_confirmation_timeout: Duration,
 }
 
 impl std::fmt::Debug for RelayerSubmitter {
@@ -58,15 +62,30 @@ impl std::fmt::Debug for RelayerSubmitter {
 }
 
 impl RelayerSubmitter {
-    /// Create from config
-    pub(crate) fn from_config(config: &RelayerConfig) -> anyhow::Result<Self> {
+    /// Create from config, fetching `TeeKeyManager` address from Bridge contract
+    pub(crate) async fn from_config(config: &RelayerConfig) -> anyhow::Result<Self> {
         let key_bytes = hex::decode(config.private_key.trim_start_matches("0x"))?;
         let signer = PrivateKeySigner::from_slice(&key_bytes)?;
+
+        // Fetch TeeKeyManager address from Bridge contract
+        let url = Url::parse(&config.rpc_url)?;
+        let provider = ProviderBuilder::new().connect_http(url);
+        let bridge = IBridge::new(config.bridge_address, &provider);
+        let tee_key_manager_address = Address::from(bridge.teeKeyManager().call().await?.0);
+
+        info!(
+            bridge = %config.bridge_address,
+            tee_key_manager = %tee_key_manager_address,
+            tx_confirmation_timeout_secs = config.tx_confirmation_timeout.as_secs(),
+            "Fetched TeeKeyManager address from Bridge"
+        );
 
         Ok(Self {
             rpc_url: config.rpc_url.clone(),
             bridge_address: config.bridge_address,
+            tee_key_manager_address,
             signer,
+            tx_confirmation_timeout: config.tx_confirmation_timeout,
         })
     }
 
@@ -147,13 +166,12 @@ impl RelayerSubmitter {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
-        let contract = ITeeKeyManager::new(self.bridge_address, &provider);
+        let contract = ITeeKeyManager::new(self.tee_key_manager_address, &provider);
 
         match contract.isSequencerKeyValid(address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
-                let err_str = e.to_string();
-                if err_str.contains("InvalidPublicKey") {
+                if is_invalid_public_key_error(&e.to_string()) {
                     Ok(false)
                 } else {
                     Err(e.into())
@@ -167,13 +185,12 @@ impl RelayerSubmitter {
         let url = Url::parse(&self.rpc_url)?;
         let provider = ProviderBuilder::new().connect_http(url);
 
-        let contract = ITeeKeyManager::new(self.bridge_address, &provider);
+        let contract = ITeeKeyManager::new(self.tee_key_manager_address, &provider);
 
         match contract.isValidatorKeyValid(address).call().await {
             Ok(_) => Ok(true),
             Err(e) => {
-                let err_str = e.to_string();
-                if err_str.contains("InvalidPublicKey") {
+                if is_invalid_public_key_error(&e.to_string()) {
                     Ok(false)
                 } else {
                     Err(e.into())
@@ -188,12 +205,15 @@ impl RelayerSubmitter {
         let provider = ProviderBuilder::new().connect_http(url);
 
         let poll_interval = Duration::from_secs(2);
-        let timeout = Duration::from_secs(120);
         let start = std::time::Instant::now();
 
         loop {
-            if start.elapsed() > timeout {
-                anyhow::bail!("Timeout waiting for tx confirmation: {}", tx_hash);
+            if start.elapsed() > self.tx_confirmation_timeout {
+                anyhow::bail!(
+                    "Timeout waiting for tx confirmation after {:?}: {}",
+                    self.tx_confirmation_timeout,
+                    tx_hash
+                );
             }
 
             match provider.get_transaction_receipt(tx_hash).await {
@@ -214,5 +234,74 @@ impl RelayerSubmitter {
 
             tokio::time::sleep(poll_interval).await;
         }
+    }
+}
+
+/// Check if an error string indicates an `InvalidPublicKey` error.
+///
+/// The `TeeKeyManager` contract reverts with `InvalidPublicKey(address)` when a key
+/// is not registered. This error can appear in two forms in error messages:
+/// - The decoded name: `InvalidPublicKey`
+/// - The hex selector: `0xffc44e88`
+fn is_invalid_public_key_error(err_str: &str) -> bool {
+    err_str.contains("InvalidPublicKey") || err_str.contains("0xffc44e88")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify the `InvalidPublicKey` error selector is correctly identified.
+    ///
+    /// The selector 0xffc44e88 is keccak256("InvalidPublicKey(address)")[:4].
+    /// This test ensures we catch both the decoded and hex forms.
+    #[test]
+    fn test_invalid_public_key_error_detection() {
+        // Hex selector form (what alloy returns in practice)
+        let hex_error = r#"execution reverted, data: "0xffc44e880000000000000000000000008bdece7573c04738bbfe3fab749e2ad89d4cb312""#;
+        assert!(
+            is_invalid_public_key_error(hex_error),
+            "Should detect InvalidPublicKey by hex selector 0xffc44e88"
+        );
+
+        // Decoded form (if alloy ever decodes the error)
+        let decoded_error = "InvalidPublicKey(0x8bDece7573C04738bBfe3faB749e2ad89D4cB312)";
+        assert!(
+            is_invalid_public_key_error(decoded_error),
+            "Should detect InvalidPublicKey by name"
+        );
+
+        // Other errors should not match
+        let other_error = "execution reverted: insufficient funds";
+        assert!(
+            !is_invalid_public_key_error(other_error),
+            "Should not match other errors"
+        );
+
+        // Partial hex should not match
+        let partial_hex = "0xffc44e";
+        assert!(
+            !is_invalid_public_key_error(partial_hex),
+            "Should not match partial selector"
+        );
+    }
+
+    /// Verify the correct selector for InvalidPublicKey(address).
+    ///
+    /// This test documents the expected selector and will fail if the
+    /// contract ABI changes.
+    #[test]
+    fn test_invalid_public_key_selector() {
+        use alloy::primitives::keccak256;
+
+        let signature = "InvalidPublicKey(address)";
+        let hash = keccak256(signature.as_bytes());
+        let selector = &hash[..4];
+        let selector_hex = format!("0x{}", hex::encode(selector));
+
+        assert_eq!(
+            selector_hex, "0xffc44e88",
+            "InvalidPublicKey(address) selector should be 0xffc44e88"
+        );
     }
 }

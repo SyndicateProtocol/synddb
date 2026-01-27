@@ -6,8 +6,14 @@ use crate::{config::RelayerConfig, submitter::RelayerSubmitter};
 use alloy::primitives::B256;
 use axum::{http::StatusCode, Extension, Json};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tracing::{info, warn};
+
+/// Maximum deadline in the future (1 day)
+const MAX_DEADLINE_FUTURE_SECS: u64 = 86400;
 
 /// Key type for registration
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -114,11 +120,12 @@ pub(crate) async fn register_key(
         }
     };
 
-    // Check image digest is in application's allowlist
-    if !app_config
-        .allowed_image_digests
-        .contains(&attestation.image_digest)
-    {
+    // Check image digest is in application's allowlist (empty list = allow all for staging)
+    let image_allowed = app_config.allowed_image_digests.is_empty()
+        || app_config
+            .allowed_image_digests
+            .contains(&attestation.image_digest);
+    if !image_allowed {
         warn!(
             image_digest = %attestation.image_digest,
             audience_hash = %attestation.audience_hash,
@@ -130,6 +137,47 @@ pub(crate) async fn register_key(
                 registered_key: None,
                 tx_hash: None,
                 error: Some("Image digest not in allowlist for this application".into()),
+            }),
+        );
+    }
+
+    // Validate deadline
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    if request.deadline <= now {
+        warn!(
+            deadline = request.deadline,
+            now = now,
+            "Rejected: deadline is in the past"
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(RegisterKeyResponse {
+                registered_key: None,
+                tx_hash: None,
+                error: Some("Deadline is in the past".into()),
+            }),
+        );
+    }
+
+    if request.deadline > now + MAX_DEADLINE_FUTURE_SECS {
+        warn!(
+            deadline = request.deadline,
+            max_allowed = now + MAX_DEADLINE_FUTURE_SECS,
+            "Rejected: deadline too far in the future"
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(RegisterKeyResponse {
+                registered_key: None,
+                tx_hash: None,
+                error: Some(format!(
+                    "Deadline too far in the future (max {} seconds)",
+                    MAX_DEADLINE_FUTURE_SECS
+                )),
             }),
         );
     }
@@ -270,14 +318,36 @@ pub(crate) async fn register_key(
                 }),
             )
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(RegisterKeyResponse {
-                registered_key: None,
-                tx_hash: None,
-                error: Some(format!("Failed to submit registration: {}", e)),
-            }),
-        ),
+        Err(e) => {
+            let err_str = e.to_string();
+
+            // Handle TOCTOU race: if key was registered between our check and submission,
+            // treat it as success. The KeyAlreadyExists error selector is 0x2dc09057.
+            if err_str.contains("KeyAlreadyExists") || err_str.contains("0x2dc09057") {
+                info!(
+                    tee_key = %attestation.tee_signing_key,
+                    key_type = ?request.key_type,
+                    "Key already registered (race condition handled)"
+                );
+                return (
+                    StatusCode::OK,
+                    Json(RegisterKeyResponse {
+                        registered_key: Some(format!("{:#x}", attestation.tee_signing_key)),
+                        tx_hash: None,
+                        error: None,
+                    }),
+                );
+            }
+
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RegisterKeyResponse {
+                    registered_key: None,
+                    tx_hash: None,
+                    error: Some(format!("Failed to submit registration: {}", e)),
+                }),
+            )
+        }
     }
 }
 

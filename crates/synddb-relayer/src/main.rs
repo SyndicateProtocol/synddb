@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize components
-    let submitter = Arc::new(RelayerSubmitter::from_config(&config)?);
+    let submitter = Arc::new(RelayerSubmitter::from_config(&config).await?);
     let config = Arc::new(config);
 
     // Build router

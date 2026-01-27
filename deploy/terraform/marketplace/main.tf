@@ -439,7 +439,7 @@ resource "google_cloud_run_v2_service" "proof_service" {
       }
 
       env {
-        name = "SP1_NETWORK_PRIVATE_KEY"
+        name = "NETWORK_PRIVATE_KEY"
         value_source {
           secret_key_ref {
             secret  = google_secret_manager_secret.sp1_network_private_key[0].secret_id

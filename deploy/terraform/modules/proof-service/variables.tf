@@ -53,9 +53,9 @@ variable "timeout_seconds" {
 }
 
 variable "max_instances" {
-  description = "Maximum number of instances"
+  description = "Maximum number of instances. Cloud Run scales out when CPU utilization exceeds ~60% during local proof verification."
   type        = number
-  default     = 1
+  default     = 3
 }
 
 variable "min_instances" {
@@ -65,9 +65,9 @@ variable "min_instances" {
 }
 
 variable "concurrency" {
-  description = "Maximum concurrent requests per instance"
+  description = "Maximum concurrent requests per instance. Set high since most request time is spent waiting on SP1 Network. Cloud Run auto-scales based on CPU utilization (~60% target) during verification."
   type        = number
-  default     = 1
+  default     = 10
 }
 
 # Access Control
