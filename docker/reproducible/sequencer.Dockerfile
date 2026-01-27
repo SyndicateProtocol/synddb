@@ -39,11 +39,15 @@
 ARG RUST_IMAGE_DIGEST=sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4
 ARG DEBIAN_IMAGE_DIGEST=sha256:e711a7b30ec1261130d0a121050b4ed81d7fb28aeabcf4ea0c7876d4e9f5aca2
 ARG DISTROLESS_IMAGE_DIGEST=sha256:43fc7a7004c4cdb27aac60b3e95c87130cf47823f72d25d42ed0f9b503f1d184
+ARG DEBIAN_SNAPSHOT=20260104T000000Z
 
 # =============================================================================
 # Builder Stage
 # =============================================================================
 FROM --platform=linux/amd64 rust@${RUST_IMAGE_DIGEST} AS builder
+
+# Re-declare ARG after FROM for use in this stage
+ARG DEBIAN_SNAPSHOT
 
 # Reproducibility: Set epoch time for all timestamps
 ENV SOURCE_DATE_EPOCH=0
@@ -63,8 +67,11 @@ ENV RUSTFLAGS="--remap-path-prefix=/app=/build --remap-path-prefix=/cargo=/cargo
 # Reproducibility: Use fixed hash seed
 ENV RUSTC_HASH_UNTRACKED_METADATA=1
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Reproducibility: Pin apt packages to a specific snapshot date
+# This ensures the same package versions are always installed, even years later
+RUN echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} trixie main" > /etc/apt/sources.list && \
+    echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT} trixie-security main" >> /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
     clang \
     libclang-dev \
     && rm -rf /var/lib/apt/lists/*

@@ -26,6 +26,7 @@ use synddb_chain_monitor::{
     handler::MessageHandler,
     monitor::ChainMonitor,
 };
+use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 /// Shared statistics for all event handlers.
@@ -213,22 +214,44 @@ async fn main() -> Result<()> {
     let handler = Arc::new(MultiEventHandler::default());
     let stats = handler.get_stats();
 
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
     // Spawn a task to periodically log statistics
+    let stats_shutdown_rx = shutdown_tx.subscribe();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut shutdown_rx = stats_shutdown_rx;
         loop {
-            interval.tick().await;
-            stats.log_summary();
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+                _ = interval.tick() => {
+                    stats.log_summary();
+                }
+            }
         }
+    });
+
+    // Handle Ctrl+C
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        info!("Shutdown signal received");
+        let _ = shutdown_tx.send(true);
     });
 
     // Create and run monitor
     let mut monitor = ChainMonitor::new(config, handler).await?;
 
-    info!("Monitor initialized - processing events from Bridge contract");
+    info!("Monitor initialized - processing events from Bridge contract (Ctrl+C to stop)");
 
-    // Run indefinitely
-    monitor.run().await?;
+    // Run until shutdown signal
+    monitor.run(shutdown_rx).await?;
 
     Ok(())
 }

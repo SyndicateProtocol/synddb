@@ -1,0 +1,157 @@
+# SyndDB Staging Environment - Base Sepolia
+#
+# Fill in the values marked with TODO and rename to terraform.tfvars
+#
+# Deployment order:
+#   1. Deploy contracts to Base Sepolia (see Step 2 below)
+#   2. Fill in contract addresses in this file
+#   3. Run: cd deploy/terraform/environments/staging && terraform init && terraform apply
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# GCP Project Configuration
+# -----------------------------------------------------------------------------
+
+# TODO: Your GCP project ID
+project_id = "TODO_YOUR_GCP_PROJECT_ID"
+
+region = "us-central1"
+zone   = "us-central1-a"
+
+# -----------------------------------------------------------------------------
+# Container Images
+# -----------------------------------------------------------------------------
+# Using edge tag from Artifact Registry. Change to specific version for stability.
+
+sequencer_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-sequencer:edge"
+validator_image     = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-validator:edge"
+proof_service_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/proof-service:edge"
+
+# -----------------------------------------------------------------------------
+# Storage
+# -----------------------------------------------------------------------------
+
+# TODO: Unique bucket name for batch storage (must be globally unique)
+gcs_bucket_name = "TODO_YOUR_PROJECT-synddb-staging"
+
+# -----------------------------------------------------------------------------
+# Artifact Registry
+# -----------------------------------------------------------------------------
+
+artifact_registry_location   = "us-central1"
+artifact_registry_repository = "synddb"
+
+# -----------------------------------------------------------------------------
+# Instance Configuration
+# -----------------------------------------------------------------------------
+
+sequencer_machine_type = "n2d-standard-2"
+validator_machine_type = "n2d-standard-2"
+
+# -----------------------------------------------------------------------------
+# TEE Bootstrap Configuration (Base Sepolia)
+# -----------------------------------------------------------------------------
+# These values come from contract deployment (Step 2)
+
+tee_bootstrap = {
+  # TODO: TeeKeyManager contract address (from contract deployment)
+  key_manager_address = "0xTODO_TEE_KEY_MANAGER_ADDRESS"
+
+  # TODO: Base Sepolia RPC URL (Alchemy, Infura, or public)
+  rpc_url = "https://base-sepolia.g.alchemy.com/v2/TODO_YOUR_API_KEY"
+
+  # Base Sepolia chain ID
+  chain_id = 84532
+
+  # TODO: Your staging domain for attestation audience
+  attestation_audience = "https://TODO_YOUR_STAGING_DOMAIN"
+}
+
+# -----------------------------------------------------------------------------
+# Bridge Signer Configuration (for Price Oracle)
+# -----------------------------------------------------------------------------
+
+enable_bridge_signer = true
+
+# TODO: Bridge contract address (from contract deployment)
+bridge_contract_address = "0xTODO_BRIDGE_ADDRESS"
+
+# Base Sepolia chain ID
+bridge_chain_id = 84532
+
+# -----------------------------------------------------------------------------
+# Batching Configuration
+# -----------------------------------------------------------------------------
+
+batch_max_messages   = 100
+batch_flush_interval = "2s"
+
+# -----------------------------------------------------------------------------
+# Relayer Configuration (Optional - for gas funding)
+# -----------------------------------------------------------------------------
+# Uncomment and fill in to enable the relayer service
+
+# relayer_image = "us-central1-docker.pkg.dev/synddb-infra/synddb/synddb-relayer:edge"
+#
+# relayer_config = {
+#   rpc_url                = "https://base-sepolia.g.alchemy.com/v2/TODO_YOUR_API_KEY"
+#   chain_id               = 84532
+#   key_manager_address    = "0xTODO_TEE_KEY_MANAGER_ADDRESS"
+#   treasury_address       = "0xTODO_GAS_TREASURY_ADDRESS"
+#   required_audience_hash = "0xTODO_KECCAK256_OF_AUDIENCE"
+#   allowed_image_digests  = ["0xTODO_SEQUENCER_IMAGE_DIGEST", "0xTODO_VALIDATOR_IMAGE_DIGEST"]
+# }
+
+# -----------------------------------------------------------------------------
+# Labels
+# -----------------------------------------------------------------------------
+
+labels = {
+  environment = "staging"
+  managed-by  = "terraform"
+  project     = "synddb"
+  chain       = "base-sepolia"
+}
+
+# =============================================================================
+# DEPLOYMENT INSTRUCTIONS
+# =============================================================================
+#
+# Step 1: Set up Foundry wallet
+#   cast wallet import deployer --interactive
+#
+# Step 2: Deploy contracts to Base Sepolia
+#   cd contracts
+#
+#   ADMIN_ADDRESS="0xYOUR_ADMIN_ADDRESS" \
+#   SEQUENCER_ADDRESS="0xYOUR_ADMIN_ADDRESS" \
+#   forge script script/DeployLocalDevEnv.s.sol:DeployLocalDevEnv \
+#       --rpc-url https://sepolia.base.org \
+#       --account deployer \
+#       --etherscan-api-key $BASESCAN_API_KEY \
+#       --verify \
+#       --broadcast \
+#       -vvv
+#
+#   Record the output addresses:
+#     - TeeKeyManager:  0x...
+#     - Bridge:         0x...
+#     - PriceOracle:    0x...
+#
+# Step 3: Fill in TODO values above with deployed contract addresses
+#
+# Step 4: Deploy infrastructure
+#   cd deploy/terraform/environments/staging
+#   cp terraform.tfvars.base-sepolia terraform.tfvars
+#   terraform init
+#   terraform plan
+#   terraform apply
+#
+# Step 5: Get outputs
+#   terraform output
+#
+# Step 6: Deploy price oracle app (separate service)
+#   See examples/price-oracle/README.md
+#
+# =============================================================================
