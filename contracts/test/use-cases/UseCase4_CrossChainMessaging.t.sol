@@ -5,6 +5,8 @@ import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
+import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockCrossChainReceiver} from "./mocks/MockCrossChainReceiver.sol";
 import {WETH9} from "./mocks/WETH9.sol";
@@ -26,13 +28,22 @@ contract UseCase4_CrossChainMessaging is UseCaseBaseTest {
 
     function setUp() public {
         admin = address(this);
-        sequencer = makeAddr("sequencer");
+        sequencer = vm.addr(sequencerPrivateKey);
         user = makeAddr("user");
         recipient = makeAddr("recipient");
 
         token = new MockERC20("Cross Chain Token", "CCT");
         WETH9 weth = new WETH9();
-        bridge = new Bridge(admin, address(weth));
+
+        // Deploy attestation infrastructure
+        attestationVerifier = new MockAttestationVerifier();
+        teeKeyManager = new TeeKeyManager(attestationVerifier);
+
+        // Register sequencer as a valid TEE key
+        bytes memory publicValues = abi.encode(sequencer);
+        teeKeyManager.addKey(publicValues, "");
+
+        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
         setupValidators(bridge);
         validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);
         destinationChain = new MockCrossChainReceiver();

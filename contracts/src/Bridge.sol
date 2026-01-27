@@ -4,7 +4,10 @@ pragma solidity 0.8.30;
 import {ModuleCheckRegistry} from "src/ModuleCheckRegistry.sol";
 import {IBridge} from "src/interfaces/IBridge.sol";
 import {IWrappedNativeToken} from "src/interfaces/IWrappedNativeToken.sol";
+import {ITeeKeyManager} from "src/interfaces/ITeeKeyManager.sol";
 import {ProcessingStage, MessageState, SequencerSignature} from "src/types/DataTypes.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
  * @title Bridge
@@ -15,6 +18,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     mapping(bytes32 messageId => MessageState state) public messageStates;
 
     IWrappedNativeToken public immutable wrappedNativeToken;
+    ITeeKeyManager public teeKeyManager;
 
     /**
      * @notice Emitted when a new message is initialized
@@ -52,7 +56,15 @@ contract Bridge is IBridge, ModuleCheckRegistry {
      */
     event NativeTokenUnwrapped(uint256 amount, address indexed target);
 
+    /**
+     * @notice Emitted when the TEE key manager is updated
+     * @param oldKeyManager Previous key manager address
+     * @param newKeyManager New key manager address
+     */
+    event TeeKeyManagerUpdated(address indexed oldKeyManager, address indexed newKeyManager);
+
     error ZeroAddressNotAllowed();
+    error InvalidSequencerSignature(address recoveredSigner);
     error MessageAlreadyInitialized(bytes32 messageId);
     error MessageNotInitialized(bytes32 messageId);
     error MessageAlreadyHandled(bytes32 messageId);
@@ -66,12 +78,14 @@ contract Bridge is IBridge, ModuleCheckRegistry {
      * @notice Initializes the bridge contract
      * @param admin Address to be granted admin privileges
      * @param _wrappedNativeToken Address of the wrapped native token contract (e.g., WETH)
+     * @param _teeKeyManager Address of the TEE key manager contract for sequencer verification
      */
-    constructor(address admin, address _wrappedNativeToken) ModuleCheckRegistry(admin) {
-        if (admin == address(0) || _wrappedNativeToken == address(0)) {
+    constructor(address admin, address _wrappedNativeToken, address _teeKeyManager) ModuleCheckRegistry(admin) {
+        if (admin == address(0) || _wrappedNativeToken == address(0) || _teeKeyManager == address(0)) {
             revert ZeroAddressNotAllowed();
         }
         wrappedNativeToken = IWrappedNativeToken(_wrappedNativeToken);
+        teeKeyManager = ITeeKeyManager(_teeKeyManager);
     }
 
     /**
@@ -116,6 +130,20 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         emit NativeTokenWrapped(msg.sender, amount);
     }
 
+    /**
+     * @notice Updates the TEE key manager contract address
+     * @dev Only callable by admin. Use with caution as this changes which keys are considered valid.
+     * @param _teeKeyManager New TEE key manager contract address
+     */
+    function setTeeKeyManager(address _teeKeyManager) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (_teeKeyManager == address(0)) {
+            revert ZeroAddressNotAllowed();
+        }
+        address oldKeyManager = address(teeKeyManager);
+        teeKeyManager = ITeeKeyManager(_teeKeyManager);
+        emit TeeKeyManagerUpdated(oldKeyManager, _teeKeyManager);
+    }
+
     /// @inheritdoc IBridge
     function initializeMessage(
         bytes32 messageId,
@@ -129,7 +157,8 @@ contract Bridge is IBridge, ModuleCheckRegistry {
 
     /**
      * @notice Internal function to initialize a message
-     * @dev Creates the message state and stores the sequencer signature
+     * @dev Creates the message state, verifies the sequencer signature against TeeKeyManager,
+     *      and stores the signature. The sequencer must sign a hash of the message parameters.
      * @param messageId Unique identifier for the message
      * @param targetAddress Address that will receive the message call
      * @param payload Encoded function call data
@@ -145,6 +174,17 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     ) internal {
         if (isMessageInitialized(messageId)) {
             revert MessageAlreadyInitialized(messageId);
+        }
+
+        // Verify sequencer signature is from a registered TEE key
+        bytes32 messageHash =
+            keccak256(abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount));
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        address signer = ECDSA.recover(ethSignedHash, sequencerSignature.signature);
+
+        // This will revert with InvalidPublicKey if the signer is not a registered TEE key
+        if (!teeKeyManager.isKeyValid(signer)) {
+            revert InvalidSequencerSignature(signer);
         }
 
         messageStates[messageId] = MessageState({

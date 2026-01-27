@@ -7,6 +7,9 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
+#[cfg(feature = "tee")]
+use synddb_bootstrap::{BootstrapConfig, BootstrapStateMachine, ProverMode};
+
 use synddb_shared::{metrics, runtime, telemetry};
 use synddb_validator::{
     bridge::{signature_store::SignatureStore, signer::BridgeSigner},
@@ -61,6 +64,62 @@ async fn main() -> Result<()> {
     config
         .validate_bridge_config()
         .map_err(|e| anyhow::anyhow!(e))?;
+
+    // Run TEE key bootstrapping if enabled
+    #[cfg(feature = "tee")]
+    if config.enable_key_bootstrap {
+        config
+            .validate_bootstrap_config()
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        info!("Starting TEE key bootstrap for validator...");
+
+        let bootstrap_config = BootstrapConfig {
+            enable_key_bootstrap: true,
+            tee_key_manager_address: config.tee_key_manager_address.clone(),
+            rpc_url: config.bootstrap_rpc_url.clone(),
+            chain_id: config.bootstrap_chain_id,
+            proof_service_url: config.proof_service_url.clone(),
+            attestation_audience: config.attestation_audience.clone(),
+            proof_timeout: config.proof_timeout,
+            bootstrap_timeout: config.bootstrap_timeout,
+            min_gas_balance: config.min_bootstrap_balance,
+            prover_mode: ProverMode::Service,
+            ..Default::default()
+        };
+
+        let mut bootstrap = BootstrapStateMachine::new();
+
+        // Run bootstrap with timeout - returns the registered key
+        match tokio::time::timeout(config.bootstrap_timeout, bootstrap.run(&bootstrap_config)).await
+        {
+            Ok(Ok(key)) => {
+                info!(
+                    address = %key.address(),
+                    "TEE key bootstrap completed successfully"
+                );
+                // Key is registered on-chain, validator can now proceed
+            }
+            Ok(Err(e)) => {
+                error!(error = %e, "TEE key bootstrap failed");
+                return Err(anyhow::anyhow!("Bootstrap failed: {}", e));
+            }
+            Err(_) => {
+                error!("TEE key bootstrap timed out");
+                return Err(anyhow::anyhow!(
+                    "Bootstrap timed out after {:?}",
+                    config.bootstrap_timeout
+                ));
+            }
+        }
+    }
+
+    #[cfg(not(feature = "tee"))]
+    if config.enable_key_bootstrap {
+        return Err(anyhow::anyhow!(
+            "TEE key bootstrap requires the 'tee' feature to be enabled"
+        ));
+    }
 
     // Using watch::channel for shutdown because we need broadcast semantics:
     // the shutdown signal must be received by multiple tasks (sync loop, validator internals).

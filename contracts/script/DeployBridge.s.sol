@@ -9,6 +9,7 @@ import {Bridge} from "src/Bridge.sol";
  * @title DeployBridge
  * @notice Deployment script for the Bridge contract to OP Stack networks
  * @dev Uses Foundry's script system with keystore-based signing.
+ *      Requires TEE_KEY_MANAGER_ADDRESS to be set for sequencer signature verification.
  *
  */
 contract DeployBridge is Script {
@@ -20,18 +21,20 @@ contract DeployBridge is Script {
     function run() external returns (Bridge) {
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address wrappedNativeToken = vm.envAddress("WRAPPED_NATIVE_TOKEN_ADDRESS");
+        address teeKeyManager = vm.envAddress("TEE_KEY_MANAGER_ADDRESS");
 
         console.log("========================================");
         console.log("Deploying Bridge Contract");
         console.log("========================================");
         console.log("Admin:", admin);
         console.log("Wrapped Native Token:", wrappedNativeToken);
+        console.log("TEE Key Manager:", teeKeyManager);
         console.log("========================================");
 
         // Start broadcasting transactions
         vm.startBroadcast();
 
-        Bridge bridge = new Bridge(admin, wrappedNativeToken);
+        Bridge bridge = new Bridge(admin, wrappedNativeToken, teeKeyManager);
 
         vm.stopBroadcast();
 
@@ -42,8 +45,8 @@ contract DeployBridge is Script {
         console.log("========================================");
         console.log("");
         console.log("Next Steps:");
-        console.log("1. Grant SEQUENCER_ROLE to sequencer address:");
-        console.log("   bridge.grantRole(SEQUENCER_ROLE, <sequencer_address>)");
+        console.log("1. Grant MESSAGE_INITIALIZER_ROLE to relayer addresses (if using relayers):");
+        console.log("   bridge.grantRole(MESSAGE_INITIALIZER_ROLE, <relayer_address>)");
         console.log("");
         console.log("2. Grant VALIDATOR_ROLE to validator addresses:");
         console.log("   bridge.grantRole(VALIDATOR_ROLE, <validator_address>)");
@@ -51,6 +54,8 @@ contract DeployBridge is Script {
         console.log("3. Add validation modules (if needed):");
         console.log("   bridge.addPreModule(<module_address>)");
         console.log("   bridge.addPostModule(<module_address>)");
+        console.log("");
+        console.log("Note: Sequencer keys are verified via TeeKeyManager, not role grants.");
         console.log("========================================");
 
         return bridge;

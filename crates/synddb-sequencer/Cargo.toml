@@ -16,6 +16,7 @@ workspace = true
 # Workspace crates
 synddb-shared = { path = "../synddb-shared" }
 gcp-attestation = { path = "../gcp-attestation" }
+synddb-bootstrap = { path = "../synddb-bootstrap", optional = true }
 
 # Core async and CLI
 tokio = { workspace = true, features = ["full"] }
@@ -77,11 +78,11 @@ otel = ["synddb-shared/otel"]
 # TODO: Implement additional DA layer transports
 # When implemented, dependencies should be non-optional for runtime selection.
 # See PLAN_TODO.md for tracking and crates/synddb-sequencer/src/transport/
-tee = []      # TEE-specific functionality
-celestia = [] # Celestia DA layer
-eigenda = []  # EigenDA layer
-ipfs = []     # IPFS storage
-arweave = []  # Arweave permanent storage
+tee = ["dep:synddb-bootstrap"] # TEE-specific functionality (key bootstrapping)
+celestia = []                  # Celestia DA layer
+eigenda = []                   # EigenDA layer
+ipfs = []                      # IPFS storage
+arweave = []                   # Arweave permanent storage
 
 [dev-dependencies]
 tempfile = "3.24.0"

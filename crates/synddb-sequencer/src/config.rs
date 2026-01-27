@@ -194,9 +194,91 @@ pub struct SequencerConfig {
     /// How often to poll for new outbound messages (in milliseconds)
     #[arg(long, env = "OUTBOUND_POLL_INTERVAL_MS", default_value = "1000")]
     pub outbound_poll_interval_ms: u64,
+
+    // ========================================================================
+    // TEE Bootstrap configuration (requires 'tee' feature)
+    // ========================================================================
+    /// Enable TEE key bootstrapping with on-chain registration
+    ///
+    /// When enabled, the sequencer will:
+    /// 1. Generate an ephemeral signing key
+    /// 2. Fetch a TEE attestation token
+    /// 3. Generate an SP1 proof via the proof service
+    /// 4. Submit the proof to the `TeeKeyManager` contract
+    /// 5. Wait for on-chain confirmation before accepting requests
+    #[arg(long, env = "ENABLE_KEY_BOOTSTRAP", default_value = "false")]
+    pub enable_key_bootstrap: bool,
+
+    /// `TeeKeyManager` contract address for key registration
+    #[arg(long, env = "TEE_KEY_MANAGER_CONTRACT_ADDRESS")]
+    pub tee_key_manager_address: Option<String>,
+
+    /// RPC URL for submitting bootstrap transactions
+    #[arg(long, env = "BOOTSTRAP_RPC_URL")]
+    pub bootstrap_rpc_url: Option<String>,
+
+    /// Chain ID for bootstrap transactions
+    #[arg(long, env = "BOOTSTRAP_CHAIN_ID")]
+    pub bootstrap_chain_id: Option<u64>,
+
+    /// URL of the GPU proof service for generating SP1 proofs
+    #[arg(long, env = "PROOF_SERVICE_URL")]
+    pub proof_service_url: Option<String>,
+
+    /// Expected audience claim for attestation tokens
+    #[arg(long, env = "ATTESTATION_AUDIENCE")]
+    pub attestation_audience: Option<String>,
+
+    /// Timeout for proof generation (default: 10 minutes)
+    #[arg(long, env = "PROOF_TIMEOUT", default_value = "600s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub proof_timeout: Duration,
+
+    /// Total bootstrap timeout (default: 15 minutes)
+    #[arg(long, env = "BOOTSTRAP_TIMEOUT", default_value = "900s", value_parser = humantime::parse_duration)]
+    #[serde(with = "humantime_serde")]
+    pub bootstrap_timeout: Duration,
+
+    /// Minimum balance required for bootstrap gas (in wei)
+    #[arg(
+        long,
+        env = "MIN_BOOTSTRAP_BALANCE",
+        default_value = "100000000000000000"
+    )]
+    pub min_bootstrap_balance: u128,
 }
 
 impl SequencerConfig {
+    /// Validate bootstrap configuration
+    ///
+    /// Returns an error if bootstrap is enabled but required fields are missing.
+    pub fn validate_bootstrap_config(&self) -> Result<(), String> {
+        if !self.enable_key_bootstrap {
+            return Ok(());
+        }
+
+        if self.tee_key_manager_address.is_none() {
+            return Err(
+                "TEE_KEY_MANAGER_CONTRACT_ADDRESS is required when ENABLE_KEY_BOOTSTRAP=true"
+                    .into(),
+            );
+        }
+        if self.bootstrap_rpc_url.is_none() {
+            return Err("BOOTSTRAP_RPC_URL is required when ENABLE_KEY_BOOTSTRAP=true".into());
+        }
+        if self.bootstrap_chain_id.is_none() {
+            return Err("BOOTSTRAP_CHAIN_ID is required when ENABLE_KEY_BOOTSTRAP=true".into());
+        }
+        if self.proof_service_url.is_none() {
+            return Err("PROOF_SERVICE_URL is required when ENABLE_KEY_BOOTSTRAP=true".into());
+        }
+        if self.attestation_audience.is_none() {
+            return Err("ATTESTATION_AUDIENCE is required when ENABLE_KEY_BOOTSTRAP=true".into());
+        }
+
+        Ok(())
+    }
+
     /// Get batch configuration from sequencer config
     pub const fn batch_config(&self) -> BatchConfig {
         BatchConfig {

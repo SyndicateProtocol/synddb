@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/gcp-attestation",
   "crates/synddb-benchmark",
+  "crates/synddb-bootstrap",
   "crates/synddb-sequencer",
   "crates/synddb-validator",
   "crates/synddb-client",

@@ -4,6 +4,8 @@ pragma solidity 0.8.30;
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
+import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {WETH9} from "./mocks/WETH9.sol";
 import {MockNFT} from "./mocks/MockNFT.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
@@ -27,11 +29,20 @@ contract UseCase2_NFTMinting is UseCaseBaseTest {
 
     function setUp() public {
         admin = address(this);
-        sequencer = makeAddr("sequencer");
+        sequencer = vm.addr(sequencerPrivateKey);
         user = makeAddr("user");
 
         weth = new WETH9();
-        bridge = new Bridge(admin, address(weth));
+
+        // Deploy attestation infrastructure
+        attestationVerifier = new MockAttestationVerifier();
+        teeKeyManager = new TeeKeyManager(attestationVerifier);
+
+        // Register sequencer as a valid TEE key
+        bytes memory publicValues = abi.encode(sequencer);
+        teeKeyManager.addKey(publicValues, "");
+
+        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
         freeNFT = new MockNFT("Free NFT", "FREE", 0);
         paidNFT = new MockNFT("Paid NFT", "PAID", NFT_PRICE);
 

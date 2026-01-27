@@ -4,6 +4,8 @@ pragma solidity 0.8.30;
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
+import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {WETH9} from "./mocks/WETH9.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
@@ -28,14 +30,23 @@ contract UseCase3_ERC20Transfer is UseCaseBaseTest {
 
     function setUp() public {
         admin = address(this);
-        sequencer = makeAddr("sequencer");
+        sequencer = vm.addr(sequencerPrivateKey);
         user = makeAddr("user");
         recipient = makeAddr("recipient");
 
         usdc = new MockERC20("USD Coin", "USDC");
         dai = new MockERC20("Dai Stablecoin", "DAI");
         weth = new WETH9();
-        bridge = new Bridge(admin, address(weth));
+
+        // Deploy attestation infrastructure
+        attestationVerifier = new MockAttestationVerifier();
+        teeKeyManager = new TeeKeyManager(attestationVerifier);
+
+        // Register sequencer as a valid TEE key
+        bytes memory publicValues = abi.encode(sequencer);
+        teeKeyManager.addKey(publicValues, "");
+
+        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
 
         setupValidators(bridge);
         validatorModule = new ValidatorSignatureThresholdModule(address(bridge), validators, 2);

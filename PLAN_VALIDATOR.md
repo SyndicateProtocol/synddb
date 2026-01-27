@@ -415,7 +415,7 @@ export GAP_SKIP_ON_FAILURE="false"
 
 # Bridge signer mode (all required if BRIDGE_SIGNER=true)
 export BRIDGE_SIGNER="true"
-export BRIDGE_CONTRACT="0x..."
+export BRIDGE_CONTRACT_ADDRESS="0x..."
 export BRIDGE_CHAIN_ID="1"
 export BRIDGE_SIGNING_KEY="0x..."
 export BRIDGE_SIGNATURE_ENDPOINT="0.0.0.0:8081"
@@ -934,7 +934,7 @@ validator:
   settlement:
     chain_id: 1
     rpc_endpoint: "${RPC_URL}"
-    contract_address: "${BRIDGE_CONTRACT}"
+    contract_address: "${BRIDGE_CONTRACT_ADDRESS}"
     gas_price_multiplier: 1.2
 
   # Message processing

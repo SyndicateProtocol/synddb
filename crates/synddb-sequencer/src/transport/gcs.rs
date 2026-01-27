@@ -139,11 +139,10 @@ impl GcsTransport {
                     || error_str.contains("not found")
                 {
                     return Ok(None);
-                } else {
-                    return Err(TransportError::Storage(format!(
-                        "Failed to download from GCS: {e}"
-                    )));
                 }
+                return Err(TransportError::Storage(format!(
+                    "Failed to download from GCS: {e}"
+                )));
             }
         };
 
@@ -213,12 +212,11 @@ impl GcsTransport {
             }
 
             // Check for more pages
-            if !response.next_page_token.is_empty() {
-                debug!(token = %response.next_page_token, "Fetching next page of batch files");
-                page_token = Some(response.next_page_token);
-            } else {
+            if response.next_page_token.is_empty() {
                 break;
             }
+            debug!(token = %response.next_page_token, "Fetching next page of batch files");
+            page_token = Some(response.next_page_token);
         }
 
         batches.sort_by_key(|(start, _, _)| *start);

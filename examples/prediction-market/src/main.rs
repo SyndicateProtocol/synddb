@@ -159,7 +159,7 @@ enum Commands {
         ws_url: String,
 
         /// Bridge contract address to monitor
-        #[arg(long, env = "BRIDGE_CONTRACT")]
+        #[arg(long, env = "BRIDGE_CONTRACT_ADDRESS")]
         bridge: String,
 
         /// Block number to start watching from
