@@ -27,7 +27,7 @@ spec:
         autoscaling.knative.dev/minScale: "0"
     spec:
       containerConcurrency: 1  # Only one proof at a time
-      timeoutSeconds: 900      # 15 minutes for proof generation
+      timeoutSeconds: 3600     # 60 minutes for Groth16/PLONK proofs
       containers:
         - image: gcr.io/PROJECT_ID/proof-service:latest
           ports:

@@ -68,6 +68,14 @@ When working on large features or refactors, commit incrementally as you complet
 - Reduces risk of losing work
 - Creates a clear history of changes
 
+### Git Staging
+Avoid `git add -A`, `git add .`, or `git add --all`. These commands stage all modified files, which can accidentally include unrelated changes. Instead, stage only the specific files you modified for the current task:
+```bash
+git add path/to/file1.rs path/to/file2.rs
+```
+
+Similarly, avoid `git restore .` or `git checkout .` to discard changes. Other files in the working directory may contain work from parallel sessions that should be preserved. Only restore specific files you intend to discard.
+
 ### Documentation (SPEC and PLAN files)
 The `SPEC.md` and `PLAN_*.md` files document the specifications and implementation plans for each component. These files must be kept up to date with the current implementation:
 - After making major implementation changes, update the corresponding SPEC and PLAN files to reflect the new state
@@ -210,6 +218,7 @@ sequencer_port=9000
 - Keep solutions minimal - avoid over-engineering
 - Use `tracing` macros (`info!`, `warn!`, `debug!`, `error!`) for logging
 - Structured logging with fields: `info!(sequence = seq, "Message")`
+- Ethereum address naming: EOA (wallet) addresses use `_ADDRESS` suffix, contract addresses use `_CONTRACT_ADDRESS` suffix
 - Do not add self-explanatory comments that do not clarify code. Below is an example of useless comments:
 
 ```rust

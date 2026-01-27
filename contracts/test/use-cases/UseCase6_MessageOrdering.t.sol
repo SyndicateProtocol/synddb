@@ -129,7 +129,7 @@ contract UseCase6_MessageOrdering is Test {
         for (uint256 nonce = 0; nonce < 3; nonce++) {
             bytes32 messageId = keccak256(abi.encodePacked("msg", nonce));
             bytes memory payload = "";
-            SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+            SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
 
             // Validate nonce first
             orderingModule.validateNonce(identifier, nonce);
@@ -172,7 +172,7 @@ contract UseCase6_MessageOrdering is Test {
 
             bytes32 messageId = keccak256(abi.encodePacked("user1-msg", nonce));
             bytes memory payload = "";
-            SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+            SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
 
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, receiver, payload, sig, 0);
@@ -186,7 +186,7 @@ contract UseCase6_MessageOrdering is Test {
 
             bytes32 messageId = keccak256(abi.encodePacked("user2-msg", nonce));
             bytes memory payload = "";
-            SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+            SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
 
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, receiver, payload, sig, 0);
@@ -288,7 +288,7 @@ contract UseCase6_MessageOrdering is Test {
             // Create message
             bytes32 messageId = keccak256(abi.encodePacked("swap", nonce));
             bytes memory payload = abi.encodeWithSignature(swaps[nonce]);
-            SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+            SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
 
             // Initialize and execute
             vm.prank(sequencer);

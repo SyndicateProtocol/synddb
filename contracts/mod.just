@@ -7,8 +7,8 @@
 #   just contracts::deploy-base-sepolia  # Deploy to Base Sepolia
 #
 # This module runs in the contracts/ directory by default.
-
 # Use bash with strict mode
+
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # Build contracts
@@ -57,15 +57,15 @@ analyze:
     forge inspect Bridge bytecode
 
 # Deploy to local Anvil (use root `just deploy` instead for full setup)
-[no-cd]
 [group('deploy')]
+[no-cd]
 [private]
 _deploy-local:
     ./scripts/deploy-local.sh
 
 # Deploy Bridge to Base Sepolia
-[group('deploy')]
 [confirm('This will deploy to Base Sepolia testnet. Continue?')]
+[group('deploy')]
 deploy-base-sepolia:
     forge script script/DeployBridge.s.sol:DeployBridge \
         --rpc-url base_sepolia \
@@ -78,6 +78,6 @@ deploy-base-sepolia:
 # Verify contract on Etherscan
 [group('deploy')]
 verify contract address:
-    forge verify-contract {{address}} {{contract}} \
+    forge verify-contract {{ address }} {{ contract }} \
         --chain base-sepolia \
         --etherscan-api-key ${ETHERSCAN_API_KEY}

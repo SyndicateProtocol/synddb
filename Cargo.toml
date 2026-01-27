@@ -4,6 +4,7 @@ members = [
   "crates/gcp-attestation",
   "crates/synddb-benchmark",
   "crates/synddb-bootstrap",
+  "crates/synddb-relayer",
   "crates/synddb-sequencer",
   "crates/synddb-validator",
   "crates/synddb-client",
@@ -84,6 +85,9 @@ rsa = { version = "0.9", features = ["sha2"] }
 ciborium = "0.2"
 coset = "0.3"
 serde_bytes = "0.11"
+
+# TOML configuration
+toml = "0.8"
 
 # Blockchain / Cryptography
 alloy = { version = "1.1", features = [

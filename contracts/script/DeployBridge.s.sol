@@ -9,7 +9,7 @@ import {Bridge} from "src/Bridge.sol";
  * @title DeployBridge
  * @notice Deployment script for the Bridge contract to OP Stack networks
  * @dev Uses Foundry's script system with keystore-based signing.
- *      Requires TEE_KEY_MANAGER_ADDRESS to be set for sequencer signature verification.
+ *      Requires TEE_KEY_MANAGER_CONTRACT_ADDRESS to be set for sequencer signature verification.
  *
  */
 contract DeployBridge is Script {
@@ -20,8 +20,8 @@ contract DeployBridge is Script {
 
     function run() external returns (Bridge) {
         address admin = vm.envAddress("ADMIN_ADDRESS");
-        address wrappedNativeToken = vm.envAddress("WRAPPED_NATIVE_TOKEN_ADDRESS");
-        address teeKeyManager = vm.envAddress("TEE_KEY_MANAGER_ADDRESS");
+        address wrappedNativeToken = vm.envAddress("WRAPPED_NATIVE_TOKEN_CONTRACT_ADDRESS");
+        address teeKeyManager = vm.envAddress("TEE_KEY_MANAGER_CONTRACT_ADDRESS");
 
         console.log("========================================");
         console.log("Deploying Bridge Contract");

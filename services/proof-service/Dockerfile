@@ -27,11 +27,17 @@ WORKDIR /app/services/proof-service
 RUN cargo build --release
 
 # Runtime stage with CUDA support
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+# Using CUDA 12.5.1 to meet SP1's >= 12.5.1 recommendation
+# Cloud Run provides driver 535 (CUDA 12.2), so we need forward compatibility
+FROM nvidia/cuda:12.5.1-runtime-ubuntu22.04
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    cuda-compat-12-5 \
     && rm -rf /var/lib/apt/lists/*
+
+# Use forward compatibility libraries for Cloud Run's older driver (535/CUDA 12.2)
+ENV LD_LIBRARY_PATH=/usr/local/cuda-12.5/compat:${LD_LIBRARY_PATH}
 
 WORKDIR /app
 
