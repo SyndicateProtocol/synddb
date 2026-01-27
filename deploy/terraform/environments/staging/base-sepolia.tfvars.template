@@ -255,6 +255,22 @@ relayer_config = {
 relayer_private_key = ""  # TODO: Set here or in Secret Manager console after deploy
 
 # -----------------------------------------------------------------------------
+# Contract Deployer Configuration
+# -----------------------------------------------------------------------------
+# Private key that owns the deployed contracts (AttestationVerifier, TeeKeyManager, etc).
+# Used to automatically update the AttestationVerifier's expected image digest hash
+# when the sequencer image changes.
+#
+# This is the same key used to deploy contracts in contracts/README.md.
+# IMPORTANT: Never commit the actual key to git. This file (terraform.tfvars) is gitignored.
+
+deployer_private_key = ""  # TODO: Same key used to deploy contracts (0x prefixed)
+
+# AttestationVerifier contract address - receives automatic image digest updates
+# Get this from your contract deployment output
+attestation_verifier_address = "0x0000000000000000000000000000000000000000"  # TODO: Your AttestationVerifier contract
+
+# -----------------------------------------------------------------------------
 # Labels
 # -----------------------------------------------------------------------------
 # Resource labels for organization and cost tracking in GCP.

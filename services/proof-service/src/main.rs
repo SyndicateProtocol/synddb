@@ -23,7 +23,6 @@ use config::Config;
 use prover::{decode_public_values, get_jwt_kid, AttestationProver, JwksCache};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 
@@ -31,8 +30,6 @@ use tracing::{error, info};
 struct AppState {
     prover: AttestationProver,
     jwks_cache: JwksCache,
-    /// Flag to track if prover is currently busy
-    prover_busy: RwLock<bool>,
 }
 
 /// Request to generate a proof
@@ -65,13 +62,15 @@ struct ProveResponse {
 struct ErrorResponse {
     error: String,
     details: Option<String>,
+    /// Whether this error is permanent (should not retry)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permanent: Option<bool>,
 }
 
 /// Health check response
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: String,
-    prover_busy: bool,
 }
 
 #[tokio::main]
@@ -101,11 +100,7 @@ async fn main() -> anyhow::Result<()> {
         config.jwks_cache_ttl_secs,
     );
 
-    let state = Arc::new(AppState {
-        prover,
-        jwks_cache,
-        prover_busy: RwLock::new(false),
-    });
+    let state = Arc::new(AppState { prover, jwks_cache });
 
     // Build router
     let app = Router::new()
@@ -128,49 +123,75 @@ async fn prove_handler(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ProveRequest>,
 ) -> impl IntoResponse {
-    // Check if prover is busy
-    {
-        let busy = state.prover_busy.read().await;
-        if *busy {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Prover is busy".into(),
-                    details: Some("Another proof is currently being generated".into()),
-                }),
-            )
-                .into_response();
-        }
-    }
-
-    // Mark prover as busy
-    {
-        let mut busy = state.prover_busy.write().await;
-        *busy = true;
-    }
-
-    // Ensure we mark prover as not busy when done
     let result = generate_proof(&state, &request).await;
-
-    {
-        let mut busy = state.prover_busy.write().await;
-        *busy = false;
-    }
 
     match result {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(e) => {
-            error!(error = %e, "Proof generation failed");
+            let error_msg = e.to_string();
+            let is_permanent = is_permanent_error(&error_msg);
+
+            if is_permanent {
+                error!(error = %e, "Permanent error encountered when requesting proof");
+            } else {
+                error!(error = %e, "Proof generation failed (transient, may retry)");
+            }
+
+            // Return 400 Bad Request for permanent errors (don't retry)
+            // Return 503 Service Unavailable for transient errors (may retry)
+            let status = if is_permanent {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
+
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                status,
                 Json(ErrorResponse {
                     error: "Proof generation failed".into(),
-                    details: Some(e.to_string()),
+                    details: Some(error_msg),
+                    permanent: Some(is_permanent),
                 }),
             )
                 .into_response()
         }
     }
+}
+
+/// Check if an error message indicates a permanent failure that should not be retried.
+///
+/// Permanent errors include:
+/// - Insufficient PROVE token balance
+/// - Resource exhaustion (quota exceeded)
+/// - Invalid inputs that won't change on retry
+fn is_permanent_error(error_msg: &str) -> bool {
+    let error_lower = error_msg.to_lowercase();
+
+    // SP1 Network balance/quota errors
+    if error_lower.contains("insufficient balance") {
+        return true;
+    }
+    if error_lower.contains("resource has been exhausted") {
+        return true;
+    }
+
+    // Input validation errors
+    if error_lower.contains("invalid") && error_lower.contains("key") {
+        return true;
+    }
+    if error_lower.contains("invalid") && error_lower.contains("signature") {
+        return true;
+    }
+
+    // JWT/attestation errors that won't change
+    if error_lower.contains("jwt") && error_lower.contains("expired") {
+        return true;
+    }
+    if error_lower.contains("jwk not found") {
+        return true;
+    }
+
+    false
 }
 
 /// Generate proof (separated for cleaner error handling)
@@ -216,22 +237,20 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
     // Decode public values to get TEE address
     let public_values = decode_public_values(proof.public_values.as_slice())?;
 
-    // Serialize proof
-    let proof_bytes = bincode::serialize(&proof.proof)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize proof: {}", e))?;
+    // Get proof bytes in Solidity-compatible format for on-chain verification
+    // This includes the verifier route selector in the first 4 bytes
+    let proof_bytes = proof.bytes();
 
     Ok(ProveResponse {
         public_values: format!("0x{}", hex::encode(proof.public_values.as_slice())),
-        proof_bytes: format!("0x{}", hex::encode(&proof_bytes)),
+        proof_bytes: format!("0x{}", hex::encode(proof_bytes)),
         tee_address: format!("{}", public_values.tee_signing_key),
     })
 }
 
 /// Handle health check requests
-async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let busy = *state.prover_busy.read().await;
+async fn health_handler() -> impl IntoResponse {
     Json(HealthResponse {
         status: "ready".into(),
-        prover_busy: busy,
     })
 }

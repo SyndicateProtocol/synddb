@@ -7,7 +7,10 @@
 use alloy::primitives::{Address, B256};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf, time::Duration};
+
+/// Default transaction confirmation timeout (120 seconds)
+const DEFAULT_TX_CONFIRMATION_TIMEOUT_SECS: u64 = 120;
 
 /// Per-application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,9 +42,17 @@ pub(crate) struct ConfigFile {
     #[serde(default = "default_listen_addr")]
     pub listen_addr: SocketAddr,
 
+    /// Transaction confirmation timeout in seconds
+    #[serde(default = "default_tx_confirmation_timeout_secs")]
+    pub tx_confirmation_timeout_secs: u64,
+
     /// Per-application configurations
     #[serde(rename = "application")]
     pub applications: Vec<ApplicationConfig>,
+}
+
+const fn default_tx_confirmation_timeout_secs() -> u64 {
+    DEFAULT_TX_CONFIRMATION_TIMEOUT_SECS
 }
 
 fn default_listen_addr() -> SocketAddr {
@@ -75,6 +86,10 @@ pub(crate) struct CliConfig {
     #[arg(long, env = "RELAYER_LISTEN_ADDR", default_value = "0.0.0.0:8082")]
     pub listen_addr: SocketAddr,
 
+    /// Transaction confirmation timeout in seconds
+    #[arg(long, env = "TX_CONFIRMATION_TIMEOUT", default_value_t = DEFAULT_TX_CONFIRMATION_TIMEOUT_SECS)]
+    pub tx_confirmation_timeout_secs: u64,
+
     /// Required audience string (single-app mode)
     #[arg(long, env = "REQUIRED_AUDIENCE")]
     pub required_audience: Option<String>,
@@ -101,6 +116,9 @@ pub(crate) struct RelayerConfig {
 
     /// Listen address for HTTP server
     pub listen_addr: SocketAddr,
+
+    /// Transaction confirmation timeout
+    pub tx_confirmation_timeout: Duration,
 
     /// Application configs indexed by audience hash
     pub applications: HashMap<B256, ApplicationConfig>,
@@ -146,6 +164,7 @@ impl RelayerConfig {
             bridge_address: config.bridge_address,
             private_key: config.private_key,
             listen_addr: config.listen_addr,
+            tx_confirmation_timeout: Duration::from_secs(config.tx_confirmation_timeout_secs),
             applications,
         })
     }
@@ -202,6 +221,7 @@ impl RelayerConfig {
             bridge_address,
             private_key,
             listen_addr: cli.listen_addr,
+            tx_confirmation_timeout: Duration::from_secs(cli.tx_confirmation_timeout_secs),
             applications,
         })
     }

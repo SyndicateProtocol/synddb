@@ -2,11 +2,19 @@
 name = "proof-service"
 version = "0.1.0"
 edition = "2021"
-description = "GPU-accelerated SP1 proof generation service for TEE attestation"
+description = "SP1 network proof generation service for TEE attestation"
 publish = false
 
 # Standalone service, not part of main workspace
 [workspace]
+
+[[bin]]
+name = "proof-service"
+path = "src/main.rs"
+
+[[bin]]
+name = "sp1-vkey"
+path = "src/vkey.rs"
 
 [dependencies]
 # Web framework
@@ -18,9 +26,18 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 serde = { version = "1.0", features = ["derive"] }
 hex = "0.4"
 
-# SP1 SDK for proof generation
-# native-gnark: Compiles Groth16 prover natively (requires Go 1.22) instead of using Docker
-sp1-sdk = { version = "5.0", features = ["native-gnark"] }
+# SP1 SDK for network proof generation
+#
+# We use Succinct's Prover Network (auction mode) instead of local proving because:
+# - GPU proving requires Moongate's Docker-in-Docker architecture which doesn't work
+#   on Cloud Run or similar container platforms (closed-source dependency)
+#   See: https://docs.succinct.xyz/docs/provers/cluster-development/architecture#node
+# - CPU proving optimizations (RUSTFLAGS="-C target-cpu=native -C target-feature=+avx512f")
+#   are not needed for network proving since proof generation is offloaded
+#
+# native-gnark is required for local verification of proofs returned from the network.
+# Without it, the SDK tries to use Docker for gnark verification, which fails on Cloud Run.
+sp1-sdk = { version = "5.2", features = ["network", "native-gnark"] }
 
 # GCP attestation verification (for JWKS fetching and JWT parsing)
 gcp-attestation = { path = "../../crates/gcp-attestation" }
@@ -44,8 +61,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # HTTP client for JWKS fetching
 reqwest = { version = "0.12", features = ["json"] }
 
-# Binary serialization for proofs
-bincode = "1.3"
-
 [build-dependencies]
-sp1-build = "5.0"
+sp1-build = "5.2"

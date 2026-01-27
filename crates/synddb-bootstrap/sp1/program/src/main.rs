@@ -64,7 +64,7 @@ pub fn main() {
         image_digest_hash: keccak256(result.image_digest.as_bytes()),
         tee_signing_key: evm_address,
         secboot: result.secboot,
-        dbgstat_disabled: result.dbgstat == "disabled", // Reject debug mode VMs
+        dbgstat_disabled: result.dbgstat == "disabled-since-boot", // Only accept production VMs
         audience_hash: keccak256(result.audience.as_bytes()),
         image_signature_v: sig_v,
         image_signature_r: FixedBytes::from(sig_r),

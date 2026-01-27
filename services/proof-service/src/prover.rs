@@ -4,7 +4,10 @@ use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use gcp_attestation::{extract_kid_from_jwt, JwkKey};
 use gcp_cs_attestation_sp1_program::PublicValuesStruct;
-use sp1_sdk::{include_elf, EnvProver, Prover, ProverClient, SP1ProofWithPublicValues, SP1Stdin};
+use sp1_sdk::{
+    include_elf, network::NetworkMode, NetworkProver, Prover, ProverClient,
+    SP1ProofWithPublicValues, SP1Stdin,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -14,18 +17,23 @@ pub const GCP_CS_ATTESTATION_ELF: &[u8] = include_elf!("gcp-cs-attestation-sp1-p
 
 /// Wrapper around SP1 prover for attestation proofs
 pub struct AttestationProver {
-    client: EnvProver,
+    client: NetworkProver,
 }
 
 impl AttestationProver {
-    /// Create a new prover using environment configuration
+    /// Create a new prover using the Succinct Prover Network (Mainnet)
     ///
-    /// Uses the SP1 Network Prover which offloads proof generation to Succinct's
-    /// hosted infrastructure. Requires the `NETWORK_PRIVATE_KEY` environment variable.
+    /// Uses the auction-based Mainnet mode where provers compete for proof requests.
+    /// Requires `NETWORK_PRIVATE_KEY` environment variable with PROVE tokens deposited.
+    ///
+    /// # Panics
+    /// Panics if the `NETWORK_PRIVATE_KEY` environment variable is not set.
     pub fn new() -> Self {
-        info!("Initializing SP1 prover from environment");
+        info!("Initializing SP1 prover for Succinct Network Mainnet (auction mode)");
         Self {
-            client: ProverClient::from_env(),
+            client: ProverClient::builder()
+                .network_for(NetworkMode::Mainnet)
+                .build(),
         }
     }
 
@@ -79,37 +87,6 @@ impl AttestationProver {
 
         info!("Proof generated and verified successfully");
         Ok(proof)
-    }
-
-    /// Execute the program without generating a proof (for testing)
-    pub fn execute(
-        &self,
-        jwt_token: &str,
-        jwk: &JwkKey,
-        expected_audience: &str,
-        evm_public_key: &[u8; 64],
-        image_signature: &[u8],
-    ) -> Result<Vec<u8>> {
-        info!("Executing program in test mode");
-
-        let mut stdin = SP1Stdin::new();
-        stdin.write(&jwt_token.as_bytes().to_vec());
-        stdin.write(jwk);
-        stdin.write(&expected_audience.to_string());
-        stdin.write(&evm_public_key.to_vec());
-        stdin.write(&image_signature.to_vec());
-
-        let (output, report) = self
-            .client
-            .execute(GCP_CS_ATTESTATION_ELF, &stdin)
-            .run()
-            .context("Program execution failed")?;
-
-        info!(
-            cycles = report.total_instruction_count(),
-            "Program executed"
-        );
-        Ok(output.to_vec())
     }
 }
 

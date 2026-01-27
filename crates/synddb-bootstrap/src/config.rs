@@ -39,8 +39,8 @@ pub struct BootstrapConfig {
     #[arg(long, env = "ATTESTATION_AUDIENCE")]
     pub attestation_audience: Option<String>,
 
-    /// Timeout for proof generation
-    #[arg(long, env = "PROOF_TIMEOUT", default_value = "10m", value_parser = humantime::parse_duration)]
+    /// Timeout for proof generation (network proofs can take 10-20 minutes)
+    #[arg(long, env = "PROOF_TIMEOUT", default_value = "20m", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub proof_timeout: Duration,
 
@@ -49,8 +49,8 @@ pub struct BootstrapConfig {
     #[serde(with = "humantime_serde")]
     pub proof_health_check_timeout: Duration,
 
-    /// Total bootstrap timeout
-    #[arg(long, env = "BOOTSTRAP_TIMEOUT", default_value = "15m", value_parser = humantime::parse_duration)]
+    /// Total bootstrap timeout (must exceed `proof_timeout` + registration time)
+    #[arg(long, env = "BOOTSTRAP_TIMEOUT", default_value = "30m", value_parser = humantime::parse_duration)]
     #[serde(with = "humantime_serde")]
     pub bootstrap_timeout: Duration,
 
@@ -88,9 +88,9 @@ impl Default for BootstrapConfig {
             prover_mode: ProverMode::Service,
             proof_service_url: None,
             attestation_audience: None,
-            proof_timeout: Duration::from_secs(600),
+            proof_timeout: Duration::from_secs(1200),
             proof_health_check_timeout: Duration::from_secs(10),
-            bootstrap_timeout: Duration::from_secs(900),
+            bootstrap_timeout: Duration::from_secs(1800),
             proof_max_retries: 3,
             relayer_max_retries: 3,
             relayer_timeout: Duration::from_secs(180),
@@ -166,7 +166,7 @@ mod tests {
     fn test_default_config() {
         let config = BootstrapConfig::default();
         assert!(!config.enable_key_bootstrap);
-        assert_eq!(config.proof_timeout, Duration::from_secs(600));
+        assert_eq!(config.proof_timeout, Duration::from_secs(1200));
     }
 
     #[test]
