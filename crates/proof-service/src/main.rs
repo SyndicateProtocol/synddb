@@ -86,6 +86,14 @@ struct HealthResponse {
 async fn main() -> anyhow::Result<()> {
     let config = Config::parse();
 
+    // Handle --print-image-id flag (for CI/deployment)
+    // Prints the embedded RISC Zero image ID and exits immediately.
+    // No server startup, no CUDA initialization - just reads a compile-time constant.
+    if config.print_image_id {
+        println!("0x{}", hex::encode(prover::risc0_image_id_bytes32()));
+        return Ok(());
+    }
+
     // Initialize logging
     if config.log_json {
         tracing_subscriber::fmt().json().init();
@@ -230,6 +238,19 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
     // Fetch JWK for this key ID
     let jwk = state.jwks_cache.get_jwk(&kid).await?;
     info!("Found matching JWK");
+
+    // Log attestation sample for debugging/capture (query: "attestation_sample")
+    // This data is not sensitive - tokens contain only TEE metadata, no secrets.
+    info!(
+        event = "attestation_sample",
+        source = "proof_service",
+        raw_token = %request.jwt_token,
+        jwk_kid = %jwk.kid,
+        jwk_n = %jwk.n,
+        jwk_e = %jwk.e,
+        audience = %request.expected_audience,
+        "Attestation sample for proof generation"
+    );
 
     // Generate proof (this is CPU/GPU intensive and takes minutes)
     let proof_output = state.prover.generate_proof(

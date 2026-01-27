@@ -27,4 +27,8 @@ pub struct Config {
     /// JWKS cache TTL in seconds
     #[arg(long, env = "JWKS_CACHE_TTL_SECS", default_value = "3600")]
     pub jwks_cache_ttl_secs: u64,
+
+    /// Print the RISC Zero image ID and exit (for CI/deployment)
+    #[arg(long)]
+    pub print_image_id: bool,
 }

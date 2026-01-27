@@ -4195,6 +4195,7 @@ dependencies = [
  "risc0-ethereum-contracts",
  "risc0-zkvm",
  "serde",
+ "serde_json",
  "tokio",
  "tower-http",
  "tracing",

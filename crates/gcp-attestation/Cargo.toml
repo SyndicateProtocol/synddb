@@ -2,7 +2,7 @@
 name = "gcp-attestation"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Note: No rust-version specified - must be compatible with RISC Zero zkVM toolchain (currently 1.91.x)
 license.workspace = true
 repository.workspace = true
 description = "GCP Confidential Space attestation verification library"

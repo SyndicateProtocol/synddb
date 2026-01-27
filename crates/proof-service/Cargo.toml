@@ -71,6 +71,10 @@ reqwest = { version = "0.12", features = ["json"] }
 
 [build-dependencies]
 risc0-build = "3.0.4"
+hex = "0.4"
+
+[dev-dependencies]
+serde_json = "1.0"
 
 [package.metadata.risc0]
 methods = ["../synddb-bootstrap/risc0/program"]
