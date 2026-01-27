@@ -112,7 +112,7 @@ axum-prometheus = "0.10"
 # OpenTelemetry / Distributed Tracing
 opentelemetry = "0.29"
 opentelemetry_sdk = { version = "0.29", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.29", features = ["grpc-tonic"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
 tracing-opentelemetry = "0.30"
 tracing-stackdriver = { version = "0.10", features = ["opentelemetry"] }
 
