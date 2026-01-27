@@ -12,7 +12,6 @@ on:
   push:
     branches:
       - main
-      - example-app
     tags:
       - 'v*'  # Release tags (e.g., v1.0.0)
     paths:
@@ -305,7 +304,7 @@ jobs:
               echo "tags=$REGISTRY/$IMAGE:$VERSION" >> $GITHUB_OUTPUT
             fi
             echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/example-app" ]]; then
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "tags=$REGISTRY/$IMAGE:sha-$SHORT_SHA,$REGISTRY/$IMAGE:edge" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
           else
@@ -587,7 +586,7 @@ jobs:
             else
               echo "tags=$REGISTRY/$IMAGE:$VERSION" >> $GITHUB_OUTPUT
             fi
-          elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/example-app" ]]; then
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "tags=$REGISTRY/$IMAGE:sha-$SHORT_SHA,$REGISTRY/$IMAGE:edge" >> $GITHUB_OUTPUT
           else
             echo "tags=$REGISTRY/$IMAGE:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
