@@ -144,7 +144,8 @@ impl GcsTransport {
     ///
     /// Returns the path of the batch file if found.
     ///
-    /// TODO: Performance note
+    /// # Performance Note
+    ///
     /// This is O(n) in the number of batches - it lists all batches and scans them.
     /// For large numbers of batches, consider:
     /// 1. Prefix narrowing: estimate batch start from sequence if batch sizes are consistent
@@ -161,33 +162,50 @@ impl GcsTransport {
     }
 
     /// List all batch files and parse their metadata
+    ///
+    /// Handles GCS pagination to retrieve all batches (GCS returns max 1000 per request).
     async fn list_batch_files(&self) -> Result<Vec<(u64, u64, String)>, TransportError> {
         use google_cloud_storage::http::objects::list::ListObjectsRequest;
 
         let prefix = format!("{}/batches/", self.config.prefix);
-        let request = ListObjectsRequest {
-            bucket: self.config.bucket.clone(),
-            prefix: Some(prefix),
-            ..Default::default()
-        };
+        let mut batches = Vec::new();
+        let mut page_token: Option<String> = None;
 
-        match self.client.list_objects(&request).await {
-            Ok(response) => {
-                let mut batches = Vec::new();
-                for obj in response.items.unwrap_or_default() {
+        loop {
+            let request = ListObjectsRequest {
+                bucket: self.config.bucket.clone(),
+                prefix: Some(prefix.clone()),
+                page_token: page_token.clone(),
+                ..Default::default()
+            };
+
+            let response = self.client.list_objects(&request).await.map_err(|e| {
+                TransportError::Storage(format!("Failed to list batch objects: {e}"))
+            })?;
+
+            // Parse batch info from object names
+            if let Some(items) = response.items {
+                for obj in items {
                     if let Some(filename) = obj.name.rsplit('/').next() {
                         if let Some((start, end)) = parse_batch_filename(filename) {
                             batches.push((start, end, obj.name));
                         }
                     }
                 }
-                batches.sort_by_key(|(start, _, _)| *start);
-                Ok(batches)
             }
-            Err(e) => Err(TransportError::Storage(format!(
-                "Failed to list batch objects: {e}"
-            ))),
+
+            // Check for more pages
+            match response.next_page_token {
+                Some(token) if !token.is_empty() => {
+                    debug!(token = %token, "Fetching next page of batch files");
+                    page_token = Some(token);
+                }
+                _ => break,
+            }
         }
+
+        batches.sort_by_key(|(start, _, _)| *start);
+        Ok(batches)
     }
 }
 

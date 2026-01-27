@@ -194,7 +194,10 @@ async fn sync_to_head_with_signing(
     let mut synced = 0;
     let mut on_withdrawal = create_withdrawal_callback(signer.cloned(), store.clone());
 
-    // TODO CLAUDE: check that received messages are all in order, or else break. maybe this is already covered
+    // Message ordering is enforced by:
+    // 1. Starting from next_sequence and incrementing sequentially
+    // 2. sync_one_with_callback validates message.sequence == requested sequence
+    // 3. Any mismatch returns SequenceGap error, breaking the loop
 
     loop {
         let result = validator

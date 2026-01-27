@@ -56,6 +56,7 @@ anvil_address_1 := env_var('ANVIL_ADDRESS_1')
 bridge_address := env_var('BRIDGE_ADDRESS')
 weth_address := env_var('WETH_ADDRESS')
 price_oracle_address := env_var('PRICE_ORACLE_ADDRESS')
+tee_key_manager_address := env_var('TEE_KEY_MANAGER_ADDRESS')
 anvil_rpc_url := env_var('ANVIL_RPC_URL')
 anvil_chain_id := env_var('ANVIL_CHAIN_ID')
 anvil_port := env_var('ANVIL_PORT')
@@ -265,6 +266,71 @@ fund-sequencer amount="1":
 [group('components')]
 fund-validator amount="1":
     @just fund-service validator-signer "{{ amount }}"
+
+# Register a TEE key with the mock attestation verifier (Anvil only)
+# Usage: just register-tee-key <address>
+
+# This uses MockAttestationVerifier which accepts any address without proof verification.
+[group('components')]
+register-tee-key address:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Registering TEE key {{ address }} with TeeKeyManager..."
+    # Encode the address as publicValues (MockAttestationVerifier just decodes and returns it)
+    PUBLIC_VALUES=$(cast abi-encode "f(address)" "{{ address }}")
+    cast send --rpc-url {{ anvil_rpc_url }} \
+        --private-key {{ anvil_key_0 }} \
+        {{ tee_key_manager_address }} \
+        "addKey(bytes,bytes)" \
+        "$PUBLIC_VALUES" \
+        "0x"
+    echo "Done. Key {{ address }} is now registered."
+
+# Register the sequencer's dynamically generated key as a TEE key
+
+# Usage: just register-sequencer-key
+[group('components')]
+register-sequencer-key:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Fetching sequencer address..."
+    SIGNER_ADDRESS=$(curl -s "http://127.0.0.1:{{ sequencer_port }}/status" | jq -r '.signer_address')
+    if [ -z "$SIGNER_ADDRESS" ] || [ "$SIGNER_ADDRESS" = "null" ]; then
+        echo "Error: Could not fetch signer_address from sequencer"
+        exit 1
+    fi
+    echo "Registering sequencer key $SIGNER_ADDRESS with TeeKeyManager..."
+    PUBLIC_VALUES=$(cast abi-encode "f(address)" "$SIGNER_ADDRESS")
+    cast send --rpc-url {{ anvil_rpc_url }} \
+        --private-key {{ anvil_key_0 }} \
+        {{ tee_key_manager_address }} \
+        "addKey(bytes,bytes)" \
+        "$PUBLIC_VALUES" \
+        "0x"
+    echo "Done. Sequencer key $SIGNER_ADDRESS is now registered as TEE key."
+
+# Register the validator's bridge signer key as a TEE key
+
+# Usage: just register-validator-key
+[group('components')]
+register-validator-key:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Fetching validator bridge signer address..."
+    SIGNER_ADDRESS=$(curl -s "http://127.0.0.1:8081/info" | jq -r '.signer')
+    if [ -z "$SIGNER_ADDRESS" ] || [ "$SIGNER_ADDRESS" = "null" ]; then
+        echo "Error: Could not fetch signer from validator (is bridge signer mode enabled?)"
+        exit 1
+    fi
+    echo "Registering validator key $SIGNER_ADDRESS with TeeKeyManager..."
+    PUBLIC_VALUES=$(cast abi-encode "f(address)" "$SIGNER_ADDRESS")
+    cast send --rpc-url {{ anvil_rpc_url }} \
+        --private-key {{ anvil_key_0 }} \
+        {{ tee_key_manager_address }} \
+        "addKey(bytes,bytes)" \
+        "$PUBLIC_VALUES" \
+        "0x"
+    echo "Done. Validator key $SIGNER_ADDRESS is now registered as TEE key."
 
 # Run sequencer (key is generated at startup)
 [group('components')]

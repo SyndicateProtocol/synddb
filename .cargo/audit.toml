@@ -7,4 +7,10 @@ ignore = [
     # Transitive dependency from alloy - no fix available yet
     # https://rustsec.org/advisories/RUSTSEC-2025-0137
     "RUSTSEC-2025-0137",
+
+    # rsa: Marvin Attack potential key recovery through timing sidechannels
+    # gcp-attestation only uses RSA for signature verification (public key ops),
+    # not decryption - this timing attack on decryption does not affect us
+    # https://rustsec.org/advisories/RUSTSEC-2023-0071
+    "RUSTSEC-2023-0071",
 ]

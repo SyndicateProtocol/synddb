@@ -5,34 +5,66 @@ import {Script, console} from "forge-std/Script.sol";
 import {Bridge} from "src/Bridge.sol";
 import {PriceOracle} from "src/examples/PriceOracle.sol";
 import {MockWETH} from "test/use-cases/mocks/MockWETH.sol";
+import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
 
 /**
  * @title DeployLocalDevEnv
  * @notice Combined deployment script for local Anvil development environment
- * @dev Deploys MockWETH, Bridge, and PriceOracle with proper role configuration.
+ * @dev Deploys MockWETH, Bridge, PriceOracle, and TEE attestation contracts with mock verification.
  *
  * Required environment variables:
  *   - ADMIN_ADDRESS: Address to receive admin roles (typically deployer)
  *   - SEQUENCER_ADDRESS: Address of the sequencer (receives MESSAGE_INITIALIZER_ROLE on Bridge)
  *
+ * Optional environment variables:
+ *   - DEPLOY_MOCK_ATTESTATION: Set to "true" to deploy mock attestation on non-Anvil chains
+ *
  * Usage with Anvil:
  *   anvil &
  *   forge script script/DeployLocalDevEnv.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+ *
+ * TEE Key Registration (after sequencer starts):
+ *   1. Get sequencer address: curl -s http://localhost:8433/status | jq -r '.signer_address'
+ *   2. Register key: cast send $TEE_KEY_MANAGER "addKey(bytes,bytes)" $(cast abi-encode "f(address)" $SIGNER_ADDRESS) 0x
  */
 contract DeployLocalDevEnv is Script {
     // Role constants (must match Bridge/ModuleCheckRegistry)
     bytes32 public constant MESSAGE_INITIALIZER_ROLE = keccak256("MESSAGE_INITIALIZER_ROLE");
 
-    function run() external returns (MockWETH weth, Bridge bridge, PriceOracle oracle) {
+    // Anvil chain ID
+    uint256 public constant ANVIL_CHAIN_ID = 31337;
+
+    function run()
+        external
+        returns (
+            MockWETH weth,
+            Bridge bridge,
+            PriceOracle oracle,
+            MockAttestationVerifier attestationVerifier,
+            TeeKeyManager keyManager
+        )
+    {
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address sequencer = vm.envAddress("SEQUENCER_ADDRESS");
+
+        // Check if mock attestation should be deployed
+        bool deployMock = block.chainid == ANVIL_CHAIN_ID || vm.envOr("DEPLOY_MOCK_ATTESTATION", false);
 
         console.log("========================================");
         console.log("Deploying Local Development Environment");
         console.log("========================================");
         console.log("Admin:", admin);
         console.log("Sequencer:", sequencer);
+        console.log("Chain ID:", block.chainid);
+        console.log("Deploy Mock Attestation:", deployMock);
         console.log("========================================");
+
+        if (!deployMock) {
+            console.log("WARNING: Mock attestation not deployed on non-Anvil chain.");
+            console.log("Set DEPLOY_MOCK_ATTESTATION=true to override.");
+            revert("Mock attestation requires Anvil or explicit override");
+        }
 
         vm.startBroadcast();
 
@@ -52,15 +84,25 @@ contract DeployLocalDevEnv is Script {
         oracle = new PriceOracle(admin, address(bridge));
         console.log("PriceOracle deployed:", address(oracle));
 
+        // 5. Deploy MockAttestationVerifier (for TEE key registration without real proofs)
+        attestationVerifier = new MockAttestationVerifier();
+        console.log("MockAttestationVerifier deployed:", address(attestationVerifier));
+
+        // 6. Deploy TeeKeyManager with mock verifier
+        keyManager = new TeeKeyManager(attestationVerifier);
+        console.log("TeeKeyManager deployed:", address(keyManager));
+
         vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");
         console.log("Deployment Complete!");
         console.log("========================================");
-        console.log("MockWETH:    ", address(weth));
-        console.log("Bridge:      ", address(bridge));
-        console.log("PriceOracle: ", address(oracle));
+        console.log("MockWETH:               ", address(weth));
+        console.log("Bridge:                 ", address(bridge));
+        console.log("PriceOracle:            ", address(oracle));
+        console.log("MockAttestationVerifier:", address(attestationVerifier));
+        console.log("TeeKeyManager:          ", address(keyManager));
         console.log("========================================");
         console.log("");
         console.log("Role Configuration:");
@@ -72,12 +114,15 @@ contract DeployLocalDevEnv is Script {
         console.log("    - Bridge has UPDATER_ROLE");
         console.log("========================================");
         console.log("");
-        console.log("To update prices via Bridge:");
-        console.log("  1. Sequencer calls bridge.initializeAndHandleMessage(...)");
-        console.log("  2. Payload: abi.encodeCall(PriceOracle.updatePrice, (asset, price, timestamp))");
-        console.log("  3. Target: PriceOracle address");
+        console.log("TEE Key Registration (after sequencer starts):");
+        console.log("  1. Get sequencer's dynamically generated address:");
+        console.log("     SIGNER=$(curl -s http://localhost:8433/status | jq -r '.signer_address')");
+        console.log("");
+        console.log("  2. Register the key with TeeKeyManager:");
+        console.log("     cast send", address(keyManager), "\"addKey(bytes,bytes)\" \\");
+        console.log("       $(cast abi-encode \"f(address)\" $SIGNER) 0x --private-key $ANVIL_KEY_0");
         console.log("========================================");
 
-        return (weth, bridge, oracle);
+        return (weth, bridge, oracle, attestationVerifier, keyManager);
     }
 }

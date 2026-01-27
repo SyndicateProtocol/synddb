@@ -5,13 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, time::Duration};
 use strum::{EnumIter, IntoEnumIterator};
 
-/// Response from the sequencer's `/status` endpoint
+/// Response from the sequencer's `/status` endpoint (partial)
+///
+/// Only deserializes the fields we need - serde ignores unrecognized fields by default.
 #[derive(Debug, Deserialize)]
 struct SequencerStatus {
-    #[allow(dead_code)]
-    current_sequence: u64,
-    #[allow(dead_code)]
-    signer_address: String,
     signer_pubkey: String,
 }
 
