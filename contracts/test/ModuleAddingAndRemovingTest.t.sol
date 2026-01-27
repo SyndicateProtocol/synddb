@@ -4,7 +4,10 @@ pragma solidity 0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {Bridge} from "src/Bridge.sol";
 import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
+import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /// @notice Mock module that always returns true
 contract MockModule is IModuleCheck {
@@ -30,8 +33,12 @@ contract GasConsumingModule is IModuleCheck {
 
 contract ModuleAddingAndRemovingTest is Test {
     Bridge public bridge;
+    TeeKeyManager public teeKeyManager;
+    MockAttestationVerifier public attestationVerifier;
+
     address public admin;
     address public sequencer;
+    uint256 public sequencerPrivateKey = 0xA11CE;
     address public weth;
 
     event PreModuleAdded(address indexed module);
@@ -39,11 +46,34 @@ contract ModuleAddingAndRemovingTest is Test {
 
     function setUp() public {
         admin = address(this);
-        sequencer = makeAddr("sequencer");
+        sequencer = vm.addr(sequencerPrivateKey);
         weth = makeAddr("weth");
 
-        bridge = new Bridge(admin, weth);
+        // Deploy attestation infrastructure
+        attestationVerifier = new MockAttestationVerifier();
+        teeKeyManager = new TeeKeyManager(attestationVerifier);
+
+        // Register sequencer as a valid TEE key
+        bytes memory publicValues = abi.encode(sequencer);
+        teeKeyManager.addKey(publicValues, "");
+
+        bridge = new Bridge(admin, weth, address(teeKeyManager));
         bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+    }
+
+    /// @notice Create a sequencer signature for a message
+    function createSequencerSignature(
+        bytes32 messageId,
+        address targetAddress,
+        bytes memory payload,
+        uint256 nativeTokenAmount
+    ) internal view returns (SequencerSignature memory) {
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount)
+        );
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
+        return SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -66,7 +96,7 @@ contract ModuleAddingAndRemovingTest is Test {
 
         for (uint256 j = 0; j < moduleCounts.length; j++) {
             // Deploy fresh Bridge for each test
-            Bridge testBridge = new Bridge(admin, weth);
+            Bridge testBridge = new Bridge(admin, weth, address(teeKeyManager));
 
             // Add modules
             address[] memory modules = new address[](moduleCounts[j]);
@@ -160,7 +190,7 @@ contract ModuleAddingAndRemovingTest is Test {
 
         for (uint256 j = 0; j < moduleCounts.length; j++) {
             // Deploy fresh Bridge for each test
-            Bridge testBridge = new Bridge(admin, weth);
+            Bridge testBridge = new Bridge(admin, weth, address(teeKeyManager));
             testBridge.grantRole(testBridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
 
             // Add gas-consuming modules
@@ -172,7 +202,7 @@ contract ModuleAddingAndRemovingTest is Test {
             // Create a test message
             bytes32 messageId = keccak256(abi.encodePacked("test", j));
             bytes memory payload = abi.encodeWithSignature("test()");
-            SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+            SequencerSignature memory sig = createSequencerSignature(messageId, address(this), payload, 0);
 
             // Initialize message
             vm.startPrank(sequencer);
@@ -288,7 +318,7 @@ contract ModuleAddingAndRemovingTest is Test {
         // Test message handling with these modules
         bytes32 messageId = keccak256("realistic-test");
         bytes memory payload = abi.encodeWithSignature("test()");
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(this), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(this), payload, sig, 0);

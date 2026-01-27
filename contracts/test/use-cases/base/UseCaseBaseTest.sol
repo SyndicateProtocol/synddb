@@ -4,6 +4,9 @@ pragma solidity 0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {Bridge} from "src/Bridge.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
+import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
+import {SequencerSignature} from "src/types/DataTypes.sol";
 import {WETH9} from "../mocks/WETH9.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
@@ -16,6 +19,13 @@ abstract contract UseCaseBaseTest is Test {
     uint256[] public validatorPrivateKeys;
     address[] public validators;
 
+    // Sequencer key for signing messages
+    uint256 public sequencerPrivateKey = 0xA11CE;
+
+    // TEE infrastructure
+    TeeKeyManager public teeKeyManager;
+    MockAttestationVerifier public attestationVerifier;
+
     /*//////////////////////////////////////////////////////////////
                             SHARED SETUP HELPERS
     //////////////////////////////////////////////////////////////*/
@@ -27,8 +37,32 @@ abstract contract UseCaseBaseTest is Test {
     /// @return weth The deployed WETH9 contract
     function createBridgeWithWETH(address admin, address sequencer) internal returns (Bridge bridge, WETH9 weth) {
         weth = new WETH9();
-        bridge = new Bridge(admin, address(weth));
+
+        // Deploy attestation infrastructure
+        attestationVerifier = new MockAttestationVerifier();
+        teeKeyManager = new TeeKeyManager(attestationVerifier);
+
+        // Register sequencer as a valid TEE key
+        bytes memory publicValues = abi.encode(sequencer);
+        teeKeyManager.addKey(publicValues, "");
+
+        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
         bridge.grantRole(bridge.MESSAGE_INITIALIZER_ROLE(), sequencer);
+    }
+
+    /// @notice Create a sequencer signature for a message
+    function createSequencerSignature(
+        bytes32 messageId,
+        address targetAddress,
+        bytes memory payload,
+        uint256 nativeTokenAmount
+    ) internal view returns (SequencerSignature memory) {
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount)
+        );
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
+        return SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
     }
 
     /// @notice Setup bridge with validators and validator module

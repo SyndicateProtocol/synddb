@@ -5,6 +5,8 @@ import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ERC20TotalSupplyCheckModule} from "src/modules/ERC20TotalSupplyCheckModule.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
+import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {WETH9} from "./mocks/WETH9.sol";
 import {ETHReceiver} from "./mocks/ETHReceiver.sol";
 import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
@@ -26,11 +28,20 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
 
     function setUp() public {
         admin = address(this);
-        sequencer = makeAddr("sequencer");
+        sequencer = vm.addr(sequencerPrivateKey);
         user = makeAddr("user");
 
         weth = new WETH9();
-        bridge = new Bridge(admin, address(weth));
+
+        // Deploy attestation infrastructure
+        attestationVerifier = new MockAttestationVerifier();
+        teeKeyManager = new TeeKeyManager(attestationVerifier);
+
+        // Register sequencer as a valid TEE key
+        bytes memory publicValues = abi.encode(sequencer);
+        teeKeyManager.addKey(publicValues, "");
+
+        bridge = new Bridge(admin, address(weth), address(teeKeyManager));
         recipient = new ETHReceiver();
 
         setupValidators(bridge);
@@ -66,7 +77,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         bytes32 messageId = keccak256(abi.encodePacked("transfer", block.timestamp));
         bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), transferAmount);
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
@@ -115,7 +126,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
             bytes32 messageId = keccak256(abi.encodePacked("transfer", i));
             bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), amounts[i]);
 
-            SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+            SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
 
             vm.prank(sequencer);
             bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
@@ -145,7 +156,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         bytes32 messageId = keccak256("insufficient-sigs");
         bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), transferAmount);
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
@@ -169,7 +180,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         bytes32 messageId = keccak256("exact-threshold");
         bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), transferAmount);
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
@@ -193,7 +204,7 @@ contract UseCase1_ETHTransfer is UseCaseBaseTest {
         bytes32 messageId = keccak256("more-than-threshold");
         bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), transferAmount);
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
 
         vm.prank(sequencer);
         bridge.initializeMessage(messageId, address(weth), payload, sig, 0);

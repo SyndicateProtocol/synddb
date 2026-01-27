@@ -114,6 +114,15 @@ impl EvmKeyManager {
         arr.copy_from_slice(&result);
         arr
     }
+
+    /// Get a reference to the underlying signer
+    ///
+    /// Used for transaction signing in the bootstrap process. The TEE key
+    /// signs and pays for its own registration transaction.
+    #[must_use]
+    pub const fn signer(&self) -> &PrivateKeySigner {
+        &self.signer
+    }
 }
 
 impl std::fmt::Debug for EvmKeyManager {

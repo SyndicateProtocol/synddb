@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 # Workspace crates
 synddb-shared = { path = "../synddb-shared" }
+synddb-bootstrap = { path = "../synddb-bootstrap", optional = true }
 
 # Core async and CLI
 tokio = { workspace = true, features = ["full"] }
@@ -70,6 +71,9 @@ default = []
 
 # OpenTelemetry distributed tracing for Cloud Trace
 otel = ["synddb-shared/otel"]
+
+# TEE-specific functionality (key bootstrapping)
+tee = ["dep:synddb-bootstrap"]
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

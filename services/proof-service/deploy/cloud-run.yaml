@@ -1,0 +1,58 @@
+# Cloud Run service configuration for GPU-accelerated proof generation
+#
+# Deploy with:
+#   gcloud run services replace deploy/cloud-run.yaml --region=us-central1
+#
+# Prerequisites:
+# 1. Build and push image: gcloud builds submit --tag gcr.io/PROJECT_ID/proof-service
+# 2. Request GPU quota for Cloud Run in your region
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: proof-service
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    metadata:
+      annotations:
+        # GPU configuration
+        run.googleapis.com/gpu-type: nvidia-l4
+        run.googleapis.com/gpu-count: "1"
+        # Allow longer startup for SP1 initialization
+        run.googleapis.com/startup-cpu-boost: "true"
+        # Single instance since proof generation is resource-intensive
+        autoscaling.knative.dev/maxScale: "1"
+        autoscaling.knative.dev/minScale: "0"
+    spec:
+      containerConcurrency: 1  # Only one proof at a time
+      timeoutSeconds: 900      # 15 minutes for proof generation
+      containers:
+        - image: gcr.io/PROJECT_ID/proof-service:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SP1_PROVER
+              value: "cuda"
+            - name: RUST_LOG
+              value: "info"
+            - name: LOG_JSON
+              value: "true"
+          resources:
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 30

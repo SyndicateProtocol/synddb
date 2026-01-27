@@ -11,12 +11,12 @@ import {PriceOracle} from "src/examples/PriceOracle.sol";
  *
  * Required environment variables:
  *   - ADMIN_ADDRESS: Address to receive admin role
- *   - BRIDGE_ADDRESS: Address of the Bridge contract (receives UPDATER_ROLE)
+ *   - BRIDGE_CONTRACT_ADDRESS: Address of the Bridge contract (receives UPDATER_ROLE)
  */
 contract DeployPriceOracle is Script {
     function run() external returns (PriceOracle) {
         address admin = vm.envAddress("ADMIN_ADDRESS");
-        address bridge = vm.envAddress("BRIDGE_ADDRESS");
+        address bridge = vm.envAddress("BRIDGE_CONTRACT_ADDRESS");
 
         console.log("========================================");
         console.log("Deploying PriceOracle Contract");

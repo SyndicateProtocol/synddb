@@ -4952,6 +4952,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "synddb-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap",
+ "hex",
+ "humantime",
+ "humantime-serde",
+ "reqwest",
+ "serde",
+ "synddb-client",
+ "synddb-shared",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "synddb-chain-monitor"
 version = "0.1.0"
 dependencies = [
@@ -5088,6 +5107,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum",
+ "synddb-bootstrap",
  "synddb-shared",
  "tempfile",
  "thiserror 2.0.17",
@@ -5153,6 +5173,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum",
+ "synddb-bootstrap",
  "synddb-shared",
  "thiserror 2.0.17",
  "tokio",

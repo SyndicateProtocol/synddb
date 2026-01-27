@@ -53,10 +53,10 @@ anvil_key_0 := env_var('ANVIL_KEY_0')
 anvil_key_1 := env_var('ANVIL_KEY_1')
 anvil_address_0 := env_var('ANVIL_ADDRESS_0')
 anvil_address_1 := env_var('ANVIL_ADDRESS_1')
-bridge_address := env_var('BRIDGE_ADDRESS')
-weth_address := env_var('WETH_ADDRESS')
-price_oracle_address := env_var('PRICE_ORACLE_ADDRESS')
-tee_key_manager_address := env_var('TEE_KEY_MANAGER_ADDRESS')
+bridge_contract_address := env_var('BRIDGE_CONTRACT_ADDRESS')
+weth_contract_address := env_var('WETH_CONTRACT_ADDRESS')
+price_oracle_contract_address := env_var('PRICE_ORACLE_CONTRACT_ADDRESS')
+tee_key_manager_contract_address := env_var('TEE_KEY_MANAGER_CONTRACT_ADDRESS')
 anvil_rpc_url := env_var('ANVIL_RPC_URL')
 anvil_chain_id := env_var('ANVIL_CHAIN_ID')
 anvil_port := env_var('ANVIL_PORT')
@@ -91,9 +91,9 @@ info:
     echo "  Key:     {{ anvil_key_1 }}"
     echo ""
     echo "=== Contract Addresses ==="
-    echo "  WETH:         {{ weth_address }}"
-    echo "  Bridge:       {{ bridge_address }}"
-    echo "  Price Oracle: {{ price_oracle_address }}"
+    echo "  WETH:         {{ weth_contract_address }}"
+    echo "  Bridge:       {{ bridge_contract_address }}"
+    echo "  Price Oracle: {{ price_oracle_contract_address }}"
     echo ""
     echo "=== Service URLs ==="
     echo "  Anvil RPC:  {{ anvil_rpc_url }}"
@@ -280,7 +280,7 @@ register-tee-key address:
     PUBLIC_VALUES=$(cast abi-encode "f(address)" "{{ address }}")
     cast send --rpc-url {{ anvil_rpc_url }} \
         --private-key {{ anvil_key_0 }} \
-        {{ tee_key_manager_address }} \
+        {{ tee_key_manager_contract_address }} \
         "addKey(bytes,bytes)" \
         "$PUBLIC_VALUES" \
         "0x"
@@ -303,7 +303,7 @@ register-sequencer-key:
     PUBLIC_VALUES=$(cast abi-encode "f(address)" "$SIGNER_ADDRESS")
     cast send --rpc-url {{ anvil_rpc_url }} \
         --private-key {{ anvil_key_0 }} \
-        {{ tee_key_manager_address }} \
+        {{ tee_key_manager_contract_address }} \
         "addKey(bytes,bytes)" \
         "$PUBLIC_VALUES" \
         "0x"
@@ -326,7 +326,7 @@ register-validator-key:
     PUBLIC_VALUES=$(cast abi-encode "f(address)" "$SIGNER_ADDRESS")
     cast send --rpc-url {{ anvil_rpc_url }} \
         --private-key {{ anvil_key_0 }} \
-        {{ tee_key_manager_address }} \
+        {{ tee_key_manager_contract_address }} \
         "addKey(bytes,bytes)" \
         "$PUBLIC_VALUES" \
         "0x"
@@ -361,7 +361,7 @@ validator-bridge:
     STATE_DB_PATH={{ data_dir }}/validator_state.db \
     PENDING_CHANGESETS_DB_PATH={{ data_dir }}/pending_changesets.db \
     BRIDGE_SIGNER=true \
-    BRIDGE_CONTRACT={{ bridge_address }} \
+    BRIDGE_CONTRACT_ADDRESS={{ bridge_contract_address }} \
     BRIDGE_CHAIN_ID=31337 \
     cargo run -p synddb-validator --release
 
