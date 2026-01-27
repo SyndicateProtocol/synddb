@@ -11,6 +11,7 @@ use std::{
     os::raw::c_char,
     time::Duration,
 };
+use tracing::{info, warn};
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
@@ -245,22 +246,47 @@ pub unsafe extern "C" fn synddb_publish(handle: *mut SyndDBHandle) -> SyndDBErro
     }
 }
 
-/// Create a manual snapshot of the database
+/// Create and publish a snapshot to the sequencer
+///
+/// This creates a complete database snapshot and sends it to the sequencer.
+/// The snapshot includes the full database state (schema + data) and is used
+/// for replica synchronization and disaster recovery.
+///
+/// # Behavior
+///
+/// This function is consistent with `synddb_publish()` for changesets:
+/// - `synddb_publish()` - extracts pending changesets and sends to sequencer
+/// - `synddb_snapshot()` - creates database snapshot and sends to sequencer
+///
+/// Both operations send data to the sequencer immediately (synchronous).
+///
+/// # When to Use
+///
+/// - After schema changes (`CREATE TABLE`, `ALTER TABLE`, etc.)
+/// - To create periodic recovery checkpoints
+/// - Before major migrations
+///
+/// Note: Schema changes (DDL) are NOT captured in changesets. You must call
+/// this function after DDL to ensure validators can reconstruct the schema.
 ///
 /// # Arguments
 /// * `handle` - `SyndDB` handle from `synddb_attach()`
-/// * `out_size` - Output pointer to receive snapshot size in bytes
+/// * `out_size` - Output pointer to receive snapshot size in bytes (optional, can be NULL)
 ///
 /// # Returns
 /// 0 on success, error code otherwise
 ///
 /// # Safety
 /// - `handle` must be a valid handle from `synddb_attach()`
-/// - `out_size` must be a valid pointer
+/// - `out_size` can be NULL if size is not needed
 ///
-/// # Note
-/// The snapshot data itself is sent directly to the sequencer.
-/// This function only returns the size for informational purposes.
+/// # Example (Python)
+/// ```python
+/// # After creating schema
+/// synddb.execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+/// size = synddb.snapshot()  # Creates AND publishes to sequencer
+/// print(f"Published {size} byte snapshot")
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn synddb_snapshot(
     handle: *mut SyndDBHandle,
@@ -275,7 +301,8 @@ pub unsafe extern "C" fn synddb_snapshot(
 
     let synddb = &*(handle as *const SyndDB);
 
-    match synddb.snapshot() {
+    // Create AND publish snapshot to the sequencer (synchronous)
+    match synddb.publish_snapshot() {
         Ok(snapshot) => {
             if !out_size.is_null() {
                 *out_size = snapshot.data.len();
@@ -283,7 +310,7 @@ pub unsafe extern "C" fn synddb_snapshot(
             SyndDBError::Success
         }
         Err(e) => {
-            set_last_error(format!("Failed to create snapshot: {}", e));
+            set_last_error(format!("Failed to publish snapshot: {}", e));
             SyndDBError::SnapshotError
         }
     }
@@ -341,6 +368,224 @@ pub extern "C" fn synddb_last_error() -> *const c_char {
 pub extern "C" fn synddb_version() -> *const c_char {
     static VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
     VERSION.as_ptr() as *const c_char
+}
+
+/// Execute a single SQL statement on the monitored connection
+///
+/// This is the correct way to write data when using `SyndDB` from FFI.
+/// Changes made through this function are captured and published to the sequencer.
+///
+/// # Arguments
+/// * `handle` - `SyndDB` handle from `synddb_attach()`
+/// * `sql` - SQL statement to execute (UTF-8 C string)
+///
+/// # Returns
+/// Number of rows affected on success, or -1 on error.
+/// Call `synddb_last_error()` to get the error message.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+/// - `sql` must be a valid null-terminated UTF-8 string
+///
+/// # Example (Python)
+/// ```python
+/// rows = synddb_execute(handle, b"INSERT INTO prices VALUES (1, 'BTC', 50000)\0")
+/// if rows < 0:
+///     print(synddb_last_error())
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn synddb_execute(handle: *mut SyndDBHandle, sql: *const c_char) -> i64 {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return -1;
+    }
+
+    if sql.is_null() {
+        set_last_error("Null SQL string provided");
+        return -1;
+    }
+
+    let sql_str = match CStr::from_ptr(sql).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in SQL: {}", e));
+            return -1;
+        }
+    };
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    match conn.execute(sql_str, []) {
+        Ok(rows) => rows as i64,
+        Err(e) => {
+            set_last_error(format!("SQL execution failed: {}", e));
+            -1
+        }
+    }
+}
+
+/// Execute multiple SQL statements (batch) on the monitored connection
+///
+/// This is useful for executing schema creation or multiple statements at once.
+/// Changes made through this function are captured and published to the sequencer.
+///
+/// **Automatic Snapshotting**: If DDL statements (CREATE, ALTER, DROP) are detected,
+/// a snapshot is automatically published after execution. This ensures validators
+/// can always reconstruct the schema without manual intervention.
+///
+/// # Arguments
+/// * `handle` - `SyndDB` handle from `synddb_attach()`
+/// * `sql` - SQL statements to execute (UTF-8 C string, semicolon-separated)
+///
+/// # Returns
+/// 0 on success, error code otherwise.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+/// - `sql` must be a valid null-terminated UTF-8 string
+///
+/// # Example (Python)
+/// ```python
+/// result = synddb_execute_batch(handle, b'''
+///     CREATE TABLE IF NOT EXISTS prices (id INTEGER PRIMARY KEY, asset TEXT, price REAL);
+///     CREATE INDEX IF NOT EXISTS idx_asset ON prices(asset);
+/// \0''')
+/// # Snapshot is automatically published - no manual snapshot() call needed!
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn synddb_execute_batch(
+    handle: *mut SyndDBHandle,
+    sql: *const c_char,
+) -> SyndDBError {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    if sql.is_null() {
+        set_last_error("Null SQL string provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    let sql_str = match CStr::from_ptr(sql).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in SQL: {}", e));
+            return SyndDBError::InvalidUtf8;
+        }
+    };
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    // Execute the SQL batch
+    if let Err(e) = conn.execute_batch(sql_str) {
+        set_last_error(format!("SQL batch execution failed: {}", e));
+        return SyndDBError::DatabaseError;
+    }
+
+    // Auto-snapshot after DDL (always enabled for FFI - simplest DX)
+    if SyndDB::is_ddl(sql_str) {
+        info!("DDL executed via FFI, creating automatic snapshot");
+        if let Err(e) = synddb.publish_snapshot() {
+            warn!("Failed to auto-snapshot after DDL: {}. Continuing.", e);
+            // Don't fail the execute - the DDL succeeded, snapshot is best-effort
+        }
+    }
+
+    SyndDBError::Success
+}
+
+/// Begin a transaction on the monitored connection
+///
+/// Call this before executing multiple statements that should be atomic.
+/// Must be followed by `synddb_commit()` or `synddb_rollback()`.
+///
+/// # Returns
+/// 0 on success, error code otherwise.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+#[no_mangle]
+pub unsafe extern "C" fn synddb_begin(handle: *mut SyndDBHandle) -> SyndDBError {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    match conn.execute("BEGIN", []) {
+        Ok(_) => SyndDBError::Success,
+        Err(e) => {
+            set_last_error(format!("Failed to begin transaction: {}", e));
+            SyndDBError::DatabaseError
+        }
+    }
+}
+
+/// Commit the current transaction
+///
+/// # Returns
+/// 0 on success, error code otherwise.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+#[no_mangle]
+pub unsafe extern "C" fn synddb_commit(handle: *mut SyndDBHandle) -> SyndDBError {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    match conn.execute("COMMIT", []) {
+        Ok(_) => SyndDBError::Success,
+        Err(e) => {
+            set_last_error(format!("Failed to commit transaction: {}", e));
+            SyndDBError::DatabaseError
+        }
+    }
+}
+
+/// Rollback the current transaction
+///
+/// # Returns
+/// 0 on success, error code otherwise.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `synddb_attach()`
+#[no_mangle]
+pub unsafe extern "C" fn synddb_rollback(handle: *mut SyndDBHandle) -> SyndDBError {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("Null handle provided");
+        return SyndDBError::InvalidPointer;
+    }
+
+    let synddb = &*(handle as *const SyndDB);
+    let conn = synddb.connection();
+
+    match conn.execute("ROLLBACK", []) {
+        Ok(_) => SyndDBError::Success,
+        Err(e) => {
+            set_last_error(format!("Failed to rollback transaction: {}", e));
+            SyndDBError::DatabaseError
+        }
+    }
 }
 
 #[cfg(test)]

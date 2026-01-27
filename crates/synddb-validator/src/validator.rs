@@ -7,6 +7,7 @@ use crate::{
     apply::applier::ChangesetApplier,
     config::ValidatorConfig,
     error::ValidatorError,
+    rules::RuleRegistry,
     state::store::StateStore,
     sync::{
         batch_index::{BatchIndex, BatchIterator},
@@ -44,6 +45,8 @@ pub struct Validator {
     batch_sync_enabled: bool,
     /// How often to refresh the batch index
     batch_index_refresh_interval: Duration,
+    /// Optional validation rules to apply after each changeset
+    rules: Option<RuleRegistry>,
 }
 
 impl Validator {
@@ -82,6 +85,7 @@ impl Validator {
             gap_skip_on_failure: config.gap_skip_on_failure,
             batch_sync_enabled: config.batch_sync_enabled,
             batch_index_refresh_interval: config.batch_index_refresh_interval,
+            rules: None,
         })
     }
 
@@ -107,7 +111,25 @@ impl Validator {
             gap_skip_on_failure: false,
             batch_sync_enabled: true,
             batch_index_refresh_interval: Duration::from_secs(1),
+            rules: None,
         })
+    }
+
+    /// Set the validation rules for this validator
+    ///
+    /// Rules are applied after each changeset is applied but before the transaction
+    /// is committed. If any rule fails, the changeset is rejected.
+    ///
+    /// This is typically called by custom validator implementations to register
+    /// application-specific validation logic.
+    pub fn set_rules(&mut self, rules: RuleRegistry) {
+        info!(rule_count = rules.len(), "Setting validation rules");
+        self.rules = Some(rules);
+    }
+
+    /// Get a reference to the current rules (if any)
+    pub const fn rules(&self) -> Option<&RuleRegistry> {
+        self.rules.as_ref()
     }
 
     /// Get the last synced sequence number
@@ -349,8 +371,9 @@ impl Validator {
             on_withdrawal(&withdrawal);
         }
 
-        // 4. Apply to database (logs withdrawal, applies changeset)
-        self.applier.apply_message(&message)?;
+        // 4. Apply to database with validation rules
+        self.applier
+            .apply_message_with_rules(&message, self.rules.as_ref())?;
 
         debug!(sequence, "Message applied");
 
@@ -453,8 +476,9 @@ impl Validator {
                 on_withdrawal(&withdrawal);
             }
 
-            // Apply to database
-            self.applier.apply_message(message)?;
+            // Apply to database with validation rules
+            self.applier
+                .apply_message_with_rules(message, self.rules.as_ref())?;
 
             debug!(sequence = message.sequence, "Message applied");
 
@@ -634,8 +658,11 @@ impl Validator {
                                 on_withdrawal(&withdrawal);
                             }
 
-                            // Apply
-                            if let Err(e) = self.applier.apply_message(message) {
+                            // Apply with validation rules
+                            if let Err(e) = self
+                                .applier
+                                .apply_message_with_rules(message, self.rules.as_ref())
+                            {
                                 error!(
                                     sequence = message.sequence,
                                     error = %e,

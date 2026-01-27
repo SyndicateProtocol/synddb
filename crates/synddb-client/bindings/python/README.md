@@ -128,9 +128,16 @@ Manually publish all pending changesets immediately.
 
 ### `synddb.snapshot()`
 
-Create a manual snapshot of the database.
+Create and publish a snapshot to the sequencer.
+
+This creates a complete database snapshot (schema + data) and sends it to the sequencer. Use this after schema changes (`CREATE TABLE`, etc.) since DDL is NOT captured in changesets.
 
 **Returns:** Size of snapshot in bytes (int)
+
+**When to use:**
+- After `CREATE TABLE`, `ALTER TABLE`, or other DDL statements
+- To create periodic recovery checkpoints
+- Before major migrations
 
 ### `synddb.detach()`
 

@@ -19,6 +19,7 @@ pub mod config;
 pub mod error;
 pub mod http;
 pub mod metrics;
+pub mod rules;
 pub mod state;
 pub mod sync;
 pub mod validator;

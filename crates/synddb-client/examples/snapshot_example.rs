@@ -1,5 +1,13 @@
 //! Example demonstrating snapshot creation and restoration
 //!
+//! This example shows:
+//! - `execute_ddl()`: Execute DDL with automatic snapshot publishing
+//! - `create_snapshot()`: Creates a local snapshot (does NOT send to sequencer)
+//! - `publish_snapshot()`: Creates AND sends snapshot to sequencer
+//!
+//! Note: Since v0.2, DDL executed through `SyndDB` methods automatically triggers
+//! snapshot publishing. This ensures validators can always reconstruct schemas.
+//!
 //! **Complexity:** Intermediate
 //! **Features:** Snapshot creation, verification, metadata inspection
 //! **Prerequisites:** Sequencer running on localhost:8433
@@ -15,22 +23,25 @@ fn main() -> Result<()> {
 
     println!("=== SyndDB Snapshot Example ===\n");
 
-    // Create source database
+    // Create source database and attach SyndDB FIRST
+    // This ensures all operations (including DDL) are captured
     let source_conn = Box::leak(Box::new(Connection::open("source.db")?));
+    let synddb = SyndDB::attach(source_conn, "http://localhost:8433")?;
+    println!("✓ SyndDB attached to source database");
 
-    // Create schema and populate with data
-    source_conn.execute(
+    // Create schema using execute_ddl() - this automatically publishes a snapshot!
+    // No manual snapshot() call needed for DDL operations.
+    synddb.execute_ddl(
         "CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
             name TEXT,
             balance INTEGER
         )",
-        [],
     )?;
+    println!("✓ Schema created (snapshot automatically published)");
 
-    println!("✓ Source database created");
-
-    // Insert some data
+    // Insert some data using the connection directly
+    // (changesets are captured automatically via SQLite hooks)
     for i in 1..=5 {
         source_conn.execute(
             "INSERT OR REPLACE INTO users (id, name, balance) VALUES (?1, ?2, ?3)",
@@ -38,18 +49,15 @@ fn main() -> Result<()> {
         )?;
     }
 
-    println!("✓ Inserted 5 users into source database");
-
-    // Attach SyndDB
-    let synddb = SyndDB::attach(source_conn, "http://localhost:8433")?;
-    println!("✓ SyndDB attached to source database\n");
+    println!("✓ Inserted 5 users into source database\n");
 
     // Wait a moment for initial flush
     std::thread::sleep(std::time::Duration::from_secs(1));
 
-    // Create snapshot
-    println!("Creating snapshot...");
-    let snapshot = synddb.snapshot()?;
+    // Create a LOCAL snapshot (does NOT send to sequencer)
+    // Use this when you need the snapshot data locally (backup, testing, etc.)
+    println!("Creating local snapshot (not sent to sequencer)...");
+    let snapshot = synddb.create_snapshot()?;
 
     println!("✓ Snapshot created:");
     println!("  - Size: {} bytes", snapshot.data.len());
