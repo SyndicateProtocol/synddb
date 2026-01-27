@@ -236,6 +236,7 @@ sequencer_port=9000
 - Use `tracing` macros (`info!`, `warn!`, `debug!`, `error!`) for logging
 - Structured logging with fields: `info!(sequence = seq, "Message")`
 - Ethereum address naming: EOA (wallet) addresses use `_ADDRESS` suffix, contract addresses use `_CONTRACT_ADDRESS` suffix
+- Doc comments: Use backticks around code identifiers, function calls, and technical terms to avoid `clippy::doc_markdown` warnings. This includes function calls like `` `keccak256(digest)` `` and words with internal capitalization like `` `SQLite` `` or `` `SyndDB` ``
 - Do not add self-explanatory comments that do not clarify code. Below is an example of useless comments:
 
 ```rust
@@ -288,6 +289,21 @@ The sequencer and validator run inside TEEs (Trusted Execution Environments). Wh
 If a proposed change could affect the TEE security boundary, flag the implications and confirm before proceeding.
 
 **Note:** Smart contracts (in `contracts/`) run on-chain, not inside TEEs. TEE boundary considerations do not apply to contract code.
+
+### TEE Environment Variable Overrides
+When adding or modifying environment variables for components that run in Confidential Space (sequencer, validator, price-oracle), you must update the `tee.launch_policy.allow_env_override` label in the corresponding Dockerfile. Confidential Space blocks all env vars by default—only those explicitly listed in this label can be set by the VM operator at runtime.
+
+**Affected Dockerfiles:**
+- `docker/reproducible/sequencer.Dockerfile:148` - Production sequencer
+- `docker/reproducible/validator.Dockerfile:153` - Production validator
+- `examples/price-oracle/Dockerfile:59` - Price oracle application
+- `examples/price-oracle/validator.Dockerfile:46` - Price oracle validator
+- `tests/confidential-space/Dockerfile:31` - Attestation sample
+
+When adding a new env var:
+1. Add the env var to the application code (config struct with `#[arg(env = "...")]`)
+2. Update the `allow_env_override` label in the Dockerfile to include the new variable
+3. Document the variable's purpose in a comment above the label (see `examples/price-oracle/Dockerfile:52-58` for the pattern)
 
 ## GCP Infrastructure
 

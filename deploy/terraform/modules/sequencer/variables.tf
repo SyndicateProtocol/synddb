@@ -57,8 +57,7 @@ variable "tee_bootstrap" {
     chain_id             = number           # Chain ID for EIP-712 signatures
     proof_service_url    = string           # URL of proof service for attestation proofs
     attestation_audience = string           # Expected audience for attestation tokens
-    cosign_signature     = optional(string) # Cosign signature over image digest (64 bytes, hex)
-    cosign_pubkey        = optional(string) # Cosign P-256 public key (64 or 65 bytes, hex)
+    image_signature      = optional(string) # secp256k1 signature over keccak256(image_digest) (65 bytes r||s||v, hex)
   })
   default = null
 }

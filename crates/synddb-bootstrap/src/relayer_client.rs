@@ -9,7 +9,41 @@ use alloy::{
     signers::{local::PrivateKeySigner, Signer},
 };
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tracing::{debug, info};
+
+/// Fetch an identity token from the GCP metadata server for authenticating to Cloud Run
+async fn fetch_identity_token(audience: &str) -> Result<String, BootstrapError> {
+    let metadata_url = format!(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience={}",
+        audience
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&metadata_url)
+        .header("Metadata-Flavor", "Google")
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| {
+            BootstrapError::ContractSubmissionFailed(format!(
+                "Failed to fetch identity token: {}",
+                e
+            ))
+        })?;
+
+    if !response.status().is_success() {
+        return Err(BootstrapError::ContractSubmissionFailed(format!(
+            "Failed to fetch identity token: HTTP {}",
+            response.status()
+        )));
+    }
+
+    response.text().await.map_err(|e| {
+        BootstrapError::ContractSubmissionFailed(format!("Failed to read identity token: {}", e))
+    })
+}
 
 /// Type of key to register
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -71,7 +105,7 @@ impl RelayerClient {
         relayer_url: String,
         bridge_address: Address,
         chain_id: u64,
-        timeout: std::time::Duration,
+        timeout: Duration,
     ) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(timeout)
@@ -127,11 +161,15 @@ impl RelayerClient {
             "Registering key via relayer"
         );
 
+        // Fetch identity token for Cloud Run authentication
+        let identity_token = fetch_identity_token(&self.relayer_url).await?;
+
         let url = format!("{}/register-key", self.relayer_url);
 
         let response = self
             .http_client
             .post(&url)
+            .header("Authorization", format!("Bearer {}", identity_token))
             .json(&request)
             .send()
             .await

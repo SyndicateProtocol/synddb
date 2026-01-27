@@ -303,15 +303,14 @@ struct AttestationFields {
 /// | 5    | 160-191   | `secboot`                | bool, right-aligned             |
 /// | 6    | 192-223   | `dbgstat_disabled`       | bool, right-aligned             |
 /// | 7    | 224-255   | `audience_hash`          | bytes32                         |
-/// | 8    | 256-287   | `cosign_signature_r`     | bytes32                         |
-/// | 9    | 288-319   | `cosign_signature_s`     | bytes32                         |
-/// | 10   | 320-351   | `cosign_pubkey_x`        | bytes32                         |
-/// | 11   | 352-383   | `cosign_pubkey_y`        | bytes32                         |
+/// | 8    | 256-287   | `image_signature_v`      | uint8, right-aligned            |
+/// | 9    | 288-319   | `image_signature_r`      | bytes32                         |
+/// | 10   | 320-351   | `image_signature_s`      | bytes32                         |
 ///
-/// Total: 384 bytes (12 slots × 32 bytes)
+/// Total: 352 bytes (11 slots × 32 bytes)
 fn extract_attestation_fields(public_values: &[u8]) -> Option<AttestationFields> {
-    // ABI-encoded struct is 12 slots × 32 bytes = 384 bytes
-    if public_values.len() < 384 {
+    // ABI-encoded struct is 11 slots × 32 bytes = 352 bytes
+    if public_values.len() < 352 {
         return None;
     }
 
@@ -337,8 +336,8 @@ mod tests {
 
     #[test]
     fn test_extract_attestation_fields() {
-        // Create mock ABI-encoded public values (12 slots × 32 bytes = 384 bytes)
-        let mut public_values = vec![0u8; 384];
+        // Create mock ABI-encoded public values (11 slots × 32 bytes = 352 bytes)
+        let mut public_values = vec![0u8; 352];
 
         // Slot 3 (bytes 96-128): image_digest_hash
         let expected_digest = B256::from([0xAB; 32]);

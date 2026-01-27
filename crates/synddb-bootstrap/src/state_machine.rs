@@ -176,13 +176,18 @@ impl BootstrapStateMachine {
         let attestation = self.fetch_attestation_with_retry(config).await?;
         self.attestation_token = Some(attestation.clone());
 
-        // Parse cosign signature and pubkey from config (validated in config.validate())
-        let cosign_signature = parse_hex_bytes(
-            config.cosign_signature.as_deref().unwrap(),
-            "COSIGN_SIGNATURE",
+        // Parse image signature from config (validated in config.validate())
+        // This is a 65-byte secp256k1 signature (r || s || v) for on-chain ecrecover verification
+        let image_signature = parse_hex_bytes(
+            config.image_signature.as_deref().unwrap(),
+            "IMAGE_SIGNATURE",
         )?;
-        let cosign_pubkey =
-            parse_hex_bytes(config.cosign_pubkey.as_deref().unwrap(), "COSIGN_PUBKEY")?;
+        if image_signature.len() != 65 {
+            return Err(BootstrapError::Config(format!(
+                "IMAGE_SIGNATURE must be exactly 65 bytes (r || s || v), got {}",
+                image_signature.len()
+            )));
+        }
 
         // Step 3: Generate proof
         self.state = BootstrapState::GeneratingProof;
@@ -196,8 +201,7 @@ impl BootstrapStateMachine {
                 &attestation,
                 &audience,
                 &key_manager.public_key(),
-                &cosign_signature,
-                &cosign_pubkey,
+                &image_signature,
                 config.proof_max_retries,
             )
             .await?;
@@ -264,15 +268,13 @@ impl BootstrapStateMachine {
     }
 
     /// Generate proof with retry
-    #[allow(clippy::too_many_arguments)]
     async fn generate_proof_with_retry(
         &self,
         client: &ProofClient,
         attestation: &str,
         audience: &str,
         public_key: &[u8; 64],
-        cosign_signature: &[u8],
-        cosign_pubkey: &[u8],
+        image_signature: &[u8],
         max_retries: u32,
     ) -> Result<ProofResponse, BootstrapError> {
         let mut last_error = None;
@@ -281,13 +283,7 @@ impl BootstrapStateMachine {
             info!(attempt, max_retries, "Generating proof...");
 
             match client
-                .generate_proof(
-                    attestation,
-                    audience,
-                    public_key,
-                    cosign_signature,
-                    cosign_pubkey,
-                )
+                .generate_proof(attestation, audience, public_key, image_signature)
                 .await
             {
                 Ok(proof) => return Ok(proof),

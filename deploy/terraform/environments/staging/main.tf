@@ -104,6 +104,13 @@ module "proof_service" {
   memory_limit          = "2Gi"
   labels                = var.labels
 
+  # Allow sequencer, validator, and price oracle to invoke the proof service
+  invoker_service_accounts = [
+    module.iam.sequencer_service_account_email,
+    module.iam.validator_service_account_email,
+    module.iam.price_oracle_service_account_email,
+  ]
+
   depends_on = [module.iam]
 }
 
@@ -125,6 +132,7 @@ module "sequencer" {
   labels                = var.labels
 
   # TEE bootstrap (null = disabled, requires relayer to be deployed)
+  # Image signature is fetched automatically from OCI artifact referrers
   tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
     bridge_address       = var.bridge_contract_address
     relayer_url          = module.relayer[0].service_url
@@ -132,8 +140,7 @@ module "sequencer" {
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
-    cosign_signature     = var.tee_bootstrap.cosign_signature
-    cosign_pubkey        = var.tee_bootstrap.cosign_pubkey
+    image_signature      = data.external.sequencer_signature[0].result.signature
   } : null
 
   depends_on = [module.iam, module.networking, module.proof_service, module.relayer]
@@ -159,6 +166,7 @@ module "validator" {
   labels                = var.labels
 
   # TEE bootstrap (null = disabled, requires relayer to be deployed)
+  # Image signature is fetched automatically from OCI artifact referrers
   tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
     bridge_address       = var.bridge_contract_address
     relayer_url          = module.relayer[0].service_url
@@ -166,8 +174,7 @@ module "validator" {
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
-    cosign_signature     = var.tee_bootstrap.cosign_signature
-    cosign_pubkey        = var.tee_bootstrap.cosign_pubkey
+    image_signature      = data.external.validator_signature[0].result.signature
   } : null
 
   depends_on = [module.iam, module.networking, module.sequencer, module.proof_service, module.relayer]
@@ -204,6 +211,7 @@ module "price_oracle" {
   } : null
 
   # TEE bootstrap (same as sequencer/validator, requires relayer)
+  # Image signature is fetched automatically from OCI artifact referrers
   tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
     bridge_address       = var.bridge_contract_address
     relayer_url          = module.relayer[0].service_url
@@ -211,8 +219,7 @@ module "price_oracle" {
     chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
-    cosign_signature     = var.tee_bootstrap.cosign_signature
-    cosign_pubkey        = var.tee_bootstrap.cosign_pubkey
+    image_signature      = data.external.price_oracle_signature[0].result.signature
   } : null
 
   labels = var.labels
@@ -250,6 +257,13 @@ module "relayer" {
   max_instances         = 2
   deletion_protection   = false  # Allow destruction in staging
   labels                = var.labels
+
+  # Allow sequencer, validator, and price oracle to invoke the relayer
+  invoker_service_accounts = [
+    module.iam.sequencer_service_account_email,
+    module.iam.validator_service_account_email,
+    module.iam.price_oracle_service_account_email,
+  ]
 
   depends_on = [module.iam]
 }

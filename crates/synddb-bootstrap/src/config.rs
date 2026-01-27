@@ -70,15 +70,11 @@ pub struct BootstrapConfig {
     #[serde(with = "humantime_serde")]
     pub relayer_timeout: Duration,
 
-    /// Cosign signature over the image digest (64 bytes r||s, hex-encoded with 0x prefix)
-    /// This is the ECDSA P-256 signature produced by cosign when signing the container image.
-    #[arg(long, env = "COSIGN_SIGNATURE")]
-    pub cosign_signature: Option<String>,
-
-    /// Cosign public key (64 or 65 bytes, hex-encoded with 0x prefix)
-    /// P-256 public key: either 64 bytes (x||y) or 65 bytes (0x04||x||y uncompressed)
-    #[arg(long, env = "COSIGN_PUBKEY")]
-    pub cosign_pubkey: Option<String>,
+    /// Image signature over the image digest hash (65 bytes r||s||v, hex-encoded with 0x prefix)
+    /// This is the secp256k1 ECDSA signature produced by signing the keccak256 hash of the
+    /// image digest string (e.g., "sha256:abc123...") using an Ethereum key.
+    #[arg(long, env = "IMAGE_SIGNATURE")]
+    pub image_signature: Option<String>,
 }
 
 impl Default for BootstrapConfig {
@@ -98,8 +94,7 @@ impl Default for BootstrapConfig {
             proof_max_retries: 3,
             relayer_max_retries: 3,
             relayer_timeout: Duration::from_secs(180),
-            cosign_signature: None,
-            cosign_pubkey: None,
+            image_signature: None,
         }
     }
 }
@@ -141,16 +136,10 @@ impl BootstrapConfig {
             ));
         }
 
-        // Cosign signature and pubkey are required for on-chain verification
-        if self.cosign_signature.is_none() {
+        // Image signature is required for on-chain verification
+        if self.image_signature.is_none() {
             return Err(crate::BootstrapError::Config(
-                "COSIGN_SIGNATURE is required when bootstrap is enabled".into(),
-            ));
-        }
-
-        if self.cosign_pubkey.is_none() {
-            return Err(crate::BootstrapError::Config(
-                "COSIGN_PUBKEY is required when bootstrap is enabled".into(),
+                "IMAGE_SIGNATURE is required when bootstrap is enabled".into(),
             ));
         }
 

@@ -53,6 +53,40 @@ struct AttestationResponse {
     token: String,
 }
 
+impl AttestationResponse {
+    /// Parse the response body, handling both JSON wrapper and raw JWT formats.
+    ///
+    /// The Confidential Space attestation service may return either:
+    /// - A JSON object with a "token" field: `{"token": "eyJ..."}`
+    /// - A raw JWT string directly: `eyJ...`
+    fn parse(body: &[u8]) -> Result<Self> {
+        let body_str = String::from_utf8_lossy(body);
+
+        // First, try to parse as JSON object with "token" field
+        if let Ok(response) = serde_json::from_slice::<Self>(body) {
+            return Ok(response);
+        }
+
+        // If that fails, check if the body is a raw JWT (starts with eyJ which is base64 for {"alg)
+        let trimmed = body_str.trim();
+        if trimmed.starts_with("eyJ") && trimmed.contains('.') {
+            return Ok(Self {
+                token: trimmed.to_string(),
+            });
+        }
+
+        // Neither format worked
+        anyhow::bail!(
+            "Response is neither JSON with 'token' field nor a raw JWT. Body preview: {}",
+            if body_str.len() > 100 {
+                &body_str[..100]
+            } else {
+                &body_str
+            }
+        )
+    }
+}
+
 /// Shared state for token caching across clones
 #[derive(Debug)]
 struct TokenCache {
@@ -232,7 +266,7 @@ impl AttestationClient {
                 .context("Failed to read attestation response body")?
                 .to_bytes();
 
-            serde_json::from_slice::<AttestationResponse>(&body_bytes)
+            AttestationResponse::parse(&body_bytes)
                 .context("Failed to parse attestation response")?
         };
 

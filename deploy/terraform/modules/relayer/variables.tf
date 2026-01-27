@@ -147,3 +147,9 @@ variable "deletion_protection" {
   type        = bool
   default     = true
 }
+
+variable "invoker_service_accounts" {
+  description = "List of service account emails allowed to invoke the relayer"
+  type        = list(string)
+  default     = []
+}

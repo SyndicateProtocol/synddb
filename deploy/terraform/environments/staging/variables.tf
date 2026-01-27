@@ -112,13 +112,13 @@ variable "bridge_chain_id" {
 }
 
 # TEE Bootstrap (null = disabled)
+# Note: Image signatures are fetched automatically from OCI artifact referrers.
+# See data.tf for the external data sources that resolve signatures.
 variable "tee_bootstrap" {
   description = "TEE key bootstrap configuration. Set to null to disable."
   type = object({
-    rpc_url              = string           # RPC URL for verifying key registration
-    attestation_audience = string           # Expected audience for attestation tokens
-    cosign_signature     = optional(string) # Cosign signature over image digest (64 bytes, hex)
-    cosign_pubkey        = optional(string) # Cosign P-256 public key (64 or 65 bytes, hex)
+    rpc_url              = string # RPC URL for verifying key registration
+    attestation_audience = string # Expected audience for attestation tokens
   })
   default = null
 }

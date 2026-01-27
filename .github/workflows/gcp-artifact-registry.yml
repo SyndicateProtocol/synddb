@@ -317,7 +317,7 @@ jobs:
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
           echo "::notice::Image digest: $DIGEST"
 
-      - name: Sign image by digest
+      - name: Sign image by digest (cosign)
         run: |
           # Sign by digest (not tag) to ensure signature binds to exact image content.
           # Tags are mutable and could be reassigned; digests are immutable content hashes.
@@ -326,8 +326,77 @@ jobs:
           cosign sign --yes "$IMAGE@$DIGEST"
           echo "::notice::Signed $IMAGE@$DIGEST"
 
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
+      - name: Sign image digest (secp256k1)
+        id: image_sig
+        if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
+        env:
+          PRIVATE_KEY: ${{ secrets.IMAGE_SIGNER_PRIVATE_KEY }}
+          EXPECTED_SIGNER: ${{ vars.IMAGE_SIGNER_ADDRESS }}
+        run: |
+          # Verify private key matches expected signer address
+          DERIVED_ADDRESS=$(cast wallet address --private-key "$PRIVATE_KEY")
+          if [[ "$DERIVED_ADDRESS" != "$EXPECTED_SIGNER" ]]; then
+            echo "::error::IMAGE_SIGNER_ADDRESS ($EXPECTED_SIGNER) doesn't match private key (derives to $DERIVED_ADDRESS)"
+            exit 1
+          fi
+
+          # Sign the image digest with secp256k1 for on-chain TEE bootstrap verification.
+          # The signature is over keccak256(digest_string) where digest_string is "sha256:abc123..."
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Compute keccak256 of the digest string (including the "sha256:" prefix)
+          MESSAGE_HASH=$(cast keccak "$DIGEST")
+
+          # Sign the hash directly (no EIP-191 prefix)
+          SIGNATURE=$(cast wallet sign --private-key "$PRIVATE_KEY" --no-hash "$MESSAGE_HASH")
+
+          # Verify signature before publishing
+          if ! cast wallet verify --no-hash --address "$EXPECTED_SIGNER" "$MESSAGE_HASH" "$SIGNATURE"; then
+            echo "::error::Signature verification failed!"
+            exit 1
+          fi
+
+          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          echo "::notice::Image signature: $SIGNATURE"
+          echo "::notice::Signer address: $EXPECTED_SIGNER (verified)"
+
+      - name: Attach signature artifact
+        if: ${{ steps.image_sig.outputs.signature != '' }}
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/synddb-${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Create signature payload
+          cat > signature.json <<EOF
+          {
+            "digest": "$DIGEST",
+            "signature": "${{ steps.image_sig.outputs.signature }}",
+            "signer": "${{ vars.IMAGE_SIGNER_ADDRESS }}",
+            "signatureType": "secp256k1-keccak256"
+          }
+          EOF
+
+          # Attach as OCI artifact referrer (immutable, linked to digest)
+          oras attach \
+            "$IMAGE@$DIGEST" \
+            --artifact-type application/vnd.syndicate.image-signature.v1+json \
+            signature.json:application/json
+
+          echo "::notice::Attached signature artifact to $IMAGE@$DIGEST"
+
       - name: Summary
         run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/synddb-${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
           {
             echo "## Reproducible ${{ matrix.image }}"
             echo ""
@@ -336,6 +405,17 @@ jobs:
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
             echo ""
             echo "Verified hash: \`${{ steps.hash.outputs.verified }}\`"
+            echo ""
+            if [[ -n "${{ steps.image_sig.outputs.signature }}" ]]; then
+              echo "### Image Signature (secp256k1)"
+              echo ""
+              echo "Discover signature artifacts:"
+              echo "\`\`\`bash"
+              echo "oras discover $IMAGE@$DIGEST"
+              echo "\`\`\`"
+              echo ""
+              echo "Signer: \`${{ vars.IMAGE_SIGNER_ADDRESS }}\`"
+            fi
           } >> $GITHUB_STEP_SUMMARY
 
   # Build and publish non-reproducible images (no TEE attestation required)
@@ -426,7 +506,7 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Sign image by digest
+      - name: Sign image by digest (cosign)
         run: |
           # Sign by digest (not tag) to ensure signature binds to exact image content.
           # Tags are mutable and could be reassigned; digests are immutable content hashes.
@@ -436,12 +516,92 @@ jobs:
           cosign sign --yes "$IMAGE@$DIGEST"
           echo "::notice::Signed $IMAGE@$DIGEST"
 
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
+      - name: Sign image digest (secp256k1)
+        id: image_sig
+        if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
+        env:
+          PRIVATE_KEY: ${{ secrets.IMAGE_SIGNER_PRIVATE_KEY }}
+          EXPECTED_SIGNER: ${{ vars.IMAGE_SIGNER_ADDRESS }}
+        run: |
+          # Verify private key matches expected signer address
+          DERIVED_ADDRESS=$(cast wallet address --private-key "$PRIVATE_KEY")
+          if [[ "$DERIVED_ADDRESS" != "$EXPECTED_SIGNER" ]]; then
+            echo "::error::IMAGE_SIGNER_ADDRESS ($EXPECTED_SIGNER) doesn't match private key (derives to $DERIVED_ADDRESS)"
+            exit 1
+          fi
+
+          # Sign the image digest with secp256k1 for on-chain TEE bootstrap verification.
+          # The signature is over keccak256(digest_string) where digest_string is "sha256:abc123..."
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Compute keccak256 of the digest string (including the "sha256:" prefix)
+          MESSAGE_HASH=$(cast keccak "$DIGEST")
+
+          # Sign the hash directly (no EIP-191 prefix)
+          SIGNATURE=$(cast wallet sign --private-key "$PRIVATE_KEY" --no-hash "$MESSAGE_HASH")
+
+          # Verify signature before publishing
+          if ! cast wallet verify --no-hash --address "$EXPECTED_SIGNER" "$MESSAGE_HASH" "$SIGNATURE"; then
+            echo "::error::Signature verification failed!"
+            exit 1
+          fi
+
+          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          echo "::notice::Image signature: $SIGNATURE"
+          echo "::notice::Signer address: $EXPECTED_SIGNER (verified)"
+
+      - name: Attach signature artifact
+        if: ${{ steps.image_sig.outputs.signature != '' }}
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Create signature payload
+          cat > signature.json <<EOF
+          {
+            "digest": "$DIGEST",
+            "signature": "${{ steps.image_sig.outputs.signature }}",
+            "signer": "${{ vars.IMAGE_SIGNER_ADDRESS }}",
+            "signatureType": "secp256k1-keccak256"
+          }
+          EOF
+
+          # Attach as OCI artifact referrer (immutable, linked to digest)
+          oras attach \
+            "$IMAGE@$DIGEST" \
+            --artifact-type application/vnd.syndicate.image-signature.v1+json \
+            signature.json:application/json
+
+          echo "::notice::Attached signature artifact to $IMAGE@$DIGEST"
+
       - name: Summary
         run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
           {
             echo "## ${{ matrix.image }}"
             echo ""
             echo "Tags: \`${{ steps.tags.outputs.tags }}\`"
             echo ""
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
+            echo ""
+            if [[ -n "${{ steps.image_sig.outputs.signature }}" ]]; then
+              echo "### Image Signature (secp256k1)"
+              echo ""
+              echo "Discover signature artifacts:"
+              echo "\`\`\`bash"
+              echo "oras discover $IMAGE@$DIGEST"
+              echo "\`\`\`"
+              echo ""
+              echo "Signer: \`${{ vars.IMAGE_SIGNER_ADDRESS }}\`"
+            fi
           } >> $GITHUB_STEP_SUMMARY
