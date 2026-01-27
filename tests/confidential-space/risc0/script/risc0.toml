@@ -1,5 +1,0 @@
-# RISC Zero build configuration
-# This tells risc0-build where to find guest programs
-
-[methods.gcp-cs-attestation-risc0-program]
-path = "../../../../crates/synddb-bootstrap/risc0/program"

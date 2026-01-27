@@ -319,3 +319,6 @@ Cloud Run v2 services have `deletion_protection = true` by default. To delete:
 3. Run `terraform destroy` to delete the infrastructure
 
 Do NOT use `gcloud run services delete` as it causes Terraform state drift.
+
+### GCloud Authentication
+When running `gcloud` commands that require authentication (e.g., `gcloud auth login`, `gcloud auth application-default login`), always launch the browser for the user to complete the login flow interactively. Do not use `--no-launch-browser` or other non-interactive flags.

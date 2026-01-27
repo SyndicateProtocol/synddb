@@ -440,7 +440,7 @@ jobs:
             cache-scope: proof-service
             # Larger runner for RISC Zero toolchain compilation (memory intensive)
             runner: shared-large-01
-            timeout: 120
+            timeout: 360
           - image: price-oracle
             dockerfile: examples/price-oracle/Dockerfile
             cache-scope: price-oracle
@@ -593,59 +593,24 @@ jobs:
 
           echo "::notice::Attached signature artifact to $IMAGE@$DIGEST"
 
-      # Generate RISC Zero image ID for proof-service (contains embedded RISC Zero ELF).
-      # This happens after signing since image ID is metadata, not security-critical.
-      - name: Install Rust toolchain
-        if: ${{ matrix.image == 'proof-service' }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.92.0"
-
-      - name: Cache Cargo dependencies
-        if: ${{ matrix.image == 'proof-service' }}
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            tests/confidential-space/risc0/script
-
-      - name: Install RISC Zero toolchain
-        if: ${{ matrix.image == 'proof-service' }}
-        run: |
-          set -e
-          # Components are not version-pinned because:
-          # 1. The trust boundary is the curl install - version pins don't add security
-          # 2. The risc0-zkvm crate version in Cargo.toml is the source of truth for compatibility
-          # 3. Unpinned installs get security updates automatically
-          for i in {1..3}; do
-            echo "Attempt $i to install RISC Zero toolchain..."
-            if curl -L https://risczero.com/install | bash && \
-               ~/.risc0/bin/rzup install rust && \
-               ~/.risc0/bin/rzup install r0vm && \
-               ~/.risc0/bin/rzup install cargo-risczero && \
-               ~/.risc0/bin/rzup install risc0-groth16 && \
-               ~/.risc0/bin/r0vm --version; then
-              # Add toolchain bin directories to PATH for subsequent steps
-              echo "$HOME/.risc0/bin" >> $GITHUB_PATH
-              echo "$HOME/.risc0/toolchains/rust/bin" >> $GITHUB_PATH
-              echo "$HOME/.risc0/toolchains/r0vm/bin" >> $GITHUB_PATH
-              echo "$HOME/.risc0/toolchains/cargo-risczero/bin" >> $GITHUB_PATH
-              # Export CC to use system compiler explicitly
-              echo "CC=/usr/bin/cc" >> $GITHUB_ENV
-              break
-            else
-              echo "Attempt $i failed. Retrying in 5 seconds..."
-              sleep 5
-            fi
-          done
-
-      - name: Generate RISC Zero image ID
+      # Extract RISC Zero image ID from the built proof-service container.
+      # CRITICAL: The imageId must come from the exact Docker container that was built,
+      # not from a separate build on the CI runner. The guest ELF is compiled inside
+      # the Docker container, and the imageId is extracted during build and saved to a file.
+      - name: (proof-service) Extract RISC Zero image ID from container
         id: image_id
         if: ${{ matrix.image == 'proof-service' }}
         run: |
-          # Use the test script to generate image ID (same as risc0-ci.yml)
-          # The script's build.rs uses risc0-build::embed_methods() to compile the guest
-          cd tests/confidential-space/risc0/script
-          IMAGE_ID=$(cargo run --release --bin risc0-prover -- --execute --sample ../../samples/samples_*.json 2>&1 | grep "Image ID (bytes32)" | awk '{print $NF}')
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          IMAGE="$REGISTRY/${{ matrix.image }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+
+          # Pull the just-pushed image
+          docker pull "$IMAGE@$DIGEST"
+
+          # Read the image ID file (created during Docker build using CUDA stubs)
+          # This avoids needing a GPU to run the binary just to read a compile-time constant
+          IMAGE_ID=$(docker run --rm --entrypoint cat "$IMAGE@$DIGEST" /app/risc0_image_id.txt)
 
           # Validate image_id format (0x followed by 64 hex chars)
           if [[ ! "$IMAGE_ID" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
@@ -656,7 +621,7 @@ jobs:
           echo "image_id=$IMAGE_ID" >> $GITHUB_OUTPUT
           echo "::notice::RISC Zero Image ID: $IMAGE_ID"
 
-      - name: Attach image ID artifact
+      - name: (proof-service) Attach RISC Zero image ID artifact
         if: ${{ matrix.image == 'proof-service' && steps.image_id.outputs.image_id != '' }}
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
