@@ -27,19 +27,20 @@ validator_machine_type = "n2d-standard-2"
 artifact_registry_location   = "us-central1"
 artifact_registry_repository = "synddb"
 
+# Bridge contract (shared across all services)
+bridge_contract_address = "0x..."  # Your Bridge contract
+bridge_chain_id         = 11155111  # Sepolia
+
 # TEE Bootstrap (use testnet for staging)
 # Set to null to disable, or provide the object to enable
 tee_bootstrap = {
-  key_manager_address  = "0x..."  # Testnet TeeKeyManager contract
+  relayer_url          = "https://relayer.your-domain.com"  # Relayer service URL
   rpc_url              = "https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY"
-  chain_id             = 11155111  # Sepolia
   attestation_audience = "https://synddb-staging.your-domain.com"
 }
 
 # Bridge signer (optional)
-enable_bridge_signer    = false
-# bridge_contract_address = "0x..."
-# bridge_chain_id         = 11155111
+enable_bridge_signer = false
 
 # Batching (production-like settings)
 batch_max_messages   = 100

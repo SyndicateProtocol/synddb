@@ -62,7 +62,7 @@ docker compose -f tests/e2e/docker-compose.yml down --volumes --remove-orphans
 
 ## Build Optimization
 
-All services use a single multi-stage Dockerfile (`docker/Dockerfile`) with different build targets.
+All services use a single multi-stage Dockerfile (`docker/local.Dockerfile`) with different build targets.
 Docker BuildKit builds the shared `builder` stage once and reuses it for all service targets,
 reducing build time compared to separate Dockerfiles.
 
@@ -86,4 +86,4 @@ Runs on every PR and push to `main` via `.github/workflows/e2e.yml`. The workflo
 
 - `docker-compose.yml` - Orchestrates all services
 - `runner/` - Rust test runner source code
-- `../../docker/Dockerfile` - Multi-stage Dockerfile for all services
+- `../../docker/local.Dockerfile` - Multi-stage Dockerfile for all services

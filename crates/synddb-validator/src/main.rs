@@ -76,19 +76,19 @@ async fn main() -> Result<()> {
 
         let bootstrap_config = BootstrapConfig {
             enable_key_bootstrap: true,
-            tee_key_manager_address: config.tee_key_manager_address.clone(),
+            bridge_address: config.bridge_contract_address.clone(),
             rpc_url: config.bootstrap_rpc_url.clone(),
             chain_id: config.bootstrap_chain_id,
+            relayer_url: config.relayer_url.clone(),
             proof_service_url: config.proof_service_url.clone(),
             attestation_audience: config.attestation_audience.clone(),
             proof_timeout: config.proof_timeout,
             bootstrap_timeout: config.bootstrap_timeout,
-            min_gas_balance: config.min_bootstrap_balance,
             prover_mode: ProverMode::Service,
             ..Default::default()
         };
 
-        let mut bootstrap = BootstrapStateMachine::new();
+        let mut bootstrap = BootstrapStateMachine::for_validator();
 
         // Run bootstrap with timeout - returns the registered key
         match tokio::time::timeout(config.bootstrap_timeout, bootstrap.run(&bootstrap_config)).await

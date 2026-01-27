@@ -5,6 +5,10 @@ name: Build FFI Libraries
 # 2. Main branch: Build dev platforms and commit to repo - enable cross-language dev
 # 3. Release tags: Build all platforms and create GitHub Release - production distribution
 #
+# COST OPTIMIZATION:
+# Expensive runners (macOS Intel, Windows) are only provisioned for releases or
+# manual "all-platforms" triggers. A cheap Linux runner determines this first.
+#
 # BRANCH PROTECTION NOTE:
 # If you have branch protection rules requiring PRs for the main branch, the
 # commit-dev-libs job will fail with an error like:
@@ -84,114 +88,135 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-libs:
+  # Determine which platforms need to build BEFORE spinning up expensive runners
+  check-platforms:
+    name: Check Build Requirements
+    runs-on: ubuntu-latest
+    outputs:
+      build_release: ${{ steps.check.outputs.build_release }}
+    steps:
+      - name: Determine platforms to build
+        id: check
+        run: |
+          IS_TAG="${{ startsWith(github.ref, 'refs/tags/v') }}"
+          IS_MANUAL="${{ github.event_name == 'workflow_dispatch' }}"
+          MANUAL_PLATFORMS="${{ inputs.platforms }}"
+
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Manual platforms: $MANUAL_PLATFORMS"
+
+          # Determine if release platforms (macOS Intel, Windows) should build
+          if [ "$IS_TAG" = "true" ]; then
+            echo "build_release=true" >> $GITHUB_OUTPUT
+            echo "Release tag detected - will build ALL platforms"
+          elif [ "$IS_MANUAL" = "true" ] && [ "$MANUAL_PLATFORMS" = "all-platforms" ]; then
+            echo "build_release=true" >> $GITHUB_OUTPUT
+            echo "Manual all-platforms requested - will build ALL platforms"
+          else
+            echo "build_release=false" >> $GITHUB_OUTPUT
+            echo "Not a release - will only build dev platforms (Linux, macOS ARM)"
+          fi
+
+  # Dev platforms: Linux x64, macOS ARM64 (always build)
+  build-dev-libs:
     name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: check-platforms
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 (always build)
           - platform: linux
             os: ubuntu-latest
             arch: x64
             rust_target: x86_64-unknown-linux-gnu
             lib_name: libsynddb_client.so
             lib_dir: linux-x64
-            build_for: both
 
-          # macOS ARM64 (always build - common for dev)
           - platform: darwin
             os: macos-14
             arch: arm64
             rust_target: aarch64-apple-darwin
             lib_name: libsynddb_client.dylib
             lib_dir: darwin-arm64
-            build_for: both
 
-          # macOS x86_64 (releases only)
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}-ffi
+
+      - name: Build FFI library
+        run: |
+          cargo build \
+            --package synddb-client \
+            --features ffi \
+            --release \
+            --target ${{ matrix.rust_target }}
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts/${{ matrix.lib_dir }}
+          cp target/${{ matrix.rust_target }}/release/${{ matrix.lib_name }} \
+             artifacts/${{ matrix.lib_dir }}/
+          ls -lh artifacts/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
+          file artifacts/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffi-lib-${{ matrix.platform }}-${{ matrix.arch }}
+          path: artifacts/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 7 }}
+
+  # Release platforms: macOS x64, Windows (only for releases or manual all-platforms)
+  build-release-libs:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: check-platforms
+    if: needs.check-platforms.outputs.build_release == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - platform: darwin
             os: macos-15-intel
             arch: x64
             rust_target: x86_64-apple-darwin
             lib_name: libsynddb_client.dylib
             lib_dir: darwin-x64
-            build_for: release
 
-          # Windows x86_64 (releases only)
           - platform: win32
             os: windows-latest
             arch: x64
             rust_target: x86_64-pc-windows-msvc
             lib_name: synddb_client.dll
             lib_dir: win-x64
-            build_for: release
 
     steps:
-      - name: Check if should build
-        id: should_build
-        run: |
-          IS_TAG="${{ startsWith(github.ref, 'refs/tags/v') }}"
-          IS_PR="${{ github.event_name == 'pull_request' }}"
-          IS_MANUAL="${{ github.event_name == 'workflow_dispatch' }}"
-          MANUAL_PLATFORMS="${{ inputs.platforms }}"
-          BUILD_FOR="${{ matrix.build_for }}"
-
-          echo "Event: ${{ github.event_name }}"
-          echo "Ref: ${{ github.ref }}"
-          echo "Platform build_for: $BUILD_FOR"
-          echo "Manual platforms: $MANUAL_PLATFORMS"
-
-          # Handle manual triggers
-          if [ "$IS_MANUAL" = "true" ]; then
-            if [ "$MANUAL_PLATFORMS" = "all-platforms" ]; then
-              echo "should_build=true" >> $GITHUB_OUTPUT
-              echo "✓ Building for MANUAL TEST (all platforms)"
-            elif [ "$BUILD_FOR" = "both" ]; then
-              echo "should_build=true" >> $GITHUB_OUTPUT
-              echo "✓ Building for MANUAL TEST (dev platforms)"
-            else
-              echo "should_build=false" >> $GITHUB_OUTPUT
-              echo "⊘ Skipping (manual dev - release-only platform)"
-            fi
-          # Handle automatic triggers
-          elif [ "$IS_TAG" = "true" ]; then
-            # Release tags: Build all platforms
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "✓ Building for RELEASE (all platforms)"
-          elif [ "$BUILD_FOR" = "both" ]; then
-            # PRs and main: Only build dev platforms (Linux, macOS ARM)
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            if [ "$IS_PR" = "true" ]; then
-              echo "✓ Building for PR (dry run)"
-            else
-              echo "✓ Building for DEV (will commit)"
-            fi
-          else
-            # Skip release-only platforms on PRs and main
-            echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "⊘ Skipping (release-only platform)"
-          fi
-        shell: bash
-
       - name: Checkout code
-        if: steps.should_build.outputs.should_build == 'true'
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        if: steps.should_build.outputs.should_build == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
 
       - name: Cache cargo dependencies
-        if: steps.should_build.outputs.should_build == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.arch }}-ffi
 
       - name: Build FFI library
-        if: steps.should_build.outputs.should_build == 'true'
         run: |
           cargo build \
             --package synddb-client \
@@ -200,7 +225,7 @@ jobs:
             --target ${{ matrix.rust_target }}
 
       - name: Prepare artifacts (Unix)
-        if: steps.should_build.outputs.should_build == 'true' && matrix.platform != 'win32'
+        if: matrix.platform != 'win32'
         run: |
           mkdir -p artifacts/${{ matrix.lib_dir }}
           cp target/${{ matrix.rust_target }}/release/${{ matrix.lib_name }} \
@@ -209,7 +234,7 @@ jobs:
           file artifacts/${{ matrix.lib_dir }}/${{ matrix.lib_name }}
 
       - name: Prepare artifacts (Windows)
-        if: steps.should_build.outputs.should_build == 'true' && matrix.platform == 'win32'
+        if: matrix.platform == 'win32'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts/${{ matrix.lib_dir }}
@@ -218,7 +243,6 @@ jobs:
           Get-ChildItem artifacts/${{ matrix.lib_dir }}
 
       - name: Upload artifact
-        if: steps.should_build.outputs.should_build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ffi-lib-${{ matrix.platform }}-${{ matrix.arch }}
@@ -227,7 +251,7 @@ jobs:
 
   commit-dev-libs:
     name: Commit Dev Libraries
-    needs: build-libs
+    needs: build-dev-libs
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -290,7 +314,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: build-libs
+    needs: [build-dev-libs, build-release-libs]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -417,7 +441,7 @@ jobs:
 
   publish-crates:
     name: Publish to crates.io
-    needs: build-libs
+    needs: [build-dev-libs, build-release-libs]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 

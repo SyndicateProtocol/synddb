@@ -16,6 +16,10 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * @param secboot Whether secure boot was enabled in the TEE
  * @param dbgstat_disabled True if dbgstat claim is "disabled" (production mode)
  * @param audience_hash Hash of the audience string (keccak256 of audience claim)
+ * @param cosign_signature_r Cosign signature R component (P-256 / secp256r1)
+ * @param cosign_signature_s Cosign signature S component (P-256 / secp256r1)
+ * @param cosign_pubkey_x Cosign public key X coordinate (P-256 / secp256r1)
+ * @param cosign_pubkey_y Cosign public key Y coordinate (P-256 / secp256r1)
  */
 struct PublicValuesStruct {
     bytes32 jwk_key_hash;
@@ -26,14 +30,22 @@ struct PublicValuesStruct {
     bool secboot;
     bool dbgstat_disabled;
     bytes32 audience_hash;
+    bytes32 cosign_signature_r;
+    bytes32 cosign_signature_s;
+    bytes32 cosign_pubkey_x;
+    bytes32 cosign_pubkey_y;
 }
+
+// RIP-7212 P256 precompile address for secp256r1 signature verification
+address constant P256_VERIFIER = 0x0000000000000000000000000000000000000100;
 
 /**
  * @title AttestationVerifier
  * @notice Verifies TEE attestation proofs using SP1 zero-knowledge proofs
  * @dev Specifically designed for GCP Confidential Space attestations.
  *      Validates attestation tokens signed by Google's JWKS keys and verifies
- *      container image digests, secure boot status, and validity windows.
+ *      container image digests, secure boot status, validity windows, and
+ *      cosign signatures over image digests using P-256 (secp256r1).
  */
 contract AttestationVerifier is IAttestationVerifier, Ownable {
     address public immutable verifier;
@@ -43,9 +55,15 @@ contract AttestationVerifier is IAttestationVerifier, Ownable {
 
     mapping(bytes32 jwkHash => bool isTrusted) public trustedJwkHashes;
 
+    /// @notice Mapping from cosign pubkey hash to whether it's trusted
+    /// @dev Key is keccak256(abi.encodePacked(pubkey_x, pubkey_y))
+    mapping(bytes32 cosignPubkeyHash => bool isTrusted) public trustedCosignPubkeys;
+
     event TrustedJwkHashAdded(bytes32 indexed jwkHash);
     event TrustedJwkHashRemoved(bytes32 indexed jwkHash);
     event ImageDigestHashUpdated(bytes32 oldHash, bytes32 newHash);
+    event TrustedCosignPubkeyAdded(bytes32 indexed pubkeyHash);
+    event TrustedCosignPubkeyRemoved(bytes32 indexed pubkeyHash);
 
     error InvalidVerifierAddress();
     error InvalidVerificationKey();
@@ -56,6 +74,8 @@ contract AttestationVerifier is IAttestationVerifier, Ownable {
     error SecureBootRequired();
     error DebugModeNotAllowed();
     error ImageDigestMismatch(bytes32 expected, bytes32 actual);
+    error UntrustedCosignPubkey(bytes32 pubkeyHash);
+    error CosignSignatureInvalid();
 
     /**
      * @notice Constructs the attestation verifier
@@ -83,6 +103,7 @@ contract AttestationVerifier is IAttestationVerifier, Ownable {
     /**
      * @notice Verifies an attestation proof and extracts the TEE signing key
      * @dev Validates all attestation claims before accepting the proof.
+     *      Also verifies the cosign signature over the image digest using the P256 precompile.
      *      For GCP Confidential Space, the tee_signing_key field is always address(0)
      *      because GCP CS JWT tokens do not contain an embedded signing key.
      *      This field exists for compatibility with other TEE providers (e.g., AWS Nitro).
@@ -121,6 +142,26 @@ contract AttestationVerifier is IAttestationVerifier, Ownable {
             revert ImageDigestMismatch(expectedImageDigestHash, values.image_digest_hash);
         }
 
+        // Verify the cosign pubkey is trusted
+        bytes32 cosignPubkeyHash = keccak256(abi.encodePacked(values.cosign_pubkey_x, values.cosign_pubkey_y));
+        if (!trustedCosignPubkeys[cosignPubkeyHash]) {
+            revert UntrustedCosignPubkey(cosignPubkeyHash);
+        }
+
+        // Verify cosign signature over image_digest_hash using P256 precompile (RIP-7212)
+        // The precompile expects: message_hash (32) || r (32) || s (32) || x (32) || y (32)
+        bytes memory p256Input = abi.encodePacked(
+            values.image_digest_hash,
+            values.cosign_signature_r,
+            values.cosign_signature_s,
+            values.cosign_pubkey_x,
+            values.cosign_pubkey_y
+        );
+        (bool success, bytes memory result) = P256_VERIFIER.staticcall(p256Input);
+        if (!success || result.length == 0 || abi.decode(result, (uint256)) != 1) {
+            revert CosignSignatureInvalid();
+        }
+
         ISP1Verifier(verifier).verifyProof(attestationVerifierVKey, publicValues, proofBytes);
 
         return values.tee_signing_key;
@@ -157,5 +198,41 @@ contract AttestationVerifier is IAttestationVerifier, Ownable {
         bytes32 oldHash = expectedImageDigestHash;
         expectedImageDigestHash = newHash;
         emit ImageDigestHashUpdated(oldHash, newHash);
+    }
+
+    /**
+     * @notice Adds a trusted cosign public key
+     * @dev Cosign pubkeys are used to verify container image signatures from CI.
+     *      Only callable by contract owner to prevent unauthorized key additions.
+     * @param pubkeyX The X coordinate of the P-256 public key
+     * @param pubkeyY The Y coordinate of the P-256 public key
+     */
+    function addTrustedCosignPubkey(bytes32 pubkeyX, bytes32 pubkeyY) external onlyOwner {
+        bytes32 pubkeyHash = keccak256(abi.encodePacked(pubkeyX, pubkeyY));
+        trustedCosignPubkeys[pubkeyHash] = true;
+        emit TrustedCosignPubkeyAdded(pubkeyHash);
+    }
+
+    /**
+     * @notice Removes a cosign public key from the trusted set
+     * @dev Only callable by contract owner to prevent unauthorized key removals.
+     * @param pubkeyX The X coordinate of the P-256 public key
+     * @param pubkeyY The Y coordinate of the P-256 public key
+     */
+    function removeTrustedCosignPubkey(bytes32 pubkeyX, bytes32 pubkeyY) external onlyOwner {
+        bytes32 pubkeyHash = keccak256(abi.encodePacked(pubkeyX, pubkeyY));
+        trustedCosignPubkeys[pubkeyHash] = false;
+        emit TrustedCosignPubkeyRemoved(pubkeyHash);
+    }
+
+    /**
+     * @notice Checks if a cosign public key is trusted
+     * @param pubkeyX The X coordinate of the P-256 public key
+     * @param pubkeyY The Y coordinate of the P-256 public key
+     * @return True if the public key is trusted
+     */
+    function isCosignPubkeyTrusted(bytes32 pubkeyX, bytes32 pubkeyY) external view returns (bool) {
+        bytes32 pubkeyHash = keccak256(abi.encodePacked(pubkeyX, pubkeyY));
+        return trustedCosignPubkeys[pubkeyHash];
     }
 }

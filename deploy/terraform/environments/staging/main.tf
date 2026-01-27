@@ -38,6 +38,7 @@ resource "google_project_service" "apis" {
     "storage.googleapis.com",
     "run.googleapis.com",
     "artifactregistry.googleapis.com",
+    "secretmanager.googleapis.com",
   ])
 
   project            = var.project_id
@@ -99,6 +100,8 @@ module "proof_service" {
   allow_unauthenticated = false
   min_instances         = 0  # Scale to zero when idle
   max_instances         = 1
+  cpu_limit             = "2"
+  memory_limit          = "2Gi"
   labels                = var.labels
 
   depends_on = [module.iam]
@@ -121,16 +124,17 @@ module "sequencer" {
   batch_flush_interval  = var.batch_flush_interval
   labels                = var.labels
 
-  # TEE bootstrap (null = disabled)
-  tee_bootstrap = var.tee_bootstrap != null ? {
-    key_manager_address  = var.tee_bootstrap.key_manager_address
+  # TEE bootstrap (null = disabled, requires relayer to be deployed)
+  tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
+    bridge_address       = var.bridge_contract_address
+    relayer_url          = module.relayer[0].service_url
     rpc_url              = var.tee_bootstrap.rpc_url
-    chain_id             = var.tee_bootstrap.chain_id
+    chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
 
-  depends_on = [module.iam, module.networking, module.proof_service]
+  depends_on = [module.iam, module.networking, module.proof_service, module.relayer]
 }
 
 # Validator - production-like configuration
@@ -152,16 +156,17 @@ module "validator" {
   bridge_chain_id       = var.bridge_chain_id
   labels                = var.labels
 
-  # TEE bootstrap (null = disabled)
-  tee_bootstrap = var.tee_bootstrap != null ? {
-    key_manager_address  = var.tee_bootstrap.key_manager_address
+  # TEE bootstrap (null = disabled, requires relayer to be deployed)
+  tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
+    bridge_address       = var.bridge_contract_address
+    relayer_url          = module.relayer[0].service_url
     rpc_url              = var.tee_bootstrap.rpc_url
-    chain_id             = var.tee_bootstrap.chain_id
+    chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
 
-  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service]
+  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service, module.relayer]
 }
 
 # Price Oracle - example application in Confidential Space
@@ -194,18 +199,19 @@ module "price_oracle" {
     poll_interval    = 5
   } : null
 
-  # TEE bootstrap (same as sequencer/validator)
-  tee_bootstrap = var.tee_bootstrap != null ? {
-    key_manager_address  = var.tee_bootstrap.key_manager_address
+  # TEE bootstrap (same as sequencer/validator, requires relayer)
+  tee_bootstrap = var.tee_bootstrap != null && length(module.relayer) > 0 ? {
+    bridge_address       = var.bridge_contract_address
+    relayer_url          = module.relayer[0].service_url
     rpc_url              = var.tee_bootstrap.rpc_url
-    chain_id             = var.tee_bootstrap.chain_id
+    chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
 
   labels = var.labels
 
-  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service]
+  depends_on = [module.iam, module.networking, module.sequencer, module.proof_service, module.relayer]
 }
 
 # Relayer - gas funding service for TEE keys
@@ -220,20 +226,23 @@ module "relayer" {
   service_account_email = module.iam.relayer_service_account_email
 
   # Blockchain configuration
-  rpc_url             = var.relayer_config.rpc_url
-  chain_id            = var.relayer_config.chain_id
-  key_manager_address = var.relayer_config.key_manager_address
-  treasury_address    = var.relayer_config.treasury_address
+  rpc_url        = var.relayer_config.rpc_url
+  chain_id       = var.bridge_chain_id
+  bridge_address = var.bridge_contract_address
 
   # Application configuration
-  required_audience_hash = var.relayer_config.required_audience_hash
+  required_audience      = var.relayer_config.required_audience
   allowed_image_digests  = var.relayer_config.allowed_image_digests
+
+  # Secret (if empty, set manually in Secret Manager console)
+  private_key = var.relayer_private_key
 
   # Access settings
   ingress               = "internal"
   allow_unauthenticated = false
   min_instances         = 0
   max_instances         = 2
+  deletion_protection   = false  # Allow destruction in staging
   labels                = var.labels
 
   depends_on = [module.iam]

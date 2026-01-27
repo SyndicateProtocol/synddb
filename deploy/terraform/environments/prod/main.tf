@@ -89,16 +89,17 @@ module "proof_service" {
   count  = var.tee_bootstrap != null ? 1 : 0
   source = "../../modules/proof-service"
 
-  project_id            = var.project_id
-  region                = var.region
-  service_name          = "synddb-prod-proof"
-  container_image       = var.proof_service_image
-  service_account_email = module.iam.proof_service_account_email
-  ingress               = "internal"
-  allow_unauthenticated = false
-  min_instances         = 0  # Scale to zero when idle
-  max_instances         = 1  # Only one proof at a time
-  labels                = var.labels
+  project_id              = var.project_id
+  region                  = var.region
+  service_name            = "synddb-prod-proof"
+  container_image         = var.proof_service_image
+  service_account_email   = module.iam.proof_service_account_email
+  sp1_network_private_key = var.sp1_network_private_key
+  ingress                 = "internal"
+  allow_unauthenticated   = false
+  min_instances           = 0  # Scale to zero when idle
+  max_instances           = 1  # Only one proof at a time
+  labels                  = var.labels
 
   depends_on = [module.iam]
 }
@@ -122,9 +123,10 @@ module "sequencer" {
 
   # TEE bootstrap (null = disabled)
   tee_bootstrap = var.tee_bootstrap != null ? {
-    key_manager_address  = var.tee_bootstrap.key_manager_address
+    bridge_address       = var.bridge_contract_address
+    relayer_url          = var.tee_bootstrap.relayer_url
     rpc_url              = var.tee_bootstrap.rpc_url
-    chain_id             = var.tee_bootstrap.chain_id
+    chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
@@ -155,9 +157,10 @@ module "validator" {
 
   # TEE bootstrap (null = disabled)
   tee_bootstrap = var.tee_bootstrap != null ? {
-    key_manager_address  = var.tee_bootstrap.key_manager_address
+    bridge_address       = var.bridge_contract_address
+    relayer_url          = var.tee_bootstrap.relayer_url
     rpc_url              = var.tee_bootstrap.rpc_url
-    chain_id             = var.tee_bootstrap.chain_id
+    chain_id             = var.bridge_chain_id
     proof_service_url    = module.proof_service[0].service_url
     attestation_audience = var.tee_bootstrap.attestation_audience
   } : null
@@ -177,13 +180,12 @@ module "relayer" {
   service_account_email = module.iam.relayer_service_account_email
 
   # Blockchain configuration
-  rpc_url             = var.relayer_config.rpc_url
-  chain_id            = var.relayer_config.chain_id
-  key_manager_address = var.relayer_config.key_manager_address
-  treasury_address    = var.relayer_config.treasury_address
+  rpc_url        = var.relayer_config.rpc_url
+  chain_id       = var.bridge_chain_id
+  bridge_address = var.bridge_contract_address
 
   # Application configuration
-  required_audience_hash = var.relayer_config.required_audience_hash
+  required_audience      = var.relayer_config.required_audience
   allowed_image_digests  = var.relayer_config.allowed_image_digests
 
   # Production settings

@@ -1,5 +1,9 @@
 name: Rust CI
 
+# COST OPTIMIZATION:
+# Quick format/lint checks run first. Expensive jobs (tests, fuzz, coverage)
+# only start after quick checks pass, avoiding wasted compute on simple errors.
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review] # Run on all non-draft PRs
@@ -28,8 +32,9 @@ env:
   RUSTFLAGS: "-Dwarnings"
 
 jobs:
-  lint-toml:
-    name: TOML Format
+  # Fast checks run first - gate for expensive jobs
+  quick-checks:
+    name: Quick Checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,55 +48,15 @@ jobs:
           cache-targets: false
           cache-all-crates: true
 
-      - name: Install Taplo
-        uses: clechasseur/rs-cargo@v2
-        with:
-          command: install
-          args: taplo-cli@0.9.0
-
-      - name: Check TOML formatting
-        run: just lint-toml
-
-  lint-deps:
-    name: Unused Dependencies
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install just
-        uses: extractions/setup-just@v2
-
-      - name: Cache cargo binaries
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-          cache-all-crates: true
-
-      - name: Install cargo-machete
-        uses: clechasseur/rs-cargo@v2
-        with:
-          command: install
-          args: cargo-machete@0.7.0
-
-      - name: Check for unused dependencies
-        run: just lint-deps
-
-      - name: Check for unused dependencies (tests/confidential-space)
-        run: cargo machete tests/confidential-space
-
-  lint-fmt:
-    name: Rust Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install just
-        uses: extractions/setup-just@v2
-
-      - name: Install Rust nightly toolchain
+      - name: Install Rust nightly (for fmt)
         run: |
           rustup toolchain install nightly --profile minimal
           rustup component add --toolchain nightly rustfmt
+
+      - name: Install tools
+        run: |
+          cargo install taplo-cli@0.9.0 --locked || true
+          cargo install cargo-machete@0.7.0 --locked || true
 
       - name: Check Rust formatting
         run: just lint-fmt
@@ -99,8 +64,22 @@ jobs:
       - name: Check Rust formatting (tests/confidential-space)
         run: cargo +nightly fmt --all --check --manifest-path tests/confidential-space/Cargo.toml
 
+      - name: Check TOML formatting
+        run: just lint-toml
+
+      - name: Check for unused dependencies
+        run: just lint-deps
+
+      - name: Check for unused dependencies (tests/confidential-space)
+        run: cargo machete tests/confidential-space
+
+      - name: Validate justfile syntax
+        run: just --unstable --fmt --check
+
+  # Clippy runs after quick-checks pass
   lint:
     name: Clippy Lints
+    needs: quick-checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -111,7 +90,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable  # Uses version from rust-toolchain.toml
+          toolchain: stable
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -127,8 +106,10 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
 
+  # Tests run after quick-checks pass
   test:
     name: Tests
+    needs: quick-checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -155,6 +136,7 @@ jobs:
 
   test-stress:
     name: Session Stress Test
+    needs: quick-checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -174,6 +156,7 @@ jobs:
 
   test-integration:
     name: Client Integration Tests
+    needs: quick-checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -193,6 +176,7 @@ jobs:
 
   fuzz:
     name: SQLite Fuzzer
+    needs: quick-checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -214,6 +198,7 @@ jobs:
 
   fuzz-e2e:
     name: E2E Pipeline Fuzzer
+    needs: quick-checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -238,32 +223,9 @@ jobs:
         env:
           PROPTEST_CASES: "10"
 
-  justfile-validate:
-    name: Justfile Validation
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install just
-        uses: extractions/setup-just@v2
-
-      - name: Validate justfile syntax
-        run: just --unstable --fmt --check
-
-      - name: List available recipes
-        run: |
-          echo "=== Root recipes ==="
-          just --list
-          echo ""
-          echo "=== Contracts module ==="
-          just --list contracts
-          echo ""
-          echo "=== Examples module ==="
-          just --list examples
-
   examples:
     name: Examples Compile
+    needs: quick-checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -287,6 +249,7 @@ jobs:
 
   coverage:
     name: Code Coverage
+    needs: quick-checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

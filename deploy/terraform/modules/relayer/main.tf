@@ -41,10 +41,11 @@ resource "google_secret_manager_secret_iam_member" "relayer_secret_access" {
 
 # Cloud Run service
 resource "google_cloud_run_v2_service" "relayer" {
-  name     = var.service_name
-  location = var.region
-  project  = var.project_id
-  ingress  = var.ingress == "all" ? "INGRESS_TRAFFIC_ALL" : var.ingress == "internal" ? "INGRESS_TRAFFIC_INTERNAL_ONLY" : "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  name                = var.service_name
+  location            = var.region
+  project             = var.project_id
+  ingress             = var.ingress == "all" ? "INGRESS_TRAFFIC_ALL" : var.ingress == "internal" ? "INGRESS_TRAFFIC_INTERNAL_ONLY" : "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  deletion_protection = var.deletion_protection
 
   template {
     scaling {
@@ -98,33 +99,18 @@ resource "google_cloud_run_v2_service" "relayer" {
       }
 
       env {
-        name  = "TEE_KEY_MANAGER_CONTRACT_ADDRESS"
-        value = var.key_manager_address
+        name  = "BRIDGE_CONTRACT_ADDRESS"
+        value = var.bridge_address
       }
 
       env {
-        name  = "GAS_TREASURY_CONTRACT_ADDRESS"
-        value = var.treasury_address
-      }
-
-      env {
-        name  = "REQUIRED_AUDIENCE_HASH"
-        value = var.required_audience_hash
+        name  = "REQUIRED_AUDIENCE"
+        value = var.required_audience
       }
 
       env {
         name  = "ALLOWED_IMAGE_DIGESTS"
         value = join(",", var.allowed_image_digests)
-      }
-
-      env {
-        name  = "MAX_FUNDING_PER_DIGEST_DAILY"
-        value = var.max_funding_per_digest_daily
-      }
-
-      env {
-        name  = "MAX_FUNDING_PER_ADDRESS"
-        value = var.max_funding_per_address
       }
 
       # Private key from Secret Manager
@@ -136,11 +122,6 @@ resource "google_cloud_run_v2_service" "relayer" {
             version = "latest"
           }
         }
-      }
-
-      env {
-        name  = "LOG_JSON"
-        value = "true"
       }
 
       env {

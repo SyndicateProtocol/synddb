@@ -51,9 +51,10 @@ variable "machine_type" {
 variable "tee_bootstrap" {
   description = "TEE key bootstrap configuration. Set to null to disable."
   type = object({
-    key_manager_address  = string # TeeKeyManager contract address
-    rpc_url              = string # RPC URL for bootstrap transactions
-    chain_id             = number # Chain ID for bootstrap transactions
+    bridge_address       = string # Bridge contract address for key registration
+    relayer_url          = string # Relayer URL for key registration
+    rpc_url              = string # RPC URL for verifying key registration
+    chain_id             = number # Chain ID for EIP-712 signatures
     proof_service_url    = string # URL of proof service for attestation proofs
     attestation_audience = string # Expected audience for attestation tokens
   })

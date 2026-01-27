@@ -288,3 +288,19 @@ The sequencer and validator run inside TEEs (Trusted Execution Environments). Wh
 If a proposed change could affect the TEE security boundary, flag the implications and confirm before proceeding.
 
 **Note:** Smart contracts (in `contracts/`) run on-chain, not inside TEEs. TEE boundary considerations do not apply to contract code.
+
+## GCP Infrastructure
+
+### Terraform Environments
+Infrastructure is managed via Terraform in `deploy/terraform/environments/`:
+- `staging/` - Test environment on Base Sepolia
+- `prod/` - Production environment
+
+### Deleting Infrastructure
+Cloud Run v2 services have `deletion_protection = true` by default. To delete:
+
+1. Set `deletion_protection = false` on the resource in Terraform
+2. Run `terraform apply` to update the protection setting
+3. Run `terraform destroy` to delete the infrastructure
+
+Do NOT use `gcloud run services delete` as it causes Terraform state drift.

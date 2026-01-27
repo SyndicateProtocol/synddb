@@ -108,10 +108,11 @@ Edit `terraform.tfvars` and fill in:
 |----------|-------|
 | `project_id` | Your GCP project ID |
 | `gcs_bucket_name` | Unique bucket name (e.g., `myproject-synddb-staging`) |
-| `tee_bootstrap.key_manager_address` | TeeKeyManager address from step 2 |
+| `bridge_contract_address` | Bridge address from step 2 |
+| `bridge_chain_id` | Chain ID (84532 for Base Sepolia) |
+| `tee_bootstrap.relayer_url` | URL of the relayer service |
 | `tee_bootstrap.rpc_url` | Your Base Sepolia RPC URL |
 | `tee_bootstrap.attestation_audience` | Your staging domain |
-| `bridge_contract_address` | Bridge address from step 2 |
 
 ### 4. Initialize Terraform
 
@@ -169,17 +170,17 @@ curl http://$VALIDATOR_IP:8080/health
 
 ### 8. Verify TEE Key Registration
 
-The sequencer and validator automatically register their TEE keys on startup. Verify:
+The sequencer and validator automatically register their TEE keys on startup via the relayer. Verify:
 
 ```bash
 # Get sequencer's signer address
 SIGNER=$(curl -s http://$SEQUENCER_IP:8433/status | jq -r '.signer_address')
 
-# Check if registered on-chain
+# Check if registered on-chain (via Bridge contract)
 cast call \
     --rpc-url https://sepolia.base.org \
-    $TEE_KEY_MANAGER_ADDRESS \
-    "isKeyValid(address)(bool)" \
+    $BRIDGE_CONTRACT_ADDRESS \
+    "isSequencerKeyValid(address)(bool)" \
     $SIGNER
 ```
 

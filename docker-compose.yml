@@ -20,7 +20,7 @@
 #   See also: justfile for the single source of truth on addresses/keys.
 #
 # Build optimization:
-#   All services use a single multi-stage Dockerfile (docker/Dockerfile).
+#   All services use a single multi-stage Dockerfile (docker/local.Dockerfile).
 #   Docker BuildKit builds the shared 'builder' stage once and reuses it
 #   for all service targets, reducing build time by ~4x.
 
@@ -36,7 +36,7 @@ services:
   sequencer:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: sequencer
     ports:
       - "${SEQUENCER_PORT:-8433}:8433"
@@ -55,7 +55,7 @@ services:
   validator:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: validator
     ports:
       - "${VALIDATOR_PORT:-8080}:8080"
@@ -82,7 +82,7 @@ services:
   customer_sqlite_app:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: customer-app
     environment:
       <<: *defaults
@@ -98,7 +98,7 @@ services:
   stress_test:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/local.Dockerfile
       target: stress-test
     environment:
       <<: *defaults
