@@ -26,7 +26,8 @@ import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
  *
  * TEE Key Registration (after sequencer starts):
  *   1. Get sequencer address: curl -s http://localhost:8433/status | jq -r '.signer_address'
- *   2. Register key: cast send $BRIDGE "registerSequencerKey(bytes,bytes)" $(cast abi-encode "f(address)" $SIGNER_ADDRESS) 0x
+ *   2. Register key: cast send $BRIDGE "registerKey(uint8,bytes,bytes)" 0 $(cast abi-encode "f(address)" $SIGNER_ADDRESS) 0x
+ *      (0 = KeyType.Sequencer, 1 = KeyType.Validator)
  */
 contract DeployLocalDevEnv is Script {
     // Anvil chain ID
@@ -119,8 +120,8 @@ contract DeployLocalDevEnv is Script {
         console.log("  1. Get sequencer's dynamically generated address:");
         console.log("     SIGNER=$(curl -s http://localhost:8433/status | jq -r '.signer_address')");
         console.log("");
-        console.log("  2. Register the key through Bridge:");
-        console.log("     cast send", address(bridge), "\"registerSequencerKey(bytes,bytes)\" \\");
+        console.log("  2. Register the key through Bridge (0 = Sequencer, 1 = Validator):");
+        console.log("     cast send", address(bridge), "\"registerKey(uint8,bytes,bytes)\" 0 \\");
         console.log("       $(cast abi-encode \"f(address)\" $SIGNER) 0x --private-key $ANVIL_KEY_0");
         console.log("========================================");
 

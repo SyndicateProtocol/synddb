@@ -71,7 +71,7 @@ cargo test -p gcp-attestation
 
 ### Option 3: RISC Zero proof generation
 
-Use the proof-service to generate proofs from these attestation samples. See `services/proof-service/README.md` for details.
+Use the proof-service to generate proofs from these attestation samples. See `crates/proof-service/README.md` for details.
 
 ## Example Output
 

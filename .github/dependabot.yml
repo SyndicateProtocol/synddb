@@ -10,6 +10,10 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
     groups:
       # Group alloy crates together (blockchain primitives)
       alloy:
@@ -27,6 +31,15 @@ updates:
       tracing:
         patterns:
           - "tracing*"
+      # Group axum/tower ecosystem (web framework)
+      axum:
+        patterns:
+          - "axum*"
+          - "tower*"
+      # Group RISC Zero ecosystem
+      risc0:
+        patterns:
+          - "risc0*"
 
   # GitHub Actions
   - package-ecosystem: github-actions
@@ -35,3 +48,18 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+
+  # Docker base images (reproducible builds)
+  - package-ecosystem: docker
+    directory: "/docker/reproducible"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"

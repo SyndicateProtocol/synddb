@@ -1,4 +1,4 @@
-# Development data directory (created by dev-env.sh)
+# Development data directory
 .dev-data/
 
 # SQLite databases

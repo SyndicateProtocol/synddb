@@ -155,7 +155,7 @@ fn main() {
 
         let prover = default_prover();
         let prove_info = prover
-            .prove_with_opts(env, GCP_CS_ATTESTATION_RISC0_PROGRAM_ELF, &ProverOpts::fake())
+            .prove_with_opts(env, GCP_CS_ATTESTATION_RISC0_PROGRAM_ELF, &ProverOpts::fast())
             .expect("Execution failed");
 
         let receipt = prove_info.receipt;

@@ -168,21 +168,15 @@ Solidity contracts for on-chain settlement:
 
 ### Price Oracle (Python)
 
-A price oracle that fetches prices from external APIs and publishes them on-chain:
-
-```bash
-just examples::price-oracle
-```
+A price oracle that fetches prices from external APIs and publishes them on-chain.
 
 [Full Documentation](examples/price-oracle/README.md)
 
 ### Prediction Market (Rust)
 
-A prediction market demonstrating full SyndDB integration:
+A prediction market demonstrating full SyndDB integration.
 
-```bash
-just examples::prediction-market
-```
+[Full Documentation](examples/prediction-market/README.md)
 
 ## Infrastructure
 

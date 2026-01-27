@@ -187,6 +187,19 @@ variable "attestation_verifier_address" {
   default     = ""
 }
 
+variable "trusted_image_signer" {
+  description = "Trusted image signer address for TEE attestation verification (from CI signing)"
+  type        = string
+  default     = ""
+}
+
+variable "etherscan_api_key" {
+  description = "Etherscan API key for contract verification (optional)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # Labels
 variable "labels" {
   description = "Labels to apply to all resources"

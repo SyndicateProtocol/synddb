@@ -6,7 +6,7 @@ import {Bridge} from "src/Bridge.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
 import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
 import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
-import {SequencerSignature} from "src/types/DataTypes.sol";
+import {SequencerSignature, KeyType} from "src/types/DataTypes.sol";
 import {WETH9} from "../mocks/WETH9.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
@@ -50,7 +50,7 @@ abstract contract UseCaseBaseTest is Test {
 
         // Register sequencer as a valid TEE key through bridge
         bytes memory publicValues = abi.encode(sequencer);
-        bridge.registerSequencerKey(publicValues, "");
+        bridge.registerKey(KeyType.Sequencer, publicValues, "");
 
         // Grant message initializer permission
         bridge.setMessageInitializer(sequencer, true);
@@ -109,7 +109,7 @@ abstract contract UseCaseBaseTest is Test {
 
             // Register validator key through bridge
             bytes memory publicValues = abi.encode(validatorAddr);
-            bridge.registerValidatorKey(publicValues, "");
+            bridge.registerKey(KeyType.Validator, publicValues, "");
         }
     }
 

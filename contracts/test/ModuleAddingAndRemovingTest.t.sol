@@ -6,7 +6,7 @@ import {Bridge} from "src/Bridge.sol";
 import {IModuleCheck} from "src/interfaces/IModuleCheck.sol";
 import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
 import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
-import {ProcessingStage, SequencerSignature} from "src/types/DataTypes.sol";
+import {ProcessingStage, SequencerSignature, KeyType} from "src/types/DataTypes.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /// @notice Mock module that always returns true
@@ -61,7 +61,7 @@ contract ModuleAddingAndRemovingTest is Test {
 
         // Register sequencer as a valid TEE key through bridge
         bytes memory publicValues = abi.encode(sequencer);
-        bridge.registerSequencerKey(publicValues, "");
+        bridge.registerKey(KeyType.Sequencer, publicValues, "");
 
         // Grant message initializer permission
         bridge.setMessageInitializer(sequencer, true);
