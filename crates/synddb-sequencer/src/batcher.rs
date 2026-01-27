@@ -173,7 +173,7 @@ impl Batcher {
     /// ## Ordering Guarantee
     ///
     /// All commands are processed in FIFO order. The batcher uses an `mpsc` channel
-    /// and a single-threaded event loop ([`run`](Self::run)), ensuring that
+    /// and a single-threaded event loop (`run`), ensuring that
     /// concurrent submissions are serialized. Messages are signed and batched in
     /// the order received, and batches are signed and published sequentially.
     /// This prevents race conditions even when multiple HTTP handlers submit

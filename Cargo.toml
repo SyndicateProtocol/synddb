@@ -7,6 +7,8 @@ members = [
   "crates/synddb-client",
   "crates/synddb-chain-monitor",
   "crates/synddb-shared",
+  "crates/synddb-fuzzer",
+  "crates/synddb-e2e-fuzzer",
   "examples/prediction-market",
   "examples/price-oracle/validator",
   "tests/e2e/runner",

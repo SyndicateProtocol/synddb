@@ -1,0 +1,36 @@
+services:
+  sequencer:
+    build:
+      context: ../..
+      dockerfile: examples/price-oracle/Dockerfile
+    entrypoint: ["/usr/local/bin/synddb-sequencer"]
+    environment:
+      - SIGNING_KEY=ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - RUST_LOG=info
+      - HTTP_PORT=8433
+    ports:
+      - "8433:8433"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8433/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  price-oracle:
+    build:
+      context: ../..
+      dockerfile: examples/price-oracle/Dockerfile
+    environment:
+      - SEQUENCER_URL=http://sequencer:8433
+      - DATABASE_PATH=/data/price-oracle.db
+    volumes:
+      - oracle-data:/data
+    depends_on:
+      sequencer:
+        condition: service_healthy
+    # Keep container running for test commands
+    entrypoint: ["sleep", "infinity"]
+
+volumes:
+  oracle-data:

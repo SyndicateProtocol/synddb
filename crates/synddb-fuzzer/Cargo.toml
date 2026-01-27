@@ -1,0 +1,29 @@
+[package]
+name = "synddb-fuzzer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Property-based and grammar-based fuzzing for SyndDB SQLite replication"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Database
+rusqlite = { workspace = true }
+
+# Property-based testing
+proptest = "1.5"
+proptest-derive = "0.5"
+
+# Random generation for grammar-based testing
+rand = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Utils
+tempfile = "3"
+hex = { workspace = true }
