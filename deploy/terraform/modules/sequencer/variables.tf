@@ -24,6 +24,11 @@ variable "subnet_self_link" {
   type        = string
 }
 
+variable "static_internal_ip" {
+  description = "Static internal IP address to assign to the instance"
+  type        = string
+}
+
 variable "service_account_email" {
   description = "Service account email"
   type        = string

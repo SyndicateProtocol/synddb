@@ -566,23 +566,24 @@ impl ConfidentialValidator {
         // Get attestation token
         let attestation = Self::generate_attestation(&public_key).await?;
 
-        // Generate zkVM proof for attestation
-        let zk_proof = Self::generate_attestation_proof(&attestation).await?;
+        // Generate zkVM proof for attestation via proof service
+        let proof_response = Self::request_proof(&attestation).await?;
 
-        // Register with Bridge.sol
-        let provider = Provider::new(Url::parse(rpc_url)?);
-        let bridge = BridgeContract::new(bridge_address, provider);
+        // Sign EIP-712 key registration message
+        let signature = Self::sign_key_registration(&signing_key, deadline).await?;
 
-        let tx = bridge
-            .registerValidator(
-                attestation.token.clone(),
-                public_key.to_encoded_point(false).as_bytes().to_vec(),
-                zk_proof,
-            )
-            .send()
+        // Register via relayer (relayer pays gas)
+        let registration = relayer_client
+            .register_key(RegisterKeyRequest {
+                public_values: proof_response.public_values,
+                proof_bytes: proof_response.proof_bytes,
+                deadline,
+                signature,
+                key_type: KeyType::Validator,
+            })
             .await?;
 
-        info!("Validator registered on-chain: {:?}", tx.tx_hash());
+        info!("Validator registered on-chain: {:?}", registration.tx_hash);
 
         // Seal key to Secret Manager
         let key_data = ValidatorKeyData {

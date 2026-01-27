@@ -140,11 +140,11 @@ variable "batch_flush_interval" {
 variable "price_oracle_config" {
   description = "Price oracle configuration. Set to null to disable."
   type = object({
-    coingecko_api_key      = optional(string, "")
-    cmc_api_key            = optional(string, "")
-    fetch_interval         = optional(number, 60)
-    assets                 = optional(list(string), ["BTC", "ETH"])
-    chain_monitor_enabled  = optional(bool, false)
+    coingecko_api_key     = optional(string, "")
+    cmc_api_key           = optional(string, "")
+    fetch_interval        = optional(number, 60)
+    assets                = optional(list(string), ["BTC", "ETH"])
+    chain_monitor_enabled = optional(bool, false)
   })
   default = null
 }

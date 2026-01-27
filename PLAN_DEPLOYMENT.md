@@ -289,33 +289,38 @@ Generate ephemeral key
 Log TEE address ──────────► Operator funds address with ETH
        │
        ▼
-Wait for balance (polls every 5s)
-       │
-       ▼
 Fetch attestation token from /run/container_launcher/teeserver.sock
        │
        ▼
 Call proof service (2-10 min with GPU)
        │
        ▼
-Submit addKey(publicValues, proof) to TeeKeyManager
+Sign EIP-712 key registration message
+       │
+       ▼
+Submit to relayer: POST /register-key
+       │
+       ▼
+Relayer calls Bridge.registerKeyWithSignature(keyType, publicValues, proof, deadline, signature)
        │
        ▼
 Wait for tx confirmation
        │
        ▼
-Verify isKeyValid(address) == true
+Verify isKeyValid(keyType, address) == true
        │
        ▼
 Bootstrap complete, start main service
 ```
 
-### Pre-funding TEE Keys
+### Relayer Gas Funding
 
-Since TEE keys are ephemeral and pay their own gas:
+The relayer pays gas for TEE key registration transactions. TEE keys no longer need to be pre-funded:
 
-1. On first boot, service logs: `TEE address: 0x... - fund this address before bootstrap can complete`
-2. Operator sends ETH to this address (minimum 0.1 ETH by default)
-3. Bootstrap waits until balance is sufficient, then proceeds
+1. TEE generates ephemeral key and attestation proof
+2. TEE signs EIP-712 key registration message (gasless signature)
+3. TEE submits signature + proof to relayer via POST /register-key
+4. Relayer verifies attestation and submits transaction to Bridge contract
+5. Relayer pays gas for the on-chain transaction
 
-For testnet deployments, consider a faucet mechanism or pre-funding a pool of addresses.
+The relayer wallet must be funded with ETH for gas. Configure the relayer private key in `terraform.tfvars`.

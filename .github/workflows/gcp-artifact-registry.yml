@@ -34,9 +34,67 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
+  # Detect which paths changed to skip unnecessary builds
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      reproducible: ${{ steps.filter.outputs.reproducible }}
+      proof-service: ${{ steps.filter.outputs.proof-service }}
+      relayer: ${{ steps.filter.outputs.relayer }}
+      price-oracle: ${{ steps.filter.outputs.price-oracle }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for path changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            reproducible:
+              - 'docker/reproducible/**'
+              - 'crates/synddb-sequencer/**'
+              - 'crates/synddb-validator/**'
+              - 'crates/synddb-shared/**'
+              - 'crates/synddb-storage/**'
+              - 'crates/synddb-bootstrap/**'
+              - 'crates/gcp-attestation/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/gcp-artifact-registry.yml'
+            proof-service:
+              - 'crates/proof-service/**'
+              - 'crates/synddb-bootstrap/risc0/**'
+              - 'crates/gcp-attestation/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/gcp-artifact-registry.yml'
+            relayer:
+              - 'docker/relayer.Dockerfile'
+              - 'crates/synddb-relayer/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/gcp-artifact-registry.yml'
+            price-oracle:
+              - 'examples/price-oracle/**'
+              - '.github/workflows/gcp-artifact-registry.yml'
+
+      - name: Summary
+        run: |
+          echo "## Path Changes Detected" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Filter | Changed |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| reproducible | ${{ steps.filter.outputs.reproducible }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| proof-service | ${{ steps.filter.outputs.proof-service }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| relayer | ${{ steps.filter.outputs.relayer }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| price-oracle | ${{ steps.filter.outputs.price-oracle }} |" >> $GITHUB_STEP_SUMMARY
+
   # Build on multiple runners to verify cross-machine reproducibility
   build:
     name: Reproducible Build (${{ matrix.runner }}, ${{ matrix.image }})
+    needs: changes
+    if: needs.changes.outputs.reproducible == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -421,6 +479,7 @@ jobs:
   # Build and publish non-reproducible images (no TEE attestation required)
   publish-standard:
     name: Standard Publish ${{ matrix.image }}
+    needs: changes
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
     permissions:
@@ -435,25 +494,50 @@ jobs:
             cache-scope: relayer
             runner: ubuntu-latest
             timeout: 30
+            filter: relayer
           - image: proof-service
             dockerfile: crates/proof-service/Dockerfile.risc0
             cache-scope: proof-service
             # Larger runner for RISC Zero toolchain compilation (memory intensive)
             runner: shared-large-01
-            timeout: 360
+            timeout: 120
+            filter: proof-service
           - image: price-oracle
             dockerfile: examples/price-oracle/Dockerfile
             cache-scope: price-oracle
             runner: ubuntu-latest
             timeout: 30
+            filter: price-oracle
           - image: price-oracle-validator
             dockerfile: examples/price-oracle/validator.Dockerfile
             cache-scope: price-oracle-validator
             runner: ubuntu-latest
             timeout: 30
+            filter: price-oracle
 
     steps:
+      - name: Check if build needed
+        id: check
+        run: |
+          FILTER="${{ matrix.filter }}"
+          RELAYER="${{ needs.changes.outputs.relayer }}"
+          PROOF="${{ needs.changes.outputs.proof-service }}"
+          ORACLE="${{ needs.changes.outputs.price-oracle }}"
+
+          case "$FILTER" in
+            relayer) SHOULD_BUILD="$RELAYER" ;;
+            proof-service) SHOULD_BUILD="$PROOF" ;;
+            price-oracle) SHOULD_BUILD="$ORACLE" ;;
+            *) SHOULD_BUILD="false" ;;
+          esac
+
+          echo "should_build=$SHOULD_BUILD" >> $GITHUB_OUTPUT
+          if [ "$SHOULD_BUILD" != "true" ]; then
+            echo "::notice::Skipping ${{ matrix.image }} - no relevant changes detected"
+          fi
+
       - name: Free disk space
+        if: steps.check.outputs.should_build == 'true'
         uses: endersonmenezes/free-disk-space@v3
         with:
           remove_android: true
@@ -463,26 +547,33 @@ jobs:
           remove_swap: false
 
       - uses: actions/checkout@v4
+        if: steps.check.outputs.should_build == 'true'
 
       - name: Authenticate to Google Cloud
+        if: steps.check.outputs.should_build == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
+        if: steps.check.outputs.should_build == 'true'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
+        if: steps.check.outputs.should_build == 'true'
         run: gcloud auth configure-docker ${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev --quiet
 
       - name: Set up Docker Buildx
+        if: steps.check.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Install cosign
+        if: steps.check.outputs.should_build == 'true'
         uses: sigstore/cosign-installer@v4.0.0
 
       - name: Generate image tags
+        if: steps.check.outputs.should_build == 'true'
         id: tags
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
@@ -503,6 +594,7 @@ jobs:
           fi
 
       - name: Build and push ${{ matrix.image }}
+        if: steps.check.outputs.should_build == 'true'
         id: build
         uses: docker/build-push-action@v6
         with:
@@ -517,6 +609,7 @@ jobs:
           sbom: true
 
       - name: Sign image by digest (cosign)
+        if: steps.check.outputs.should_build == 'true'
         run: |
           # Sign by digest (not tag) to ensure signature binds to exact image content.
           # Tags are mutable and could be reassigned; digests are immutable content hashes.
@@ -527,16 +620,18 @@ jobs:
           echo "::notice::Signed $IMAGE@$DIGEST"
 
       - name: Install Foundry
+        if: steps.check.outputs.should_build == 'true'
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Install oras
+        if: steps.check.outputs.should_build == 'true'
         uses: oras-project/setup-oras@v1
 
       # Sign image before installing any additional toolchains to minimize attack surface.
       # The secp256k1 signature only requires Foundry (cast) which is already installed.
       - name: Sign image digest (secp256k1)
         id: image_sig
-        if: ${{ vars.IMAGE_SIGNER_ADDRESS != '' }}
+        if: steps.check.outputs.should_build == 'true' && vars.IMAGE_SIGNER_ADDRESS != ''
         env:
           PRIVATE_KEY: ${{ secrets.IMAGE_SIGNER_PRIVATE_KEY }}
           EXPECTED_SIGNER: ${{ vars.IMAGE_SIGNER_ADDRESS }}
@@ -569,7 +664,7 @@ jobs:
           echo "::notice::Signer address: $EXPECTED_SIGNER (verified)"
 
       - name: Attach signature artifact
-        if: ${{ steps.image_sig.outputs.signature != '' }}
+        if: steps.check.outputs.should_build == 'true' && steps.image_sig.outputs.signature != ''
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
           IMAGE="$REGISTRY/${{ matrix.image }}"
@@ -599,7 +694,7 @@ jobs:
       # the Docker container, and the imageId is extracted during build and saved to a file.
       - name: (proof-service) Extract RISC Zero image ID from container
         id: image_id
-        if: ${{ matrix.image == 'proof-service' }}
+        if: steps.check.outputs.should_build == 'true' && matrix.image == 'proof-service'
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
           IMAGE="$REGISTRY/${{ matrix.image }}"
@@ -622,7 +717,7 @@ jobs:
           echo "::notice::RISC Zero Image ID: $IMAGE_ID"
 
       - name: (proof-service) Attach RISC Zero image ID artifact
-        if: ${{ matrix.image == 'proof-service' && steps.image_id.outputs.image_id != '' }}
+        if: steps.check.outputs.should_build == 'true' && matrix.image == 'proof-service' && steps.image_id.outputs.image_id != ''
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
           IMAGE="$REGISTRY/${{ matrix.image }}"
@@ -646,6 +741,7 @@ jobs:
           echo "::notice::Attached image ID artifact to $IMAGE@$DIGEST"
 
       - name: Summary
+        if: steps.check.outputs.should_build == 'true'
         run: |
           REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
           IMAGE="$REGISTRY/${{ matrix.image }}"

@@ -17,6 +17,12 @@ locals {
       BIND_ADDRESS  = "0.0.0.0:8080"
       SEQUENCER_URL = var.sequencer_url
 
+      # Database paths (container-local storage, state lost on restart)
+      # For production, mount a persistent disk at /data
+      DATABASE_PATH              = "/data/validator.db"
+      STATE_DB_PATH              = "/data/validator_state.db"
+      PENDING_CHANGESETS_DB_PATH = "/data/pending_changesets.db"
+
       # Fetcher configuration
       FETCHER_TYPE = "gcs"
       GCS_BUCKET   = var.gcs_bucket
@@ -62,6 +68,7 @@ module "confidential_vm" {
   machine_type          = var.machine_type
   network_self_link     = var.network_self_link
   subnet_self_link      = var.subnet_self_link
+  static_internal_ip    = var.static_internal_ip
   service_account_email = var.service_account_email
   container_image       = var.container_image
   environment_variables = local.env_vars

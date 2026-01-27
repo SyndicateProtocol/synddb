@@ -62,6 +62,13 @@ pub struct BootstrapConfig {
     #[arg(long, env = "RELAYER_MAX_RETRIES", default_value = "3")]
     pub relayer_max_retries: u32,
 
+    /// Maximum retries for key verification after registration
+    ///
+    /// RPC nodes may have a delay before reflecting newly registered keys.
+    /// This retry loop accounts for that indexing delay.
+    #[arg(long, env = "VERIFICATION_MAX_RETRIES", default_value = "5")]
+    pub verification_max_retries: u32,
+
     /// Timeout for relayer key registration requests (default: 3 minutes)
     ///
     /// This covers the time for the relayer to submit the transaction and
@@ -93,6 +100,7 @@ impl Default for BootstrapConfig {
             bootstrap_timeout: Duration::from_secs(1800),
             proof_max_retries: 3,
             relayer_max_retries: 3,
+            verification_max_retries: 5,
             relayer_timeout: Duration::from_secs(180),
             image_signature: None,
         }

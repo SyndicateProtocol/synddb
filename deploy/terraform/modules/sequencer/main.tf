@@ -52,6 +52,7 @@ module "confidential_vm" {
   machine_type          = var.machine_type
   network_self_link     = var.network_self_link
   subnet_self_link      = var.subnet_self_link
+  static_internal_ip    = var.static_internal_ip
   service_account_email = var.service_account_email
   container_image       = var.container_image
   environment_variables = local.env_vars
