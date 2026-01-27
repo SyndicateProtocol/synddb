@@ -1,0 +1,45 @@
+[package]
+name = "synddb-relayer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Gas funding relayer for SyndDB TEE keys"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Core async and CLI
+tokio = { workspace = true, features = ["full"] }
+clap = { workspace = true, features = ["derive", "env"] }
+anyhow = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+hex = { workspace = true }
+toml = { workspace = true }
+
+# Logging and tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# HTTP server
+axum = { workspace = true }
+
+# Blockchain / Contract interaction
+alloy = { workspace = true, features = [
+  "signers",
+  "signer-local",
+  "provider-http",
+  "network",
+  "sol-types",
+] }
+
+# URL parsing
+url = { workspace = true }
+
+[[bin]]
+name = "synddb-relayer"
+path = "src/main.rs"

@@ -203,6 +203,58 @@ impl ContractSubmitter {
             }
         }
     }
+
+    /// Get current gas price
+    pub async fn get_gas_price(&self) -> Result<u128, BootstrapError> {
+        let url = reqwest::Url::from_str(&self.rpc_url)
+            .map_err(|e| BootstrapError::Config(format!("Invalid RPC URL: {e}")))?;
+
+        let provider = ProviderBuilder::new().connect_http(url);
+
+        let gas_price = provider
+            .get_gas_price()
+            .await
+            .map_err(|e| BootstrapError::ContractSubmissionFailed(e.to_string()))?;
+
+        Ok(gas_price)
+    }
+
+    /// Send ETH from one address to another
+    ///
+    /// Used for draining old keys to treasury.
+    pub async fn send_eth(
+        &self,
+        signer: &PrivateKeySigner,
+        to: Address,
+        amount: u128,
+    ) -> Result<B256, BootstrapError> {
+        use alloy::rpc::types::TransactionRequest;
+
+        let wallet = EthereumWallet::from(signer.clone());
+        let url = reqwest::Url::from_str(&self.rpc_url)
+            .map_err(|e| BootstrapError::Config(format!("Invalid RPC URL: {e}")))?;
+
+        let provider = ProviderBuilder::new().wallet(wallet).connect_http(url);
+
+        let tx = TransactionRequest::default()
+            .to(to)
+            .value(alloy::primitives::U256::from(amount));
+
+        let pending = provider
+            .send_transaction(tx)
+            .await
+            .map_err(|e| BootstrapError::TransactionFailed(e.to_string()))?;
+
+        let tx_hash = *pending.tx_hash();
+        info!(
+            tx_hash = %tx_hash,
+            to = %to,
+            amount_wei = amount,
+            "ETH transfer submitted"
+        );
+
+        Ok(tx_hash)
+    }
 }
 
 #[cfg(test)]

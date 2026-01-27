@@ -5,8 +5,12 @@ import {UseCaseBaseTest} from "./base/UseCaseBaseTest.sol";
 import {Bridge} from "src/Bridge.sol";
 import {SequencerSignature} from "src/types/DataTypes.sol";
 import {ValidatorSignatureThresholdModule} from "src/modules/ValidatorSignatureThresholdModule.sol";
+import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
+import {MockAttestationVerifier} from "src/attestation/MockAttestationVerifier.sol";
 import {MockONFT} from "./mocks/MockONFT.sol";
 import {MockCrossChainReceiver} from "./mocks/MockCrossChainReceiver.sol";
+import {WETH9} from "./mocks/WETH9.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
  * @title UseCase5_CrossChainNFT
@@ -20,16 +24,30 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
     MockONFT public onft;
     MockCrossChainReceiver public receiver;
 
-    address public sequencer = address(0x123);
+    address public sequencer;
     address public user = address(0x456);
 
+    // We need a separate sequencer private key for destBridge since it doesn't have validators
+    uint256 public destSequencerPrivateKey = 0xB22CE;
+
     function setUp() public {
+        sequencer = vm.addr(sequencerPrivateKey);
+        address destSequencer = vm.addr(destSequencerPrivateKey);
+
         // Setup source chain bridge with validators
         (sourceBridge,) = createBridgeWithWETH(address(this), sequencer);
         validatorModule = setupBridgeWithValidators(sourceBridge);
 
         // Setup destination chain bridge (simpler, no validators needed for this test)
-        (destBridge,) = createBridgeWithWETH(address(this), sequencer);
+        // We need to create a separate TEE key manager for destBridge
+        MockAttestationVerifier destAttestationVerifier = new MockAttestationVerifier();
+        TeeKeyManager destTeeKeyManager = new TeeKeyManager(destAttestationVerifier);
+        bytes memory destPublicValues = abi.encode(destSequencer);
+        destTeeKeyManager.addKey(destPublicValues, "");
+
+        WETH9 destWeth = new WETH9();
+        destBridge = new Bridge(address(this), address(destWeth), address(destTeeKeyManager));
+        destBridge.grantRole(destBridge.MESSAGE_INITIALIZER_ROLE(), destSequencer);
 
         // Deploy ONFT with source bridge as the authorized bridge
         onft = new MockONFT("Omnichain NFT", "ONFT", address(sourceBridge));
@@ -40,6 +58,18 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         // Mint initial NFT to user
         onft.mint(user);
         assertEq(onft.ownerOf(0), user);
+    }
+
+    /// @notice Helper to create sequencer signature for destBridge (uses destSequencerPrivateKey)
+    function createDestSequencerSignature(bytes32 messageId, address targetAddress, bytes memory payload)
+        internal
+        view
+        returns (SequencerSignature memory)
+    {
+        bytes32 messageHash = keccak256(abi.encodePacked(messageId, targetAddress, keccak256(payload), uint256(0)));
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(destSequencerPrivateKey, ethSignedHash);
+        return SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
     }
 
     /// @notice Test basic cross-chain NFT transfer via burn-and-mint
@@ -56,7 +86,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         bytes memory burnPayload = abi.encodeWithSelector(onft.crosschainBurn.selector, user, tokenId);
 
         // Sequencer signature for burn
-        SequencerSignature memory burnSig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory burnSig = createSequencerSignature(burnMessageId, address(onft), burnPayload, 0);
 
         // Step 3: Execute burn on source chain
         vm.prank(sequencer);
@@ -78,10 +108,10 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         );
 
         // Sequencer signature for mint (different from burn)
-        SequencerSignature memory mintSig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory mintSig = createDestSequencerSignature(mintMessageId, address(receiver), mintPayload);
 
         // Execute mint on destination chain (no validators needed for this simple test)
-        vm.prank(sequencer);
+        vm.prank(vm.addr(destSequencerPrivateKey));
         destBridge.initializeMessage(mintMessageId, address(receiver), mintPayload, mintSig, 0);
         destBridge.handleMessage(mintMessageId);
 
@@ -98,7 +128,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         bytes32 messageId = keccak256("malicious-burn");
         bytes memory payload = abi.encodeWithSelector(onft.crosschainBurn.selector, attacker, tokenId);
 
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(onft), payload, 0);
 
         vm.prank(sequencer);
         sourceBridge.initializeMessage(messageId, address(onft), payload, sig, 0);
@@ -145,7 +175,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
 
         bytes32 burnMsg1 = keccak256("burn-1");
         bytes memory burnPayload1 = abi.encodeWithSelector(sourceOnft.crosschainBurn.selector, user, tokenId);
-        SequencerSignature memory sig1 = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig1 = createSequencerSignature(burnMsg1, address(sourceOnft), burnPayload1, 0);
 
         vm.prank(sequencer);
         sourceBridge.initializeMessage(burnMsg1, address(sourceOnft), burnPayload1, sig1, 0);
@@ -159,9 +189,10 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         // Step 2: Mint on destination
         bytes32 mintMsg = keccak256("mint-dest");
         bytes memory mintPayload = abi.encodeWithSelector(destOnft.crosschainMint.selector, user, tokenId);
+        SequencerSignature memory mintSig = createDestSequencerSignature(mintMsg, address(destOnft), mintPayload);
 
-        vm.prank(sequencer);
-        destBridge.initializeMessage(mintMsg, address(destOnft), mintPayload, sig1, 0);
+        vm.prank(vm.addr(destSequencerPrivateKey));
+        destBridge.initializeMessage(mintMsg, address(destOnft), mintPayload, mintSig, 0);
         destBridge.handleMessage(mintMsg);
 
         assertEq(destOnft.ownerOf(tokenId), user);
@@ -172,9 +203,10 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
 
         bytes32 burnMsg2 = keccak256("burn-2");
         bytes memory burnPayload2 = abi.encodeWithSelector(destOnft.crosschainBurn.selector, user, tokenId);
+        SequencerSignature memory burnSig2 = createDestSequencerSignature(burnMsg2, address(destOnft), burnPayload2);
 
-        vm.prank(sequencer);
-        destBridge.initializeMessage(burnMsg2, address(destOnft), burnPayload2, sig1, 0);
+        vm.prank(vm.addr(destSequencerPrivateKey));
+        destBridge.initializeMessage(burnMsg2, address(destOnft), burnPayload2, burnSig2, 0);
         destBridge.handleMessage(burnMsg2);
 
         // Verify burned on dest
@@ -184,9 +216,10 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         // Step 4: Re-mint on source
         bytes32 mintMsg2 = keccak256("mint-source");
         bytes memory mintPayload2 = abi.encodeWithSelector(sourceOnft.crosschainMint.selector, user, tokenId);
+        SequencerSignature memory mintSig2 = createSequencerSignature(mintMsg2, address(sourceOnft), mintPayload2, 0);
 
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(mintMsg2, address(sourceOnft), mintPayload2, sig1, 0);
+        sourceBridge.initializeMessage(mintMsg2, address(sourceOnft), mintPayload2, mintSig2, 0);
         submitValidatorSignatures(sourceBridge, mintMsg2);
         sourceBridge.handleMessage(mintMsg2);
 
@@ -218,7 +251,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
         for (uint256 i = 0; i < 3; i++) {
             bytes32 messageId = keccak256(abi.encodePacked("burn-batch", i));
             bytes memory payload = abi.encodeWithSelector(batchOnft.crosschainBurn.selector, user, i);
-            SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+            SequencerSignature memory sig = createSequencerSignature(messageId, address(batchOnft), payload, 0);
 
             vm.prank(sequencer);
             sourceBridge.initializeMessage(messageId, address(batchOnft), payload, sig, 0);
@@ -250,7 +283,7 @@ contract UseCase5_CrossChainNFT is UseCaseBaseTest {
 
         bytes32 messageId = keccak256("burn-999");
         bytes memory payload = abi.encodeWithSelector(multiOnft.crosschainBurn.selector, user, 999);
-        SequencerSignature memory sig = SequencerSignature({signature: new bytes(65), submittedAt: block.timestamp});
+        SequencerSignature memory sig = createSequencerSignature(messageId, address(multiOnft), payload, 0);
 
         vm.prank(sequencer);
         sourceBridge.initializeMessage(messageId, address(multiOnft), payload, sig, 0);

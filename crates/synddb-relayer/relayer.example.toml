@@ -1,0 +1,50 @@
+# Example relayer configuration for multi-tenant mode
+#
+# Copy this file to `relayer.toml` and set RELAYER_CONFIG_PATH to point to it.
+# Alternatively, use environment variables for single-application mode.
+
+# RPC URL for transaction submission
+rpc_url = "http://localhost:8545"
+
+# Chain ID for EIP-712 domain (31337 = Anvil local)
+chain_id = 31337
+
+# TeeKeyManager contract address (shared across all applications)
+key_manager_address = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+
+# Relayer's private key (hex-encoded, for paying gas)
+# WARNING: Use a dedicated funded account, not a key with significant value
+private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+
+# Listen address for HTTP server (default: 0.0.0.0:8082)
+listen_addr = "0.0.0.0:8082"
+
+# Application 1: Example SyndDB deployment
+[[application]]
+# Audience hash identifies this application (extracted from TEE attestation)
+audience_hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+# GasTreasury contract address for this application
+treasury_address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+
+# Allowed image digests for this application
+# Only TEEs running these code versions will be funded
+allowed_image_digests = [
+    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+]
+
+# Optional: Override per-application rate limits
+# max_funding_per_digest_daily = "1000000000000000000"  # 1 ETH (default)
+# max_funding_per_address = "50000000000000000"         # 0.05 ETH (default)
+
+# Application 2: Another SyndDB deployment
+[[application]]
+audience_hash = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+treasury_address = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+allowed_image_digests = [
+    "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+]
+# Lower limits for this application
+max_funding_per_digest_daily = "500000000000000000"  # 0.5 ETH
+max_funding_per_address = "25000000000000000"        # 0.025 ETH

@@ -1,25 +1,27 @@
-name: Reproducible Builds
+name: GCP Artifact Registry
 
-# Verify that Docker builds are bit-for-bit reproducible across machines.
-# This is critical for Confidential Space attestation - the image hash
-# must be verifiable by anyone rebuilding from source.
+# Build and publish Docker images to Artifact Registry.
+#
+# This workflow handles two types of images:
+# 1. Reproducible TEE images (sequencer, validator) - bit-for-bit reproducible
+#    for Confidential Space attestation where image hash must be verifiable
+# 2. Standard images (relayer, proof-service) - regular builds without
+#    reproducibility requirements
 
 on:
   push:
     branches:
       - main
-      # TEMPORARY: Remove example-app after development, then clean up tags:
-      #   gcloud artifacts docker tags delete $REGION-docker.pkg.dev/$PROJECT/$REPO/synddb-sequencer:example-app-edge
-      #   gcloud artifacts docker tags delete $REGION-docker.pkg.dev/$PROJECT/$REPO/synddb-validator:example-app-edge
       - example-app
     tags:
       - 'v*'  # Release tags (e.g., v1.0.0)
     paths:
       - "docker/reproducible/**"
       - "crates/**"
+      - "services/**"
       - "Cargo.toml"
       - "Cargo.lock"
-      - ".github/workflows/reproducible-builds.yml"
+      - ".github/workflows/gcp-artifact-registry.yml"
 
   # Allow manual triggering for verification before releases
   workflow_dispatch:
@@ -247,16 +249,10 @@ jobs:
             fi
             echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            # Main branch push: sha + edge
+          elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/example-app" ]]; then
+            # Main or example-app branch push: sha + edge
             echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA,$REGISTRY/synddb-sequencer:edge" >> $GITHUB_OUTPUT
             echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA,$REGISTRY/synddb-validator:edge" >> $GITHUB_OUTPUT
-            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
-            echo "is_release=false" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == "refs/heads/example-app" ]]; then
-            # TEMPORARY: example-app branch push: sha + example-app-edge
-            echo "sequencer_tags=$REGISTRY/synddb-sequencer:sha-$SHORT_SHA,$REGISTRY/synddb-sequencer:example-app-edge" >> $GITHUB_OUTPUT
-            echo "validator_tags=$REGISTRY/synddb-validator:sha-$SHORT_SHA,$REGISTRY/synddb-validator:example-app-edge" >> $GITHUB_OUTPUT
             echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event_name }}" == "push" ]]; then
@@ -414,3 +410,88 @@ jobs:
           echo "  --certificate-identity-regexp='https://github.com/SyndicateProtocol/synddb/.*' \\\\" >> $GITHUB_STEP_SUMMARY
           echo "  --certificate-oidc-issuer='https://token.actions.githubusercontent.com'" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # Build and publish non-reproducible images (no TEE attestation required)
+  publish-standard:
+    name: Publish Standard Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate image tags
+        id: tags
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            if [[ "${{ github.event_name }}" == "push" ]]; then
+              echo "relayer_tags=$REGISTRY/synddb-relayer:$VERSION,$REGISTRY/synddb-relayer:latest" >> $GITHUB_OUTPUT
+              echo "proof_service_tags=$REGISTRY/proof-service:$VERSION,$REGISTRY/proof-service:latest" >> $GITHUB_OUTPUT
+            else
+              echo "relayer_tags=$REGISTRY/synddb-relayer:$VERSION" >> $GITHUB_OUTPUT
+              echo "proof_service_tags=$REGISTRY/proof-service:$VERSION" >> $GITHUB_OUTPUT
+            fi
+            echo "primary_tag=$VERSION" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/example-app" ]]; then
+            echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA,$REGISTRY/synddb-relayer:edge" >> $GITHUB_OUTPUT
+            echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA,$REGISTRY/proof-service:edge" >> $GITHUB_OUTPUT
+            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+          else
+            echo "relayer_tags=$REGISTRY/synddb-relayer:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "proof_service_tags=$REGISTRY/proof-service:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "primary_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push relayer
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/reproducible/relayer.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.relayer_tags }}
+          cache-from: type=gha,scope=relayer
+          cache-to: type=gha,mode=max,scope=relayer
+
+      - name: Build and push proof-service
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/proof-service/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.proof_service_tags }}
+          cache-from: type=gha,scope=proof-service
+          cache-to: type=gha,mode=max,scope=proof-service
+
+      - name: Summary
+        run: |
+          REGISTRY="${{ vars.GCP_ARTIFACT_REGISTRY_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REGISTRY_REPO }}"
+
+          echo "## Standard Images Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tags |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| synddb-relayer | \`${{ steps.tags.outputs.relayer_tags }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| proof-service | \`${{ steps.tags.outputs.proof_service_tags }}\` |" >> $GITHUB_STEP_SUMMARY

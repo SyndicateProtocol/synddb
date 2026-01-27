@@ -28,14 +28,14 @@ pub mod local_defaults {
     /// Anvil chain ID
     pub const CHAIN_ID: u64 = 31337;
 
-    /// Bridge contract address (deployed at nonce 1 from Anvil account 0)
-    pub const BRIDGE_CONTRACT: &str = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
+    /// Bridge contract address (deployed at nonce 3 from Anvil account 0)
+    pub const BRIDGE_CONTRACT: &str = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9";
 
     /// `MockWETH` address (deployed at nonce 0 from Anvil account 0)
     pub const WETH: &str = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 
-    /// `PriceOracle` address (deployed at nonce 3 from Anvil account 0)
-    pub const PRICE_ORACLE: &str = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9";
+    /// `PriceOracle` address (deployed at nonce 5 from Anvil account 0)
+    pub const PRICE_ORACLE: &str = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707";
 }
 
 /// Available fetcher types for retrieving messages from the storage layer

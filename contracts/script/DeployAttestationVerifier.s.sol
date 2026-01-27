@@ -13,7 +13,7 @@ import {TeeKeyManager} from "src/attestation/TeeKeyManager.sol";
  */
 contract DeployAttestationVerifier is Script {
     function run() external returns (AttestationVerifier, TeeKeyManager) {
-        address verifier = vm.envAddress("SP1_VERIFIER_ADDRESS");
+        address verifier = vm.envAddress("SP1_VERIFIER_CONTRACT_ADDRESS");
         bytes32 attestationVerifierVKey = vm.envBytes32("ATTESTATION_VERIFIER_VKEY");
         bytes32 expectedImageDigestHash = vm.envBytes32("EXPECTED_IMAGE_DIGEST_HASH");
         uint64 expirationTolerance = uint64(vm.envUint("EXPIRATION_TOLERANCE"));

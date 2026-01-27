@@ -365,6 +365,21 @@ validator-bridge:
     BRIDGE_CHAIN_ID=31337 \
     cargo run -p synddb-validator --release
 
+# Run gas funding relayer for TEE key registration
+# The relayer handles key registration and funding for TEE keys that don't have gas.
+
+# Requires GasTreasury contract to be deployed and configured.
+[group('components')]
+relayer treasury_address:
+    RPC_URL={{ anvil_rpc_url }} \
+    CHAIN_ID={{ anvil_chain_id }} \
+    TEE_KEY_MANAGER_CONTRACT_ADDRESS={{ tee_key_manager_contract_address }} \
+    GAS_TREASURY_CONTRACT_ADDRESS={{ treasury_address }} \
+    RELAYER_PRIVATE_KEY={{ anvil_key_0 }} \
+    RELAYER_LISTEN_ADDR=127.0.0.1:{{ env_var_or_default('RELAYER_PORT', '8082') }} \
+    ALLOWED_IMAGE_DIGESTS=0x0000000000000000000000000000000000000000000000000000000000000000 \
+    cargo run -p synddb-relayer --release
+
 # ============================================================================
 # Building
 # ============================================================================
@@ -888,3 +903,48 @@ update-digests:
     echo "  1. Review changes: git diff docker/reproducible/"
     echo "  2. Build and test: just repro-all"
     echo "  3. Commit: git add docker/reproducible/ && git commit -m 'chore: update base image digests'"
+
+# ============================================================================
+# Terraform (Infrastructure)
+# ============================================================================
+
+# Initialize Terraform for an environment
+[group('terraform')]
+tf-init env="staging":
+    cd deploy/terraform/environments/{{ env }} && terraform init
+
+# Plan Terraform changes for an environment
+[group('terraform')]
+tf-plan env="staging":
+    cd deploy/terraform/environments/{{ env }} && terraform plan
+
+# Apply Terraform changes for an environment
+[group('terraform')]
+tf-apply env="staging":
+    cd deploy/terraform/environments/{{ env }} && terraform apply
+
+# Destroy Terraform resources for an environment
+[confirm('This will DESTROY all resources in {{ env }}. Are you sure?')]
+[group('terraform')]
+tf-destroy env="staging":
+    cd deploy/terraform/environments/{{ env }} && terraform destroy
+
+# Show Terraform outputs for an environment
+[group('terraform')]
+tf-output env="staging":
+    cd deploy/terraform/environments/{{ env }} && terraform output
+
+# Format all Terraform files
+[group('terraform')]
+tf-fmt:
+    terraform fmt -recursive deploy/terraform/
+
+# Validate Terraform configuration
+[group('terraform')]
+tf-validate env="staging":
+    cd deploy/terraform/environments/{{ env }} && terraform validate
+
+# Initialize and plan Marketplace package
+[group('terraform')]
+tf-marketplace-plan:
+    cd deploy/terraform/marketplace && terraform init && terraform plan -var="goog_cm_deployment_name=test"
