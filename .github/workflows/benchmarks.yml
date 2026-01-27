@@ -99,7 +99,7 @@ jobs:
 
       - name: Restore cached baseline benchmarks
         id: cache-baseline
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             bench-baseline-simple.log
