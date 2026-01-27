@@ -220,6 +220,43 @@ impl SequenceResponse {
     }
 }
 
+/// Response for withdrawal sequencing (includes Bridge-compatible signature)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WithdrawalResponse {
+    /// Assigned sequence number
+    pub sequence: u64,
+    /// Timestamp when sequenced
+    pub timestamp: u64,
+    /// Hash of the COSE message
+    pub message_hash: String,
+    /// COSE signature (for CBOR batch verification)
+    pub cose_signature: String,
+    /// Sequencer public key (64 bytes hex)
+    pub signer: String,
+    /// Bridge-compatible signature for `initializeMessage`
+    pub bridge_signature: BridgeSignatureResponse,
+    /// Warning message if batch publishing failed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_warning: Option<String>,
+}
+
+/// Bridge signature response (matches Bridge contract's `SequencerSignature` struct)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BridgeSignatureResponse {
+    /// The message ID (`request_id` as bytes32 hex)
+    pub message_id: String,
+    /// Bridge message hash that was signed
+    pub message_hash: String,
+    /// EIP-191 signature (65 bytes hex: r || s || v)
+    pub signature: String,
+    /// Signer address (20 bytes hex)
+    pub signer: String,
+    /// Sequence number (for Bridge's SequencerSignature.sequence field)
+    pub sequence: u64,
+    /// Timestamp (for Bridge's SequencerSignature.timestamp field)
+    pub timestamp: u64,
+}
+
 /// Status response
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
@@ -502,6 +539,26 @@ async fn receive_withdrawal(
             SequencerError::from(e)
         })?;
 
+    // Create Bridge-compatible signature for the withdrawal
+    let bridge_sig = state
+        .inbox
+        .sign_bridge_withdrawal(
+            &request.request_id,
+            &request.recipient,
+            &request.data,
+            &request.amount,
+        )
+        .map_err(|e| {
+            error!(
+                request_id = %request.request_id,
+                error = %e,
+                error_type = "bridge_signing",
+                "Failed to create Bridge signature"
+            );
+            crate::metrics::record_error("bridge_signing");
+            SequencerError::from(e)
+        })?;
+
     // Send to batcher for batching if configured
     let batch_warning = if let Some(batcher) = &state.batcher {
         if let Err(e) = batcher.add_message(cbor_message).await {
@@ -522,13 +579,26 @@ async fn receive_withdrawal(
     info!(
         sequence = receipt.sequence,
         request_id = %request.request_id,
-        "Withdrawal request sequenced"
+        bridge_message_id = %bridge_sig.message_id,
+        "Withdrawal request sequenced with Bridge signature"
     );
 
-    let mut response = SequenceResponse::from(receipt);
-    if let Some(warning) = batch_warning {
-        response = response.with_batch_warning(warning);
-    }
+    let response = WithdrawalResponse {
+        sequence: receipt.sequence,
+        timestamp: receipt.timestamp,
+        message_hash: receipt.message_hash,
+        cose_signature: receipt.signature,
+        signer: receipt.signer,
+        bridge_signature: BridgeSignatureResponse {
+            message_id: bridge_sig.message_id,
+            message_hash: bridge_sig.message_hash,
+            signature: bridge_sig.signature,
+            signer: bridge_sig.signer,
+            sequence: receipt.sequence,
+            timestamp: receipt.timestamp,
+        },
+        batch_warning,
+    };
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -949,11 +1019,15 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let receipt: SequenceResponse = serde_json::from_slice(&body).unwrap();
+        let receipt: WithdrawalResponse = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(receipt.sequence, 0);
-        assert!(receipt.signature.starts_with("0x"));
+        assert!(receipt.cose_signature.starts_with("0x"));
         assert!(receipt.signer.starts_with("0x"));
+        // Verify Bridge signature is present
+        assert!(receipt.bridge_signature.signature.starts_with("0x"));
+        assert!(receipt.bridge_signature.message_id.starts_with("0x"));
+        assert!(receipt.bridge_signature.signer.starts_with("0x"));
     }
 
     #[tokio::test]

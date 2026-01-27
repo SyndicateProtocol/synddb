@@ -129,6 +129,15 @@ resource "google_cloud_run_v2_service" "relayer" {
         value = var.rust_log
       }
 
+      # Optional: Validator URL for withdrawal signature fetching
+      dynamic "env" {
+        for_each = var.validator_url != "" ? [1] : []
+        content {
+          name  = "VALIDATOR_URL"
+          value = var.validator_url
+        }
+      }
+
       startup_probe {
         http_get {
           path = "/health"

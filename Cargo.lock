@@ -3752,11 +3752,14 @@ dependencies = [
 name = "price-oracle-validator"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "axum",
  "clap",
+ "hex",
  "metrics-exporter-prometheus",
  "rusqlite",
+ "synddb-bootstrap",
  "synddb-shared",
  "synddb-validator",
  "tokio",
@@ -5102,6 +5105,7 @@ dependencies = [
  "axum",
  "clap",
  "hex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

@@ -18,6 +18,7 @@ anyhow = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 hex = { workspace = true }
 toml = { workspace = true }
 
@@ -40,6 +41,9 @@ alloy = { workspace = true, features = [
 # URL parsing
 url = { workspace = true }
 
+# HTTP client
+reqwest = { workspace = true }
+
 # Crypto (for computing journalDigest for debugging)
 sha2 = { workspace = true }
 
@@ -48,4 +52,3 @@ name = "synddb-relayer"
 path = "src/main.rs"
 
 [dev-dependencies]
-serde_json = { workspace = true }

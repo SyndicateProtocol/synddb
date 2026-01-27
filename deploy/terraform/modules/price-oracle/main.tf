@@ -31,10 +31,11 @@ locals {
     } : {},
     # Chain monitor configuration (if enabled)
     var.chain_monitor != null ? {
-      CHAIN_MONITOR_ENABLED  = "true"
-      CHAIN_MONITOR_RPC_URL  = var.chain_monitor.rpc_url
-      CHAIN_MONITOR_CONTRACT = var.chain_monitor.contract_address
-      CHAIN_MONITOR_POLL     = tostring(var.chain_monitor.poll_interval)
+      CHAIN_MONITOR_ENABLED           = "true"
+      CHAIN_MONITOR_RPC_URL           = var.chain_monitor.rpc_url
+      CHAIN_MONITOR_CONTRACT          = var.chain_monitor.contract_address
+      CHAIN_MONITOR_POLL              = tostring(var.chain_monitor.poll_interval)
+      PRICE_ORACLE_CONTRACT_ADDRESS   = var.chain_monitor.contract_address
     } : {},
     # TEE bootstrap configuration (if enabled)
     var.tee_bootstrap != null ? merge(
