@@ -110,15 +110,15 @@ Attach to a SQLite database with default configuration.
 
 **Returns:** SyndDB instance
 
-### `SyndDB.attach_with_config(db_path, sequencer_url, flush_interval_ms=1000, snapshot_interval=0)`
+### `SyndDB.attach_with_config(db_path, sequencer_url, flush_interval_ms=1000, snapshot_interval=100)`
 
 Attach with custom configuration.
 
 **Parameters:**
 - `db_path` (str): Path to SQLite database file
 - `sequencer_url` (str): URL of sequencer TEE
-- `flush_interval_ms` (int): Milliseconds between automatic publishes (default: 1000)
-- `snapshot_interval` (int): Number of changesets between snapshots (default: 0 = disabled)
+- `flush_interval_ms` (int): Milliseconds between automatic publishes (must be > 0, default: 1000)
+- `snapshot_interval` (int): Number of changesets between snapshots (must be > 0, default: 100)
 
 **Returns:** SyndDB instance
 
