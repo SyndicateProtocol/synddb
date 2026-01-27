@@ -586,49 +586,54 @@ def run_daemon(
 
                 # Process any pending price requests from sequencer
                 if sequencer_url:
-                    conn = init_database(db_path)
-                    msg_client = MessageClient(sequencer_url)
+                    try:
+                        conn = init_database(db_path)
+                        msg_client = MessageClient(sequencer_url)
 
-                    def get_price(asset: str) -> Optional[tuple[float, int]]:
-                        cursor = conn.execute(
-                            "SELECT price, timestamp FROM prices WHERE asset = ? ORDER BY timestamp DESC LIMIT 1",
-                            (asset,),
-                        )
-                        row = cursor.fetchone()
-                        return (row[0], row[1]) if row else None
-
-                    messages = msg_client.get_messages(type="price_request", pending_only=True)
-                    processed = 0
-                    for msg in messages:
-                        try:
-                            payload = msg.get("payload", {})
-                            asset = payload.get("asset")
-                            if not asset:
-                                msg_client.ack(msg["id"], processed=False, note="missing asset")
-                                continue
-
-                            price_data = get_price(asset)
-                            if not price_data:
-                                msg_client.ack(msg["id"], processed=False, note=f"no price for {asset}")
-                                continue
-
-                            price, timestamp = price_data
-                            resp_id = create_price_response_message(
-                                conn,
-                                request_id=msg.get("message_id", ""),
-                                asset=asset,
-                                price=price,
-                                timestamp=timestamp,
+                        def get_price(asset: str) -> Optional[tuple[float, int]]:
+                            cursor = conn.execute(
+                                "SELECT price, timestamp FROM prices WHERE asset = ? ORDER BY timestamp DESC LIMIT 1",
+                                (asset,),
                             )
-                            if resp_id:
-                                msg_client.ack(msg["id"], processed=True)
-                                processed += 1
-                        except Exception as e:
-                            logging.error(f"Error processing message {msg['id']}: {e}")
+                            row = cursor.fetchone()
+                            return (row[0], row[1]) if row else None
 
-                    if processed > 0:
-                        click.echo(f"Processed {processed} price requests")
-                    conn.close()
+                        messages = msg_client.get_messages(type="price_request", pending_only=True)
+                        processed = 0
+                        for msg in messages:
+                            try:
+                                payload = msg.get("payload", {})
+                                asset = payload.get("asset")
+                                if not asset:
+                                    msg_client.ack(msg["id"], processed=False, note="missing asset")
+                                    continue
+
+                                price_data = get_price(asset)
+                                if not price_data:
+                                    msg_client.ack(msg["id"], processed=False, note=f"no price for {asset}")
+                                    continue
+
+                                price, timestamp = price_data
+                                resp_id = create_price_response_message(
+                                    conn,
+                                    request_id=msg.get("message_id", ""),
+                                    asset=asset,
+                                    price=price,
+                                    timestamp=timestamp,
+                                )
+                                if resp_id:
+                                    msg_client.ack(msg["id"], processed=True)
+                                    processed += 1
+                            except Exception as e:
+                                logging.error(f"Error processing message {msg['id']}: {e}")
+
+                        if processed > 0:
+                            click.echo(f"Processed {processed} price requests")
+                    except Exception as e:
+                        logging.debug(f"Sequencer unavailable, skipping price request processing: {e}")
+                    finally:
+                        if "conn" in locals():
+                            conn.close()
 
             except Exception as e:
                 logging.error(f"Error in daemon loop: {e}")

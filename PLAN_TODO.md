@@ -384,6 +384,49 @@ Migration approach:
 - [ ] Signed binaries
 - [ ] Notarization for macOS binaries
 
+### 12.1 FFI Distribution Strategy
+
+**Current State**:
+- GitHub Releases: Pre-built binaries for all platforms on version tags
+- Dev libs committed to repo: `crates/synddb-client/libs/` for local development (Linux x64, macOS ARM64)
+- Docker builds from source: Ensures FFI libs always match source code (e.g., price-oracle Dockerfile)
+
+**Recommended Improvements**:
+
+#### PyPI Wheels with Maturin [P2]
+
+The most idiomatic distribution for Python FFI bindings. Maturin builds platform-specific wheels with the native library bundled.
+
+**Benefits**:
+- Users run `pip install synddb-client` - no Rust toolchain needed
+- Platform detection automatic (manylinux, macosx, win)
+- Version pinning via pip/requirements.txt
+
+**Implementation**:
+1. Add `pyproject.toml` with maturin build backend
+2. Create `src/lib.rs` with PyO3 bindings (or pure FFI + ctypes wrapper in wheel)
+3. Add CI job to build wheels for each platform matrix
+4. Publish to PyPI on version tags alongside GitHub Release
+
+**Tools**: `maturin`, `cibuildwheel`
+
+**Reference**: https://github.com/PyO3/maturin
+
+#### npm Package [P2]
+
+For Node.js distribution via npm with prebuilt binaries.
+
+**Options**:
+- `prebuildify` - prebuild binaries, bundle in package
+- `napi-rs` - Rust-to-Node native addon framework
+- Current `koffi` approach with bundled `.so`/`.dylib` files
+
+**Implementation**:
+1. Create `crates/synddb-client/bindings/nodejs/package.json`
+2. Bundle platform-specific binaries in `prebuilds/` directory
+3. Add postinstall script to select correct binary
+4. Publish to npm on version tags
+
 ---
 
 ## 13. E2E Test Improvements [P2]

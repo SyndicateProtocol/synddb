@@ -118,23 +118,21 @@ fn main() {
     let expected_evm_address = Address::from_slice(&pubkey_hash[12..]);
     println!("Mock EVM address: {}", expected_evm_address);
 
-    // Generate mock cosign signature and public key for testing
-    // In production, these would come from the cosign signature on the container image
-    let mock_cosign_signature: [u8; 64] = {
-        let mut sig = [0u8; 64];
-        for (i, byte) in sig.iter_mut().enumerate() {
+    // Generate mock image signature for testing (65 bytes: r || s || v)
+    // In production, this would come from CI signing the container image digest with secp256k1
+    let mock_image_signature: [u8; 65] = {
+        let mut sig = [0u8; 65];
+        // r (32 bytes)
+        for (i, byte) in sig[0..32].iter_mut().enumerate() {
             *byte = (i as u8).wrapping_mul(11).wrapping_add(17);
         }
-        sig
-    };
-
-    let mock_cosign_pubkey: [u8; 65] = {
-        let mut pubkey = [0u8; 65];
-        pubkey[0] = 0x04; // Uncompressed point prefix
-        for (i, byte) in pubkey[1..].iter_mut().enumerate() {
+        // s (32 bytes)
+        for (i, byte) in sig[32..64].iter_mut().enumerate() {
             *byte = (i as u8).wrapping_mul(13).wrapping_add(23);
         }
-        pubkey
+        // v (1 byte) - valid recovery id
+        sig[64] = 27;
+        sig
     };
 
     // Prepare inputs for the zkVM
@@ -143,8 +141,7 @@ fn main() {
     stdin.write(&jwk);
     stdin.write(&sample.audience);
     stdin.write(&mock_evm_public_key.to_vec());
-    stdin.write(&mock_cosign_signature.to_vec());
-    stdin.write(&mock_cosign_pubkey.to_vec());
+    stdin.write(&mock_image_signature.to_vec());
 
     if args.execute {
         println!("\n=== Executing program (test mode) ===\n");
@@ -181,21 +178,14 @@ fn main() {
             "audience_hash: 0x{}",
             hex::encode(public_values.audience_hash)
         );
+        println!("image_signature_v: {}", public_values.image_signature_v);
         println!(
-            "cosign_signature_r: 0x{}",
-            hex::encode(public_values.cosign_signature_r)
+            "image_signature_r: 0x{}",
+            hex::encode(public_values.image_signature_r)
         );
         println!(
-            "cosign_signature_s: 0x{}",
-            hex::encode(public_values.cosign_signature_s)
-        );
-        println!(
-            "cosign_pubkey_x: 0x{}",
-            hex::encode(public_values.cosign_pubkey_x)
-        );
-        println!(
-            "cosign_pubkey_y: 0x{}",
-            hex::encode(public_values.cosign_pubkey_y)
+            "image_signature_s: 0x{}",
+            hex::encode(public_values.image_signature_s)
         );
 
         // Verify against local verification

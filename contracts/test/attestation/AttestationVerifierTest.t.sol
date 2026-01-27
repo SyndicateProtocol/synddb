@@ -20,18 +20,6 @@ contract MockSP1Verifier {
     }
 }
 
-/// @notice Mock P256 precompile that always returns success (1)
-/// @dev Used for testing since Foundry doesn't have RIP-7212 precompile
-contract MockP256Precompile {
-    fallback() external {
-        // Always return 1 (success) as a 32-byte value
-        assembly {
-            mstore(0, 1)
-            return(0, 32)
-        }
-    }
-}
-
 /**
  * @title AttestationVerifierTest
  * @notice Comprehensive test suite for TEE attestation verification
@@ -56,17 +44,20 @@ contract AttestationVerifierTest is Test {
     event TrustedJwkHashAdded(bytes32 indexed jwkHash);
     event TrustedJwkHashRemoved(bytes32 indexed jwkHash);
     event ImageDigestHashUpdated(bytes32 oldHash, bytes32 newHash);
+    event TrustedImageSignerAdded(address indexed signer);
 
-    // RIP-7212 P256 precompile address
-    address constant P256_VERIFIER = 0x0000000000000000000000000000000000000100;
+    // Image signer (secp256k1) test constants
+    // Using a known private key for deterministic signature generation
+    uint256 public constant IMAGE_SIGNER_PRIVATE_KEY =
+        0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
+    address public IMAGE_SIGNER_ADDRESS;
 
     function setUp() public {
         admin = address(this);
         weth = makeAddr("weth");
 
-        // Deploy mock P256 precompile at the RIP-7212 address
-        MockP256Precompile mockP256 = new MockP256Precompile();
-        vm.etch(P256_VERIFIER, address(mockP256).code);
+        // Derive image signer address from private key
+        IMAGE_SIGNER_ADDRESS = vm.addr(IMAGE_SIGNER_PRIVATE_KEY);
 
         sp1Verifier = new MockSP1Verifier();
 
@@ -78,17 +69,14 @@ contract AttestationVerifierTest is Test {
         bridge = new Bridge(admin, weth, address(keyManager));
         keyManager.setBridge(address(bridge));
 
-        // Add trusted cosign pubkey for tests
-        verifier.addTrustedCosignPubkey(COSIGN_PUBKEY_X, COSIGN_PUBKEY_Y);
+        // Add trusted image signer for tests
+        verifier.addTrustedImageSigner(IMAGE_SIGNER_ADDRESS);
     }
 
-    // Test cosign key coordinates (dummy values for testing)
-    bytes32 public constant COSIGN_PUBKEY_X = 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef;
-    bytes32 public constant COSIGN_PUBKEY_Y = 0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321;
-    bytes32 public constant COSIGN_SIG_R = 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;
-    bytes32 public constant COSIGN_SIG_S = 0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb;
-
     function createValidPublicValues() internal view returns (PublicValuesStruct memory) {
+        // Sign the image digest hash with the test private key
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(IMAGE_SIGNER_PRIVATE_KEY, IMAGE_DIGEST_HASH);
+
         return PublicValuesStruct({
             jwk_key_hash: TRUSTED_JWK_HASH,
             validity_window_start: uint64(block.timestamp - 1),
@@ -98,10 +86,9 @@ contract AttestationVerifierTest is Test {
             secboot: true,
             dbgstat_disabled: true,
             audience_hash: keccak256("https://synddb-sequencer.example.com"),
-            cosign_signature_r: COSIGN_SIG_R,
-            cosign_signature_s: COSIGN_SIG_S,
-            cosign_pubkey_x: COSIGN_PUBKEY_X,
-            cosign_pubkey_y: COSIGN_PUBKEY_Y
+            image_signature_v: v,
+            image_signature_r: r,
+            image_signature_s: s
         });
     }
 

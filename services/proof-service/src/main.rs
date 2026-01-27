@@ -44,11 +44,9 @@ struct ProveRequest {
     expected_audience: String,
     /// EVM public key (64-byte uncompressed secp256k1, hex-encoded with 0x prefix)
     evm_public_key: String,
-    /// Cosign signature over image digest (64 bytes: r || s, hex-encoded with 0x prefix)
-    cosign_signature: String,
-    /// Cosign public key (64 or 65 bytes, hex-encoded with 0x prefix)
-    /// 65 bytes = 0x04 || x || y (uncompressed), 64 bytes = x || y
-    cosign_pubkey: String,
+    /// Image signature (65 bytes: r || s || v, hex-encoded with 0x prefix)
+    /// This is a secp256k1 ECDSA signature over keccak256(image_digest) for on-chain ecrecover
+    image_signature: String,
 }
 
 /// Response from proof generation
@@ -187,25 +185,14 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
         .try_into()
         .map_err(|_| anyhow::anyhow!("EVM public key must be exactly 64 bytes"))?;
 
-    // Parse cosign signature from hex (must be exactly 64 bytes: r || s)
-    let cosign_sig_hex = request.cosign_signature.trim_start_matches("0x");
-    let cosign_signature = hex::decode(cosign_sig_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid cosign signature hex: {}", e))?;
-    if cosign_signature.len() != 64 {
+    // Parse image signature from hex (must be exactly 65 bytes: r || s || v)
+    let image_sig_hex = request.image_signature.trim_start_matches("0x");
+    let image_signature = hex::decode(image_sig_hex)
+        .map_err(|e| anyhow::anyhow!("Invalid image signature hex: {}", e))?;
+    if image_signature.len() != 65 {
         anyhow::bail!(
-            "Cosign signature must be exactly 64 bytes, got {}",
-            cosign_signature.len()
-        );
-    }
-
-    // Parse cosign public key from hex (64 or 65 bytes)
-    let cosign_pubkey_hex = request.cosign_pubkey.trim_start_matches("0x");
-    let cosign_pubkey = hex::decode(cosign_pubkey_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid cosign pubkey hex: {}", e))?;
-    if cosign_pubkey.len() != 64 && cosign_pubkey.len() != 65 {
-        anyhow::bail!(
-            "Cosign pubkey must be 64 or 65 bytes, got {}",
-            cosign_pubkey.len()
+            "Image signature must be exactly 65 bytes (r || s || v), got {}",
+            image_signature.len()
         );
     }
 
@@ -223,8 +210,7 @@ async fn generate_proof(state: &AppState, request: &ProveRequest) -> anyhow::Res
         &jwk,
         &request.expected_audience,
         &evm_public_key,
-        &cosign_signature,
-        &cosign_pubkey,
+        &image_signature,
     )?;
 
     // Decode public values to get TEE address

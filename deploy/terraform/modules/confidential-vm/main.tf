@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/google"
       version = ">= 5.0.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = ">= 3.0.0"
+    }
   }
 }
 
@@ -20,6 +24,15 @@ locals {
 
   # Combine base and environment metadata
   all_metadata = merge(local.base_metadata, local.env_metadata)
+}
+
+# Trigger replacement when container image or signature changes.
+# Confidential Space VMs must be recreated to pick up new images.
+resource "null_resource" "image_trigger" {
+  triggers = {
+    image     = var.container_image
+    signature = lookup(var.environment_variables, "IMAGE_SIGNATURE", "")
+  }
 }
 
 resource "google_compute_instance" "confidential_vm" {
@@ -85,4 +98,9 @@ resource "google_compute_instance" "confidential_vm" {
 
   # Allow stopping for updates
   allow_stopping_for_update = true
+
+  # Recreate VM when image or signature changes
+  lifecycle {
+    replace_triggered_by = [null_resource.image_trigger]
+  }
 }
