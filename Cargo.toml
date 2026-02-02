@@ -84,7 +84,7 @@ rsa = { version = "0.9", features = ["sha2"] }
 
 # CBOR/COSE serialization
 ciborium = "0.2"
-coset = "0.3"
+coset = "0.4"
 serde_bytes = "0.11"
 
 # TOML configuration
