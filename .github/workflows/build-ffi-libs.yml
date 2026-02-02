@@ -260,7 +260,7 @@ jobs:
           ssh-key: ${{ secrets.FFI_DEPLOY_KEY }}
 
       - name: Download dev library artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: 'ffi-lib-*'
           path: artifacts
@@ -321,7 +321,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download all release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: 'ffi-lib-*'
           path: artifacts
