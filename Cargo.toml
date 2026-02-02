@@ -34,7 +34,7 @@ tokio = { version = "1.49", features = ["full"] }
 # TODO: Update to rusqlite 0.38+ when ready - has breaking changes:
 # - Removed ToSql for u64 (use i64 instead)
 # - Removed FromSql for usize (use i64 and convert)
-rusqlite = { version = "0.32", features = ["bundled", "backup", "session"] }
+rusqlite = { version = "0.38", features = ["bundled", "backup", "session"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
