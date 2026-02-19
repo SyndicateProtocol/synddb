@@ -21,28 +21,32 @@ interface IBridge {
      * @param payload Encoded function call data (e.g., `abi.encodeWithSignature("transfer(address,uint256)", recipient, amount)`)
      * @param sequencerSignature Signature from the trusted TEE sequencer.
      * @param nativeTokenAmount Amount of native token to transfer with the call
+     * @param deadline Timestamp after which message cannot be executed (0 = no deadline)
      */
     function initializeMessage(
         bytes32 messageId,
         address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
-        uint256 nativeTokenAmount
+        uint256 nativeTokenAmount,
+        uint256 deadline
     ) external;
 
     /**
      * @notice Executes a previously initialized message
      * @dev Execution follows these steps:
      *      1. Validates message is in PreExecution stage (see ProcessingStage enum in DataTypes.sol)
-     *      2. Runs all pre-execution validation modules (ModuleCheck)
-     *      3. Unwraps native tokens if nativeTokenAmount > 0
-     *      4. Executes the call to targetAddress with payload
-     *      5. Re-wraps any returned native tokens
-     *      6. Runs all post-execution validation modules (ModuleCheck)
-     *      7. Marks message as Completed
+     *      2. Checks message has not expired (deadline not passed)
+     *      3. Runs all pre-execution validation modules (ModuleCheck)
+     *      4. Unwraps native tokens if nativeTokenAmount > 0
+     *      5. Executes the call to targetAddress with payload (with gas limit)
+     *      6. Re-wraps any returned native tokens
+     *      7. Runs all post-execution validation modules (ModuleCheck)
+     *      8. Marks message as Completed
      * @param messageId Unique identifier of the message to execute
+     * @param payload The original payload (must match stored hash)
      */
-    function handleMessage(bytes32 messageId) external;
+    function handleMessage(bytes32 messageId, bytes calldata payload) external;
 
     /**
      * @notice Initializes and immediately executes a message in a single transaction
@@ -55,6 +59,7 @@ interface IBridge {
      * @param validatorSignatures Array of signatures from authorized validators. Can be empty if running in sequencer-only
      *        mode or if no validator signature threshold module is configured.
      * @param nativeTokenAmount Amount of native token to transfer with the call
+     * @param deadline Timestamp after which message cannot be executed (0 = no deadline)
      */
     function initializeAndHandleMessage(
         bytes32 messageId,
@@ -62,8 +67,16 @@ interface IBridge {
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
         bytes[] calldata validatorSignatures,
-        uint256 nativeTokenAmount
+        uint256 nativeTokenAmount,
+        uint256 deadline
     ) external;
+
+    /**
+     * @notice Cancels an initialized message that has not yet been executed
+     * @dev Only callable by owner. Message must be in PreExecution stage.
+     * @param messageId Unique identifier of the message to cancel
+     */
+    function cancelMessage(bytes32 messageId) external;
 
     /**
      * @notice Checks if a message has been successfully completed
