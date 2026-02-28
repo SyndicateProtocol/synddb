@@ -1,0 +1,21 @@
+[package]
+name = "synddb-stylus-attestation-verifier"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Stylus attestation verifier for SyndDB TEE key registration"
+
+[dependencies]
+alloy-primitives = "1.0"
+alloy-sol-types = "1.0"
+stylus-sdk = "0.10.0"
+mini-alloc = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[features]
+export-abi = ["stylus-sdk/export-abi"]
+
+[lib]
+crate-type = ["lib", "cdylib"]
