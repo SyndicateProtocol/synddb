@@ -29,6 +29,7 @@ url = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 hex = { workspace = true }
 
 # Blockchain / Contract interaction
@@ -37,6 +38,7 @@ alloy = { workspace = true, features = [
   "signer-local",
   "provider-http",
   "network",
+  "sol-types",
 ] }
 
 # CLI configuration
@@ -53,4 +55,3 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
-serde_json = { workspace = true }

@@ -83,12 +83,14 @@ pub struct BootstrapConfig {
     #[arg(long, env = "IMAGE_SIGNATURE")]
     pub image_signature: Option<String>,
 
-    /// Attestor service URL for Stylus verification mode.
-    /// This service verifies the GCP JWT off-chain and signs the attestation claims
-    /// with an ECDSA key for on-chain verification by the Stylus contract.
-    /// Required when `prover_mode=stylus`.
-    #[arg(long, env = "ATTESTOR_SERVICE_URL")]
-    pub attestor_service_url: Option<String>,
+    /// Google JWKS URL for fetching RSA public keys used to verify Confidential Space JWTs.
+    /// Only used when `prover_mode=stylus`. Defaults to the GCP Confidential Space JWKS endpoint.
+    #[arg(
+        long,
+        env = "GOOGLE_JWKS_URL",
+        default_value = "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com"
+    )]
+    pub google_jwks_url: String,
 }
 
 impl Default for BootstrapConfig {
@@ -110,7 +112,7 @@ impl Default for BootstrapConfig {
             verification_max_retries: 5,
             relayer_timeout: Duration::from_secs(180),
             image_signature: None,
-            attestor_service_url: None,
+            google_jwks_url: "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com".into(),
         }
     }
 }
@@ -152,12 +154,6 @@ impl BootstrapConfig {
             ));
         }
 
-        if self.prover_mode == ProverMode::Stylus && self.attestor_service_url.is_none() {
-            return Err(crate::BootstrapError::Config(
-                "ATTESTOR_SERVICE_URL is required when prover_mode is 'stylus'".into(),
-            ));
-        }
-
         // Image signature is required for on-chain verification
         if self.image_signature.is_none() {
             return Err(crate::BootstrapError::Config(
@@ -179,8 +175,8 @@ pub enum ProverMode {
     /// Use mock prover for testing (no real proof)
     Mock,
     /// Use Stylus on-chain verification (skips RISC Zero zkVM).
-    /// Requires a trusted attestor service that verifies the GCP JWT off-chain
-    /// and signs the attestation claims with an ECDSA key.
+    /// The Stylus contract verifies the GCP Confidential Space JWT directly
+    /// on-chain using RSA signature verification via EVM precompiles.
     Stylus,
 }
 
@@ -224,22 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_stylus_missing_attestor_url() {
-        let config = BootstrapConfig {
-            enable_key_bootstrap: true,
-            bridge_address: Some("0x1234567890123456789012345678901234567890".into()),
-            rpc_url: Some("http://localhost:8545".into()),
-            chain_id: Some(1),
-            relayer_url: Some("http://localhost:3000".into()),
-            prover_mode: ProverMode::Stylus,
-            image_signature: Some("0x".to_string() + &"ab".repeat(65)),
-            ..Default::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("ATTESTOR_SERVICE_URL"));
-    }
-
-    #[test]
     fn test_validate_stylus_valid() {
         let config = BootstrapConfig {
             enable_key_bootstrap: true,
@@ -248,7 +228,6 @@ mod tests {
             chain_id: Some(1),
             relayer_url: Some("http://localhost:3000".into()),
             prover_mode: ProverMode::Stylus,
-            attestor_service_url: Some("http://localhost:8090".into()),
             image_signature: Some("0x".to_string() + &"ab".repeat(65)),
             ..Default::default()
         };
