@@ -186,7 +186,7 @@ impl StylusAttestationVerifier {
         // Extract kid and verify JWK is trusted
         let kid = json_get_string(&jwt.header_json, b"kid")
             .ok_or(VerifierError::InvalidJwt(InvalidJwt {}))?;
-        let kid_hash: FixedBytes<32> = self.vm().native_keccak256(kid).into();
+        let kid_hash: FixedBytes<32> = self.vm().native_keccak256(kid);
 
         if !self.trusted_jwk_hashes.get(kid_hash) {
             return Err(VerifierError::UntrustedJwk(UntrustedJwk { kid_hash }));
@@ -198,7 +198,7 @@ impl StylusAttestationVerifier {
             Vec::with_capacity(proof.jwk_modulus.len() + proof.jwk_exponent.len());
         key_material.extend_from_slice(&proof.jwk_modulus);
         key_material.extend_from_slice(&proof.jwk_exponent);
-        let actual_key_hash: FixedBytes<32> = self.vm().native_keccak256(&key_material).into();
+        let actual_key_hash: FixedBytes<32> = self.vm().native_keccak256(&key_material);
 
         let stored_key_hash = self.jwk_key_material_hashes.get(kid_hash);
         if stored_key_hash != actual_key_hash {
@@ -257,7 +257,7 @@ impl StylusAttestationVerifier {
         // Audience hash must match
         let aud = json_get_string(&jwt.payload_json, b"aud")
             .ok_or(VerifierError::InvalidJwt(InvalidJwt {}))?;
-        let aud_hash: FixedBytes<32> = self.vm().native_keccak256(aud).into();
+        let aud_hash: FixedBytes<32> = self.vm().native_keccak256(aud);
         if aud_hash != values.audience_hash {
             return Err(VerifierError::ClaimsMismatch(ClaimsMismatch {}));
         }
@@ -287,7 +287,7 @@ impl StylusAttestationVerifier {
         // Image digest hash: find `image_digest` in the JWT payload (nested under submods.container)
         let image_digest = json_get_string(&jwt.payload_json, b"image_digest")
             .ok_or(VerifierError::InvalidJwt(InvalidJwt {}))?;
-        let image_digest_hash: FixedBytes<32> = self.vm().native_keccak256(image_digest).into();
+        let image_digest_hash: FixedBytes<32> = self.vm().native_keccak256(image_digest);
         if image_digest_hash != values.image_digest_hash {
             return Err(VerifierError::ClaimsMismatch(ClaimsMismatch {}));
         }
@@ -568,12 +568,12 @@ fn verify_pkcs1v15_sha256(decrypted: &[u8], expected_hash: &[u8; 32]) -> bool {
 
     // Find separator (0x00) after 0xFF padding
     let mut separator_pos = None;
-    for i in 2..len {
-        if decrypted[i] == 0x00 {
+    for (i, &byte) in decrypted.iter().enumerate().skip(2) {
+        if byte == 0x00 {
             separator_pos = Some(i);
             break;
         }
-        if decrypted[i] != 0xFF {
+        if byte != 0xFF {
             return false;
         }
     }
@@ -964,20 +964,24 @@ mod tests {
         assert_eq!(parsed.signing_input, expected_signing_input.as_bytes());
     }
 
+    /// Helper to build a PKCS#1 v1.5 padded message.
+    /// Format: 0x00 || 0x01 || [0xFF * ff_count] || 0x00 || digest_info || hash
+    fn build_pkcs1v15_padded(header: [u8; 2], ff_count: usize, hash: &[u8; 32]) -> Vec<u8> {
+        let mut padded = Vec::with_capacity(header.len() + ff_count + 1 + PKCS1_SHA256_DIGEST_INFO.len() + 32);
+        padded.extend_from_slice(&header);
+        padded.extend(core::iter::repeat_n(0xFF, ff_count));
+        padded.push(0x00);
+        padded.extend_from_slice(&PKCS1_SHA256_DIGEST_INFO);
+        padded.extend_from_slice(hash);
+        padded
+    }
+
     #[test]
     fn test_pkcs1v15_sha256_valid() {
         // Build a valid PKCS#1 v1.5 padded message for a 256-byte RSA key
         let hash = [0xAB; 32];
-        let mut padded = Vec::with_capacity(256);
-        padded.push(0x00);
-        padded.push(0x01);
         // 256 - 2 - 1 - 19 - 32 = 202 bytes of 0xFF
-        for _ in 0..202 {
-            padded.push(0xFF);
-        }
-        padded.push(0x00);
-        padded.extend_from_slice(&PKCS1_SHA256_DIGEST_INFO);
-        padded.extend_from_slice(&hash);
+        let padded = build_pkcs1v15_padded([0x00, 0x01], 202, &hash);
         assert_eq!(padded.len(), 256);
 
         assert!(verify_pkcs1v15_sha256(&padded, &hash));
@@ -987,15 +991,7 @@ mod tests {
     fn test_pkcs1v15_sha256_wrong_hash() {
         let hash = [0xAB; 32];
         let wrong_hash = [0xCD; 32];
-        let mut padded = Vec::with_capacity(256);
-        padded.push(0x00);
-        padded.push(0x01);
-        for _ in 0..202 {
-            padded.push(0xFF);
-        }
-        padded.push(0x00);
-        padded.extend_from_slice(&PKCS1_SHA256_DIGEST_INFO);
-        padded.extend_from_slice(&hash);
+        let padded = build_pkcs1v15_padded([0x00, 0x01], 202, &hash);
 
         assert!(!verify_pkcs1v15_sha256(&padded, &wrong_hash));
     }
@@ -1003,13 +999,7 @@ mod tests {
     #[test]
     fn test_pkcs1v15_sha256_bad_header() {
         let hash = [0xAB; 32];
-        let mut padded = vec![0x00, 0x02]; // Wrong: should be 0x01
-        for _ in 0..202 {
-            padded.push(0xFF);
-        }
-        padded.push(0x00);
-        padded.extend_from_slice(&PKCS1_SHA256_DIGEST_INFO);
-        padded.extend_from_slice(&hash);
+        let padded = build_pkcs1v15_padded([0x00, 0x02], 202, &hash); // Wrong: should be 0x01
 
         assert!(!verify_pkcs1v15_sha256(&padded, &hash));
     }
@@ -1067,11 +1057,554 @@ mod tests {
         assert_eq!(decoded.jwk_exponent.as_ref(), b"exponent-data");
     }
 
+    // -- Base64 edge case tests --
+
+    #[test]
+    fn test_base64url_decode_empty() {
+        let decoded = base64url_decode(b"").unwrap();
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn test_base64url_decode_single_byte() {
+        // Single byte (0x41 = 'A') encodes to "QQ" in base64url (2 chars, needs == padding)
+        let decoded = base64url_decode(b"QQ").unwrap();
+        assert_eq!(decoded, vec![0x41]);
+    }
+
+    #[test]
+    fn test_base64url_decode_two_bytes() {
+        // Two bytes encode to 3 base64url chars (needs = padding)
+        let decoded = base64url_decode(b"QUI").unwrap();
+        assert_eq!(decoded, vec![0x41, 0x42]);
+    }
+
+    #[test]
+    fn test_base64url_decode_invalid_char() {
+        // Space is not a valid base64 character
+        assert!(base64url_decode(b"QQ Q").is_err());
+    }
+
+    #[test]
+    fn test_base64_decode_invalid_length() {
+        // Length not multiple of 4 after padding
+        assert!(base64_decode(b"QQQQ Q").is_err());
+    }
+
+    #[test]
+    fn test_base64url_decode_all_url_safe_chars() {
+        // Test that both - and _ are correctly translated
+        // "+" in standard base64 = "-" in base64url
+        // "/" in standard base64 = "_" in base64url
+        let decoded = base64url_decode(b"-_8").unwrap();
+        // "-" -> "+", "_" -> "/", "8" stays; "+" = 62, "/" = 63, "8" = 60
+        // After decoding: these are specific byte values
+        let standard_decoded = base64_decode(b"+/8=").unwrap();
+        assert_eq!(decoded, standard_decoded);
+    }
+
+    #[test]
+    fn test_base64_decode_high_byte_rejected() {
+        // Bytes >= 128 should be rejected
+        let input = [0x80, b'Q', b'Q', b'Q'];
+        assert!(base64_decode(&input).is_err());
+    }
+
+    // -- JSON extraction edge case tests --
+
+    #[test]
+    fn test_json_get_string_missing_key() {
+        let json = br#"{"iss":"test"}"#;
+        assert!(json_get_string(json, b"nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_json_get_string_empty_value() {
+        let json = br#"{"key":""}"#;
+        let val = json_get_string(json, b"key").unwrap();
+        assert_eq!(val, b"");
+    }
+
+    #[test]
+    fn test_json_get_string_with_escaped_quote() {
+        let json = br#"{"key":"value\"with\"quotes","other":"ok"}"#;
+        let val = json_get_string(json, b"key").unwrap();
+        assert_eq!(val, b"value\\\"with\\\"quotes");
+    }
+
+    #[test]
+    fn test_json_get_u64_missing_key() {
+        let json = br#"{"iat":1000}"#;
+        assert!(json_get_u64(json, b"exp").is_none());
+    }
+
+    #[test]
+    fn test_json_get_u64_zero() {
+        let json = br#"{"val":0}"#;
+        assert_eq!(json_get_u64(json, b"val"), Some(0));
+    }
+
+    #[test]
+    fn test_json_get_u64_max_safe() {
+        // Large but valid u64 value
+        let json = br#"{"big":18446744073709551615}"#;
+        assert_eq!(json_get_u64(json, b"big"), Some(u64::MAX));
+    }
+
+    #[test]
+    fn test_json_get_u64_overflow() {
+        // u64::MAX + 1 should overflow and return None
+        let json = br#"{"big":18446744073709551616}"#;
+        assert!(json_get_u64(json, b"big").is_none());
+    }
+
+    #[test]
+    fn test_json_get_u64_not_a_number() {
+        let json = br#"{"val":"not_a_number"}"#;
+        assert!(json_get_u64(json, b"val").is_none());
+    }
+
+    #[test]
+    fn test_json_get_bool_missing_key() {
+        let json = br#"{"secboot":true}"#;
+        assert!(json_get_bool(json, b"nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_json_get_bool_not_a_bool() {
+        // Value is a string, not a bool literal
+        let json = br#"{"flag":"true"}"#;
+        assert!(json_get_bool(json, b"flag").is_none());
+    }
+
+    #[test]
+    fn test_json_get_string_key_at_end() {
+        let json = br#"{"first":"a","last":"z"}"#;
+        assert_eq!(json_get_string(json, b"last").unwrap(), b"z");
+    }
+
+    #[test]
+    fn test_json_get_string_value_contains_colon() {
+        let json = br#"{"url":"https://example.com:8080/path"}"#;
+        assert_eq!(
+            json_get_string(json, b"url").unwrap(),
+            b"https://example.com:8080/path"
+        );
+    }
+
+    #[test]
+    fn test_json_get_string_key_substring_of_another() {
+        // "aud" is a substring of "audience" - should only match exact key
+        let json = br#"{"audience":"wrong","aud":"correct"}"#;
+        assert_eq!(json_get_string(json, b"aud").unwrap(), b"correct");
+    }
+
+    #[test]
+    fn test_json_find_key_value_looks_like_key() {
+        // The value of "description" contains "iss": which looks like a key-value pair
+        let json = br#"{"description":"the iss is important","iss":"real_issuer"}"#;
+        let iss = json_get_string(json, b"iss").unwrap();
+        assert_eq!(iss, b"real_issuer");
+    }
+
+    #[test]
+    fn test_json_get_nested_deeply() {
+        // Test deeply nested object extraction
+        let json = br#"{"a":{"b":{"c":{"target":"found"}}}}"#;
+        assert_eq!(json_get_string(json, b"target").unwrap(), b"found");
+    }
+
+    #[test]
+    fn test_json_get_u64_followed_by_comma() {
+        let json = br#"{"a":123,"b":456}"#;
+        assert_eq!(json_get_u64(json, b"a"), Some(123));
+        assert_eq!(json_get_u64(json, b"b"), Some(456));
+    }
+
+    #[test]
+    fn test_json_get_u64_followed_by_brace() {
+        let json = br#"{"val":789}"#;
+        assert_eq!(json_get_u64(json, b"val"), Some(789));
+    }
+
+    // -- JWT parsing error tests --
+
+    #[test]
+    fn test_parse_jwt_invalid_utf8() {
+        let invalid = vec![0xFF, 0xFE, 0xFD];
+        assert!(parse_jwt(&invalid).is_err());
+    }
+
+    #[test]
+    fn test_parse_jwt_no_dots() {
+        assert!(parse_jwt(b"nodots").is_err());
+    }
+
+    #[test]
+    fn test_parse_jwt_one_dot() {
+        assert!(parse_jwt(b"only.one").is_err());
+    }
+
+    #[test]
+    fn test_parse_jwt_invalid_base64_in_header() {
+        // "!!!" is not valid base64
+        assert!(parse_jwt(b"!!!.cGF5bG9hZA.c2ln").is_err());
+    }
+
+    #[test]
+    fn test_parse_jwt_empty_parts() {
+        // Three dots but empty segments - base64url_decode of "" returns empty vec, which is valid
+        let result = parse_jwt(b"..");
+        // Empty header/payload decode to empty JSON, which is fine at the parsing level
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_jwt_extra_dots_ignored() {
+        // JWT with extra dots - splitn(3, '.') means the third part includes everything after second dot
+        let header = base64url_encode(br#"{"alg":"RS256"}"#);
+        let payload = base64url_encode(br#"{"iss":"test"}"#);
+        let jwt = format!("{}.{}.sig.extra.dots", header, payload);
+        // The signature part will be "sig.extra.dots" which will fail base64 decode
+        // because '.' is not valid base64
+        assert!(parse_jwt(jwt.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn test_parse_jwt_preserves_signing_input_exactly() {
+        // The signing input must be the exact base64url-encoded header.payload
+        let header_b64 = base64url_encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload_b64 = base64url_encode(br#"{"sub":"test"}"#);
+        let sig_b64 = base64url_encode(b"\x01\x02\x03");
+        let jwt = format!("{}.{}.{}", header_b64, payload_b64, sig_b64);
+
+        let parsed = parse_jwt(jwt.as_bytes()).unwrap();
+        let expected = format!("{}.{}", header_b64, payload_b64);
+        assert_eq!(
+            core::str::from_utf8(&parsed.signing_input).unwrap(),
+            &expected
+        );
+    }
+
+    // -- PKCS#1 v1.5 additional edge case tests --
+
+    #[test]
+    fn test_pkcs1v15_sha256_non_ff_in_padding() {
+        // A non-0xFF byte (0xFE) in the padding should fail
+        let hash = [0xAB; 32];
+        let mut padded = vec![0x00, 0x01];
+        padded.extend(core::iter::repeat_n(0xFF, 100));
+        padded.push(0xFE); // Invalid: not 0xFF
+        padded.extend(core::iter::repeat_n(0xFF, 101));
+        padded.push(0x00);
+        padded.extend_from_slice(&PKCS1_SHA256_DIGEST_INFO);
+        padded.extend_from_slice(&hash);
+
+        assert!(!verify_pkcs1v15_sha256(&padded, &hash));
+    }
+
+    #[test]
+    fn test_pkcs1v15_sha256_wrong_digest_info() {
+        let hash = [0xAB; 32];
+        let mut padded = vec![0x00, 0x01];
+        padded.extend(core::iter::repeat_n(0xFF, 202));
+        padded.push(0x00);
+        // Wrong DigestInfo - change first byte
+        let mut wrong_digest_info = PKCS1_SHA256_DIGEST_INFO;
+        wrong_digest_info[0] = 0x31; // Should be 0x30
+        padded.extend_from_slice(&wrong_digest_info);
+        padded.extend_from_slice(&hash);
+
+        assert!(!verify_pkcs1v15_sha256(&padded, &hash));
+    }
+
+    #[test]
+    fn test_pkcs1v15_sha256_too_short() {
+        // Less than 62 bytes should fail immediately
+        let hash = [0xAB; 32];
+        let padded = vec![0x00, 0x01, 0xFF, 0x00]; // Way too short
+        assert!(!verify_pkcs1v15_sha256(&padded, &hash));
+    }
+
+    #[test]
+    fn test_pkcs1v15_sha256_minimum_valid_padding() {
+        // Exactly 8 bytes of 0xFF padding (minimum per PKCS#1 v1.5 spec)
+        let hash = [0xAB; 32];
+        let padded = build_pkcs1v15_padded([0x00, 0x01], 8, &hash);
+        // 2 + 8 + 1 + 19 + 32 = 62 bytes (minimum valid)
+        assert_eq!(padded.len(), 62);
+
+        assert!(verify_pkcs1v15_sha256(&padded, &hash));
+    }
+
+    #[test]
+    fn test_pkcs1v15_sha256_128_byte_key() {
+        // 1024-bit RSA key (128 bytes) - valid but smaller padding
+        let hash = [0xAB; 32];
+        // 128 - 2 - 1 - 19 - 32 = 74 bytes of 0xFF
+        let padded = build_pkcs1v15_padded([0x00, 0x01], 74, &hash);
+        assert_eq!(padded.len(), 128);
+
+        assert!(verify_pkcs1v15_sha256(&padded, &hash));
+    }
+
+    #[test]
+    fn test_pkcs1v15_sha256_no_separator() {
+        // All 0xFF with no 0x00 separator - should fail
+        let hash = [0xAB; 32];
+        let mut padded = vec![0x00, 0x01];
+        padded.extend(core::iter::repeat_n(0xFF, 256));
+        // No separator, no DigestInfo, no hash
+        assert!(!verify_pkcs1v15_sha256(&padded, &hash));
+    }
+
+    #[test]
+    fn test_pkcs1v15_sha256_extra_data_after_hash() {
+        // Correct padding but extra bytes after the hash (wrong total length)
+        let hash = [0xAB; 32];
+        let mut padded = build_pkcs1v15_padded([0x00, 0x01], 202, &hash);
+        padded.push(0x00); // Extra byte - makes total length wrong
+        assert_eq!(padded.len(), 257);
+
+        // The check `len - digest_start != 51` should catch this
+        assert!(!verify_pkcs1v15_sha256(&padded, &hash));
+    }
+
+    // -- Realistic GCP Confidential Space JWT parsing test --
+
+    #[test]
+    fn test_parse_realistic_gcp_jwt() {
+        // Build a realistic GCP Confidential Space JWT payload
+        let header = br#"{"alg":"RS256","kid":"1a2b3c4d5e6f","typ":"JWT"}"#;
+        let payload = br#"{"iss":"https://confidentialcomputing.googleapis.com","sub":"https://www.googleapis.com/compute/v1/projects/my-project/zones/us-central1-a/instances/12345","aud":"https://synddb.example.com","iat":1764707757,"exp":1764711357,"nbf":1764707757,"secboot":true,"hwmodel":"GCP_AMD_SEV","swname":"CONFIDENTIAL_SPACE","dbgstat":"disabled-since-boot","submods":{"container":{"image_digest":"sha256:61bb0cf00789abcdef1234567890abcdef1234567890abcdef1234567890abcd","image_reference":"us-central1-docker.pkg.dev/my-project/my-repo/sequencer@sha256:61bb0cf00789abcdef1234567890abcdef1234567890abcdef1234567890abcd"}}}"#;
+        let sig = b"fake-rsa-signature-for-testing";
+
+        let header_b64 = base64url_encode(header);
+        let payload_b64 = base64url_encode(payload);
+        let sig_b64 = base64url_encode(sig);
+        let jwt = format!("{}.{}.{}", header_b64, payload_b64, sig_b64);
+
+        let parsed = parse_jwt(jwt.as_bytes()).unwrap();
+
+        // Verify header fields
+        assert_eq!(
+            json_get_string(&parsed.header_json, b"alg").unwrap(),
+            b"RS256"
+        );
+        assert_eq!(
+            json_get_string(&parsed.header_json, b"kid").unwrap(),
+            b"1a2b3c4d5e6f"
+        );
+        assert_eq!(
+            json_get_string(&parsed.header_json, b"typ").unwrap(),
+            b"JWT"
+        );
+
+        // Verify payload claims
+        assert_eq!(
+            json_get_string(&parsed.payload_json, b"iss").unwrap(),
+            b"https://confidentialcomputing.googleapis.com"
+        );
+        assert_eq!(
+            json_get_string(&parsed.payload_json, b"aud").unwrap(),
+            b"https://synddb.example.com"
+        );
+        assert_eq!(json_get_u64(&parsed.payload_json, b"iat"), Some(1764707757));
+        assert_eq!(json_get_u64(&parsed.payload_json, b"exp"), Some(1764711357));
+        assert_eq!(json_get_u64(&parsed.payload_json, b"nbf"), Some(1764707757));
+        assert_eq!(json_get_bool(&parsed.payload_json, b"secboot"), Some(true));
+        assert_eq!(
+            json_get_string(&parsed.payload_json, b"hwmodel").unwrap(),
+            b"GCP_AMD_SEV"
+        );
+        assert_eq!(
+            json_get_string(&parsed.payload_json, b"swname").unwrap(),
+            b"CONFIDENTIAL_SPACE"
+        );
+        assert_eq!(
+            json_get_string(&parsed.payload_json, b"dbgstat").unwrap(),
+            b"disabled-since-boot"
+        );
+        assert_eq!(
+            json_get_string(&parsed.payload_json, b"image_digest").unwrap(),
+            b"sha256:61bb0cf00789abcdef1234567890abcdef1234567890abcdef1234567890abcd"
+        );
+
+        // Verify signature was decoded
+        assert_eq!(parsed.signature, sig);
+    }
+
+    // -- Modexp input format verification --
+
+    #[test]
+    fn test_modexp_input_construction() {
+        // Verify the modexp input format matches the EIP-198 spec:
+        // base_length (32 bytes) || exp_length (32 bytes) || mod_length (32 bytes) || base || exp || mod
+        let base = vec![0x01; 256]; // 256-byte signature
+        let exponent = vec![0x01, 0x00, 0x01]; // Common RSA exponent (65537)
+        let modulus = vec![0x02; 256]; // 256-byte modulus
+
+        // Reconstruct what modexp_call would build (without calling the precompile)
+        let mut input = Vec::with_capacity(96 + base.len() + exponent.len() + modulus.len());
+
+        let mut len_buf = [0u8; 32];
+        len_buf[28..32].copy_from_slice(&(base.len() as u32).to_be_bytes());
+        input.extend_from_slice(&len_buf);
+
+        len_buf = [0u8; 32];
+        len_buf[28..32].copy_from_slice(&(exponent.len() as u32).to_be_bytes());
+        input.extend_from_slice(&len_buf);
+
+        len_buf = [0u8; 32];
+        len_buf[28..32].copy_from_slice(&(modulus.len() as u32).to_be_bytes());
+        input.extend_from_slice(&len_buf);
+
+        input.extend_from_slice(&base);
+        input.extend_from_slice(&exponent);
+        input.extend_from_slice(&modulus);
+
+        // Verify total length: 96 (headers) + 256 (base) + 3 (exp) + 256 (mod) = 611
+        assert_eq!(input.len(), 611);
+
+        // Verify base_length = 256 (big-endian in last 4 bytes of first 32-byte word)
+        assert_eq!(input[28..32], [0x00, 0x00, 0x01, 0x00]);
+
+        // Verify exp_length = 3
+        assert_eq!(input[60..64], [0x00, 0x00, 0x00, 0x03]);
+
+        // Verify mod_length = 256
+        assert_eq!(input[92..96], [0x00, 0x00, 0x01, 0x00]);
+
+        // Verify base starts at offset 96
+        assert_eq!(&input[96..98], &[0x01, 0x01]);
+
+        // Verify exponent starts at offset 96 + 256 = 352
+        assert_eq!(&input[352..355], &[0x01, 0x00, 0x01]);
+
+        // Verify modulus starts at offset 352 + 3 = 355
+        assert_eq!(&input[355..357], &[0x02, 0x02]);
+    }
+
+    // -- ecrecover input format verification --
+
+    #[test]
+    fn test_ecrecover_input_construction() {
+        // Verify the ecrecover input format: hash (32) || v (32, right-padded) || r (32) || s (32)
+        let hash = FixedBytes::<32>::from([0xAA; 32]);
+        let v: u8 = 28;
+        let r = FixedBytes::<32>::from([0xBB; 32]);
+        let s = FixedBytes::<32>::from([0xCC; 32]);
+
+        // Reconstruct what ecrecover_call would build
+        let mut input = Vec::with_capacity(128);
+        input.extend_from_slice(hash.as_slice());
+        let mut v_padded = [0u8; 32];
+        v_padded[31] = v;
+        input.extend_from_slice(&v_padded);
+        input.extend_from_slice(r.as_slice());
+        input.extend_from_slice(s.as_slice());
+
+        assert_eq!(input.len(), 128);
+
+        // Hash at bytes 0..32
+        assert_eq!(&input[0..32], &[0xAA; 32]);
+
+        // V at byte 63 (right-aligned in 32-byte word)
+        assert_eq!(input[31 + 1..63], [0u8; 31]);
+        assert_eq!(input[63], 28);
+
+        // R at bytes 64..96
+        assert_eq!(&input[64..96], &[0xBB; 32]);
+
+        // S at bytes 96..128
+        assert_eq!(&input[96..128], &[0xCC; 32]);
+    }
+
+    // -- ABI encoding with non-zero values --
+
+    #[test]
+    fn test_public_values_abi_roundtrip_with_real_values() {
+        let values = PublicValuesStruct {
+            jwk_key_hash: FixedBytes::from([0x11; 32]),
+            validity_window_start: 1764707757,
+            validity_window_end: 1764711357,
+            image_digest_hash: FixedBytes::from([0x22; 32]),
+            tee_signing_key: Address::from([0x33; 20]),
+            secboot: true,
+            dbgstat_disabled: true,
+            audience_hash: FixedBytes::from([0x44; 32]),
+            image_signature_v: 28,
+            image_signature_r: FixedBytes::from([0x55; 32]),
+            image_signature_s: FixedBytes::from([0x66; 32]),
+        };
+
+        let encoded = values.abi_encode();
+        let decoded = PublicValuesStruct::abi_decode(&encoded).unwrap();
+
+        assert_eq!(decoded.jwk_key_hash, FixedBytes::from([0x11; 32]));
+        assert_eq!(decoded.validity_window_start, 1764707757);
+        assert_eq!(decoded.validity_window_end, 1764711357);
+        assert_eq!(decoded.image_digest_hash, FixedBytes::from([0x22; 32]));
+        assert_eq!(decoded.tee_signing_key, Address::from([0x33; 20]));
+        assert!(decoded.secboot);
+        assert!(decoded.dbgstat_disabled);
+        assert_eq!(decoded.audience_hash, FixedBytes::from([0x44; 32]));
+        assert_eq!(decoded.image_signature_v, 28);
+        assert_eq!(decoded.image_signature_r, FixedBytes::from([0x55; 32]));
+        assert_eq!(decoded.image_signature_s, FixedBytes::from([0x66; 32]));
+    }
+
+    #[test]
+    fn test_public_values_abi_decode_invalid_data() {
+        // Too short to be valid ABI-encoded data
+        assert!(PublicValuesStruct::abi_decode(&[0u8; 10]).is_err());
+    }
+
+    #[test]
+    fn test_stylus_proof_data_abi_decode_invalid_data() {
+        assert!(StylusProofData::abi_decode(&[0u8; 10]).is_err());
+    }
+
+    // -- find_subsequence tests --
+
+    #[test]
+    fn test_find_subsequence_found() {
+        assert_eq!(find_subsequence(b"hello world", b"world"), Some(6));
+    }
+
+    #[test]
+    fn test_find_subsequence_not_found() {
+        assert_eq!(find_subsequence(b"hello world", b"xyz"), None);
+    }
+
+    #[test]
+    fn test_find_subsequence_needle_larger_than_haystack() {
+        assert_eq!(find_subsequence(b"hi", b"hello"), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "window size must be non-zero")]
+    fn test_find_subsequence_empty_needle_panics() {
+        // Empty needle causes a panic via .windows(0) - this is fine since
+        // json_find_key always builds patterns of at least 3 bytes ("key")
+        let _ = find_subsequence(b"hello", b"");
+    }
+
+    #[test]
+    fn test_find_subsequence_at_start() {
+        assert_eq!(find_subsequence(b"hello", b"hel"), Some(0));
+    }
+
+    #[test]
+    fn test_find_subsequence_at_end() {
+        assert_eq!(find_subsequence(b"hello", b"llo"), Some(2));
+    }
+
     /// Helper for tests: encode bytes to base64url (no padding)
     fn base64url_encode(input: &[u8]) -> String {
         const TABLE: &[u8] =
             b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-        let mut result = String::with_capacity((input.len() + 2) / 3 * 4);
+        let mut result = String::with_capacity(input.len().div_ceil(3) * 4);
         for chunk in input.chunks(3) {
             let b0 = chunk[0] as usize;
             let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };

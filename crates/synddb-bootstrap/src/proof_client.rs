@@ -1,9 +1,11 @@
 //! Client for proof generation (RISC Zero service or Stylus local construction)
 
 use crate::{BootstrapConfig, BootstrapError, ProverMode};
-use alloy::primitives::{keccak256, Address, FixedBytes};
-use alloy::sol;
-use alloy::sol_types::SolValue;
+use alloy::{
+    primitives::{keccak256, Address, FixedBytes},
+    sol,
+    sol_types::SolValue,
+};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -390,15 +392,12 @@ impl ProofClient {
             BootstrapError::ProofGenerationFailed(format!("Failed to parse JWKS response: {e}"))
         })?;
 
-        jwks.keys
-            .into_iter()
-            .find(|k| k.kid == kid)
-            .ok_or_else(|| {
-                BootstrapError::ProofGenerationFailed(format!(
-                    "JWK with kid '{}' not found in JWKS response",
-                    kid
-                ))
-            })
+        jwks.keys.into_iter().find(|k| k.kid == kid).ok_or_else(|| {
+            BootstrapError::ProofGenerationFailed(format!(
+                "JWK with kid '{}' not found in JWKS response",
+                kid
+            ))
+        })
     }
 
     /// Generate a mock proof for testing
@@ -512,12 +511,12 @@ fn base64url_decode(input: &str) -> Result<Vec<u8>, String> {
 
 fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     const DECODE_TABLE: [i8; 128] = [
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62,
-        -1, -1, -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -2, -1, -1, -1, 0,
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-        25, -1, -1, -1, -1, -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-        41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1,
+        -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -2, -1, -1, -1, 0, 1, 2, 3, 4,
+        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1,
+        -1, -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+        46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
     ];
 
     let bytes = input.as_bytes();
@@ -534,8 +533,16 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         let c = bytes[i + 2];
         let d = bytes[i + 3];
 
-        let va = if a < 128 { DECODE_TABLE[a as usize] } else { -1 };
-        let vb = if b < 128 { DECODE_TABLE[b as usize] } else { -1 };
+        let va = if a < 128 {
+            DECODE_TABLE[a as usize]
+        } else {
+            -1
+        };
+        let vb = if b < 128 {
+            DECODE_TABLE[b as usize]
+        } else {
+            -1
+        };
 
         if va < 0 || vb < 0 {
             return Err("Invalid base64 character".into());
@@ -544,14 +551,22 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         output.push(((va as u8) << 2) | ((vb as u8) >> 4));
 
         if c != b'=' {
-            let vc = if c < 128 { DECODE_TABLE[c as usize] } else { -1 };
+            let vc = if c < 128 {
+                DECODE_TABLE[c as usize]
+            } else {
+                -1
+            };
             if vc < 0 {
                 return Err("Invalid base64 character".into());
             }
             output.push(((vb as u8) << 4) | ((vc as u8) >> 2));
 
             if d != b'=' {
-                let vd = if d < 128 { DECODE_TABLE[d as usize] } else { -1 };
+                let vd = if d < 128 {
+                    DECODE_TABLE[d as usize]
+                } else {
+                    -1
+                };
                 if vd < 0 {
                     return Err("Invalid base64 character".into());
                 }
