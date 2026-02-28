@@ -3155,7 +3155,7 @@ dependencies = [
  "metrics",
  "metrics-util 0.20.1",
  "quanta",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4459,7 +4459,7 @@ checksum = "5e1aee7486406df3541b5a657204a11be97175a467d77bc98e6d94a66289fb80"
 dependencies = [
  "arraydeque",
  "smallvec 2.0.0-alpha.12",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

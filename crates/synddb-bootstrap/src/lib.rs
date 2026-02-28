@@ -5,10 +5,17 @@
 //!
 //! 1. Generate ephemeral signing key inside TEE
 //! 2. Fetch attestation token from Confidential Space
-//! 3. Request RISC Zero proof from proof service
+//! 3. Generate attestation proof (RISC Zero or Stylus attestor)
 //! 4. Sign registration request (EIP-712)
 //! 5. Send to relayer for on-chain submission (relayer pays gas)
 //! 6. Verify key registration on-chain
+//!
+//! # Verification Modes
+//!
+//! - **Service** (default): Uses RISC Zero zkVM proof service for ZK proof generation
+//! - **Stylus**: Uses a trusted attestor service that signs claims with ECDSA for
+//!   verification by an Arbitrum Stylus contract (skips RISC Zero)
+//! - **Mock**: For testing only, generates invalid proofs
 //!
 //! # Usage
 //!

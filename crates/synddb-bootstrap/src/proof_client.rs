@@ -77,6 +77,7 @@ pub struct ProofClient {
     service_url: String,
     timeout: Duration,
     health_check_timeout: Duration,
+    prover_mode: ProverMode,
 }
 
 impl ProofClient {
@@ -88,6 +89,12 @@ impl ProofClient {
                 .clone()
                 .ok_or_else(|| BootstrapError::Config("PROOF_SERVICE_URL is required".into()))?,
             ProverMode::Mock => "mock://localhost".into(),
+            ProverMode::Stylus => config
+                .attestor_service_url
+                .clone()
+                .ok_or_else(|| {
+                    BootstrapError::Config("ATTESTOR_SERVICE_URL is required".into())
+                })?,
         };
 
         let client = reqwest::Client::builder()
@@ -100,6 +107,7 @@ impl ProofClient {
             service_url,
             timeout: config.proof_timeout,
             health_check_timeout: config.proof_health_check_timeout,
+            prover_mode: config.prover_mode,
         })
     }
 
@@ -118,8 +126,20 @@ impl ProofClient {
         image_signature: &[u8],
     ) -> Result<ProofResponse, BootstrapError> {
         // Check for mock mode
-        if self.service_url.starts_with("mock://") {
+        if self.prover_mode == ProverMode::Mock {
             return self.generate_mock_proof(evm_public_key);
+        }
+
+        // Check for Stylus attestor mode
+        if self.prover_mode == ProverMode::Stylus {
+            return self
+                .generate_stylus_attestation(
+                    jwt_token,
+                    expected_audience,
+                    evm_public_key,
+                    image_signature,
+                )
+                .await;
         }
 
         let request = ProofRequest {
@@ -213,6 +233,81 @@ impl ProofClient {
             .map_err(|e| BootstrapError::ProofServiceUnavailable(e.to_string()))?;
 
         Ok(response.status().is_success())
+    }
+
+    /// Generate an attestation for Stylus on-chain verification.
+    ///
+    /// Instead of generating a RISC Zero ZK proof, this calls a trusted attestor
+    /// service that verifies the GCP Confidential Space JWT off-chain and returns
+    /// the attestation claims signed with an ECDSA key. The Stylus contract verifies
+    /// this ECDSA signature on-chain rather than a ZK proof.
+    async fn generate_stylus_attestation(
+        &self,
+        jwt_token: &str,
+        expected_audience: &str,
+        evm_public_key: &[u8; 64],
+        image_signature: &[u8],
+    ) -> Result<ProofResponse, BootstrapError> {
+        info!(
+            service_url = %self.service_url,
+            "Requesting Stylus attestation from attestor service"
+        );
+
+        let request = ProofRequest {
+            jwt_token: jwt_token.to_string(),
+            expected_audience: expected_audience.to_string(),
+            evm_public_key: format!("0x{}", hex::encode(evm_public_key)),
+            image_signature: format!("0x{}", hex::encode(image_signature)),
+        };
+
+        // Fetch identity token for Cloud Run authentication
+        let identity_token = fetch_identity_token(&self.client, &self.service_url).await?;
+
+        let response = self
+            .client
+            .post(format!("{}/attest", self.service_url))
+            .header("Authorization", format!("Bearer {}", identity_token))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    BootstrapError::ProofGenerationTimeout(self.timeout)
+                } else if e.is_connect() {
+                    BootstrapError::ProofServiceUnavailable(e.to_string())
+                } else {
+                    BootstrapError::ProofGenerationFailed(e.to_string())
+                }
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+
+            if status == reqwest::StatusCode::BAD_REQUEST {
+                return Err(BootstrapError::ProofGenerationPermanent(body));
+            }
+
+            return Err(BootstrapError::ProofGenerationFailed(format!(
+                "HTTP {status}: {body}"
+            )));
+        }
+
+        // The attestor service returns the same ProofResponse format:
+        // - public_values: ABI-encoded PublicValuesStruct
+        // - proof_bytes: ECDSA signature (r || s || v) from the attestor
+        // - tee_address: derived TEE address
+        let proof_response: ProofResponse = response
+            .json()
+            .await
+            .map_err(|e| BootstrapError::ProofGenerationFailed(e.to_string()))?;
+
+        info!(
+            tee_address = %proof_response.tee_address,
+            "Stylus attestation complete"
+        );
+
+        Ok(proof_response)
     }
 
     /// Generate a mock proof for testing
