@@ -45,7 +45,7 @@
 #   cast send <CONTRACT> "addAllowedImageDigestHash(bytes32)" <DIGEST_HASH>
 #   cast send <CONTRACT> "addTrustedImageSigner(address)" <SIGNER_ADDRESS>
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -100,26 +100,39 @@ usage() {
     exit 0
 }
 
+# Helper for flags that require a value
+require_arg() {
+    if [[ $# -lt 2 || "$2" == --* ]]; then
+        error "$1 requires a value"
+        exit 1
+    fi
+}
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --endpoint)
+            require_arg "$@"
             ENDPOINT="$2"
             shift 2
             ;;
         --private-key)
+            require_arg "$@"
             PRIVATE_KEY="$2"
             shift 2
             ;;
         --private-key-path)
+            require_arg "$@"
             PRIVATE_KEY_PATH="$2"
             shift 2
             ;;
         --expiration-tolerance)
+            require_arg "$@"
             EXPIRATION_TOLERANCE="$2"
             shift 2
             ;;
         --contract-address)
+            require_arg "$@"
             CONTRACT_ADDRESS="$2"
             shift 2
             ;;
@@ -161,66 +174,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --- Export ABI mode ---
-if [[ "$EXPORT_ABI" == "true" ]]; then
-    log "Exporting ABI..."
-    cd "$CONTRACT_DIR"
-    cargo stylus export-abi
-    exit 0
-fi
+# --- Validation helpers ---
 
-# --- Check prerequisites ---
-check_prerequisites() {
-    local missing=()
-
-    if ! command -v cargo >/dev/null 2>&1; then
-        missing+=("cargo (install via rustup: https://rustup.rs)")
-    fi
-
-    if ! cargo stylus --version >/dev/null 2>&1; then
-        missing+=("cargo-stylus (install: cargo install --force cargo-stylus)")
-    fi
-
-    if ! command -v cast >/dev/null 2>&1; then
-        missing+=("cast (install Foundry: https://book.getfoundry.sh)")
-    fi
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        error "Missing required tools:"
-        for tool in "${missing[@]}"; do
-            echo "  - $tool"
-        done
-        exit 1
-    fi
-}
-
-check_prerequisites
-
-# --- Build key argument ---
-build_key_arg() {
-    if [[ -n "$PRIVATE_KEY" ]]; then
-        echo "--private-key=$PRIVATE_KEY"
-    elif [[ -n "$PRIVATE_KEY_PATH" ]]; then
-        echo "--private-key-path=$PRIVATE_KEY_PATH"
-    else
-        error "No private key provided. Use --private-key or --private-key-path"
-        exit 1
-    fi
-}
-
-# Helper to get the private key value for cast commands
-get_private_key() {
-    if [[ -n "$PRIVATE_KEY" ]]; then
-        echo "$PRIVATE_KEY"
-    elif [[ -n "$PRIVATE_KEY_PATH" ]]; then
-        cat "$PRIVATE_KEY_PATH" | tr -d '[:space:]'
-    else
-        error "No private key provided."
-        exit 1
-    fi
-}
-
-# Validate endpoint is set when needed
 require_endpoint() {
     if [[ -z "$ENDPOINT" ]]; then
         error "No RPC endpoint provided. Use --endpoint or set STYLUS_RPC_URL"
@@ -228,9 +183,104 @@ require_endpoint() {
     fi
 }
 
-# --- Check mode ---
+require_private_key() {
+    if [[ -z "$PRIVATE_KEY" && -z "$PRIVATE_KEY_PATH" ]]; then
+        error "No private key provided. Use --private-key or --private-key-path"
+        exit 1
+    fi
+    if [[ -n "$PRIVATE_KEY_PATH" && ! -f "$PRIVATE_KEY_PATH" ]]; then
+        error "Private key file not found: $PRIVATE_KEY_PATH"
+        exit 1
+    fi
+}
+
+require_tool() {
+    local tool="$1"
+    local install_hint="$2"
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        error "Required tool not found: $tool"
+        echo "  Install: $install_hint" >&2
+        exit 1
+    fi
+}
+
+require_cargo_stylus() {
+    require_tool "cargo" "https://rustup.rs"
+    if ! cargo stylus --version >/dev/null 2>&1; then
+        error "Required tool not found: cargo-stylus"
+        echo "  Install: cargo install --force cargo-stylus" >&2
+        exit 1
+    fi
+}
+
+# Build the key flag for cargo stylus deploy
+build_key_arg() {
+    if [[ -n "$PRIVATE_KEY" ]]; then
+        echo "--private-key=$PRIVATE_KEY"
+    elif [[ -n "$PRIVATE_KEY_PATH" ]]; then
+        echo "--private-key-path=$PRIVATE_KEY_PATH"
+    fi
+}
+
+# Get the raw private key value for cast commands
+get_private_key() {
+    if [[ -n "$PRIVATE_KEY" ]]; then
+        echo "$PRIVATE_KEY"
+    elif [[ -n "$PRIVATE_KEY_PATH" ]]; then
+        tr -d '[:space:]' < "$PRIVATE_KEY_PATH"
+    fi
+}
+
+# Extract a 20-byte Ethereum address from text.
+# Filters for lines containing "address" to avoid matching tx hashes.
+extract_address() {
+    grep -i 'address' | grep -oi '0x[0-9a-fA-F]\{40\}' | head -1
+}
+
+# Write deployment info as valid JSON
+write_deployment_json() {
+    local address="$1"
+    local chain_id="$2"
+    local deploy_tx="${3:-}"
+
+    # Ensure chain_id is a number, fallback to null for JSON validity
+    if ! [[ "$chain_id" =~ ^[0-9]+$ ]]; then
+        chain_id="null"
+    fi
+
+    # deploymentTx: use JSON null (unquoted) when empty, quoted string otherwise
+    local deploy_tx_json="null"
+    if [[ -n "$deploy_tx" ]]; then
+        deploy_tx_json="\"$deploy_tx\""
+    fi
+
+    mkdir -p "$OUTPUT_DIR"
+    cat > "$OUTPUT_DIR/stylus-deployment.json" <<EOF
+{
+  "contract": "StylusAttestationVerifier",
+  "address": "$address",
+  "chainId": $chain_id,
+  "endpoint": "$ENDPOINT",
+  "expirationTolerance": $EXPIRATION_TOLERANCE,
+  "deploymentTx": $deploy_tx_json,
+  "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
+# --- Export ABI mode ---
+if [[ "$EXPORT_ABI" == "true" ]]; then
+    require_cargo_stylus
+    log "Exporting ABI..."
+    cd "$CONTRACT_DIR"
+    cargo stylus export-abi
+    exit 0
+fi
+
+# --- Check-only mode ---
 if [[ "$CHECK_ONLY" == "true" ]]; then
     require_endpoint
+    require_cargo_stylus
     log "Checking contract against $ENDPOINT..."
     cd "$CONTRACT_DIR"
     cargo stylus check --endpoint="$ENDPOINT"
@@ -241,10 +291,12 @@ fi
 # --- Init-only mode ---
 if [[ "$INIT_ONLY" == "true" ]]; then
     require_endpoint
+    require_private_key
     if [[ -z "$CONTRACT_ADDRESS" ]]; then
         error "--contract-address is required with --init-only"
         exit 1
     fi
+    require_tool "cast" "https://book.getfoundry.sh"
     CAST_KEY=$(get_private_key)
 
     log "Initializing contract at $CONTRACT_ADDRESS..."
@@ -287,6 +339,9 @@ fi
 
 # --- Deploy mode ---
 require_endpoint
+require_private_key
+require_cargo_stylus
+require_tool "cast" "https://book.getfoundry.sh"
 
 log "Deploying SyndDB Stylus Attestation Verifier"
 log "  Endpoint: $ENDPOINT"
@@ -302,9 +357,15 @@ echo ""
 # Step 2: Deploy
 log "Step 2/3: Deploying contract..."
 
+KEY_ARG=$(build_key_arg)
+if [[ -z "$KEY_ARG" ]]; then
+    error "Failed to build key argument"
+    exit 1
+fi
+
 DEPLOY_ARGS=(
     "--endpoint=$ENDPOINT"
-    "$(build_key_arg)"
+    "$KEY_ARG"
 )
 
 if [[ "$NO_ACTIVATE" == "true" ]]; then
@@ -330,10 +391,9 @@ DEPLOY_OUTPUT=$(cargo stylus deploy "${DEPLOY_ARGS[@]}" 2>&1) || {
 
 echo "$DEPLOY_OUTPUT"
 
-# Extract contract address from output
-# cargo stylus deploy outputs lines like: "deployed code at address: 0x..."
-# or "contract address: 0x..." depending on version
-DEPLOYED_ADDRESS=$(echo "$DEPLOY_OUTPUT" | grep -oi '0x[0-9a-fA-F]\{40\}' | head -1)
+# Extract contract address from lines containing "address" to avoid matching tx hashes.
+# cargo stylus deploy outputs: "deployed code at address: 0x..." or "contract address: 0x..."
+DEPLOYED_ADDRESS=$(echo "$DEPLOY_OUTPUT" | extract_address)
 
 if [[ -z "$DEPLOYED_ADDRESS" ]]; then
     error "Could not parse deployed contract address from output"
@@ -369,20 +429,8 @@ fi
 echo ""
 
 # Save deployment info
-mkdir -p "$OUTPUT_DIR"
 CHAIN_ID=$(cast chain-id --rpc-url "$ENDPOINT" 2>/dev/null || echo "unknown")
-
-cat > "$OUTPUT_DIR/stylus-deployment.json" <<EOF
-{
-  "contract": "StylusAttestationVerifier",
-  "address": "$DEPLOYED_ADDRESS",
-  "chainId": $CHAIN_ID,
-  "endpoint": "$ENDPOINT",
-  "expirationTolerance": $EXPIRATION_TOLERANCE,
-  "deploymentTx": "${DEPLOY_TX:-null}",
-  "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
+write_deployment_json "$DEPLOYED_ADDRESS" "$CHAIN_ID" "$DEPLOY_TX"
 
 success "Deployment info saved to $OUTPUT_DIR/stylus-deployment.json"
 echo ""
