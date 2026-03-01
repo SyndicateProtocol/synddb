@@ -5,10 +5,20 @@
 //!
 //! 1. Generate ephemeral signing key inside TEE
 //! 2. Fetch attestation token from Confidential Space
-//! 3. Request RISC Zero proof from proof service
+//! 3. Generate attestation proof (RISC Zero service or Stylus local construction)
 //! 4. Sign registration request (EIP-712)
 //! 5. Send to relayer for on-chain submission (relayer pays gas)
 //! 6. Verify key registration on-chain
+//!
+//! # Verification Modes
+//!
+//! - **Service** (default): Uses RISC Zero zkVM proof service for ZK proof generation.
+//!   The proof service runs the RISC Zero guest program to verify the JWT and generate
+//!   a Groth16 proof, which is verified on-chain by `RiscZeroAttestationVerifier`.
+//! - **Stylus**: Constructs proof data locally and sends the raw JWT for direct on-chain
+//!   verification by an Arbitrum Stylus contract. The contract verifies the RS256 signature
+//!   using SHA-256 and modexp EVM precompiles. No external proof service needed.
+//! - **Mock**: For testing only, generates invalid proofs
 //!
 //! # Usage
 //!

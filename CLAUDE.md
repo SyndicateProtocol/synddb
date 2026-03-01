@@ -56,7 +56,7 @@ pub struct Config {
 - Don't import libraries for specific tests, import them at the top level instead
 
 ### Test Modification Policy
-Treat existing tests as immutable. If an existing test fails or seems to need modification, ask for confirmation before changing it—the test may be catching a regression. This does not apply to new tests written as part of the current work, meaning the new content introduced in the current branch or PR.
+Existing tests should be treated as correct unless they are genuinely broken or poorly scoped. If a test is truly broken (testing the wrong thing, asserting incorrect behavior, or not well scoped), fix or update it. If a test fails and you suspect it may be catching a real regression, ask for confirmation before changing it. This policy does not apply to new tests written as part of the current work.
 
 ### Project structure
 - Do not re-export dependencies from `crates/` in mod.rs or lib.rs files. Refer to the full path instead.

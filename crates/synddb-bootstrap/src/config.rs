@@ -82,6 +82,15 @@ pub struct BootstrapConfig {
     /// image digest string (e.g., "sha256:abc123...") using an Ethereum key.
     #[arg(long, env = "IMAGE_SIGNATURE")]
     pub image_signature: Option<String>,
+
+    /// Google JWKS URL for fetching RSA public keys used to verify Confidential Space JWTs.
+    /// Only used when `prover_mode=stylus`. Defaults to the GCP Confidential Space JWKS endpoint.
+    #[arg(
+        long,
+        env = "GOOGLE_JWKS_URL",
+        default_value = "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com"
+    )]
+    pub google_jwks_url: String,
 }
 
 impl Default for BootstrapConfig {
@@ -103,6 +112,7 @@ impl Default for BootstrapConfig {
             verification_max_retries: 5,
             relayer_timeout: Duration::from_secs(180),
             image_signature: None,
+            google_jwks_url: "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com".into(),
         }
     }
 }
@@ -159,11 +169,15 @@ impl BootstrapConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum ProverMode {
-    /// Use self-hosted proof service
+    /// Use self-hosted RISC Zero proof service
     #[default]
     Service,
     /// Use mock prover for testing (no real proof)
     Mock,
+    /// Use Stylus on-chain verification (skips RISC Zero zkVM).
+    /// The Stylus contract verifies the GCP Confidential Space JWT directly
+    /// on-chain using RSA signature verification via EVM precompiles.
+    Stylus,
 }
 
 #[cfg(test)]
@@ -203,5 +217,20 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_stylus_valid() {
+        let config = BootstrapConfig {
+            enable_key_bootstrap: true,
+            bridge_address: Some("0x1234567890123456789012345678901234567890".into()),
+            rpc_url: Some("http://localhost:8545".into()),
+            chain_id: Some(1),
+            relayer_url: Some("http://localhost:3000".into()),
+            prover_mode: ProverMode::Stylus,
+            image_signature: Some("0x".to_string() + &"ab".repeat(65)),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
     }
 }

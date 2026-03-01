@@ -18,6 +18,9 @@ members = [
   "tests/e2e/runner",
   "tests/e2e-gcs/runner",
 ]
+exclude = [
+  "contracts/stylus/attestation-verifier",
+]
 
 [workspace.package]
 version = "0.1.0"
