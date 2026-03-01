@@ -162,7 +162,12 @@ impl ProofClient {
         // Stylus mode: construct proof locally (no external service)
         if self.prover_mode == ProverMode::Stylus {
             return self
-                .generate_stylus_proof(jwt_token, expected_audience, evm_public_key, image_signature)
+                .generate_stylus_proof(
+                    jwt_token,
+                    expected_audience,
+                    evm_public_key,
+                    image_signature,
+                )
                 .await;
         }
 
