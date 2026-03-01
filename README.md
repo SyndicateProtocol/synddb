@@ -1,5 +1,7 @@
 # SyndDB - High-Performance Blockchain Database
 
+> **Note:** This is a prototype and is not production ready. It is for testing purposes only and should not be used with real funds. There will be bugs.
+
 SyndDB enables developers to build high-performance blockchain applications using **any programming language** with SQLite bindings. Applications import a lightweight client library that automatically captures SQL operations and sends them to a sequencer service for publishing to data availability layers.
 
 ## Overview

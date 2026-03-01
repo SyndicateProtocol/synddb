@@ -1,7 +1,5 @@
 # Stylus Infrastructure Case Study: SyndDB
 
-> **Note:** This is a prototype and is not production ready. It is for testing purposes only and should not be used with real funds. There will be bugs.
-
 **Executive Summary:** Syndicate uses Arbitrum Stylus for onchain TEE attestation verification, replacing a zkVM proving pipeline with a single WASM smart contract that verifies GCP Confidential Space JWT tokens directly onchain, delivering simpler architecture, zero per-proof costs, and faster bootstrapping for TEE-based infrastructure.
 
 ## Opportunity
