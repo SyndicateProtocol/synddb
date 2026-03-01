@@ -162,7 +162,7 @@ impl ProofClient {
         // Stylus mode: construct proof locally (no external service)
         if self.prover_mode == ProverMode::Stylus {
             return self
-                .generate_stylus_proof(jwt_token, evm_public_key, image_signature)
+                .generate_stylus_proof(jwt_token, expected_audience, evm_public_key, image_signature)
                 .await;
         }
 
@@ -269,6 +269,7 @@ impl ProofClient {
     async fn generate_stylus_proof(
         &self,
         jwt_token: &str,
+        expected_audience: &str,
         evm_public_key: &[u8; 64],
         image_signature: &[u8],
     ) -> Result<ProofResponse, BootstrapError> {
@@ -295,6 +296,14 @@ impl ProofClient {
         let claims: JwtClaims = serde_json::from_slice(&payload_bytes).map_err(|e| {
             BootstrapError::ProofGenerationFailed(format!("Failed to parse JWT claims: {e}"))
         })?;
+
+        // Validate audience matches expected value
+        if claims.aud != expected_audience {
+            return Err(BootstrapError::ProofGenerationFailed(format!(
+                "JWT audience mismatch: expected '{}', got '{}'",
+                expected_audience, claims.aud
+            )));
+        }
 
         // Derive TEE address from public key
         let pubkey_hash = keccak256(evm_public_key);
@@ -413,15 +422,23 @@ impl ProofClient {
 
         debug!(address = %address, "Generated mock proof");
 
-        // Build ABI-encoded public values with correct tee_address placement
-        // PublicValuesStruct has 11 fields x 32 bytes = 352 bytes ABI-encoded
-        // Slot 4 (bytes 128-160): tee_signing_key (address is right-aligned, bytes 140-160)
-        let mut public_values_bytes = vec![0u8; 352];
-        // Place address at bytes 140-160 (right-aligned in 32-byte slot 4)
-        public_values_bytes[140..160].copy_from_slice(address.as_slice());
+        let public_values = PublicValuesStruct {
+            jwk_key_hash: FixedBytes::ZERO,
+            validity_window_start: 0,
+            validity_window_end: 0,
+            image_digest_hash: FixedBytes::ZERO,
+            tee_signing_key: address,
+            secboot: false,
+            dbgstat_disabled: false,
+            audience_hash: FixedBytes::ZERO,
+            image_signature_v: 0,
+            image_signature_r: FixedBytes::ZERO,
+            image_signature_s: FixedBytes::ZERO,
+        };
+        let public_values_encoded = public_values.abi_encode();
 
         Ok(ProofResponse {
-            public_values: format!("0x{}", hex::encode(&public_values_bytes)),
+            public_values: format!("0x{}", hex::encode(&public_values_encoded)),
             proof_bytes: "0x".into(),
             tee_address: format!("{address}"),
         })
@@ -520,7 +537,7 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     ];
 
     let bytes = input.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err("Invalid base64 length".into());
     }
 

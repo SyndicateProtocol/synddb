@@ -80,6 +80,8 @@ sol! {
     error InvalidProofData();
     error InvalidPublicValues();
     error PrecompileFailed();
+    error ZeroAddress();
+    error ToleranceExceedsOneDay();
 }
 
 #[derive(SolidityError)]
@@ -104,6 +106,8 @@ pub enum VerifierError {
     InvalidProofData(InvalidProofData),
     InvalidPublicValues(InvalidPublicValues),
     PrecompileFailed(PrecompileFailed),
+    ZeroAddress(ZeroAddress),
+    ToleranceExceedsOneDay(ToleranceExceedsOneDay),
 }
 
 /// Stylus attestation verifier that directly verifies GCP Confidential Space
@@ -140,10 +144,15 @@ pub struct StylusAttestationVerifier {
 #[public]
 impl StylusAttestationVerifier {
     /// Initializes the contract. Must be called once after deployment.
-    /// Sets the caller as the owner.
+    /// Sets the caller as the owner. Expiration tolerance is capped at 86400 seconds (1 day).
     pub fn initialize(&mut self, expiration_tolerance: u64) -> Result<(), VerifierError> {
         if self.initialized.get() {
             return Err(VerifierError::AlreadyInitialized(AlreadyInitialized {}));
+        }
+        if expiration_tolerance > 86400 {
+            return Err(VerifierError::ToleranceExceedsOneDay(
+                ToleranceExceedsOneDay {},
+            ));
         }
         self.owner.set(self.vm().msg_sender());
         self.expiration_tolerance.set(U64::from(expiration_tolerance));
@@ -403,9 +412,12 @@ impl StylusAttestationVerifier {
         Ok(())
     }
 
-    /// Transfers ownership of the contract.
+    /// Transfers ownership of the contract. Reverts if `new_owner` is the zero address.
     pub fn transfer_ownership(&mut self, new_owner: Address) -> Result<(), VerifierError> {
         self.only_owner()?;
+        if new_owner == Address::ZERO {
+            return Err(VerifierError::ZeroAddress(ZeroAddress {}));
+        }
         let previous_owner = self.owner.get();
         self.owner.set(new_owner);
         self.vm().log(OwnershipTransferred {
@@ -767,10 +779,20 @@ fn json_get_string<'a>(json: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
     i += 1;
     let start = i;
 
-    // Find closing quote (handle escaped quotes)
+    // Find closing quote (handle escaped quotes correctly, including \\")
     while i < json.len() {
-        if json[i] == b'"' && (i == start || json[i - 1] != b'\\') {
-            return Some(&json[start..i]);
+        if json[i] == b'"' {
+            // Count consecutive backslashes before this quote.
+            // An even number means the quote is NOT escaped.
+            let mut backslash_count = 0;
+            let mut j = i;
+            while j > start && json[j - 1] == b'\\' {
+                backslash_count += 1;
+                j -= 1;
+            }
+            if backslash_count % 2 == 0 {
+                return Some(&json[start..i]);
+            }
         }
         i += 1;
     }
@@ -1127,9 +1149,26 @@ mod tests {
 
     #[test]
     fn test_json_get_string_with_escaped_quote() {
+        // JSON: {"key":"value\"with\"quotes","other":"ok"}
+        // The value contains escaped quotes: value"with"quotes
         let json = br#"{"key":"value\"with\"quotes","other":"ok"}"#;
         let val = json_get_string(json, b"key").unwrap();
-        assert_eq!(val, b"value\\\"with\\\"quotes");
+        // Raw bytes between the outer quotes include the backslash-quote sequences
+        assert_eq!(val, br#"value\"with\"quotes"#);
+    }
+
+    #[test]
+    fn test_json_get_string_with_double_backslash_before_quote() {
+        // JSON: {"key":"value\\","other":"ok"}
+        // The \\\\ in the raw string is two backslashes in the actual bytes.
+        // The first backslash escapes the second, so the quote after them is the real closing quote.
+        let json = br#"{"key":"value\\","other":"ok"}"#;
+        let val = json_get_string(json, b"key").unwrap();
+        assert_eq!(val, br#"value\\"#);
+
+        // Verify the next key is still extractable
+        let other = json_get_string(json, b"other").unwrap();
+        assert_eq!(other, b"ok");
     }
 
     #[test]
