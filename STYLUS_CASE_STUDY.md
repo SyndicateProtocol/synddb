@@ -26,7 +26,7 @@ We evaluated three approaches:
 
 **1. Pure Solidity: Technically possible but prohibitively expensive**
 
-The most direct comparison is [op-enclave](https://github.com/base/op-enclave) by Base, which verifies AWS Nitro attestations in Solidity using their [nitro-validator](https://github.com/base/nitro-validator) library. Their approach requires traversing the full certificate chain onchain, which costs approximately **63 million gas** with no prior verified certificates. Even with certificate caching and multi-transaction strategies, [Marlin's NitroProver](https://blog.marlin.org/onchain-verification-of-aws-nitro-enclave-attestations) still requires **20+ million gas** for attestation verification after pre-verifying individual certificates at 12-13 million gas each.
+The most direct comparison is [op-enclave](https://github.com/base/op-enclave) by Base, which verifies AWS Nitro attestations in Solidity using their [nitro-validator](https://github.com/base/nitro-validator) library. Their approach requires traversing the full certificate chain onchain, which costs approximately **63 million gas** with no prior verified certificates. Even with certificate caching and multi-transaction strategies, [Marlin's NitroProver](https://blog.marlin.org/on-chain-verification-of-aws-nitro-enclave-attestations) still requires **20+ million gas** for attestation verification after pre-verifying individual certificates at 12-13 million gas each.
 
 The gas cost comes from the fundamental operations required: CBOR/COSE parsing, X.509 certificate chain validation, and ECDSA P-384 signature verification, all of which are expensive in the EVM. The op-enclave project itself is difficult to use and not well maintained, and the gas costs make it impractical for frequent attestation verification.
 
@@ -236,7 +236,7 @@ The bulk of the work is in step 1. The remaining steps are the same configuratio
 
 The main challenge was **scoping Stylus to the right use case**. Our initial instinct was to run as much as possible inside Stylus, potentially the entire SQLite engine. Through prototyping, we learned that Stylus's cost advantages are concentrated in compute and memory, while storage costs remain unchanged. This led us to identify TEE attestation verification as the ideal target: a compute-intensive, memory-intensive, storage-minimal operation that was already a pain point in our architecture.
 
-A secondary challenge was implementing JWT parsing and RSA verification without Rust's standard library. The Stylus `no_std` environment required custom implementations of base64url decoding, minimal JSON extraction (searching for key-value patterns rather than full parsing), and PKCS#1 v1.5 padding verification. These are well-understood algorithms, but implementing them correctly in a constrained environment required care.
+A secondary challenge was implementing JWT parsing and RSA verification without Rust's standard library. Stylus supports `std`, but we chose `no_std` to minimize the WASM binary size and gas costs. This required custom implementations of base64url decoding, minimal JSON extraction (searching for key-value patterns rather than full parsing), and PKCS#1 v1.5 padding verification. These are well-understood algorithms, but implementing them correctly in a constrained environment required care.
 
 ### Adoption for Builders
 
@@ -300,7 +300,7 @@ We spent significant effort on the RISC Zero approach specifically because oncha
 
 ### 4. Easy in Rust Doesn't Always Mean Easy in Stylus
 
-While Stylus runs Rust, it's a `no_std` environment with gas metering. Not all Rust crates work out of the box. We had to implement custom base64url decoding and JSON parsing. EVM precompiles (SHA-256, modexp, ecrecover) are powerful building blocks, but you need to understand their gas costs and calling conventions. Test your assumptions about gas costs early.
+While Stylus runs Rust and supports `std`, we used `no_std` to keep the WASM binary small. Not all Rust crates work well in this constrained environment. We had to implement custom base64url decoding and JSON parsing. EVM precompiles (SHA-256, modexp, ecrecover) are powerful building blocks, but you need to understand their gas costs and calling conventions. Test your assumptions about gas costs early.
 
 ### 5. The Modular Interface Pattern
 
