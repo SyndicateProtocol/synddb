@@ -36,12 +36,12 @@ Our initial approach used zero-knowledge virtual machines (first SP1, then RISC 
 
 This works, but adds per-proof costs and operational complexity:
 
-- **Per-proof costs**: SP1's Network Prover charges ~$0.13 per proof (0.3 PROVE tokens). RISC Zero's Boundless prover network charges ~$0.018 per proof. These costs are modest individually but are incurred on every TEE bootstrap event (every service restart generates a new key and needs a new proof). The cost difference between SP1 and RISC Zero may be due to the characteristics of our operation -- a single lightweight proof that doesn't benefit from SP1's batching optimizations.
-- **Self-hosted GPU alternative**: Instead of prover networks, you can self-host GPU proving. RISC Zero supports native GPU proving via CUDA on NVIDIA L4 GPUs, with proof generation taking 2-5 minutes. However, SP1's closed-source GPU prover cannot run in Google Cloud Run due to Docker-in-Docker requirements and memory constraints, which is what pushed us to prover networks initially.
-- **Operational complexity**: Even with prover networks, the architecture requires a separate proof service, zkVM toolchain management, and coordination between the TEE service, proof service, and on-chain contracts. Self-hosted GPU proving adds CUDA dependencies, 60-minute timeout configuration, and single-instance concurrency limits.
-- **Proof generation latency**: Whether using prover networks or self-hosted GPUs, proof generation takes 2-5 minutes. This adds minutes to every TEE bootstrap event -- every time a sequencer or validator restarts, it must wait for a proof before it can register its key and begin operating.
+- **Per-proof costs**: SP1's Network Prover charges ~$0.13 per proof (0.3 PROVE tokens). Self-hosted RISC Zero GPU proving on Google Cloud Run (NVIDIA L4) costs ~$0.018 per proof. These costs are modest individually but are incurred on every TEE bootstrap event (every service restart generates a new key and needs a new proof). The cost difference between SP1 and RISC Zero may be due to the characteristics of our operation -- a single lightweight proof that doesn't benefit from SP1's batching optimizations.
+- **SP1 limitations**: We started with SP1 but its closed-source GPU prover cannot run in Google Cloud Run due to Docker-in-Docker requirements and memory constraints, which pushed us to SP1's hosted Network Prover. RISC Zero's open-source GPU prover runs natively on Cloud Run, enabling significantly cheaper self-hosted proving.
+- **Operational complexity**: The architecture requires a separate GPU-enabled Cloud Run service (for RISC Zero) or prover network integration (for SP1), zkVM toolchain management, and coordination between the TEE service, proof service, and on-chain contracts. Self-hosted GPU proving adds CUDA dependencies, 60-minute timeout configuration, and single-instance concurrency limits.
+- **Proof generation latency**: Whether using SP1's Network Prover or RISC Zero's self-hosted GPU, proof generation takes 2-5 minutes. This adds minutes to every TEE bootstrap event -- every time a sequencer or validator restarts, it must wait for a proof before it can register its key and begin operating.
 - **zkVM maturity concerns**: zkVMs are relatively new technology and have had critical vulnerabilities. For maximum security, you'd want to use multiple zkVMs (e.g., both RISC Zero and SP1), which multiplies costs.
-- **Build determinism** (self-hosted only): The RISC Zero image ID (a hash of the compiled guest program) must match exactly between the proof service binary and the on-chain contract. Different build environments produce different ELF binaries, requiring careful CI/CD pipelines with CUDA stubs for image ID extraction during Docker builds.
+- **Build determinism**: The RISC Zero image ID (a hash of the compiled guest program) must match exactly between the proof service binary and the on-chain contract. Different build environments produce different ELF binaries, requiring careful CI/CD pipelines with CUDA stubs for image ID extraction during Docker builds.
 
 **3. Stylus: The right abstraction**
 
@@ -119,16 +119,16 @@ The Stylus VM uses **ink** -- a fractional gas unit where 1 gas = 10,000 ink -- 
 
 #### vs. zkVM Proving (RISC Zero / SP1)
 
-| Metric | SP1 (Network Prover) | RISC Zero (Boundless) | RISC Zero (Self-hosted GPU) | Stylus |
-|--------|----------------------|-----------------------|-----------------------------|--------|
-| Per-proof cost | ~$0.13 | ~$0.018 | ~$0.02-0.06 (L4 GPU compute) | On-chain gas only |
-| Proof generation time | 2-5 min | 2-5 min | 2-5 min | Instant (single tx) |
-| GPU infrastructure | None (hosted) | None (hosted) | Required (NVIDIA L4) | None |
-| External dependencies | PROVE tokens, network key | Boundless API | CUDA, proof service | Stylus SDK only |
-| Build determinism | N/A | N/A | Critical (image ID match) | Standard Rust compilation |
-| Maturity risk | zkVMs have had critical vulnerabilities | Same | Same | WASM is battle-tested |
+| Metric | SP1 (Network Prover) | RISC Zero (Self-hosted GPU) | Stylus |
+|--------|----------------------|-----------------------------|--------|
+| Per-proof cost | ~$0.13 (0.3 PROVE) | ~$0.018 (L4 on Cloud Run) | On-chain gas only |
+| Proof generation time | 2-5 min | 2-5 min | Instant (single tx) |
+| GPU infrastructure | None (hosted) | Required (NVIDIA L4) | None |
+| External dependencies | PROVE tokens, network key | CUDA, proof service | Stylus SDK only |
+| Build determinism | N/A | Critical (image ID match) | Standard Rust compilation |
+| Maturity risk | zkVMs have had critical vulnerabilities | Same | WASM is battle-tested |
 
-Note: SP1's higher per-proof cost ($0.13 vs $0.018) may reflect the characteristics of our specific operation -- a single lightweight proof that doesn't benefit from SP1's batching optimizations. For appchains with custom gas tokens, Stylus verification is effectively free beyond standard chain operation costs.
+Note: SP1's higher per-proof cost ($0.13 vs $0.018) may reflect the characteristics of our specific operation -- a single lightweight proof that doesn't benefit from SP1's batching optimizations. SP1's closed-source GPU prover cannot self-host on Cloud Run (Docker-in-Docker requirements), necessitating their hosted Network Prover. RISC Zero's open-source GPU prover runs natively on Cloud Run, enabling much cheaper self-hosted proving. For appchains with custom gas tokens, Stylus verification is effectively free beyond standard chain operation costs.
 
 #### Appchain Cost Model
 
@@ -150,10 +150,9 @@ Request GCP Confidential Space JWT token
        |
        v
 Send JWT to proof service                 <-- External dependency
-       |
-       v
-Proof service sends to prover network     <-- Per-proof cost ($0.018-0.13)
-(or generates locally on GPU)                  + 2-5 min latency
+       |                                        (GPU on Cloud Run or
+       v                                         SP1 Network Prover)
+Generate proof (2-5 min)                  <-- $0.018-0.13 per proof
        |
        v
 Receive Groth16 proof
@@ -193,7 +192,7 @@ On-chain: full JWT verification in single tx
 TeeKeyManager registers signing key
 ```
 
-The Stylus approach eliminates the entire proving pipeline from the architecture: the proof service, the prover network (or self-hosted GPU), and the zkVM toolchain. The TEE service constructs the verification data locally (just the raw JWT and JWK RSA key material) and submits it directly on-chain.
+The Stylus approach eliminates the entire proving pipeline from the architecture: the proof service (whether a self-hosted GPU on Cloud Run or SP1's Network Prover), and the zkVM toolchain. The TEE service constructs the verification data locally (just the raw JWT and JWK RSA key material) and submits it directly on-chain.
 
 ### Integration and Libraries
 
@@ -257,17 +256,17 @@ From the builder's perspective, they write a SQLite application and run it anywh
 | Metric | zkVM Approach | Stylus Approach | Improvement |
 |--------|---------------|-----------------|-------------|
 | Infrastructure services | 4 (TEE + proof service + relayer + contracts) | 3 (TEE + relayer + contracts) | 1 fewer service |
-| Per-bootstrap cost | $0.018-0.13 (prover network) | On-chain gas only | Eliminated per-proof fees |
+| Per-bootstrap cost | $0.018 (RISC Zero GPU) to $0.13 (SP1 Network) | On-chain gas only | Eliminated per-proof fees |
 | Proof generation time | 2-5 minutes | <1 second (single tx) | ~100-300x faster |
 | Build pipeline complexity | zkVM toolchain, guest programs, image ID management | Standard Rust/WASM compilation | Significantly simpler |
-| External dependencies | Prover network (or CUDA + GPU), zkVM toolchain, proof service | Stylus SDK | Fewer dependencies |
+| External dependencies | CUDA + GPU (RISC Zero) or prover network (SP1), zkVM toolchain, proof service | Stylus SDK | Fewer dependencies |
 | Bootstrapping latency | Minutes (proof generation) | Seconds (single transaction) | Orders of magnitude faster |
 
 ### Qualitative
 
-**Simpler architecture**: Removing the proof service eliminates an entire class of operational concerns -- prover network API keys and token management (or CUDA driver compatibility and GPU availability for self-hosted proving), proof service scaling, build determinism for RISC Zero image IDs, and the complexity of coordinating between the TEE service, proof service, and on-chain contracts.
+**Simpler architecture**: Removing the proof service eliminates an entire class of operational concerns -- GPU provisioning and CUDA driver compatibility (for RISC Zero self-hosted proving) or prover network token management (for SP1), proof service scaling, build determinism for RISC Zero image IDs, and the complexity of coordinating between the TEE service, proof service, and on-chain contracts.
 
-**Better developer experience**: New team members no longer need to understand the RISC Zero toolchain, guest program compilation, prover network APIs, or GPU infrastructure to work on attestation. The Stylus contract is a single Rust file that reads like normal application code.
+**Better developer experience**: New team members no longer need to understand the RISC Zero toolchain, guest program compilation, GPU infrastructure, or SP1's prover network to work on attestation. The Stylus contract is a single Rust file that reads like normal application code.
 
 **Faster iteration**: Changes to attestation logic require recompiling and redeploying a single WASM contract, rather than rebuilding a RISC Zero guest program, updating the image ID on-chain, and redeploying the proof service with matching binaries.
 
@@ -277,7 +276,7 @@ From the builder's perspective, they write a SQLite application and run it anywh
 
 **vs. op-enclave (Solidity-only)**: op-enclave's [nitro-validator](https://github.com/base/nitro-validator) requires ~63M gas for full attestation verification in Solidity. Even with certificate caching, the multi-transaction approach adds complexity and still costs 20M+ gas. Stylus's 10-100x compute discount makes the same cryptographic operations dramatically cheaper in a single transaction. For appchains, this cost effectively disappears.
 
-**vs. zkVM proving costs**: Prover networks charge $0.018 per proof (RISC Zero Boundless) to $0.13 per proof (SP1 Network Prover). Self-hosted GPU proving on NVIDIA L4s costs $0.02-0.06 per proof in compute time. While individual proof costs are modest, they are incurred on every TEE bootstrap -- every service restart, scaling event, or key rotation. More importantly, the 2-5 minute proof generation latency delays every bootstrap, and the operational complexity of managing proof services, zkVM toolchains, and build determinism is significant. Stylus replaces all of this with on-chain gas costs, which on an appchain with a custom gas token can be subsidized to zero.
+**vs. zkVM proving costs**: Self-hosted RISC Zero GPU proving on Cloud Run costs ~$0.018 per proof. SP1's hosted Network Prover charges ~$0.13 per proof (0.3 PROVE tokens). While individual proof costs are modest, they are incurred on every TEE bootstrap -- every service restart, scaling event, or key rotation. More importantly, the 2-5 minute proof generation latency delays every bootstrap, and the operational complexity of managing proof services (GPU infrastructure for RISC Zero, prover network integration for SP1), zkVM toolchains, and build determinism is significant. Stylus replaces all of this with on-chain gas costs, which on an appchain with a custom gas token can be subsidized to zero.
 
 ## Lessons for Other Infrastructure Teams
 
