@@ -59,15 +59,15 @@ contract ETHTransferTest is UseCaseBaseTest {
         bytes32 messageId = keccak256(abi.encodePacked("transfer", block.timestamp));
         bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), transferAmount);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(weth), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(weth), payload, sig, 0, 0);
 
         // Submit validator signatures (2 out of 3 threshold)
         submitValidatorSignatures(bridge, messageId);
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(weth.balanceOf(address(recipient)), transferAmount);
         assertEq(weth.balanceOf(address(bridge)), 0);
@@ -108,15 +108,15 @@ contract ETHTransferTest is UseCaseBaseTest {
             bytes32 messageId = keccak256(abi.encodePacked("transfer", i));
             bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), amounts[i]);
 
-            SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
+            SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(weth), payload, 0);
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
+            bridge.initializeMessage(messageId, address(weth), payload, sig, 0, 0);
 
             // Submit validator signatures
             submitValidatorSignatures(bridge, messageId);
 
-            bridge.handleMessage(messageId);
+            bridge.handleMessage(messageId, payload);
         }
 
         uint256 expectedTotal = amounts[0] + amounts[1] + amounts[2];
@@ -138,17 +138,17 @@ contract ETHTransferTest is UseCaseBaseTest {
         bytes32 messageId = keccak256("insufficient-sigs");
         bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), transferAmount);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(weth), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(weth), payload, sig, 0, 0);
 
         // Only submit 1 signature (threshold is 2)
         submitValidatorSignatures(bridge, messageId, 1);
 
         // Should revert due to insufficient signatures
         vm.expectRevert();
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     /// @notice Test that message succeeds with exact threshold
@@ -162,15 +162,15 @@ contract ETHTransferTest is UseCaseBaseTest {
         bytes32 messageId = keccak256("exact-threshold");
         bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), transferAmount);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(weth), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(weth), payload, sig, 0, 0);
 
         // Submit exactly 2 signatures (threshold is 2)
         submitValidatorSignatures(bridge, messageId);
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(weth.balanceOf(address(recipient)), transferAmount);
     }
@@ -186,15 +186,15 @@ contract ETHTransferTest is UseCaseBaseTest {
         bytes32 messageId = keccak256("more-than-threshold");
         bytes memory payload = abi.encodeWithSelector(weth.transfer.selector, address(recipient), transferAmount);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(weth), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(weth), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(weth), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(weth), payload, sig, 0, 0);
 
         // Submit all 3 signatures (threshold is 2)
         submitValidatorSignatures(bridge, messageId, 3);
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(weth.balanceOf(address(recipient)), transferAmount);
     }

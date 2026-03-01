@@ -74,8 +74,11 @@ contract ModuleAddingAndRemovingTest is Test {
         bytes memory payload,
         uint256 nativeTokenAmount
     ) internal view returns (SequencerSignature memory) {
+        uint256 nonce = bridge.sequencerNonces(sequencer);
         bytes32 messageHash = keccak256(
-            abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount)
+            abi.encodePacked(
+                block.chainid, messageId, targetAddress, keccak256(payload), nativeTokenAmount, uint256(0), nonce
+            )
         );
         bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
@@ -212,12 +215,12 @@ contract ModuleAddingAndRemovingTest is Test {
 
             // Initialize message
             vm.startPrank(sequencer);
-            testBridge.initializeMessage(messageId, address(this), payload, sig, 0);
+            testBridge.initializeMessage(messageId, address(this), payload, sig, 0, 0);
             vm.stopPrank();
 
             // Measure gas for handling message (which validates all modules)
             uint256 gasBeforeHandle = gasleft();
-            try testBridge.handleMessage(messageId) {
+            try testBridge.handleMessage(messageId, payload) {
                 uint256 gasUsed = gasBeforeHandle - gasleft();
 
                 emit log_named_uint("Module count", moduleCounts[j]);
@@ -327,10 +330,10 @@ contract ModuleAddingAndRemovingTest is Test {
         SequencerSignature memory sig = createSequencerSignature(messageId, address(this), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(this), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(this), payload, sig, 0, 0);
 
         uint256 gasBeforeHandle = gasleft();
-        try bridge.handleMessage(messageId) {
+        try bridge.handleMessage(messageId, payload) {
             uint256 handleGas = gasBeforeHandle - gasleft();
             emit log_named_uint("Handle message gas (20 modules)", handleGas);
             emit log_named_decimal_uint("% of block gas limit", (handleGas * 100) / 30_000_000, 2);

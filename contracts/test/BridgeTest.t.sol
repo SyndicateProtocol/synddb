@@ -32,10 +32,13 @@ contract BridgeTest is Test {
     uint256[] public validatorPrivateKeys;
     address[] public validators;
 
-    event MessageInitialized(bytes32 indexed messageId, bytes payload);
+    event MessageInitialized(bytes32 indexed messageId, bytes32 indexed payloadHash, address indexed targetAddress);
     event MessageHandled(bytes32 indexed messageId, bool success);
+    event MessageCancelled(bytes32 indexed messageId);
     event NativeTokenWrapped(address indexed sender, uint256 amount);
     event NativeTokenUnwrapped(uint256 amount, address indexed target);
+    event SequencerSignatureStored(bytes32 indexed messageId, address indexed sequencer);
+    event BatchMessageFailed(bytes32 indexed messageId, bytes reason);
 
     function setUp() public {
         admin = address(this);
@@ -106,15 +109,48 @@ contract BridgeTest is Test {
         submitValidatorSignatures(messageId, 2);
     }
 
-    /// @notice Create a sequencer signature for a message
+    /// @notice Create a sequencer signature for a message (includes chain ID, nonce, and deadline for replay protection)
+    function createSequencerSignature(
+        bytes32 messageId,
+        address targetAddress,
+        bytes memory payload,
+        uint256 nativeTokenAmount,
+        uint256 deadline
+    ) internal view returns (SequencerSignature memory) {
+        uint256 nonce = bridge.sequencerNonces(sequencer);
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(
+                block.chainid, messageId, targetAddress, keccak256(payload), nativeTokenAmount, deadline, nonce
+            )
+        );
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
+        return SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
+    }
+
+    /// @notice Convenience overload without deadline (defaults to 0 = no deadline)
     function createSequencerSignature(
         bytes32 messageId,
         address targetAddress,
         bytes memory payload,
         uint256 nativeTokenAmount
     ) internal view returns (SequencerSignature memory) {
+        return createSequencerSignature(messageId, targetAddress, payload, nativeTokenAmount, 0);
+    }
+
+    /// @notice Create a sequencer signature with an explicit nonce (for batch operations where nonce increments per message)
+    function createSequencerSignatureWithNonce(
+        bytes32 messageId,
+        address targetAddress,
+        bytes memory payload,
+        uint256 nativeTokenAmount,
+        uint256 deadline,
+        uint256 nonce
+    ) internal view returns (SequencerSignature memory) {
         bytes32 messageHash = keccak256(
-            abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount)
+            abi.encodePacked(
+                block.chainid, messageId, targetAddress, keccak256(payload), nativeTokenAmount, deadline, nonce
+            )
         );
         bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
@@ -157,9 +193,9 @@ contract BridgeTest is Test {
         SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
 
         vm.prank(sequencer);
-        vm.expectEmit(true, false, false, true);
-        emit MessageInitialized(messageId, payload);
-        bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        vm.expectEmit(true, true, true, true);
+        emit MessageInitialized(messageId, keccak256(payload), receiver);
+        bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
 
         assertTrue(bridge.isMessageInitialized(messageId));
         assertFalse(bridge.isMessageCompleted(messageId));
@@ -171,10 +207,12 @@ contract BridgeTest is Test {
         SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
 
         vm.startPrank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
 
+        // Need a new signature with incremented nonce for second attempt
+        SequencerSignature memory sig2 = createSequencerSignature(messageId, receiver, payload, 0);
         vm.expectRevert(abi.encodeWithSelector(Bridge.MessageAlreadyInitialized.selector, messageId));
-        bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        bridge.initializeMessage(messageId, receiver, payload, sig2, 0, 0);
         vm.stopPrank();
     }
 
@@ -185,7 +223,7 @@ contract BridgeTest is Test {
 
         vm.prank(user);
         vm.expectRevert();
-        bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
     }
 
     function test_InitializeMessage_InvalidSignature_Reverts() public {
@@ -193,7 +231,10 @@ contract BridgeTest is Test {
         bytes memory payload = "";
         // Create a signature with wrong private key (not registered in TeeKeyManager)
         uint256 wrongKey = 0xBAD;
-        bytes32 messageHash = keccak256(abi.encodePacked(messageId, receiver, keccak256(payload), uint256(0)));
+        uint256 nonce = bridge.sequencerNonces(sequencer);
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(block.chainid, messageId, receiver, keccak256(payload), uint256(0), uint256(0), nonce)
+        );
         bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongKey, ethSignedHash);
         SequencerSignature memory sig =
@@ -201,14 +242,15 @@ contract BridgeTest is Test {
 
         vm.prank(sequencer);
         vm.expectRevert();
-        bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
     }
 
     function test_HandleMessage_NotInitialized_Reverts() public {
         bytes32 messageId = keccak256("not-initialized");
+        bytes memory payload = "";
 
         vm.expectRevert(abi.encodeWithSelector(Bridge.MessageNotInitialized.selector, messageId));
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     function test_HandleMessage_AlreadyHandled_Reverts() public {
@@ -217,15 +259,15 @@ contract BridgeTest is Test {
         SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
 
         submitValidatorSignatures(messageId);
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
         assertTrue(bridge.isMessageCompleted(messageId));
 
         vm.expectRevert(abi.encodeWithSelector(Bridge.MessageAlreadyHandled.selector, messageId));
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     function test_HandleMessage_CompletesSuccessfully() public {
@@ -234,13 +276,13 @@ contract BridgeTest is Test {
         SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
 
         submitValidatorSignatures(messageId);
 
         vm.expectEmit(true, false, false, true);
         emit MessageHandled(messageId, true);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertTrue(bridge.isMessageCompleted(messageId));
         assertTrue(bridge.isMessageHandled(messageId));
@@ -264,7 +306,7 @@ contract BridgeTest is Test {
         uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, amount);
+        bridge.initializeMessage(messageId, receiver, payload, sig, amount, 0);
 
         // WETH balance should remain the same (no wrapping in initializeMessage)
         assertEq(weth.balanceOf(address(bridge)), bridgeWethBefore);
@@ -277,7 +319,7 @@ contract BridgeTest is Test {
         SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
 
         assertTrue(bridge.isMessageInitialized(messageId));
     }
@@ -300,7 +342,7 @@ contract BridgeTest is Test {
         uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, amount);
+        bridge.initializeMessage(messageId, receiver, payload, sig, amount, 0);
 
         submitValidatorSignatures(messageId);
 
@@ -308,7 +350,7 @@ contract BridgeTest is Test {
 
         vm.expectEmit(false, true, false, true);
         emit NativeTokenUnwrapped(amount, receiver);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(receiver.balance, receiverBalanceBefore + amount);
         assertEq(weth.balanceOf(address(bridge)), bridgeWethBefore - amount);
@@ -326,7 +368,7 @@ contract BridgeTest is Test {
         assertTrue(success);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, amount);
+        bridge.initializeMessage(messageId, receiver, payload, sig, amount, 0);
 
         // Steal the WETH
         vm.prank(address(bridge));
@@ -335,7 +377,7 @@ contract BridgeTest is Test {
         submitValidatorSignatures(messageId);
 
         vm.expectRevert(abi.encodeWithSelector(Bridge.InsufficientWrappedNativeTokenBalance.selector, amount, 0));
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     function test_HandleMessage_PartialWETH_Reverts() public {
@@ -351,7 +393,7 @@ contract BridgeTest is Test {
         assertTrue(success);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, required);
+        bridge.initializeMessage(messageId, receiver, payload, sig, required, 0);
 
         vm.prank(address(bridge));
         weth.transfer(user, available);
@@ -361,7 +403,7 @@ contract BridgeTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(Bridge.InsufficientWrappedNativeTokenBalance.selector, required, available)
         );
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     function test_HandleMessage_ZeroETH_NoUnwrap() public {
@@ -378,11 +420,11 @@ contract BridgeTest is Test {
         uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
 
         submitValidatorSignatures(messageId);
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         // WETH should remain unchanged
         assertEq(weth.balanceOf(address(bridge)), bridgeWethBefore);
@@ -397,12 +439,12 @@ contract BridgeTest is Test {
         SequencerSignature memory sig = createSequencerSignature(messageId, address(reverter), payload, amount);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(reverter), payload, sig, amount);
+        bridge.initializeMessage(messageId, address(reverter), payload, sig, amount, 0);
 
         submitValidatorSignatures(messageId);
 
         vm.expectRevert();
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     function test_HandleMessage_SequencerOnlyMode_NoValidators() public {
@@ -419,13 +461,21 @@ contract BridgeTest is Test {
 
         bytes32 messageId = keccak256("sequencer-only");
         bytes memory payload = "";
-        SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
+        // Need to create signature with the new bridge's nonce
+        uint256 nonce = sequencerOnlyBridge.sequencerNonces(sequencer);
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(block.chainid, messageId, receiver, keccak256(payload), uint256(0), uint256(0), nonce)
+        );
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
+        SequencerSignature memory sig =
+            SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
 
         vm.prank(sequencer);
-        sequencerOnlyBridge.initializeMessage(messageId, receiver, payload, sig, 0);
+        sequencerOnlyBridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
 
         // Should handle message successfully without any validator signatures
-        sequencerOnlyBridge.handleMessage(messageId);
+        sequencerOnlyBridge.handleMessage(messageId, payload);
 
         assertTrue(sequencerOnlyBridge.isMessageCompleted(messageId));
         assertTrue(sequencerOnlyBridge.isMessageHandled(messageId));
@@ -582,7 +632,7 @@ contract BridgeTest is Test {
         uint256 receiverBalanceBefore = receiver.balance;
 
         vm.prank(sequencer);
-        bridge.initializeAndHandleMessage(messageId, receiver, payload, sig, validatorSigs, amount);
+        bridge.initializeAndHandleMessage(messageId, receiver, payload, sig, validatorSigs, amount, 0);
 
         assertEq(receiver.balance, receiverBalanceBefore + amount);
         assertTrue(bridge.isMessageCompleted(messageId));
@@ -599,16 +649,21 @@ contract BridgeTest is Test {
         bytes[] memory payloads = new bytes[](batchSize);
         SequencerSignature[] memory sigs = new SequencerSignature[](batchSize);
         uint256[] memory ethAmounts = new uint256[](batchSize);
+        uint256[] memory deadlines = new uint256[](batchSize);
 
         uint256 totalEth = 0;
 
+        uint256 baseNonce = bridge.sequencerNonces(sequencer);
         for (uint256 i = 0; i < batchSize; i++) {
             messageIds[i] = keccak256(abi.encodePacked("batch", i));
             targetAddresses[i] = receiver;
             payloads[i] = "";
             ethAmounts[i] = (i + 1) * 0.1 ether;
+            deadlines[i] = 0;
             totalEth += ethAmounts[i];
-            sigs[i] = createSequencerSignature(messageIds[i], targetAddresses[i], payloads[i], ethAmounts[i]);
+            sigs[i] = createSequencerSignatureWithNonce(
+                messageIds[i], targetAddresses[i], payloads[i], ethAmounts[i], 0, baseNonce + i
+            );
         }
 
         // Deposit ETH to bridge first
@@ -619,7 +674,7 @@ contract BridgeTest is Test {
         uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
 
         vm.prank(sequencer);
-        bridge.batchInitializeMessage(messageIds, targetAddresses, payloads, sigs, ethAmounts);
+        bridge.batchInitializeMessage(messageIds, targetAddresses, payloads, sigs, ethAmounts, deadlines);
 
         for (uint256 i = 0; i < batchSize; i++) {
             assertTrue(bridge.isMessageInitialized(messageIds[i]));
@@ -635,32 +690,71 @@ contract BridgeTest is Test {
         bytes[] memory payloads = new bytes[](2);
         SequencerSignature[] memory sigs = new SequencerSignature[](2);
         uint256[] memory ethAmounts = new uint256[](2);
+        uint256[] memory deadlines = new uint256[](2);
 
         vm.prank(sequencer);
         vm.expectRevert(Bridge.ArrayLengthMismatch.selector);
-        bridge.batchInitializeMessage(messageIds, targetAddresses, payloads, sigs, ethAmounts);
+        bridge.batchInitializeMessage(messageIds, targetAddresses, payloads, sigs, ethAmounts, deadlines);
     }
 
     function test_BatchHandleMessage() public {
         uint256 batchSize = 3;
         bytes32[] memory messageIds = new bytes32[](batchSize);
+        bytes[] memory payloads = new bytes[](batchSize);
 
         for (uint256 i = 0; i < batchSize; i++) {
             messageIds[i] = keccak256(abi.encodePacked("batch-handle", i));
-            bytes memory payload = "";
-            SequencerSignature memory sig = createSequencerSignature(messageIds[i], receiver, payload, 0);
+            payloads[i] = "";
+            SequencerSignature memory sig = createSequencerSignature(messageIds[i], receiver, payloads[i], 0);
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageIds[i], receiver, payload, sig, 0);
+            bridge.initializeMessage(messageIds[i], receiver, payloads[i], sig, 0, 0);
 
             submitValidatorSignatures(messageIds[i]);
         }
 
-        bridge.batchHandleMessage(messageIds);
+        bool[] memory successes = bridge.batchHandleMessage(messageIds, payloads);
 
         for (uint256 i = 0; i < batchSize; i++) {
             assertTrue(bridge.isMessageCompleted(messageIds[i]));
+            assertTrue(successes[i]);
         }
+    }
+
+    function test_BatchHandleMessage_PartialFailure() public {
+        bytes32[] memory messageIds = new bytes32[](3);
+        bytes[] memory payloads = new bytes[](3);
+
+        // First message - will succeed
+        messageIds[0] = keccak256("batch-partial-0");
+        payloads[0] = "";
+        SequencerSignature memory sig0 = createSequencerSignature(messageIds[0], receiver, payloads[0], 0);
+        vm.prank(sequencer);
+        bridge.initializeMessage(messageIds[0], receiver, payloads[0], sig0, 0, 0);
+        submitValidatorSignatures(messageIds[0]);
+
+        // Second message - will fail (not initialized)
+        messageIds[1] = keccak256("batch-partial-1-not-initialized");
+        payloads[1] = "";
+
+        // Third message - will succeed
+        messageIds[2] = keccak256("batch-partial-2");
+        payloads[2] = "";
+        SequencerSignature memory sig2 = createSequencerSignature(messageIds[2], receiver, payloads[2], 0);
+        vm.prank(sequencer);
+        bridge.initializeMessage(messageIds[2], receiver, payloads[2], sig2, 0, 0);
+        submitValidatorSignatures(messageIds[2]);
+
+        // Execute batch - should not revert, but second message should fail
+        bool[] memory successes = bridge.batchHandleMessage(messageIds, payloads);
+
+        assertTrue(successes[0], "First message should succeed");
+        assertFalse(successes[1], "Second message should fail");
+        assertTrue(successes[2], "Third message should succeed");
+
+        assertTrue(bridge.isMessageCompleted(messageIds[0]));
+        assertFalse(bridge.isMessageInitialized(messageIds[1]));
+        assertTrue(bridge.isMessageCompleted(messageIds[2]));
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -680,14 +774,14 @@ contract BridgeTest is Test {
         assertTrue(depositSuccess);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, ethAmount);
+        bridge.initializeMessage(messageId, receiver, payload, sig, ethAmount, 0);
 
         submitValidatorSignatures(messageId);
 
         uint256 receiverBalanceBefore = receiver.balance;
         uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(receiver.balance, receiverBalanceBefore + ethAmount);
         assertEq(weth.balanceOf(address(bridge)), bridgeWethBefore - ethAmount);
@@ -712,7 +806,7 @@ contract BridgeTest is Test {
         assertTrue(success);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, requiredAmount);
+        bridge.initializeMessage(messageId, receiver, payload, sig, requiredAmount, 0);
 
         vm.prank(address(bridge));
         weth.transfer(user, stolenAmount);
@@ -724,7 +818,7 @@ contract BridgeTest is Test {
                 Bridge.InsufficientWrappedNativeTokenBalance.selector, requiredAmount, remainingAmount
             )
         );
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     function testFuzz_BatchInitialize_VariousAmounts(uint8 arrayLength, uint256 seed) public {
@@ -738,13 +832,16 @@ contract BridgeTest is Test {
 
         uint256 totalEth = 0;
 
+        uint256 baseNonce = bridge.sequencerNonces(sequencer);
         for (uint256 i = 0; i < arrayLength; i++) {
             messageIds[i] = keccak256(abi.encodePacked("fuzz-batch", seed, i));
             targetAddresses[i] = receiver;
             payloads[i] = "";
             ethAmounts[i] = bound(uint256(keccak256(abi.encodePacked(seed, i))), 0, 10 ether);
             totalEth += ethAmounts[i];
-            sigs[i] = createSequencerSignature(messageIds[i], targetAddresses[i], payloads[i], ethAmounts[i]);
+            sigs[i] = createSequencerSignatureWithNonce(
+                messageIds[i], targetAddresses[i], payloads[i], ethAmounts[i], 0, baseNonce + i
+            );
         }
 
         vm.assume(totalEth <= type(uint96).max);
@@ -758,8 +855,10 @@ contract BridgeTest is Test {
 
         uint256 bridgeWethBefore = weth.balanceOf(address(bridge));
 
+        uint256[] memory deadlines = new uint256[](arrayLength);
+
         vm.prank(sequencer);
-        bridge.batchInitializeMessage(messageIds, targetAddresses, payloads, sigs, ethAmounts);
+        bridge.batchInitializeMessage(messageIds, targetAddresses, payloads, sigs, ethAmounts, deadlines);
 
         for (uint256 i = 0; i < arrayLength; i++) {
             assertTrue(bridge.isMessageInitialized(messageIds[i]));
@@ -784,7 +883,7 @@ contract BridgeTest is Test {
         SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, ethAmount);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, receiver, payload, sig, ethAmount);
+        bridge.initializeMessage(messageId, receiver, payload, sig, ethAmount, 0);
 
         uint256 bridgeWethAfterInit = weth.balanceOf(address(bridge));
         // WETH balance should remain the same (no wrapping during initializeMessage)
@@ -794,7 +893,7 @@ contract BridgeTest is Test {
         submitValidatorSignatures(messageId);
 
         uint256 receiverBalanceBefore = receiver.balance;
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(receiver.balance, receiverBalanceBefore + ethAmount);
         assertEq(weth.balanceOf(address(bridge)), bridgeWethAfterInit - ethAmount);
@@ -822,12 +921,12 @@ contract BridgeTest is Test {
         SequencerSignature memory sig = createSequencerSignature(messageId, address(returner), payload, sentAmount);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(returner), payload, sig, sentAmount);
+        bridge.initializeMessage(messageId, address(returner), payload, sig, sentAmount, 0);
 
         submitValidatorSignatures(messageId);
 
         // Handle message - bridge sends sentAmount ETH, returner returns returnedAmount ETH
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         // Bridge should have: original WETH - sentAmount + returnedAmount (re-wrapped)
         uint256 expectedWeth = bridgeWethBefore - sentAmount + returnedAmount;
