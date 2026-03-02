@@ -675,7 +675,7 @@ dependencies = [
  "derive_more",
  "nybbles",
  "serde",
- "smallvec 1.15.1",
+ "smallvec",
  "tracing",
 ]
 
@@ -2607,7 +2607,7 @@ dependencies = [
  "itoa",
  "pin-project-lite",
  "pin-utils",
- "smallvec 1.15.1",
+ "smallvec",
  "tokio",
  "want",
 ]
@@ -2760,7 +2760,7 @@ dependencies = [
  "icu_normalizer_data",
  "icu_properties",
  "icu_provider",
- "smallvec 1.15.1",
+ "smallvec",
  "zerovec",
 ]
 
@@ -2818,7 +2818,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de"
 dependencies = [
  "idna_adapter",
- "smallvec 1.15.1",
+ "smallvec",
  "utf8_iter",
 ]
 
@@ -3287,7 +3287,7 @@ dependencies = [
  "num-iter",
  "num-traits",
  "rand 0.8.5",
- "smallvec 1.15.1",
+ "smallvec",
  "zeroize",
 ]
 
@@ -3369,7 +3369,7 @@ dependencies = [
  "proptest",
  "ruint",
  "serde",
- "smallvec 1.15.1",
+ "smallvec",
 ]
 
 [[package]]
@@ -3611,7 +3611,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "redox_syscall",
- "smallvec 1.15.1",
+ "smallvec",
  "windows-link 0.2.1",
 ]
 
@@ -4316,7 +4316,7 @@ dependencies = [
  "fallible-streaming-iterator",
  "hashlink",
  "libsqlite3-sys",
- "smallvec 1.15.1",
+ "smallvec",
 ]
 
 [[package]]
@@ -4453,12 +4453,12 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "saphyr-parser-bw"
-version = "0.0.605"
+version = "0.0.608"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e1aee7486406df3541b5a657204a11be97175a467d77bc98e6d94a66289fb80"
+checksum = "d55ae5ea09894b6d5382621db78f586df37ef18ab581bf32c754e75076b124b1"
 dependencies = [
  "arraydeque",
- "smallvec 2.0.0-alpha.12",
+ "smallvec",
  "thiserror 2.0.18",
 ]
 
@@ -4615,21 +4615,21 @@ dependencies = [
 
 [[package]]
 name = "serde-saphyr"
-version = "0.0.16"
+version = "0.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4db5a4a562bcc0017c34cd0efbabf447be783f00576a2a516947f884e6a7ed57"
+checksum = "4a6fc4aa0da972ba0f51cf5c1bb16e9dba35334adc6831b09b3ffb0ec20bb264"
 dependencies = [
  "ahash",
  "annotate-snippets",
  "base64",
  "encoding_rs_io",
+ "getrandom 0.3.4",
  "nohash-hasher",
  "num-traits",
  "regex",
  "saphyr-parser-bw",
  "serde",
- "serde_json",
- "smallvec 2.0.0-alpha.12",
+ "smallvec",
  "zmij",
 ]
 
@@ -4669,7 +4669,6 @@ version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
- "indexmap 2.12.0",
  "itoa",
  "memchr",
  "serde",
@@ -4846,12 +4845,6 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 dependencies = [
  "serde",
 ]
-
-[[package]]
-name = "smallvec"
-version = "2.0.0-alpha.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef784004ca8777809dcdad6ac37629f0a97caee4c685fcea805278d81dd8b857"
 
 [[package]]
 name = "socket2"
@@ -5800,7 +5793,7 @@ dependencies = [
  "once_cell",
  "opentelemetry 0.22.0",
  "opentelemetry_sdk 0.22.1",
- "smallvec 1.15.1",
+ "smallvec",
  "tracing",
  "tracing-core",
  "tracing-log",
@@ -5818,7 +5811,7 @@ dependencies = [
  "once_cell",
  "opentelemetry 0.29.1",
  "opentelemetry_sdk 0.29.0",
- "smallvec 1.15.1",
+ "smallvec",
  "tracing",
  "tracing-core",
  "tracing-log",
@@ -5866,7 +5859,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sharded-slab",
- "smallvec 1.15.1",
+ "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
