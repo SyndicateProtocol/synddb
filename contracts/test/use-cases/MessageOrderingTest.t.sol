@@ -63,20 +63,20 @@ contract MessageOrderingTest is UseCaseBaseTest {
         for (uint256 nonce = 0; nonce < 3; nonce++) {
             bytes32 messageId = keccak256(abi.encodePacked("msg", nonce));
             bytes memory payload = "";
-            SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
+            SequencerSignature memory sig = createSequencerSignature(bridge, messageId, receiver, payload, 0);
 
             // Validate nonce first
             orderingModule.validateNonce(identifier, nonce);
 
             // Initialize message
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+            bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
 
             // Submit validator signatures
             _submitValidatorSignatures(messageId);
 
             // Handle message
-            bridge.handleMessage(messageId);
+            bridge.handleMessage(messageId, payload);
 
             assertTrue(bridge.isMessageCompleted(messageId));
         }
@@ -106,12 +106,12 @@ contract MessageOrderingTest is UseCaseBaseTest {
 
             bytes32 messageId = keccak256(abi.encodePacked("user1-msg", nonce));
             bytes memory payload = "";
-            SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
+            SequencerSignature memory sig = createSequencerSignature(bridge, messageId, receiver, payload, 0);
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+            bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
             _submitValidatorSignatures(messageId);
-            bridge.handleMessage(messageId);
+            bridge.handleMessage(messageId, payload);
         }
 
         // User2 sends 3 messages (independent sequence)
@@ -120,12 +120,12 @@ contract MessageOrderingTest is UseCaseBaseTest {
 
             bytes32 messageId = keccak256(abi.encodePacked("user2-msg", nonce));
             bytes memory payload = "";
-            SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
+            SequencerSignature memory sig = createSequencerSignature(bridge, messageId, receiver, payload, 0);
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+            bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
             _submitValidatorSignatures(messageId);
-            bridge.handleMessage(messageId);
+            bridge.handleMessage(messageId, payload);
         }
 
         // Verify independent nonce tracking
@@ -222,13 +222,13 @@ contract MessageOrderingTest is UseCaseBaseTest {
             // Create message
             bytes32 messageId = keccak256(abi.encodePacked("swap", nonce));
             bytes memory payload = abi.encodeWithSignature(swaps[nonce]);
-            SequencerSignature memory sig = createSequencerSignature(messageId, receiver, payload, 0);
+            SequencerSignature memory sig = createSequencerSignature(bridge, messageId, receiver, payload, 0);
 
             // Initialize and execute
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, receiver, payload, sig, 0);
+            bridge.initializeMessage(messageId, receiver, payload, sig, 0, 0);
             _submitValidatorSignatures(messageId);
-            bridge.handleMessage(messageId);
+            bridge.handleMessage(messageId, payload);
 
             assertTrue(bridge.isMessageCompleted(messageId));
         }

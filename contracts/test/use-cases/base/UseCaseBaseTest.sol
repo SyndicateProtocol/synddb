@@ -56,19 +56,36 @@ abstract contract UseCaseBaseTest is Test {
         bridge.setMessageInitializer(sequencer, true);
     }
 
-    /// @notice Create a sequencer signature for a message
+    /// @notice Create a sequencer signature for a message (includes chain ID, nonce, and deadline)
     function createSequencerSignature(
+        Bridge bridge,
+        bytes32 messageId,
+        address targetAddress,
+        bytes memory payload,
+        uint256 nativeTokenAmount,
+        uint256 deadline
+    ) internal view returns (SequencerSignature memory) {
+        address sequencerAddr = vm.addr(sequencerPrivateKey);
+        uint256 nonce = bridge.sequencerNonces(sequencerAddr);
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(
+                block.chainid, messageId, targetAddress, keccak256(payload), nativeTokenAmount, deadline, nonce
+            )
+        );
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
+        return SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
+    }
+
+    /// @notice Convenience overload without deadline (defaults to 0 = no deadline)
+    function createSequencerSignature(
+        Bridge bridge,
         bytes32 messageId,
         address targetAddress,
         bytes memory payload,
         uint256 nativeTokenAmount
     ) internal view returns (SequencerSignature memory) {
-        bytes32 messageHash = keccak256(
-            abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount)
-        );
-        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sequencerPrivateKey, ethSignedHash);
-        return SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
+        return createSequencerSignature(bridge, messageId, targetAddress, payload, nativeTokenAmount, 0);
     }
 
     /// @notice Setup bridge with validators and validator module

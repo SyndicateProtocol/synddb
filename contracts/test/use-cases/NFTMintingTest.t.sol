@@ -45,14 +45,14 @@ contract NFTMintingTest is UseCaseBaseTest {
     function test_MintFreeNFT() public {
         bytes32 messageId = keccak256("free-mint-1");
         bytes memory payload = abi.encodeWithSelector(freeNFT.mint.selector, user);
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(freeNFT), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(freeNFT), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(freeNFT.ownerOf(0), user);
         assertEq(freeNFT.balanceOf(user), 1);
@@ -64,14 +64,14 @@ contract NFTMintingTest is UseCaseBaseTest {
         for (uint256 i = 0; i < mintCount; i++) {
             bytes32 messageId = keccak256(abi.encodePacked("free-mint", i));
             bytes memory payload = abi.encodeWithSelector(freeNFT.mint.selector, user);
-            SequencerSignature memory sig = createSequencerSignature(messageId, address(freeNFT), payload, 0);
+            SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(freeNFT), payload, 0);
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
+            bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0, 0);
 
             submitValidatorSignatures(bridge, messageId);
 
-            bridge.handleMessage(messageId);
+            bridge.handleMessage(messageId, payload);
         }
 
         assertEq(freeNFT.balanceOf(user), mintCount);
@@ -90,14 +90,14 @@ contract NFTMintingTest is UseCaseBaseTest {
         for (uint256 i = 0; i < recipients.length; i++) {
             bytes32 messageId = keccak256(abi.encodePacked("batch-mint", i));
             bytes memory payload = abi.encodeWithSelector(freeNFT.mint.selector, recipients[i]);
-            SequencerSignature memory sig = createSequencerSignature(messageId, address(freeNFT), payload, 0);
+            SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(freeNFT), payload, 0);
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
+            bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0, 0);
 
             submitValidatorSignatures(bridge, messageId);
 
-            bridge.handleMessage(messageId);
+            bridge.handleMessage(messageId, payload);
         }
 
         for (uint256 i = 0; i < recipients.length; i++) {
@@ -119,25 +119,26 @@ contract NFTMintingTest is UseCaseBaseTest {
         bytes32 approveMessageId = keccak256("approve-weth");
         bytes memory approvePayload = abi.encodeWithSelector(weth.approve.selector, address(paidNFT), NFT_PRICE);
         SequencerSignature memory approveSig =
-            createSequencerSignature(approveMessageId, address(weth), approvePayload, 0);
+            createSequencerSignature(bridge, approveMessageId, address(weth), approvePayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(approveMessageId, address(weth), approvePayload, approveSig, 0);
+        bridge.initializeMessage(approveMessageId, address(weth), approvePayload, approveSig, 0, 0);
 
         submitValidatorSignatures(bridge, approveMessageId);
 
-        bridge.handleMessage(approveMessageId);
+        bridge.handleMessage(approveMessageId, approvePayload);
 
         bytes32 mintMessageId = keccak256("paid-mint-1");
         bytes memory mintPayload = abi.encodeWithSelector(paidNFT.mintWithWETH.selector, user, address(weth), NFT_PRICE);
-        SequencerSignature memory mintSig = createSequencerSignature(mintMessageId, address(paidNFT), mintPayload, 0);
+        SequencerSignature memory mintSig =
+            createSequencerSignature(bridge, mintMessageId, address(paidNFT), mintPayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, mintSig, 0);
+        bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, mintSig, 0, 0);
 
         submitValidatorSignatures(bridge, mintMessageId);
 
-        bridge.handleMessage(mintMessageId);
+        bridge.handleMessage(mintMessageId, mintPayload);
 
         assertEq(paidNFT.ownerOf(0), user);
         assertEq(paidNFT.balanceOf(user), 1);
@@ -156,27 +157,28 @@ contract NFTMintingTest is UseCaseBaseTest {
         bytes memory approvePayload =
             abi.encodeWithSelector(weth.approve.selector, address(paidNFT), insufficientAmount);
         SequencerSignature memory approveSig =
-            createSequencerSignature(approveMessageId, address(weth), approvePayload, 0);
+            createSequencerSignature(bridge, approveMessageId, address(weth), approvePayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(approveMessageId, address(weth), approvePayload, approveSig, 0);
+        bridge.initializeMessage(approveMessageId, address(weth), approvePayload, approveSig, 0, 0);
 
         submitValidatorSignatures(bridge, approveMessageId);
 
-        bridge.handleMessage(approveMessageId);
+        bridge.handleMessage(approveMessageId, approvePayload);
 
         bytes32 mintMessageId = keccak256("paid-mint-insufficient");
         bytes memory mintPayload =
             abi.encodeWithSelector(paidNFT.mintWithWETH.selector, user, address(weth), insufficientAmount);
-        SequencerSignature memory mintSig = createSequencerSignature(mintMessageId, address(paidNFT), mintPayload, 0);
+        SequencerSignature memory mintSig =
+            createSequencerSignature(bridge, mintMessageId, address(paidNFT), mintPayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, mintSig, 0);
+        bridge.initializeMessage(mintMessageId, address(paidNFT), mintPayload, mintSig, 0, 0);
 
         submitValidatorSignatures(bridge, mintMessageId);
 
         vm.expectRevert();
-        bridge.handleMessage(mintMessageId);
+        bridge.handleMessage(mintMessageId, mintPayload);
     }
 
     /// @notice Test minting NFT with native ETH
@@ -191,13 +193,14 @@ contract NFTMintingTest is UseCaseBaseTest {
         // Bridge calls paidNFT to unwrap WETH and mint NFT with ETH
         bytes32 messageId = keccak256("withdraw-and-mint");
         bytes memory payload = abi.encodeWithSelector(paidNFT.mintWithPayment.selector, user);
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(paidNFT), payload, NFT_PRICE);
+        SequencerSignature memory sig =
+            createSequencerSignature(bridge, messageId, address(paidNFT), payload, NFT_PRICE);
 
         // Bridge calls paidNFT with ETH payment
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(paidNFT), payload, sig, NFT_PRICE);
+        bridge.initializeMessage(messageId, address(paidNFT), payload, sig, NFT_PRICE, 0);
         submitValidatorSignatures(bridge, messageId);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         // Verify NFT was minted to user
         assertEq(paidNFT.ownerOf(0), user);
@@ -218,28 +221,28 @@ contract NFTMintingTest is UseCaseBaseTest {
     function test_MintToZeroAddress_Reverts() public {
         bytes32 messageId = keccak256("mint-zero");
         bytes memory payload = abi.encodeWithSelector(freeNFT.mint.selector, address(0));
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(freeNFT), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(freeNFT), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
         vm.expectRevert();
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     function test_BridgeIsMsgSender() public {
         bytes32 messageId = keccak256("sender-test");
         bytes memory payload = abi.encodeWithSelector(freeNFT.mint.selector, user);
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(freeNFT), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(freeNFT), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(freeNFT), payload, sig, 0, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(freeNFT.balanceOf(user), 1);
     }

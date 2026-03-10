@@ -58,12 +58,12 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
         );
 
         SequencerSignature memory sig =
-            createSequencerSignature(crossChainMessageId, address(destinationChain), payload, 0);
+            createSequencerSignature(bridge, crossChainMessageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(crossChainMessageId, address(destinationChain), payload, sig, 0);
+        bridge.initializeMessage(crossChainMessageId, address(destinationChain), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, crossChainMessageId);
-        bridge.handleMessage(crossChainMessageId);
+        bridge.handleMessage(crossChainMessageId, payload);
 
         assertEq(token.balanceOf(recipient), mintAmount);
     }
@@ -83,12 +83,13 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, structuredData
         );
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
+        SequencerSignature memory sig =
+            createSequencerSignature(bridge, messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, messageId);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(token.balanceOf(recipient), amount);
     }
@@ -119,12 +120,13 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
             crossChainData
         );
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
+        SequencerSignature memory sig =
+            createSequencerSignature(bridge, messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, messageId);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(token.balanceOf(address(bridge)), bridgeAmount);
         assertEq(token.balanceOf(recipient), bridgeAmount);
@@ -157,12 +159,13 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
                 crossChainData
             );
 
-            SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
+            SequencerSignature memory sig =
+                createSequencerSignature(bridge, messageId, address(destinationChain), payload, 0);
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
+            bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0, 0);
             submitValidatorSignatures(bridge, messageId);
-            bridge.handleMessage(messageId);
+            bridge.handleMessage(messageId, payload);
         }
 
         for (uint256 i = 0; i < messageCount; i++) {
@@ -194,12 +197,13 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, metadata
         );
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
+        SequencerSignature memory sig =
+            createSequencerSignature(bridge, messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, messageId);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(token.balanceOf(recipient), amount);
     }
@@ -218,12 +222,13 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, crossChainData
         );
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
+        SequencerSignature memory sig =
+            createSequencerSignature(bridge, messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, messageId);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(token.balanceOf(recipient), amount);
     }
@@ -241,12 +246,13 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, emptyData
         );
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
+        SequencerSignature memory sig =
+            createSequencerSignature(bridge, messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, messageId);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(token.balanceOf(recipient), amount);
     }
@@ -264,12 +270,13 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
             destinationChain.receiveMintMessage.selector, messageId, address(token), recipient, amount, largeData
         );
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(destinationChain), payload, 0);
+        SequencerSignature memory sig =
+            createSequencerSignature(bridge, messageId, address(destinationChain), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(destinationChain), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, messageId);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(token.balanceOf(recipient), amount);
     }
@@ -296,12 +303,12 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
             mintData
         );
         SequencerSignature memory mintSig =
-            createSequencerSignature(mintMessageId, address(destinationChain), mintPayload, 0);
+            createSequencerSignature(bridge, mintMessageId, address(destinationChain), mintPayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(mintMessageId, address(destinationChain), mintPayload, mintSig, 0);
+        bridge.initializeMessage(mintMessageId, address(destinationChain), mintPayload, mintSig, 0, 0);
         submitValidatorSignatures(bridge, mintMessageId);
-        bridge.handleMessage(mintMessageId);
+        bridge.handleMessage(mintMessageId, mintPayload);
 
         assertEq(token.balanceOf(recipient), totalAmount);
 
@@ -320,12 +327,12 @@ contract CrossChainMessagingTest is UseCaseBaseTest {
             returnData
         );
         SequencerSignature memory returnSig =
-            createSequencerSignature(returnMessageId, address(destinationChain), returnPayload, 0);
+            createSequencerSignature(bridge, returnMessageId, address(destinationChain), returnPayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(returnMessageId, address(destinationChain), returnPayload, returnSig, 0);
+        bridge.initializeMessage(returnMessageId, address(destinationChain), returnPayload, returnSig, 0, 0);
         submitValidatorSignatures(bridge, returnMessageId);
-        bridge.handleMessage(returnMessageId);
+        bridge.handleMessage(returnMessageId, returnPayload);
 
         assertEq(token.balanceOf(recipient), totalAmount);
         assertEq(token.balanceOf(returnRecipient), returnAmount);

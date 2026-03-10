@@ -55,14 +55,14 @@ contract ERC20TransferTest is UseCaseBaseTest {
         bytes32 messageId = keccak256("erc20-transfer-1");
         bytes memory payload = abi.encodeWithSelector(usdc.transfer.selector, recipient, transferAmount);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(usdc), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(usdc), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(usdc.balanceOf(recipient), transferAmount);
         assertEq(usdc.balanceOf(address(bridge)), 0);
@@ -77,14 +77,14 @@ contract ERC20TransferTest is UseCaseBaseTest {
         bytes32 messageId = keccak256("erc20-transferFrom-1");
         bytes memory payload = abi.encodeWithSelector(usdc.transferFrom.selector, user, recipient, transferAmount);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(usdc), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(usdc), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0, 0);
 
         submitValidatorSignatures(bridge, messageId);
 
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(usdc.balanceOf(recipient), transferAmount);
         assertEq(usdc.balanceOf(user), INITIAL_BALANCE - transferAmount);
@@ -109,32 +109,34 @@ contract ERC20TransferTest is UseCaseBaseTest {
         // USDC transfer
         bytes32 usdcMessageId = keccak256("multi-usdc");
         bytes memory usdcPayload = abi.encodeWithSelector(usdc.transfer.selector, recipient, usdcAmount);
-        SequencerSignature memory usdcSig = createSequencerSignature(usdcMessageId, address(usdc), usdcPayload, 0);
+        SequencerSignature memory usdcSig =
+            createSequencerSignature(bridge, usdcMessageId, address(usdc), usdcPayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(usdcMessageId, address(usdc), usdcPayload, usdcSig, 0);
+        bridge.initializeMessage(usdcMessageId, address(usdc), usdcPayload, usdcSig, 0, 0);
         submitValidatorSignatures(bridge, usdcMessageId);
-        bridge.handleMessage(usdcMessageId);
+        bridge.handleMessage(usdcMessageId, usdcPayload);
 
         // DAI transfer
         bytes32 daiMessageId = keccak256("multi-dai");
         bytes memory daiPayload = abi.encodeWithSelector(dai.transfer.selector, recipient, daiAmount);
-        SequencerSignature memory daiSig = createSequencerSignature(daiMessageId, address(dai), daiPayload, 0);
+        SequencerSignature memory daiSig = createSequencerSignature(bridge, daiMessageId, address(dai), daiPayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(daiMessageId, address(dai), daiPayload, daiSig, 0);
+        bridge.initializeMessage(daiMessageId, address(dai), daiPayload, daiSig, 0, 0);
         submitValidatorSignatures(bridge, daiMessageId);
-        bridge.handleMessage(daiMessageId);
+        bridge.handleMessage(daiMessageId, daiPayload);
 
         // WETH transfer
         bytes32 wethMessageId = keccak256("multi-weth");
         bytes memory wethPayload = abi.encodeWithSelector(weth.transfer.selector, recipient, wethAmount);
-        SequencerSignature memory wethSig = createSequencerSignature(wethMessageId, address(weth), wethPayload, 0);
+        SequencerSignature memory wethSig =
+            createSequencerSignature(bridge, wethMessageId, address(weth), wethPayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(wethMessageId, address(weth), wethPayload, wethSig, 0);
+        bridge.initializeMessage(wethMessageId, address(weth), wethPayload, wethSig, 0, 0);
         submitValidatorSignatures(bridge, wethMessageId);
-        bridge.handleMessage(wethMessageId);
+        bridge.handleMessage(wethMessageId, wethPayload);
 
         assertEq(usdc.balanceOf(recipient), usdcAmount);
         assertEq(dai.balanceOf(recipient), daiAmount);
@@ -160,12 +162,12 @@ contract ERC20TransferTest is UseCaseBaseTest {
         for (uint256 i = 0; i < recipients.length; i++) {
             bytes32 messageId = keccak256(abi.encodePacked("batch-transfer", i));
             bytes memory payload = abi.encodeWithSelector(usdc.transfer.selector, recipients[i], amountEach);
-            SequencerSignature memory sig = createSequencerSignature(messageId, address(usdc), payload, 0);
+            SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(usdc), payload, 0);
 
             vm.prank(sequencer);
-            bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
+            bridge.initializeMessage(messageId, address(usdc), payload, sig, 0, 0);
             submitValidatorSignatures(bridge, messageId);
-            bridge.handleMessage(messageId);
+            bridge.handleMessage(messageId, payload);
         }
 
         for (uint256 i = 0; i < recipients.length; i++) {
@@ -188,12 +190,13 @@ contract ERC20TransferTest is UseCaseBaseTest {
         bytes32 approveMessageId = keccak256("approve-test");
         bytes memory approvePayload = abi.encodeWithSelector(usdc.approve.selector, recipient, approvalAmount);
 
-        SequencerSignature memory sig = createSequencerSignature(approveMessageId, address(usdc), approvePayload, 0);
+        SequencerSignature memory sig =
+            createSequencerSignature(bridge, approveMessageId, address(usdc), approvePayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(approveMessageId, address(usdc), approvePayload, sig, 0);
+        bridge.initializeMessage(approveMessageId, address(usdc), approvePayload, sig, 0, 0);
         submitValidatorSignatures(bridge, approveMessageId);
-        bridge.handleMessage(approveMessageId);
+        bridge.handleMessage(approveMessageId, approvePayload);
 
         assertEq(usdc.allowance(address(bridge), recipient), approvalAmount);
 
@@ -217,14 +220,14 @@ contract ERC20TransferTest is UseCaseBaseTest {
         bytes32 messageId = keccak256("insufficient-balance");
         bytes memory payload = abi.encodeWithSelector(usdc.transfer.selector, recipient, transferAmount);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(usdc), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(usdc), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, messageId);
 
         vm.expectRevert();
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     function test_TransferToZeroAddress_Reverts() public {
@@ -236,14 +239,14 @@ contract ERC20TransferTest is UseCaseBaseTest {
         bytes32 messageId = keccak256("zero-address");
         bytes memory payload = abi.encodeWithSelector(usdc.transfer.selector, address(0), amount);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(usdc), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(usdc), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, messageId);
 
         vm.expectRevert();
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
     }
 
     function test_TransferZeroAmount() public {
@@ -253,12 +256,12 @@ contract ERC20TransferTest is UseCaseBaseTest {
         bytes32 messageId = keccak256("zero-amount");
         bytes memory payload = abi.encodeWithSelector(usdc.transfer.selector, recipient, 0);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(usdc), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(bridge, messageId, address(usdc), payload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0);
+        bridge.initializeMessage(messageId, address(usdc), payload, sig, 0, 0);
         submitValidatorSignatures(bridge, messageId);
-        bridge.handleMessage(messageId);
+        bridge.handleMessage(messageId, payload);
 
         assertEq(usdc.balanceOf(recipient), 0);
     }
@@ -281,24 +284,25 @@ contract ERC20TransferTest is UseCaseBaseTest {
         bytes32 transferMessageId = keccak256("complete-transfer");
         bytes memory transferPayload = abi.encodeWithSelector(usdc.transfer.selector, recipient, transferAmount);
         SequencerSignature memory transferSig =
-            createSequencerSignature(transferMessageId, address(usdc), transferPayload, 0);
+            createSequencerSignature(bridge, transferMessageId, address(usdc), transferPayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(transferMessageId, address(usdc), transferPayload, transferSig, 0);
+        bridge.initializeMessage(transferMessageId, address(usdc), transferPayload, transferSig, 0, 0);
         submitValidatorSignatures(bridge, transferMessageId);
-        bridge.handleMessage(transferMessageId);
+        bridge.handleMessage(transferMessageId, transferPayload);
 
         assertEq(usdc.balanceOf(recipient), transferAmount);
 
         // Return remaining to user
         bytes32 returnMessageId = keccak256("complete-return");
         bytes memory returnPayload = abi.encodeWithSelector(usdc.transfer.selector, user, remainingAmount);
-        SequencerSignature memory returnSig = createSequencerSignature(returnMessageId, address(usdc), returnPayload, 0);
+        SequencerSignature memory returnSig =
+            createSequencerSignature(bridge, returnMessageId, address(usdc), returnPayload, 0);
 
         vm.prank(sequencer);
-        bridge.initializeMessage(returnMessageId, address(usdc), returnPayload, returnSig, 0);
+        bridge.initializeMessage(returnMessageId, address(usdc), returnPayload, returnSig, 0, 0);
         submitValidatorSignatures(bridge, returnMessageId);
-        bridge.handleMessage(returnMessageId);
+        bridge.handleMessage(returnMessageId, returnPayload);
 
         assertEq(usdc.balanceOf(user), INITIAL_BALANCE - transferAmount);
         assertEq(usdc.balanceOf(recipient), transferAmount);

@@ -9,14 +9,17 @@ import {IAttestationVerifier} from "src/interfaces/IAttestationVerifier.sol";
 import {ProcessingStage, MessageState, SequencerSignature, KeyType} from "src/types/DataTypes.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 /**
  * @title Bridge
  * @notice Cross-chain message bridge for SyndDB that validates and executes sequenced messages
  * @dev Manages message lifecycle with pre/post execution validation modules, native token transfers,
  *      and TEE key management. Uses Ownable2Step for secure ownership transfer.
+ *      Includes `ReentrancyGuardTransient` for protection against reentrancy attacks and Pausable for emergency stops.
  */
-contract Bridge is IBridge, ModuleCheckRegistry {
+contract Bridge is IBridge, ModuleCheckRegistry, ReentrancyGuardTransient, Pausable {
     mapping(bytes32 messageId => MessageState state) public messageStates;
 
     IWrappedNativeToken public immutable wrappedNativeToken;
@@ -27,13 +30,23 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     /// @notice Default expiration duration for new keys (0 = never expires)
     uint256 public defaultKeyExpiration;
 
-    event MessageInitialized(bytes32 indexed messageId, bytes payload);
+    /// @notice Gas limit for external message calls (prevents griefing)
+    uint256 public messageCallGasLimit = 1_000_000;
+
+    /// @notice Nonce tracking for sequencer signatures to prevent replay
+    mapping(address sequencer => uint256 nonce) public sequencerNonces;
+
+    event MessageInitialized(bytes32 indexed messageId, bytes32 indexed payloadHash, address indexed targetAddress);
     event MessageHandled(bytes32 indexed messageId, bool success);
+    event MessageCancelled(bytes32 indexed messageId);
     event NativeTokenWrapped(address indexed sender, uint256 amount);
     event NativeTokenUnwrapped(uint256 amount, address indexed target);
     event TeeKeyManagerUpdated(address indexed oldKeyManager, address indexed newKeyManager);
     event KeyRegistrationRestrictionUpdated(KeyType indexed keyType, bool restricted);
     event DefaultKeyExpirationUpdated(uint256 expiration);
+    event MessageCallGasLimitUpdated(uint256 oldLimit, uint256 newLimit);
+    event SequencerSignatureStored(bytes32 indexed messageId, address indexed sequencer);
+    event BatchMessageFailed(bytes32 indexed messageId, bytes reason);
 
     error ZeroAddressNotAllowed();
     error InvalidSequencerSignature(address recoveredSigner);
@@ -42,9 +55,14 @@ contract Bridge is IBridge, ModuleCheckRegistry {
     error MessageAlreadyHandled(bytes32 messageId);
     error MessageCurrentlyProcessing(bytes32 messageId, ProcessingStage currentStage);
     error MessageExecutionFailed(bytes32 messageId, bytes returnData);
+    error MessageExpired(bytes32 messageId, uint256 deadline);
+    error PayloadHashMismatch(bytes32 expected, bytes32 provided);
+    error InvalidNonce(uint256 expected, uint256 provided);
+    error MessageNotCancellable(bytes32 messageId, ProcessingStage currentStage);
     error ArrayLengthMismatch();
     error InsufficientWrappedNativeTokenBalance(uint256 required, uint256 available);
     error NoNativeTokenToWrap();
+    error GasLimitTooLow();
 
     /**
      * @notice Initializes the bridge contract
@@ -69,6 +87,38 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         if (msg.sender != address(wrappedNativeToken)) {
             _wrapNativeToken(msg.value);
         }
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            EMERGENCY CONTROLS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Pauses the bridge, preventing message initialization and handling
+     * @dev Only callable by owner
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @notice Unpauses the bridge, allowing normal operations
+     * @dev Only callable by owner
+     */
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    /**
+     * @notice Sets the gas limit for external message calls
+     * @dev Only callable by owner. Minimum 100,000 gas to ensure basic operations work.
+     * @param _gasLimit New gas limit
+     */
+    function setMessageCallGasLimit(uint256 _gasLimit) external onlyOwner {
+        if (_gasLimit < 100_000) revert GasLimitTooLow();
+        uint256 oldLimit = messageCallGasLimit;
+        messageCallGasLimit = _gasLimit;
+        emit MessageCallGasLimitUpdated(oldLimit, _gasLimit);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -207,7 +257,7 @@ contract Bridge is IBridge, ModuleCheckRegistry {
      * @dev Can be called by message initializer to recover stuck native token.
      * @param amount Maximum amount to wrap (will wrap min(amount, address(this).balance))
      */
-    function wrapNativeToken(uint256 amount) external onlyMessageInitializer {
+    function wrapNativeToken(uint256 amount) external onlyMessageInitializer nonReentrant {
         uint256 balance = address(this).balance;
         uint256 amountToWrap = amount > balance ? balance : amount;
 
@@ -233,9 +283,10 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
-        uint256 nativeTokenAmount
-    ) public onlyMessageInitializer {
-        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
+        uint256 nativeTokenAmount,
+        uint256 deadline
+    ) public onlyMessageInitializer nonReentrant whenNotPaused {
+        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount, deadline);
     }
 
     function _initializeMessage(
@@ -243,83 +294,82 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         address targetAddress,
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
-        uint256 nativeTokenAmount
+        uint256 nativeTokenAmount,
+        uint256 deadline
     ) internal {
         if (isMessageInitialized(messageId)) {
             revert MessageAlreadyInitialized(messageId);
         }
 
-        // Verify sequencer signature is from a registered TEE key
-        bytes32 messageHash =
-            keccak256(abi.encodePacked(messageId, targetAddress, keccak256(payload), nativeTokenAmount));
-        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
-        address signer = ECDSA.recover(ethSignedHash, sequencerSignature.signature);
+        bytes32 payloadHash = keccak256(payload);
 
-        // This will revert with InvalidPublicKey if the signer is not a registered TEE sequencer key
-        if (!teeKeyManager.isKeyValid(KeyType.Sequencer, signer)) {
-            revert InvalidSequencerSignature(signer);
-        }
+        // Verify sequencer signature is from a registered TEE key
+        // Include chain ID and nonce for replay protection
+        address signer = _verifySequencerSignature(
+            messageId, targetAddress, payloadHash, nativeTokenAmount, deadline, sequencerSignature.signature
+        );
+
+        // Increment nonce for the sequencer
+        sequencerNonces[signer]++;
 
         messageStates[messageId] = MessageState({
             messageId: messageId,
             targetAddress: targetAddress,
             stage: ProcessingStage.PreExecution,
-            payload: payload,
+            payloadHash: payloadHash,
             createdAt: block.timestamp,
+            deadline: deadline,
             nativeTokenAmount: nativeTokenAmount
         });
 
         sequencerSignatures[messageId] = sequencerSignature;
 
-        emit MessageInitialized(messageId, payload);
+        emit SequencerSignatureStored(messageId, signer);
+        emit MessageInitialized(messageId, payloadHash, targetAddress);
+    }
+
+    /**
+     * @notice Verifies sequencer signature with chain ID and nonce for replay protection
+     * @param messageId Unique identifier for the message
+     * @param targetAddress Address that will receive the message call
+     * @param payloadHash Hash of the encoded function call data
+     * @param nativeTokenAmount Amount of native token to transfer
+     * @param deadline Message expiration timestamp
+     * @param signature The sequencer's signature
+     * @return signer The recovered signer address
+     */
+    function _verifySequencerSignature(
+        bytes32 messageId,
+        address targetAddress,
+        bytes32 payloadHash,
+        uint256 nativeTokenAmount,
+        uint256 deadline,
+        bytes memory signature
+    ) internal view returns (address signer) {
+        // Include chain ID and nonce in the message hash for replay protection
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(
+                block.chainid,
+                messageId,
+                targetAddress,
+                payloadHash,
+                nativeTokenAmount,
+                deadline,
+                sequencerNonces[msg.sender]
+            )
+        );
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        signer = ECDSA.recover(ethSignedHash, signature);
+
+        // This will revert with InvalidPublicKey if the signer is not a registered TEE sequencer key
+        if (!teeKeyManager.isKeyValid(KeyType.Sequencer, signer)) {
+            revert InvalidSequencerSignature(signer);
+        }
     }
 
     /// @inheritdoc IBridge
-    function handleMessage(bytes32 messageId) public {
-        MessageState storage state = messageStates[messageId];
-
-        if (state.stage == ProcessingStage.NotStarted) {
-            revert MessageNotInitialized(messageId);
-        }
-
-        if (isMessageHandled(messageId)) {
-            revert MessageAlreadyHandled(messageId);
-        }
-
-        if (state.stage != ProcessingStage.PreExecution) {
-            revert MessageCurrentlyProcessing(messageId, state.stage);
-        }
-
-        SequencerSignature memory signature = sequencerSignatures[messageId];
-
-        _validatePreModules(messageId, ProcessingStage.PreExecution, state.payload, signature);
-
-        state.stage = ProcessingStage.Executing;
-
-        if (state.nativeTokenAmount > 0) {
-            uint256 wrappedNativeTokenBalance = wrappedNativeToken.balanceOf(address(this));
-            if (wrappedNativeTokenBalance < state.nativeTokenAmount) {
-                revert InsufficientWrappedNativeTokenBalance(state.nativeTokenAmount, wrappedNativeTokenBalance);
-            }
-
-            wrappedNativeToken.withdraw(state.nativeTokenAmount);
-            emit NativeTokenUnwrapped(state.nativeTokenAmount, state.targetAddress);
-        }
-
-        (bool success, bytes memory returnData) =
-            state.targetAddress.call{value: state.nativeTokenAmount}(state.payload);
-
-        if (!success) {
-            revert MessageExecutionFailed(messageId, returnData);
-        }
-
-        state.stage = ProcessingStage.PostExecution;
-
-        _validatePostModules(messageId, ProcessingStage.PostExecution, state.payload, signature);
-
-        state.stage = ProcessingStage.Completed;
-
-        emit MessageHandled(messageId, true);
+    function handleMessage(bytes32 messageId, bytes calldata payload) public nonReentrant whenNotPaused {
+        _handleMessageInternal(messageId, payload);
     }
 
     /// @inheritdoc IBridge
@@ -329,15 +379,33 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         bytes calldata payload,
         SequencerSignature calldata sequencerSignature,
         bytes[] calldata validatorSignatures,
-        uint256 nativeTokenAmount
-    ) external {
-        initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount);
+        uint256 nativeTokenAmount,
+        uint256 deadline
+    ) external nonReentrant whenNotPaused {
+        _initializeMessage(messageId, targetAddress, payload, sequencerSignature, nativeTokenAmount, deadline);
 
         for (uint256 i = 0; i < validatorSignatures.length; i++) {
             signMessageWithSignature(messageId, validatorSignatures[i]);
         }
 
-        handleMessage(messageId);
+        _handleMessageInternal(messageId, payload);
+    }
+
+    /// @inheritdoc IBridge
+    function cancelMessage(bytes32 messageId) external onlyOwner {
+        MessageState storage state = messageStates[messageId];
+
+        if (state.stage == ProcessingStage.NotStarted) {
+            revert MessageNotInitialized(messageId);
+        }
+
+        if (state.stage != ProcessingStage.PreExecution) {
+            revert MessageNotCancellable(messageId, state.stage);
+        }
+
+        state.stage = ProcessingStage.Rejected;
+
+        emit MessageCancelled(messageId);
     }
 
     /// @inheritdoc IBridge
@@ -373,29 +441,126 @@ contract Bridge is IBridge, ModuleCheckRegistry {
         address[] calldata targetAddresses,
         bytes[] calldata payloads,
         SequencerSignature[] calldata _sequencerSignatures,
-        uint256[] calldata nativeTokenAmounts
-    ) external onlyMessageInitializer {
+        uint256[] calldata nativeTokenAmounts,
+        uint256[] calldata deadlines
+    ) external onlyMessageInitializer nonReentrant whenNotPaused {
         if (
             messageIds.length != targetAddresses.length || messageIds.length != payloads.length
                 || messageIds.length != _sequencerSignatures.length || messageIds.length != nativeTokenAmounts.length
+                || messageIds.length != deadlines.length
         ) {
             revert ArrayLengthMismatch();
         }
 
         for (uint256 i = 0; i < messageIds.length; i++) {
             _initializeMessage(
-                messageIds[i], targetAddresses[i], payloads[i], _sequencerSignatures[i], nativeTokenAmounts[i]
+                messageIds[i],
+                targetAddresses[i],
+                payloads[i],
+                _sequencerSignatures[i],
+                nativeTokenAmounts[i],
+                deadlines[i]
             );
         }
     }
 
     /**
      * @notice Executes multiple previously initialized messages in a single transaction
+     * @dev Uses try/catch for partial success handling. Failed messages emit BatchMessageFailed event.
      * @param messageIds Array of message identifiers to execute
+     * @param payloads Array of payloads (must match stored hashes)
+     * @return successes Array of booleans indicating success/failure of each message
      */
-    function batchHandleMessage(bytes32[] calldata messageIds) external {
-        for (uint256 i = 0; i < messageIds.length; i++) {
-            handleMessage(messageIds[i]);
+    function batchHandleMessage(bytes32[] calldata messageIds, bytes[] calldata payloads)
+        external
+        nonReentrant
+        whenNotPaused
+        returns (bool[] memory successes)
+    {
+        if (messageIds.length != payloads.length) {
+            revert ArrayLengthMismatch();
         }
+
+        successes = new bool[](messageIds.length);
+
+        for (uint256 i = 0; i < messageIds.length; i++) {
+            try this.handleMessageInternal(messageIds[i], payloads[i]) {
+                successes[i] = true;
+            } catch (bytes memory reason) {
+                successes[i] = false;
+                emit BatchMessageFailed(messageIds[i], reason);
+            }
+        }
+    }
+
+    /**
+     * @notice Internal function for batch handling with try/catch support
+     * @dev Only callable by this contract. Marked external for try/catch compatibility.
+     */
+    function handleMessageInternal(bytes32 messageId, bytes calldata payload) external {
+        require(msg.sender == address(this), "Only self");
+        _handleMessageInternal(messageId, payload);
+    }
+
+    /**
+     * @notice Core message handling logic extracted for reuse
+     */
+    function _handleMessageInternal(bytes32 messageId, bytes calldata payload) internal {
+        MessageState storage state = messageStates[messageId];
+
+        if (state.stage == ProcessingStage.NotStarted) {
+            revert MessageNotInitialized(messageId);
+        }
+
+        if (isMessageHandled(messageId)) {
+            revert MessageAlreadyHandled(messageId);
+        }
+
+        if (state.stage != ProcessingStage.PreExecution) {
+            revert MessageCurrentlyProcessing(messageId, state.stage);
+        }
+
+        // Check message expiration
+        if (state.deadline != 0 && block.timestamp > state.deadline) {
+            revert MessageExpired(messageId, state.deadline);
+        }
+
+        // Verify payload matches stored hash
+        bytes32 payloadHash = keccak256(payload);
+        if (payloadHash != state.payloadHash) {
+            revert PayloadHashMismatch(state.payloadHash, payloadHash);
+        }
+
+        SequencerSignature memory signature = sequencerSignatures[messageId];
+
+        _validatePreModules(messageId, ProcessingStage.PreExecution, payload, signature);
+
+        state.stage = ProcessingStage.Executing;
+
+        if (state.nativeTokenAmount > 0) {
+            uint256 wrappedNativeTokenBalance = wrappedNativeToken.balanceOf(address(this));
+            if (wrappedNativeTokenBalance < state.nativeTokenAmount) {
+                revert InsufficientWrappedNativeTokenBalance(state.nativeTokenAmount, wrappedNativeTokenBalance);
+            }
+
+            wrappedNativeToken.withdraw(state.nativeTokenAmount);
+            emit NativeTokenUnwrapped(state.nativeTokenAmount, state.targetAddress);
+        }
+
+        // External call with gas limit to prevent griefing
+        (bool success, bytes memory returnData) =
+            state.targetAddress.call{value: state.nativeTokenAmount, gas: messageCallGasLimit}(payload);
+
+        if (!success) {
+            revert MessageExecutionFailed(messageId, returnData);
+        }
+
+        state.stage = ProcessingStage.PostExecution;
+
+        _validatePostModules(messageId, ProcessingStage.PostExecution, payload, signature);
+
+        state.stage = ProcessingStage.Completed;
+
+        emit MessageHandled(messageId, true);
     }
 }

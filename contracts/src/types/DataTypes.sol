@@ -35,8 +35,9 @@ struct MessageState {
     bytes32 messageId; // Unique identifier for the message
     address targetAddress; // Address that will receive the message call
     ProcessingStage stage; // Current processing stage
-    bytes payload; // Encoded function call data
+    bytes32 payloadHash; // Hash of encoded function call data (storage optimization)
     uint256 createdAt; // Block timestamp when message was created
+    uint256 deadline; // Timestamp after which message cannot be executed (0 = no deadline)
     uint256 nativeTokenAmount; // Amount of native token to transfer with call
 }
 
