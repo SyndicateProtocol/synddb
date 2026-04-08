@@ -72,7 +72,10 @@ contract CrossChainNFTTest is UseCaseBaseTest {
         view
         returns (SequencerSignature memory)
     {
-        bytes32 messageHash = keccak256(abi.encodePacked(messageId, targetAddress, keccak256(payload), uint256(0)));
+        uint256 nonce = destBridge.sequencerNonces(vm.addr(destSequencerPrivateKey));
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(block.chainid, messageId, targetAddress, keccak256(payload), uint256(0), uint256(0), nonce)
+        );
         bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(destSequencerPrivateKey, ethSignedHash);
         return SequencerSignature({signature: abi.encodePacked(r, s, v), submittedAt: block.timestamp});
@@ -92,13 +95,14 @@ contract CrossChainNFTTest is UseCaseBaseTest {
         bytes memory burnPayload = abi.encodeWithSelector(onft.crosschainBurn.selector, user, tokenId);
 
         // Sequencer signature for burn
-        SequencerSignature memory burnSig = createSequencerSignature(burnMessageId, address(onft), burnPayload, 0);
+        SequencerSignature memory burnSig =
+            createSequencerSignature(sourceBridge, burnMessageId, address(onft), burnPayload, 0);
 
         // Step 3: Execute burn on source chain
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(burnMessageId, address(onft), burnPayload, burnSig, 0);
+        sourceBridge.initializeMessage(burnMessageId, address(onft), burnPayload, burnSig, 0, 0);
         submitValidatorSignatures(sourceBridge, burnMessageId);
-        sourceBridge.handleMessage(burnMessageId);
+        sourceBridge.handleMessage(burnMessageId, burnPayload);
 
         // Verify NFT was burned
         vm.expectRevert();
@@ -118,8 +122,8 @@ contract CrossChainNFTTest is UseCaseBaseTest {
 
         // Execute mint on destination chain (no validators needed for this simple test)
         vm.prank(vm.addr(destSequencerPrivateKey));
-        destBridge.initializeMessage(mintMessageId, address(receiver), mintPayload, mintSig, 0);
-        destBridge.handleMessage(mintMessageId);
+        destBridge.initializeMessage(mintMessageId, address(receiver), mintPayload, mintSig, 0, 0);
+        destBridge.handleMessage(mintMessageId, mintPayload);
 
         // Verify NFT was minted on destination chain
         assertEq(destOnft.ownerOf(tokenId), destinationUser);
@@ -134,15 +138,15 @@ contract CrossChainNFTTest is UseCaseBaseTest {
         bytes32 messageId = keccak256("malicious-burn");
         bytes memory payload = abi.encodeWithSelector(onft.crosschainBurn.selector, attacker, tokenId);
 
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(onft), payload, 0);
+        SequencerSignature memory sig = createSequencerSignature(sourceBridge, messageId, address(onft), payload, 0);
 
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(messageId, address(onft), payload, sig, 0);
+        sourceBridge.initializeMessage(messageId, address(onft), payload, sig, 0, 0);
         submitValidatorSignatures(sourceBridge, messageId);
 
         // Should revert because attacker doesn't own the token
         vm.expectRevert();
-        sourceBridge.handleMessage(messageId);
+        sourceBridge.handleMessage(messageId, payload);
     }
 
     /// @notice Test only authorized bridge can mint ONFT
@@ -181,12 +185,13 @@ contract CrossChainNFTTest is UseCaseBaseTest {
 
         bytes32 burnMsg1 = keccak256("burn-1");
         bytes memory burnPayload1 = abi.encodeWithSelector(sourceOnft.crosschainBurn.selector, user, tokenId);
-        SequencerSignature memory sig1 = createSequencerSignature(burnMsg1, address(sourceOnft), burnPayload1, 0);
+        SequencerSignature memory sig1 =
+            createSequencerSignature(sourceBridge, burnMsg1, address(sourceOnft), burnPayload1, 0);
 
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(burnMsg1, address(sourceOnft), burnPayload1, sig1, 0);
+        sourceBridge.initializeMessage(burnMsg1, address(sourceOnft), burnPayload1, sig1, 0, 0);
         submitValidatorSignatures(sourceBridge, burnMsg1);
-        sourceBridge.handleMessage(burnMsg1);
+        sourceBridge.handleMessage(burnMsg1, burnPayload1);
 
         // Verify burned on source
         vm.expectRevert();
@@ -198,8 +203,8 @@ contract CrossChainNFTTest is UseCaseBaseTest {
         SequencerSignature memory mintSig = createDestSequencerSignature(mintMsg, address(destOnft), mintPayload);
 
         vm.prank(vm.addr(destSequencerPrivateKey));
-        destBridge.initializeMessage(mintMsg, address(destOnft), mintPayload, mintSig, 0);
-        destBridge.handleMessage(mintMsg);
+        destBridge.initializeMessage(mintMsg, address(destOnft), mintPayload, mintSig, 0, 0);
+        destBridge.handleMessage(mintMsg, mintPayload);
 
         assertEq(destOnft.ownerOf(tokenId), user);
 
@@ -212,8 +217,8 @@ contract CrossChainNFTTest is UseCaseBaseTest {
         SequencerSignature memory burnSig2 = createDestSequencerSignature(burnMsg2, address(destOnft), burnPayload2);
 
         vm.prank(vm.addr(destSequencerPrivateKey));
-        destBridge.initializeMessage(burnMsg2, address(destOnft), burnPayload2, burnSig2, 0);
-        destBridge.handleMessage(burnMsg2);
+        destBridge.initializeMessage(burnMsg2, address(destOnft), burnPayload2, burnSig2, 0, 0);
+        destBridge.handleMessage(burnMsg2, burnPayload2);
 
         // Verify burned on dest
         vm.expectRevert();
@@ -222,12 +227,13 @@ contract CrossChainNFTTest is UseCaseBaseTest {
         // Step 4: Re-mint on source
         bytes32 mintMsg2 = keccak256("mint-source");
         bytes memory mintPayload2 = abi.encodeWithSelector(sourceOnft.crosschainMint.selector, user, tokenId);
-        SequencerSignature memory mintSig2 = createSequencerSignature(mintMsg2, address(sourceOnft), mintPayload2, 0);
+        SequencerSignature memory mintSig2 =
+            createSequencerSignature(sourceBridge, mintMsg2, address(sourceOnft), mintPayload2, 0);
 
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(mintMsg2, address(sourceOnft), mintPayload2, mintSig2, 0);
+        sourceBridge.initializeMessage(mintMsg2, address(sourceOnft), mintPayload2, mintSig2, 0, 0);
         submitValidatorSignatures(sourceBridge, mintMsg2);
-        sourceBridge.handleMessage(mintMsg2);
+        sourceBridge.handleMessage(mintMsg2, mintPayload2);
 
         // Verify NFT is back on source chain with original owner
         assertEq(sourceOnft.ownerOf(tokenId), user);
@@ -257,12 +263,13 @@ contract CrossChainNFTTest is UseCaseBaseTest {
         for (uint256 i = 0; i < 3; i++) {
             bytes32 messageId = keccak256(abi.encodePacked("burn-batch", i));
             bytes memory payload = abi.encodeWithSelector(batchOnft.crosschainBurn.selector, user, i);
-            SequencerSignature memory sig = createSequencerSignature(messageId, address(batchOnft), payload, 0);
+            SequencerSignature memory sig =
+                createSequencerSignature(sourceBridge, messageId, address(batchOnft), payload, 0);
 
             vm.prank(sequencer);
-            sourceBridge.initializeMessage(messageId, address(batchOnft), payload, sig, 0);
+            sourceBridge.initializeMessage(messageId, address(batchOnft), payload, sig, 0, 0);
             submitValidatorSignatures(sourceBridge, messageId);
-            sourceBridge.handleMessage(messageId);
+            sourceBridge.handleMessage(messageId, payload);
         }
 
         // Verify all burned
@@ -289,12 +296,13 @@ contract CrossChainNFTTest is UseCaseBaseTest {
 
         bytes32 messageId = keccak256("burn-999");
         bytes memory payload = abi.encodeWithSelector(multiOnft.crosschainBurn.selector, user, 999);
-        SequencerSignature memory sig = createSequencerSignature(messageId, address(multiOnft), payload, 0);
+        SequencerSignature memory sig =
+            createSequencerSignature(sourceBridge, messageId, address(multiOnft), payload, 0);
 
         vm.prank(sequencer);
-        sourceBridge.initializeMessage(messageId, address(multiOnft), payload, sig, 0);
+        sourceBridge.initializeMessage(messageId, address(multiOnft), payload, sig, 0, 0);
         submitValidatorSignatures(sourceBridge, messageId);
-        sourceBridge.handleMessage(messageId);
+        sourceBridge.handleMessage(messageId, payload);
 
         // Verify only token 999 was burned
         assertEq(multiOnft.ownerOf(42), user);
